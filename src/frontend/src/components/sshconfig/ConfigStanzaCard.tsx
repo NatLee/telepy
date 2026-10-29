@@ -33,8 +33,16 @@ const NOTES: Record<ConfigPart, Record<string, TranslationKey>> = {
         user: "config.line.deviceUser",
         compression: "config.line.compression",
         stricthostkeychecking: "config.line.strictHostKeyChecking",
+        userknownhostsfile: "config.line.deviceKnownHostsFile",
+        hostkeyalias: "config.line.deviceHostKeyAlias",
         proxycommand: "config.line.deviceProxyCommand",
     },
+};
+
+/** StrictHostKeyChecking 的值換說法：伺服器 / 裝置各一句。/ What a StrictHostKeyChecking value means, per block. */
+const STRICT: Record<ConfigPart, Partial<Record<string, TranslationKey>>> = {
+    server: { yes: "config.line.strictHostKeyCheckingYes" },
+    device: { yes: "config.line.deviceStrictYes", "accept-new": "config.line.deviceStrictAcceptNew" },
 };
 
 interface Props {
@@ -64,8 +72,9 @@ export function ConfigStanzaCard({ n, part, title, hint, stanza, active, onActiv
         ...stanza.options.map((o) => ({ ...o, indent: true })),
     ];
     const note = (key: string, value: string) => {
-        // 伺服器區塊釘住了 Telepy 的主機金鑰時，StrictHostKeyChecking 的意思相反。/ With pinning, the line means the opposite.
-        const k = key.toLowerCase() === "stricthostkeychecking" && value.toLowerCase() === "yes" ? "config.line.strictHostKeyCheckingYes" : NOTES[part][key.toLowerCase()];
+        // 釘住主機金鑰時（伺服器或裝置），StrictHostKeyChecking 的意思不一樣。/ With pinning, the line means something else.
+        const strict = key.toLowerCase() === "stricthostkeychecking" ? STRICT[part][value.toLowerCase()] : undefined;
+        const k = strict ?? NOTES[part][key.toLowerCase()];
         return k ? t(k, { alias: stanza.alias }) : null;
     };
 
