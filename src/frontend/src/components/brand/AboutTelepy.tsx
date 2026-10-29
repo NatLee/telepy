@@ -14,7 +14,7 @@ import { Clapperboard, ExternalLink, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
-import { Disclaimer } from "@/components/brand/Disclaimer";
+import { DisclaimerButton } from "@/components/brand/Disclaimer";
 import { Tapi } from "@/components/brand/Tapi";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { SOURCE_URL } from "@/components/brand/ConsoleHello";
@@ -269,10 +269,10 @@ export function AboutTelepy() {
                         <Clapperboard />
                         {t("about.credits")}
                     </Button>
+                    <DisclaimerButton />
                 </div>
             </div>
         </div>
-            <Disclaimer />
             <YourTapi />
             {pearls.length > 0 &&
                 createPortal(

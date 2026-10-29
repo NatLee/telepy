@@ -40,6 +40,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { snugFits } from "@/lib/snugBody";
 import { DialogOverlay, DialogPortal } from "./dialog";
 
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
@@ -127,6 +128,46 @@ export function MoreBelow({ className }: { className?: string }) {
     );
 }
 
+/**
+ * 內容區只超出底部留白那麼一點時把留白收掉（見 `lib/snugBody.ts`）：盯著內容區與它的子元素大小，換分頁、資料載入後都會重算。
+ * Drop the body's bottom padding when it only overflows by that much (see `lib/snugBody.ts`): watches the body and its
+ * children, so switching tabs or data arriving re-checks it. `el` = the body element (null until it is mounted).
+ */
+function useSnugBody(el: HTMLDivElement | null): boolean {
+    const [snug, setSnug] = useState(false);
+    const snugRef = useRef(false);
+    useEffect(() => {
+        if (!el || typeof ResizeObserver === "undefined") return;
+        const check = () => {
+            // 平常的底部留白 = py-5 = 1.25rem（跟著顯示大小）。/ The usual bottom padding: py-5 = 1.25rem (follows the display size).
+            const pad = 1.25 * parseFloat(getComputedStyle(document.documentElement).fontSize || "16");
+            const next = snugFits(el.scrollHeight - el.clientHeight, snugRef.current, pad);
+            if (next !== snugRef.current) {
+                snugRef.current = next;
+                setSnug(next);
+            }
+        };
+        const ro = new ResizeObserver(check);
+        const observeAll = () => {
+            ro.disconnect();
+            ro.observe(el);
+            for (const child of Array.from(el.children)) ro.observe(child);
+        };
+        observeAll();
+        const mo = new MutationObserver(() => {
+            observeAll();
+            check();
+        });
+        mo.observe(el, { childList: true });
+        check();
+        return () => {
+            ro.disconnect();
+            mo.disconnect();
+        };
+    }, [el]);
+    return snug;
+}
+
 export function Modal({
     isOpen,
     onClose,
@@ -157,8 +198,15 @@ export function Modal({
         </DialogPrimitive.Description>
     );
 
+    // 內容區由 Radix 晚一點才掛上，用 callback ref 拿到元素再開始盯。/ Radix mounts the body later; a callback ref hands over the element.
+    const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
+    const snug = useSnugBody(bodyEl);
     const body = hasBody && (
-        <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}>
+        <div
+            ref={setBodyEl}
+            className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}
+            style={snug ? { paddingBottom: 0 } : undefined}
+        >
             {isLoading && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/70">
                     <Loader2 className="size-6 animate-spin text-primary" />

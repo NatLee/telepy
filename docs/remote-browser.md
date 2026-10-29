@@ -68,7 +68,7 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
 | agent / 腳本開的瀏覽器 | `src/backend-api/src/ai/browser.rs`、`mcp/`、`api/browser.rs` | MCP `browser_*` 工具與 REST `/api/browser/sessions*`(見下方「MCP agent 與腳本操作」) |
 | session-manager | `docker/kasm-browser/session_manager.py` | 每 session:Xkasmvnc + openbox + chromium(respawn 迴圈、臨時 profile) |
 | CDP 轉接 | `docker/kasm-browser/cdp.py` | session-manager 收到的動作 → 容器內 loopback 上的 Chromium DevTools |
-| 前端面板 | `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` | 終端機頁的 Browser 主畫面(隧道列表的 Browser 按鈕);握手、IME textarea、剪貼簿/IME/滑鼠設定 |
+| 前端面板 | `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` | 終端機頁的 Browser 主畫面(通道列表的 Browser 按鈕);握手、IME textarea、剪貼簿/IME/滑鼠設定 |
 | Vendored client | `src/frontend/src/vendor/kasm-novnc/` | kasmtech/noVNC v1.3.0;**內嵌需求見該 README(必讀)** |
 
 ## KasmVNC 事實表(實測釘死,別重查)
@@ -85,14 +85,14 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
 ## Session 生命週期
 
 - **建立:** `POST /api/reverse/server/{id}/remote-browser/start` `{username?}`:檢查功能權限 `remote_browser`、
-  隧道 VIEW、step-up(敏感隧道)、`username` 在 `permissions::allowed_usernames` 裡(沒帶 = 隧道預設帳號,否則第一個
+  通道 VIEW、step-up(敏感通道)、`username` 在 `permissions::allowed_usernames` 裡(沒帶 = 通道預設帳號,否則第一個
   允許的)、`remote_browser_max_sessions` → 借連線池的裝置連線、開行程內 SOCKS → session-manager 起
   Xkasmvnc/openbox/chromium → session 進記憶體(並寫一列 `telepy_remote_browser_session`)→ 回 `{session_id, ws_path}`。
-- **SOCKS 冷啟/重試:** 每次嘗試 = `ssh::pool` 借一個傳輸 lease(同一個 (隧道, 帳號) 的終端機 / 檔案已經登入的話直接共用)
+- **SOCKS 冷啟/重試:** 每次嘗試 = `ssh::pool` 借一個傳輸 lease(同一個 (通道, 帳號) 的終端機 / 檔案已經登入的話直接共用)
   + `SocksProxy::start`,整段以 `remote_browser_ssh_timeout` 為上限,失敗重試到 `remote_browser_ssh_attempts` 次
-  (預設 30 秒 / 2 次;設定名稱沿用 `ssh -D` 時代)。gateway 上沒有這條隧道的 forward(裝置離線)就秒失敗、不空等,
+  (預設 30 秒 / 2 次;設定名稱沿用 `ssh -D` 時代)。gateway 上沒有這條通道的 forward(裝置離線)就秒失敗、不空等,
   回 500 + `code: device_offline`(前端翻成 `browser.*`)。
-- **歷史(Django 版的 `ssh -D`):** `username@reverse` 是兩跳(ProxyCommand→telepy-ssh→反向隧道到
+- **歷史(Django 版的 `ssh -D`):** `username@reverse` 是兩跳(ProxyCommand→telepy-ssh→反向通道到
   裝置 sshd)。`_spawn_socks_proxy` 帶硬化選項(`BatchMode`/`ExitOnForwardFailure`/
   `ConnectTimeout`/`ServerAlive`,不再無限卡在認證;不加 `-q` 以保留 stderr),
   `start_remote_browser` 自動重試(預設 2 次,`remote_browser_ssh_attempts`)。
@@ -137,9 +137,9 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
   留下的 session 全部停掉、刪記錄。
 - **歷史(gunicorn 多 worker + Redis):** ping 探測 SOCKS 埠靠「各 worker 共用 netns」;idle GC 另掃「Redis 有記錄、
   不屬於本行程、埠沒在聽」的孤兒(擁有者 worker 已重啟,沒人持有 ssh handle)代為收掉 kasm session + Redis 記錄。
-- **誰在用、可以被結束:** WS 中繼加入 presence(kind `browser`,帶它用的裝置帳號),擁有者 / ADMIN 在隧道列表的使用中按鈕與
+- **誰在用、可以被結束:** WS 中繼加入 presence(kind `browser`,帶它用的裝置帳號),擁有者 / ADMIN 在通道列表的使用中按鈕與
   即時 session 頁(`/tunnels/sessions`)看得到,可以結束(4009,reason = 誰);gateway 事件 `browser_open` / `browser_close`
-  (含時長)寫進該隧道的 Logs;開始時對擁有者與 ADMIN(不含本人)發 `session.started` webhook。
+  (含時長)寫進該通道的 Logs;開始時對擁有者與 ADMIN(不含本人)發 `session.started` webhook。
 - **失去權限就結束**(`access_recheck.rs`,和終端機 / 檔案 / 桌面同一套):取消分享、允許清單變小、功能 `remote_browser`
   被關、帳號停用等 → 4009,reason `Telepy (access changed)`,`browser_close` 附上為什麼,本人收到 `SESSION-ENDED`;中繼收尾
   時照樣停掉 kasm session。測試 `remote_browser_ends_when_access_is_lost`。
@@ -209,7 +209,7 @@ MCP agent（scope `browser:use`）可以開一個瀏覽器自己操作，見 [`m
   `ai_max_sessions_per_user`，閒置 / 壽命 / 撤銷 / 失去權限 / 裝置離線由 `crate::ai` 的 reaper 收（規則含 OAuth grant，不走上面的 access recheck；同一批觸發點另叫 `ai::recheck` 立刻跑一次）。
 - presence kind `browser`、client = app 名稱，即時 session 頁看得到、可以結束（之後的動作回「被誰結束」）；
   開關寫 `browser_open` / `browser_close` 事件，每個動作寫 AI 稽核（`browser_type` 的文字只記長度，除非 `sensitive: false`）。
-- step-up 的隧道一律拒絕（403 `step_up_refused` / tool error）；功能 `remote_browser` 關掉時不能開、不能動作（列出與關閉照常）。
+- step-up 的通道一律拒絕（403 `step_up_refused` / tool error）；功能 `remote_browser` 關掉時不能開、不能動作（列出與關閉照常）。
 
 ```
 MCP tool (browser_navigate / read / click / type / screenshot) 或 REST /api/browser/sessions/{id}/…
@@ -233,7 +233,7 @@ MCP tool (browser_navigate / read / click / type / screenshot) 或 REST /api/bro
 | 4007 | 站台要求兩步驟登入,這個帳號還沒設定 |
 | 4012 | 功能 `remote_browser` 對這個人關著(reason = 功能 id) |
 | 4404 | session 不存在(或還沒就緒) |
-| 4403 | 沒有這條隧道的 VIEW |
+| 4403 | 沒有這條通道的 VIEW |
 | 4011 | 連不上 kasm-browser 的 KasmVNC websocket |
 | 4013 | 上游(KasmVNC)關閉或送不出去 |
 | 4009 | 從即時 session 頁被結束,或失去權限(reason = 誰 / `Telepy (access changed)`) |

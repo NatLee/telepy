@@ -1,18 +1,15 @@
 "use client";
 
 /**
- * 使用聲明：放在「關於 Telepy」裡。一段一直看得到的摘要（Telepy 直接操作真實機器，也能讓 API Token / CLI / MCP
- * 應用程式代你操作，後果自行負責），加上「閱讀完整聲明」打開的對話框：無擔保、真實機器、只連有權使用的系統、
- * 金鑰與授權等同密碼、MCP 代理（提示注入）、分享、站台管理員。條文寫在字典 about.disclaimer.*。
- * The disclaimer inside "About Telepy": a summary that is always visible (Telepy acts on real machines and lets
- * API tokens / the CLI / MCP apps act for you; you answer for it) plus "Read the full disclaimer", which opens a
- * dialog: no warranty, real machines, authorised systems only, credentials, MCP agents (prompt injection),
- * sharing, server operators. The text lives in the dictionaries under about.disclaimer.*.
+ * 使用聲明：「關於 Telepy」裡的一顆按鈕（跟原始碼、片尾名單並排），打開完整聲明的對話框：無擔保、真實機器、只連有權使用
+ * 的系統、金鑰與授權等同密碼、MCP 代理（提示注入）、分享、站台管理員。條文寫在字典 about.disclaimer.*。
+ * The disclaimer: a button in "About Telepy" (next to Source code and Credits) that opens the full notice: no
+ * warranty, real machines, authorised systems only, credentials, MCP agents (prompt injection), sharing, server
+ * operators. The text lives in the dictionaries under about.disclaimer.*.
  */
 import React, { useState } from "react";
 import { Bot, ExternalLink, KeyRound, Scale, ServerCog, Share2, ShieldAlert, ShieldCheck, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
 import { Section } from "@/components/ui/section";
 import { SOURCE_URL } from "@/components/brand/ConsoleHello";
@@ -67,18 +64,16 @@ function DisclaimerDialog({ onClose }: { onClose: () => void }) {
     );
 }
 
-/** 「關於 Telepy」裡的摘要 + 完整聲明。/ The summary in "About Telepy" plus the full disclaimer. */
-export function Disclaimer() {
+/** 「關於 Telepy」裡的「使用聲明」按鈕，打開完整聲明。/ The "Disclaimer" button in "About Telepy"; opens the full notice. */
+export function DisclaimerButton() {
     const { t } = useI18n();
     const [open, setOpen] = useState(false);
     return (
         <>
-            <Callout tone="warning" title={t("about.disclaimer")} className="mt-3.5">
-                <p>{t("about.disclaimerSummary")}</p>
-                <Button variant="link" size="sm" className="mt-1 h-auto px-0 py-0.5" onClick={() => setOpen(true)}>
-                    {t("about.disclaimerRead")}
-                </Button>
-            </Callout>
+            <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+                <ShieldAlert />
+                {t("about.disclaimer")}
+            </Button>
             {open && <DisclaimerDialog onClose={() => setOpen(false)} />}
         </>
     );
