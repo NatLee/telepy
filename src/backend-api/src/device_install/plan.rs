@@ -61,6 +61,20 @@ pub struct Part {
     pub account: String,
     /// 用這條隧道的安裝代號取的名稱。/ Named after this tunnel's install id.
     pub private: bool,
+    /// Telepy 以前的標準名稱（`telepy-tunnel-<n>`、`com.telepy.tunnel.<n>`、autossh 的 `telepy-tunnel.service`）：
+    /// 不帶人名、刪除腳本也認得，可以不改。/ Telepy's earlier standard names: no person in them and the removal
+    /// script knows them, so they may stay.
+    pub earlier: bool,
+}
+
+/// Telepy 以前自己的標準名稱嗎（不是代號、也不是別人取的）。/ One of Telepy's earlier standard names?
+pub fn earlier_name(name: &str) -> bool {
+    let numbered = |s: &str, prefix: &str, suffix: &str| s.strip_prefix(prefix).and_then(|r| r.strip_suffix(suffix)).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    name == "telepy-tunnel.service"
+        || name == "telepy-tunnel"
+        || numbered(name, "telepy-tunnel-", ".service")
+        || numbered(name, "telepy-tunnel-", ".sh")
+        || numbered(name, "com.telepy.tunnel.", "")
 }
 
 fn base_name(path: &str) -> &str {
@@ -84,7 +98,8 @@ pub fn parts(accounts: &[AccountResult], names: &Names) -> Vec<Part> {
                 _ => ("file", i.detail.clone()),
             };
             let private = names.owns(&i.detail);
-            let part = Part { kind, what: i.what.clone(), name, account: a.account.clone(), private };
+            let earlier = !private && (kind == "service" || kind == "container") && earlier_name(&name);
+            let part = Part { kind, what: i.what.clone(), name, account: a.account.clone(), private, earlier };
             // 每個帳號都看得到系統層的 unit：同一個只列一次。/ System units show up in every account: list once.
             if !out.iter().any(|p| p.kind == part.kind && p.what == part.what && p.name == part.name && (part.kind != "file" || p.account == part.account)) {
                 out.push(part);
@@ -94,9 +109,55 @@ pub fn parts(accounts: &[AccountResult], names: &Names) -> Vec<Part> {
     out
 }
 
-/// 有名字的服務裡，不是用安裝代號取名的那些（要改名的）。/ Named services not named after the install id.
+/// 裝置上連到**別台**伺服器的東西（盤點時標成 `kept other-server`，什麼模式都不碰）。
+/// Things on the device that dial another server (reported as `kept other-server`; never touched in any mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Other {
+    /// unit / plist / 腳本的檔名，或正在跑的 ssh。/ The unit / plist / script's file name, or the running ssh.
+    pub name: String,
+    /// 它連的 port。/ The port it dials.
+    pub port: Option<u16>,
+    /// 是正在跑的程序（不是檔案）。/ A running process rather than a file.
+    pub process: bool,
+    pub account: String,
+}
+
+pub fn others(accounts: &[AccountResult]) -> Vec<Other> {
+    let mut out: Vec<Other> = Vec::new();
+    for a in accounts {
+        for i in a.items.iter().filter(|i| i.kind == "kept" && i.what == "other-server") {
+            let (what, port) = match i.detail.rsplit_once(" (port ") {
+                Some((w, p)) => (w.to_string(), p.trim_end_matches(')').parse::<u16>().ok()),
+                None => (i.detail.clone(), None),
+            };
+            let process = what.split_whitespace().next().is_some_and(|w| w.bytes().all(|b| b.is_ascii_digit()));
+            let name = if process { what.split_once(' ').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { base_name(&what).to_string() };
+            let o = Other { name, port, process, account: a.account.clone() };
+            // 系統層的 unit 每個帳號都看得到；同一個程序也是。/ System units and processes show up in every account.
+            if !out.iter().any(|x| x.name == o.name && x.port == o.port) {
+                out.push(o);
+            }
+        }
+    }
+    out
+}
+
+/// 這條隧道的金鑰檔也被別台伺服器的隧道用著（刪除時會留著）。/ The tunnel's key file another server's tunnel also uses.
+pub fn shared_key(accounts: &[AccountResult]) -> Option<String> {
+    accounts.iter().flat_map(|a| a.items.iter()).find(|i| i.kind == "note" && i.what == "key-shared").map(|i| i.detail.clone())
+}
+
+/// 要改名的服務：不是用安裝代號、也不是 Telepy 以前的標準名稱（例如 `telepy-natlee.service`，可能看得出是誰裝的）。
+/// Services to rename: neither named after the install id nor one of Telepy's earlier standard names.
 pub fn older_services(parts: &[Part]) -> Vec<String> {
-    let mut out: Vec<String> = parts.iter().filter(|p| p.kind == "service" && !p.private).map(|p| p.name.clone()).collect();
+    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && !p.private && !p.earlier).map(|p| p.name.clone()).collect();
+    out.dedup();
+    out
+}
+
+/// Telepy 以前的標準名稱（可以留著；要改也行）。/ Earlier standard names (fine to keep, may be renamed).
+pub fn earlier_services(parts: &[Part]) -> Vec<String> {
+    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && p.earlier).map(|p| p.name.clone()).collect();
     out.dedup();
     out
 }
@@ -597,6 +658,24 @@ mod tests {
         assert_eq!(services, vec![("telepy-natlee.service", false), ("telepy-k7m2q9xd.service", true)]);
         assert_eq!(older_services(&p), vec!["telepy-natlee.service".to_string()]);
         assert_eq!(p.iter().filter(|p| p.kind == "process").count(), 1, "the same process seen by two accounts is one");
+        // Telepy 以前的標準名稱：可以留著，不算「要改名」。/ Earlier standard names may stay and are not "to rename".
+        let s = vec![account(
+            "natlee",
+            false,
+            vec![
+                item("found", "launchd", "/Library/LaunchDaemons/com.telepy.tunnel.62.plist"),
+                item("found", "systemd", "/etc/systemd/system/telepy-tunnel.service"),
+                item("found", "loop", "/home/pi/.ssh/telepy-tunnel-7.sh"),
+                item("found", "docker", "telepy-tunnel"),
+                item("found", "launchd", "/Users/gil/Library/LaunchAgents/info.natlee.telepy.plist"),
+            ],
+        )];
+        let p = parts(&s, &names);
+        assert_eq!(earlier_services(&p), vec!["com.telepy.tunnel.62", "telepy-tunnel.service", "telepy-tunnel-7.sh", "telepy-tunnel"]);
+        assert_eq!(older_services(&p), vec!["info.natlee.telepy".to_string()]);
+        for name in ["telepy-tunnel-.service", "com.telepy.tunnel.", "com.telepy.tunnel.abc", "telepy-tunnel-7x.sh", "telepy-natlee.service"] {
+            assert!(!earlier_name(name), "{name}");
+        }
     }
 
     #[test]
@@ -661,6 +740,28 @@ mod tests {
         let script = install_script(&p, &names, &args, "");
         assert!(script.contains("sed 's#/home/pi/.ssh/telepy-ws-12.py#/home/pi/.ssh/telepy-k7m2q9xd-ws.py#g'"), "{script}");
         assert!(undo_script(&p, &names).contains("telepy-k7m2q9xd-ws.py"));
+    }
+
+    #[test]
+    fn other_servers_and_a_shared_key_are_read_from_the_survey() {
+        let s = vec![
+            account(
+                "root",
+                true,
+                vec![
+                    item("kept", "other-server", "/etc/systemd/system/telepy-tunnel.service (port 57575)"),
+                    item("kept", "other-server", "812 /usr/bin/ssh -N -i /home/pi/.ssh/telepy_tunnel_ed25519 -p 57575 -R *:0:localhost:22 telepy@hdre (port 57575)"),
+                    item("note", "key-shared", "/home/pi/.ssh/telepy_tunnel_ed25519"),
+                ],
+            ),
+            account("pi", false, vec![item("kept", "other-server", "/etc/systemd/system/telepy-tunnel.service (port 57575)"), item("kept", "other-server", "/home/pi/old.sh")]),
+        ];
+        let o = others(&s);
+        assert_eq!(o.len(), 3, "the unit both accounts saw is listed once: {o:?}");
+        assert_eq!((o[0].name.as_str(), o[0].port, o[0].process), ("telepy-tunnel.service", Some(57575), false));
+        assert!(o[1].process && o[1].name.starts_with("/usr/bin/ssh -N") && o[1].port == Some(57575), "{o:?}");
+        assert_eq!((o[2].name.as_str(), o[2].port), ("old.sh", None));
+        assert_eq!(shared_key(&s).as_deref(), Some("/home/pi/.ssh/telepy_tunnel_ed25519"));
     }
 
     #[test]

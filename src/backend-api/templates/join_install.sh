@@ -83,8 +83,9 @@ start_background() {
     } > "$RUNNER"
     chmod 700 "$RUNNER"
     # Stop a previous loop and its ssh child (re-runs).
-    # The old ssh child is found by its key file: -R asks for 0, so the number cannot identify it.
-    PATTERN="-i $KEY "
+    # The old ssh child is found by this tunnel's own known_hosts file (named after the install id): -R asks for 0, so
+    # the number cannot identify it, and the key file may also serve a tunnel to another Telepy server.
+    PATTERN="UserKnownHostsFile=$KNOWN_HOSTS "
     pkill -f "$RUNNER" 2>/dev/null || true
     pkill -f "$PATTERN" 2>/dev/null || true
     nohup "$RUNNER" > "$LOG_FILE" 2>&1 &
@@ -232,6 +233,8 @@ remove_older_join() {
     done
     if [ -f "$SSH_DIR/$OLD.sh" ]; then
         pkill -f "$SSH_DIR/$OLD.sh" 2>/dev/null || true
+        # Its ssh child: the older join wrote the shared known_hosts plus this server's alias.
+        pkill -f "UserKnownHostsFile=$SSH_DIR/telepy_known_hosts -o HostKeyAlias=$ALIAS " 2>/dev/null || true
         if crontab -l 2>/dev/null | grep -qF "$SSH_DIR/$OLD.sh"; then
             crontab -l 2>/dev/null | grep -vF "$SSH_DIR/$OLD.sh" | crontab - 2>/dev/null || true
         fi

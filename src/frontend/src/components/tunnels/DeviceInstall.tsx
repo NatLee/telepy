@@ -10,7 +10,7 @@
  * Also the list's "older name" chip.
  */
 import React, { useState } from "react";
-import { ArrowRightLeft, Box, FileText, Info, Loader2, Package, RefreshCw, Server, TriangleAlert } from "lucide-react";
+import { ArrowRightLeft, Box, FileText, Info, KeyRound, Loader2, Package, RefreshCw, Server, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -19,7 +19,7 @@ import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowPath, StateLine } from "@/components/flow/PathFlow";
 import { useDeviceInstall } from "@/hooks/useDeviceInstall";
 import { useNow } from "@/hooks/useNow";
-import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, failureKey, groupParts, lanes, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type RenameReport, type ReportedStep } from "@/lib/deviceInstall";
+import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, failureKey, groupParts, lanes, mapRows, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type ReportedStep } from "@/lib/deviceInstall";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
@@ -58,9 +58,77 @@ function PartRow({ part }: { part: InstallPart }) {
             <span className="flex flex-wrap gap-1">
                 {part.what && part.kind !== "process" && <Chip>{part.what}</Chip>}
                 <Chip>{part.account}</Chip>
-                {named && (part.private ? <Chip tone="success">{t("deviceInstall.private")}</Chip> : <Chip tone="warning">{t("deviceInstall.older")}</Chip>)}
+                {named &&
+                    (part.private ? (
+                        <Chip tone="success">{t("deviceInstall.private")}</Chip>
+                    ) : part.earlier ? (
+                        <Chip title={t("deviceInstall.earlierHint")}>{t("deviceInstall.earlier")}</Chip>
+                    ) : (
+                        <Chip tone="warning">{t("deviceInstall.older")}</Chip>
+                    ))}
             </span>
         </li>
+    );
+}
+
+const NOTE_KEY: Record<MapRow["services"][number]["note"], TranslationKey> = {
+    private: "deviceInstall.private",
+    earlier: "deviceInstall.earlier",
+    older: "deviceInstall.older",
+    process: "deviceInstall.map.process",
+    other: "deviceInstall.map.otherService",
+};
+
+/**
+ * 「這台裝置連到哪裡」：裝置上每個讓通道連著的東西 ─ 它連的伺服器，一列一台；這台伺服器那列在最上面，
+ * 別台的列標「不會動」；兩邊共用的金鑰畫在下面。直線，寬的時候橫排、窄的時候直排。
+ * "Who this device connects to": each thing that keeps a tunnel up ─ the server it dials, one row per server; this
+ * server's row first, other servers' rows marked as never touched; a shared key below. Straight lines only.
+ */
+export function DeviceMap({ view, deviceName }: { view: Pick<DeviceInstallView, "parts" | "others" | "server_port" | "shared_key" | "online">; deviceName: string }) {
+    const { t } = useI18n();
+    const rows = mapRows(view);
+    const otherPorts = rows.filter((r) => r.kind === "other").map((r) => r.port);
+    return (
+        <div className="space-y-3">
+            {rows.map((row, i) => {
+                const mine = row.kind === "this";
+                return (
+                    <FlowPath key={`${row.kind}-${row.port}-${i}`}>
+                        <FlowNode
+                            icon={Box}
+                            compact
+                            wide
+                            title={<span className="font-mono text-xs break-all">{row.services.map((s) => s.name).join(", ") || "—"}</span>}
+                            sub={
+                                <span className="mt-1 flex flex-wrap gap-1">
+                                    <Chip>{deviceName}</Chip>
+                                    {[...new Set(row.services.map((s) => s.note))].map((n) => (
+                                        <Chip key={n} tone={n === "private" ? "success" : n === "older" ? "warning" : "neutral"}>{t(NOTE_KEY[n])}</Chip>
+                                    ))}
+                                </span>
+                            }
+                            state={mine ? (view.online ? "ok" : "waiting") : "waiting"}
+                            stateText={mine ? t("deviceInstall.map.carries") : t("deviceInstall.map.untouched")}
+                        />
+                        <FlowLink compact label={mine ? t("deviceInstall.map.thisLink", { port: row.port }) : row.port === "?" ? t("deviceInstall.map.otherPortUnknown") : t("deviceInstall.map.otherLink", { port: row.port })} state={mine ? (view.online ? "ok" : "waiting") : "waiting"} />
+                        {mine ? (
+                            <FlowNode brand compact title={t("deviceInstall.map.thisServer")} sub={t("deviceInstall.map.thisServerSub")} state={view.online ? "ok" : "waiting"} stateText={view.online ? t("deviceInstall.flow.online") : undefined} />
+                        ) : (
+                            <FlowNode icon={Server} compact title={t("deviceInstall.map.otherServer")} sub={t("deviceInstall.map.otherServerSub")} state="waiting" stateText={t("deviceInstall.map.untouched")} />
+                        )}
+                    </FlowPath>
+                );
+            })}
+            {view.shared_key && (
+                <p className="flex items-start gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                    <KeyRound size={14} className="mt-0.5 shrink-0 text-foreground" aria-hidden />
+                    <span className="min-w-0">
+                        {t("deviceInstall.map.sharedKey", { path: view.shared_key, ports: otherPorts.filter((p) => p !== "?").join(", ") || "?" })}
+                    </span>
+                </p>
+            )}
+        </div>
     );
 }
 
@@ -69,7 +137,7 @@ function RenameFlow({ view, steps, running, report }: { view: DeviceInstallView;
     const { t } = useI18n();
     const l = lanes(steps, running);
     // 改完之後 view 已經沒有舊名稱了：用回報裡的。/ After the rename the view has no older names left: use the report's.
-    const oldName = report?.old.join(", ") || view.rename.old.join(", ") || view.older.join(", ") || "—";
+    const oldName = report?.old.join(", ") || view.rename.old.join(", ") || [...view.older, ...view.earlier].join(", ") || "—";
     const newName = report?.new_name ?? view.rename.new_name ?? view.names.systemd;
     const oldText = l.carrying === "old" ? t("deviceInstall.lane.carrying") : l.old === "waiting" ? t("deviceInstall.lane.removed") : l.old === "failed" ? t("deviceInstall.lane.leftover") : t("deviceInstall.lane.removing");
     const newText = l.new === "failed" ? t("deviceInstall.lane.undone") : l.carrying === "new" ? t("deviceInstall.lane.carrying") : steps.some((s) => s.id === "standby" && s.state === "done") ? t("deviceInstall.lane.standby") : running ? t("deviceInstall.lane.starting") : t("deviceInstall.lane.notYet");
@@ -212,7 +280,7 @@ function InfoDialog({ isOpen, onClose, view }: { isOpen: boolean; onClose: () =>
         { what: "deviceInstall.info.rowDescription", old: "Telepy reverse tunnel (alice-laptop)", now: view.names.description },
     ];
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={t("deviceInstall.info.title")} description={t("deviceInstall.info.description")} icon={<Info />} size="3xl" footer={<Button type="button" variant="outline" onClick={onClose}>{t("common.close")}</Button>}>
+        <Modal isOpen={isOpen} onClose={onClose} title={t("deviceInstall.info.title")} description={t("deviceInstall.info.description")} icon={<Info />} size="4xl" footer={<Button type="button" variant="outline" onClick={onClose}>{t("common.close")}</Button>}>
             <div className="space-y-6">
                 <Section title={t("deviceInstall.info.namesTitle")} description={t("deviceInstall.info.namesBody", { id: view.install_id })}>
                     <div className="overflow-x-auto">
@@ -241,6 +309,24 @@ function InfoDialog({ isOpen, onClose, view }: { isOpen: boolean; onClose: () =>
                     <RenameFlow view={view} steps={[]} running={false} />
                     <StepList steps={[]} running={false} />
                 </Section>
+                <Section title={t("deviceInstall.info.sharedTitle")} description={t("deviceInstall.info.sharedExample")}>
+                    <DeviceMap
+                        deviceName="pi"
+                        view={{
+                            online: true,
+                            server_port: view.server_port || "56767",
+                            shared_key: "~/.ssh/telepy_tunnel_ed25519",
+                            parts: [{ kind: "service", what: "systemd", name: view.names.systemd, account: "root", private: true, earlier: false }],
+                            others: [{ name: "telepy-tunnel.service", port: 57575, process: false, account: "root" }],
+                        }}
+                    />
+                    <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                        <li>{t("deviceInstall.info.sharedNames")}</li>
+                        <li>{t("deviceInstall.info.sharedOthers")}</li>
+                        <li>{t("deviceInstall.info.sharedKey")}</li>
+                        <li>{t("deviceInstall.info.sharedAccounts")}</li>
+                    </ul>
+                </Section>
                 <Section title={t("deviceInstall.info.recordTitle")}>
                     <p className="text-sm text-muted-foreground">{t("deviceInstall.info.recordBody")}</p>
                 </Section>
@@ -266,15 +352,17 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
         <Section
             icon={<Package />}
             title={t("deviceInstall.title")}
+            wrapTitle
             description={t("deviceInstall.description")}
             action={
                 <span className="flex items-center gap-1">
                     <Button type="button" size="sm" variant="ghost" onClick={() => setInfoOpen(true)} aria-label={t("deviceInstall.info.button")} title={t("deviceInstall.info.button")}>
                         <Info size={15} />
                     </Button>
-                    <Button type="button" size="sm" variant="outline" onClick={() => void d.survey()} disabled={d.surveying || d.renaming || !v.online} title={v.online ? undefined : t("deviceInstall.offline")}>
+                    <Button type="button" size="sm" variant="outline" onClick={() => void d.survey()} disabled={d.surveying || d.renaming || !v.online} title={v.online ? t("deviceInstall.check") : t("deviceInstall.offline")} aria-label={t("deviceInstall.check")}>
                         {d.surveying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                        {t("deviceInstall.check")}
+                        {/* 手機上只留圖示，標題才不會被擠成「…」。/ Icon only on phones, so the title is not cut to "…". */}
+                        <span className="hidden sm:inline">{t("deviceInstall.check")}</span>
                     </Button>
                 </span>
             }
@@ -290,6 +378,27 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                         blocker && <p className="mt-1">{t(BLOCKER_KEY[blocker])}</p>
                     )}
                 </Callout>
+            )}
+
+            {/* 只有 Telepy 以前的標準名稱：不帶人名、刪除腳本也認得，所以只提一句，改名可選。
+                Only Telepy's earlier standard names: no person in them and removal knows them, so just a note. */}
+            {v.older.length === 0 && v.earlier.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface px-3 py-2 text-sm">
+                    <span className="min-w-0 text-muted-foreground">{t("deviceInstall.earlierBody", { names: v.earlier.join(", ") })}</span>
+                    {v.rename.possible && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => setRenameOpen(true)} disabled={!v.online || d.renaming}>
+                            <ArrowRightLeft size={14} /> {t("deviceInstall.renameOptional")}
+                        </Button>
+                    )}
+                </div>
+            )}
+
+            {(v.others.length > 0 || v.shared_key) && (
+                <div className="space-y-2">
+                    <p className="text-sm">{t("deviceInstall.map.title")}</p>
+                    <p className="text-xs text-muted-foreground">{t("deviceInstall.map.description")}</p>
+                    <DeviceMap view={v} deviceName={deviceName} />
+                </div>
             )}
 
             <PropertyList>

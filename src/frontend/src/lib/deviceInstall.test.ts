@@ -1,9 +1,9 @@
 // node --test（Node 23 會直接拿掉型別）。/ Run with `npm test` (Node strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { failureKey, groupParts, lanes, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
+import { failureKey, groupParts, lanes, mapRows, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
 
-const part = (kind: InstallPart["kind"], name: string, priv = false): InstallPart => ({ kind, what: "x", name, account: "pi", private: priv });
+const part = (kind: InstallPart["kind"], name: string, priv = false): InstallPart => ({ kind, what: "x", name, account: "pi", private: priv, earlier: false });
 
 test("parts are grouped with services first", () => {
     const groups = groupParts([part("file", "/k"), part("process", "ssh -NR …"), part("service", "telepy-natlee.service")]);
@@ -43,4 +43,26 @@ test("failures are explained and say whether anything changed", () => {
     assert.equal(untouched(r([{ id: "survey", state: "done" }, { id: "install", state: "failed" }])), true);
     assert.equal(untouched(r([{ id: "switch", state: "done" }, { id: "remove", state: "failed", detail: "sudo rm -f /a\nsudo kill 4" }])), false);
     assert.deepEqual(rootCommands(r([{ id: "remove", state: "failed", detail: "sudo rm -f /a\nsudo kill 4" }])), ["sudo rm -f /a", "sudo kill 4"]);
+});
+
+test("the device map has this tunnel first, then one row per other server", () => {
+    const rows = mapRows({
+        server_port: "56767",
+        parts: [
+            { kind: "service", what: "systemd", name: "telepy-k7m2q9xd.service", account: "root", private: true, earlier: false },
+            { kind: "process", what: "process", name: "ssh -NT …", account: "root", private: false, earlier: false },
+        ],
+        others: [
+            { name: "telepy-tunnel.service", port: 57575, process: false, account: "root" },
+            { name: "812 ssh -N -p 57575 …", port: 57575, process: true, account: "root" },
+            { name: "ssh -N -p 2200 …", port: 2200, process: true, account: "pi" },
+        ],
+    });
+    assert.deepEqual(rows.map((r) => [r.kind, r.port, r.services.map((s) => `${s.name}:${s.note}`)]), [
+        ["this", "56767", ["telepy-k7m2q9xd.service:private"]],
+        ["other", "57575", ["telepy-tunnel.service:other"]],
+        ["other", "2200", ["ssh:process"]],
+    ]);
+    // 只有在跑的 ssh、沒有服務名稱：那一列寫 ssh。/ Only a running ssh: the row says ssh.
+    assert.deepEqual(mapRows({ server_port: "1", parts: [{ kind: "process", what: "process", name: "x", account: "a", private: false, earlier: false }], others: [] })[0].services, [{ name: "ssh", note: "process" }]);
 });
