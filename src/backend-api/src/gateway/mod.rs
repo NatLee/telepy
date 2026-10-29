@@ -434,6 +434,12 @@ impl Gateway {
     /// 只看有 forward 的連線：沒 forward 的連線碰不到任何東西，下次重連一樣會被拒。
     /// Tunnel deleted: drop the device's connections (their forwards go with them; it cannot reconnect).
     pub async fn disconnect_tunnel(&self, tunnel_id: i64) -> usize {
+        self.disconnect_tunnel_because(tunnel_id, "tunnel deleted").await
+    }
+
+    /// 同 [`Self::disconnect_tunnel`]，自己給斷線原因（例：裝置金鑰換了，舊金鑰的連線不留）。
+    /// As [`Self::disconnect_tunnel`] with its own reason (e.g. the device key changed; the old key's connection goes).
+    pub async fn disconnect_tunnel_because(&self, tunnel_id: i64, reason: &str) -> usize {
         let mut handles: HashMap<u64, Handle> = HashMap::new();
         for f in self.forwards.iter().chain(self.standby.iter()) {
             let is_tunnel = self.conns.get(&f.conn_id).is_some_and(|c| matches!(c.identity, Identity::Tunnel { tunnel_id: t, .. } if t == tunnel_id));
@@ -442,7 +448,7 @@ impl Gateway {
             }
         }
         for h in handles.values() {
-            let _ = h.disconnect(Disconnect::ByApplication, "tunnel deleted".into(), String::new()).await;
+            let _ = h.disconnect(Disconnect::ByApplication, reason.into(), String::new()).await;
         }
         handles.len()
     }

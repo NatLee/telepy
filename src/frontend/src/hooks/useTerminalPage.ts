@@ -179,6 +179,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
     const [serviceKeys, setServiceKeys] = useState<any[]>([]);
     const [loadingServiceKeys, setLoadingServiceKeys] = useState(false);
+    // 不是 owner / ADMIN：這條通道的服務金鑰不給看（也不退回全站那把，那是錯的）。/ Not owner / ADMIN: the key is withheld.
+    const [serviceKeysHidden, setServiceKeysHidden] = useState(false);
 
     const [username, setUsername] = useState<string | null>(null);
     const [availableUsernames, setAvailableUsernames] = useState<TerminalUsername[]>([]);
@@ -915,9 +917,16 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const fetchServiceKeys = async () => {
         setServiceKeyModalOpen(true);
         setLoadingServiceKeys(true);
+        setServiceKeysHidden(false);
         try {
             const own = serverId ? await apiFetch(`/api/reverse/server/keys/${serverId}`) : null;
-            const ownKey = own?.ok ? (await own.json())?.service_key : null;
+            const tunnel = own?.ok ? await own.json() : null;
+            const ownKey = tunnel?.service_key;
+            if (tunnel && tunnel.can_share === false) {
+                setServiceKeys([]);
+                setServiceKeysHidden(true);
+                return;
+            }
             if (typeof ownKey === "string" && ownKey) {
                 setServiceKeys([{ key: ownKey, name: t("terminal.deviceKeyName") }]);
                 return;
@@ -999,6 +1008,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             serviceKeyModalOpen, setServiceKeyModalOpen,
             serviceKeys, setServiceKeys,
             loadingServiceKeys, setLoadingServiceKeys,
+            serviceKeysHidden,
             username, setUsername,
             availableUsernames, setAvailableUsernames,
             lanHost,

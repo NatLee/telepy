@@ -7,7 +7,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useReauth } from "@/hooks/useReauth";
 import { useI18n } from "@/lib/i18n";
+import { needsReauth } from "@/lib/mfa";
 import { useTunnelNameError } from "@/components/tunnels/TunnelNameHelp";
 import { keyProblem } from "@/lib/sshKeys";
 import { parseLabels, sameLabels } from "@/lib/tunnelLabels";
@@ -17,7 +19,8 @@ import type { TunnelEndpoint } from "@/types/tunnel";
 export interface TunnelDetails {
     id: number;
     host_friendly_name: string;
-    key: string;
+    /** 裝置公鑰：只給 owner / ADMIN，其他人 null。/ Device key: owner / ADMIN only, null for everyone else. */
+    key: string | null;
     reverse_port: number;
     description: string | null;
     user_permission: "owner" | "admin" | "edit" | "view" | null;
@@ -57,6 +60,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     const [labelsText, setLabelsTextState] = useState("");
     const [isSaving, setIsSaving] = useState(false);
     const { showSuccess, showError } = useToast();
+    const { request: requestReauth, dialog: reauthDialog } = useReauth();
 
     useEffect(() => {
         if (!isOpen || !tunnelId) return;
@@ -96,6 +100,8 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     }, [isOpen]);
 
     const canEdit = !!details && details.user_permission !== "view";
+    // 裝置金鑰只給 owner / ADMIN 看、也只有他們能換。/ Only owner / ADMIN see and change the device key.
+    const canChangeKey = !!details && details.key !== null && (details.user_permission === "owner" || details.user_permission === "admin");
     const setField = (name: keyof TunnelForm, value: string) => {
         setForm((f) => ({ ...f, [name]: value }));
         // 刪掉而不是設成 undefined:合併 {...live, ...server} 時 undefined 會蓋掉即時檢查的錯誤。
@@ -125,10 +131,10 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
         if (!details) return {};
         const p: Partial<TunnelForm> = {};
         if (form.host_friendly_name.trim() !== details.host_friendly_name) p.host_friendly_name = form.host_friendly_name.trim();
-        if (form.key.trim() !== details.key) p.key = form.key.trim();
+        if (canChangeKey && form.key.trim() !== (details.key ?? "").trim()) p.key = form.key.trim();
         if (form.description !== (details.description ?? "")) p.description = form.description;
         return p;
-    }, [details, form]);
+    }, [details, form, canChangeKey]);
     const dirty = Object.keys(patch).length > 0 || labelsChanged;
     const keyChanged = patch.key !== undefined;
     // 名稱 / 描述 / 標籤有改（「基本資料」分頁上的點）。/ Name, description or labels changed (the Basics tab's dot).
@@ -175,8 +181,17 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                     return null;
                 }
             }
-            const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, { method: "PATCH", body: JSON.stringify(patch) });
-            const body = await readJson<Record<string, unknown>>(res);
+            const send = (extra: object = {}) => apiFetch(`/api/reverse/server/keys/${tunnelId}`, { method: "PATCH", body: JSON.stringify({ ...patch, ...extra }) });
+            let res = await send();
+            let body = await readJson<Record<string, unknown>>(res);
+            // 換裝置金鑰、帳號有第二因素：先確認是你。/ A new device key with a second factor: confirm it's you first.
+            const methods = needsReauth(res.status, body);
+            if (methods) {
+                const proof = await requestReauth(methods, t("tunnelDetails.keyReauth"));
+                if (!proof) return null;
+                res = await send({ reauth: proof });
+                body = await readJson<Record<string, unknown>>(res);
+            }
             if (res.ok) {
                 showSuccess(t("tunnelDetails.updated"));
                 onUpdate();
@@ -209,7 +224,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     };
 
     return {
-        state: { details, loading, form, labelsText, labels: labelCheck.labels, errors: { ...liveErrors, ...errors }, canEdit, dirty, basicsDirty, keyChanged, valid, isSaving },
+        state: { details, loading, form, labelsText, labels: labelCheck.labels, errors: { ...liveErrors, ...errors }, canEdit, canChangeKey, dirty, basicsDirty, keyChanged, valid, isSaving, reauthDialog },
         actions: { setField, setLabelsText, save },
     };
 }

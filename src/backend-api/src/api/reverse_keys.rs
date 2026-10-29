@@ -83,12 +83,18 @@ impl KeyProblem {
 /// ignored): public keys are not secret, and the gateway identifies a connection by its key alone. The `owner`'s
 /// own personal key is fine — that device is the computer they work from, and the gateway gives it both roles.
 pub async fn device_key_problem(state: &AppState, key: &str, owner: i64) -> ApiResult<Option<KeyProblem>> {
+    device_key_problem_except(state, key, owner, None).await
+}
+
+/// 同 [`device_key_problem`]，但 `except` 這條隧道自己的裝置金鑰不算重複（換金鑰時用）。
+/// As [`device_key_problem`], except that tunnel `except`'s own device key is not a duplicate (changing the key).
+pub async fn device_key_problem_except(state: &AppState, key: &str, owner: i64, except: Option<i64>) -> ApiResult<Option<KeyProblem>> {
     let Some(parsed) = parse_public_key(key) else { return Ok(Some(KeyProblem::Invalid("Invalid SSH public key format"))) };
     if let Some(reason) = weak_key_reason(&parsed) {
         return Ok(Some(KeyProblem::Invalid(reason)));
     }
     let like = db::tunnels::like_prefix(&parsed.bare);
-    if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some() {
+    if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some_and(|t| Some(t.id) != except) {
         return Ok(Some(KeyProblem::Taken));
     }
     if db::keys::user_key_owners_by_prefix(&state.db, &like).await?.iter().any(|&u| u != owner) {
