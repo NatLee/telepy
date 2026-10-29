@@ -214,7 +214,8 @@ export function TunnelActions({
                     )}
                 </DropdownMenuGroup>
 
-                {tunnel.is_owner && (
+                {/* 連線腳本 = 把通道裝上裝置：owner / ADMIN（can_share）。/ Install scripts: owner / ADMIN (can_share). */}
+                {tunnel.can_share && (
                     <>
                         <DropdownMenuSeparator />
                         <GroupLabel>{t("tunnelActions.groupDevice")}</GroupLabel>

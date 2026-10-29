@@ -92,7 +92,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
     const { t } = useI18n();
     const { has } = useFeatures();
     const {
-        state: { details, loading, form, labelsText, labels, errors, canEdit, dirty, basicsDirty, keyChanged, valid, isSaving },
+        state: { details, loading, form, labelsText, labels, errors, canEdit, canChangeKey, dirty, basicsDirty, keyChanged, valid, isSaving, reauthDialog },
         actions: { setField, setLabelsText, save },
     } = useTunnelDetailsModal(tunnelId, isOpen, onUpdate, onClose);
     const connections = useTunnelConnections(tunnelId, isOpen);
@@ -150,7 +150,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
         if (tabsWithErrors.length && !tabsWithErrors.includes(activeTab)) setTab(tabsWithErrors[0]);
     };
     // 「儲存」只在有可編輯欄位的頁,或有改動還沒存時出現。/ Save shows on the tabs with fields, or while changes are unsaved.
-    const showSave = canEdit && (activeTab === "general" || activeTab === "identity" || dirty);
+    const showSave = canEdit && (activeTab === "general" || (activeTab === "identity" && canChangeKey) || dirty);
 
     return (
         <Modal
@@ -258,27 +258,30 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
 
                     {/* 裝置公鑰 + 裝置身分（host key 釘選）/ Device public key + device identity (pinned host key) */}
                     <div role="tabpanel" hidden={activeTab !== "identity"} className="space-y-6">
-                        {!canEdit && <Callout tone="info">{t("tunnelDetails.readOnly")}</Callout>}
-                        <Section
-                            icon={<KeyRound />}
-                            title={t("tunnelDetails.keySection")}
-                            description={t("tunnelDetails.keyHint")}
-                            action={form.key.trim() ? <CopyButton value={form.key.trim()} /> : undefined}
-                        >
-                            <Field id="tunnel-details-key" label={t("tunnels.publicKey")} required={canEdit} error={errors.key}>
-                                <Textarea
-                                    value={form.key}
-                                    onChange={(e) => setField("key", e.target.value)}
-                                    rows={3}
-                                    disabled={!canEdit}
-                                    spellCheck={false}
-                                    className="break-all font-mono text-xs leading-relaxed md:text-xs"
-                                    placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… device"
-                                />
-                            </Field>
-                            <KeyPreview value={form.key} />
-                            {keyChanged && !errors.key && <Callout tone="warning">{t("tunnelDetails.keyChanged")}</Callout>}
-                        </Section>
+                        {/* 裝置金鑰認得是哪台機器：只有 owner / ADMIN 看得到、能換。/ The device key identifies the machine: owner / ADMIN only. */}
+                        {canChangeKey ? (
+                            <Section
+                                icon={<KeyRound />}
+                                title={t("tunnelDetails.keySection")}
+                                description={t("tunnelDetails.keyHint")}
+                                action={form.key.trim() ? <CopyButton value={form.key.trim()} /> : undefined}
+                            >
+                                <Field id="tunnel-details-key" label={t("tunnels.publicKey")} required error={errors.key}>
+                                    <Textarea
+                                        value={form.key}
+                                        onChange={(e) => setField("key", e.target.value)}
+                                        rows={3}
+                                        spellCheck={false}
+                                        className="break-all font-mono text-xs leading-relaxed md:text-xs"
+                                        placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… device"
+                                    />
+                                </Field>
+                                <KeyPreview value={form.key} />
+                                {keyChanged && !errors.key && <Callout tone="warning">{t("tunnelDetails.keyChanged")}</Callout>}
+                            </Section>
+                        ) : (
+                            <Callout tone="info">{t("tunnelDetails.keyManagersOnly")}</Callout>
+                        )}
                         <DeviceHostKeySection tunnelId={tunnelId} isOpen={isOpen} onChanged={onUpdate} onAlert={onHostKeyAlert} />
                     </div>
 
@@ -298,6 +301,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     </div>
                 </form>
             )}
+            {reauthDialog}
         </Modal>
     );
 }

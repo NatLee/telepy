@@ -207,8 +207,10 @@ pub struct Tunnel {
     pub user_permission: Option<String>,
     pub shared_with_count: i64,
     pub host_friendly_name: String,
+    /// 裝置的公鑰（認得是哪台機器）：只給 owner / ADMIN，其他人 null。
+    /// The device's public key (identifies the machine): owner / ADMIN only, null for everyone else.
     #[schema(example = "ssh-ed25519 AAAA… device")]
-    pub key: String,
+    pub key: Option<String>,
     pub reverse_port: i64,
     pub description: Option<String>,
     #[schema(example = "2026-02-22T17:04:12.123456+08:00")]
@@ -253,7 +255,7 @@ pub struct Tunnel {
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
-    /// Single retrieve only: this tunnel's own service key (`type base64 comment`), the one the device authorizes
+    /// Single retrieve only: this tunnel's own service key (`type base64 comment`), the one the device authorizes; owner / ADMIN only, null for everyone else
     pub service_key: Option<String>,
 }
 
@@ -587,6 +589,13 @@ pub struct TunnelPatch {
     pub description: Option<String>,
     pub host_friendly_name: Option<String>,
     pub default_username: Option<i64>,
+    /// 新的裝置公鑰：只有 owner / ADMIN；換了會斷開現在的連線。/ A new device key: owner / ADMIN only; drops the live connection.
+    pub key: Option<String>,
+    /// 新的隧道號碼：只有 owner / ADMIN。/ A new reverse port: owner / ADMIN only.
+    pub reverse_port: Option<i64>,
+    /// 換金鑰或號碼、帳號有第二因素時要的再驗證。/ Re-authentication when changing the key or port and the account has a factor.
+    #[schema(value_type = Option<Object>)]
+    pub reauth: Option<serde_json::Value>,
 }
 
 #[derive(ToSchema)]

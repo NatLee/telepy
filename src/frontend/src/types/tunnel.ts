@@ -8,7 +8,8 @@ export interface Tunnel {
     id: number;
     host_friendly_name: string;
     reverse_port: number;
-    key?: string;
+    /** 裝置的公鑰：只給 owner / ADMIN，其他人 null。/ The device's public key: owner / ADMIN only, null for everyone else. */
+    key?: string | null;
     description?: string;
     is_owner: boolean;
     can_edit: boolean;
@@ -50,7 +51,7 @@ export interface Tunnel {
     device_claimed?: boolean;
     /** owner / ADMIN：裝置上的安裝代號與上次盤點到的舊名稱服務。/ Managers: the install id and older-named services. */
     device_install?: import("@/lib/deviceInstall").DeviceInstallSummary | null;
-    /** 單筆才有：這條通道自己的服務公鑰（裝置要授權的那把）。/ Single retrieve only: the tunnel's own service key. */
+    /** 單筆才有：這條通道自己的服務公鑰（裝置要授權的那把）；只給 owner / ADMIN。/ Single retrieve only: the tunnel's own service key; owner / ADMIN only. */
     service_key?: string | null;
 }
 

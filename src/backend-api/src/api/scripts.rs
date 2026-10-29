@@ -41,6 +41,14 @@ pub(crate) fn server_domain(headers: &HeaderMap, state: &AppState) -> String {
         .unwrap_or_default()
 }
 
+/// 連線（安裝）腳本是把隧道裝上裝置的材料（服務金鑰、號碼、安裝代號）：只給 owner / ADMIN。
+/// Connection (install) scripts set the tunnel up on the device (service key, number, install id): owner / ADMIN only.
+const SCRIPTS_FORBIDDEN: &str = "Only the tunnel owner or an ADMIN sharee can get its connection scripts.";
+
+async fn may_get_scripts(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<bool> {
+    Ok(permissions::check_access(&state.db, user_id, t, Permission::Admin).await?)
+}
+
 async fn viewable_tunnel(state: &AppState, user_id: i64, id: i64) -> ApiResult<Tunnel> {
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Reverse server keys not found"))?;
     if !permissions::check_access(&state.db, user_id, &t, Permission::View).await? {
@@ -287,7 +295,7 @@ async fn render_for(
 }
 
 /// `/tunnels/server/script/{kind}/{id}/{ssh_port}`
-#[utoipa::path(get, path = "/tunnels/server/script/{kind}/{id}/{ssh_port}", tag = "Script", security(("bearer" = [])), params(("kind" = String, Path, description = "ssh | powershell | autossh | autossh-service | docker-run | docker-compose"), ("id" = i64, Path, description = "Tunnel id"), ("ssh_port" = i64, Path, description = "sshd port on the device"), ("key_path" = Option<String>, Query, description = "Private key path to embed (-i)"), ("username_id" = Option<i64>, Query, description = "autossh-service only: which target username runs the service")), responses((status = 200, body = super::schemas::ScriptResponse), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(get, path = "/tunnels/server/script/{kind}/{id}/{ssh_port}", tag = "Script", security(("bearer" = [])), params(("kind" = String, Path, description = "ssh | powershell | autossh | autossh-service | docker-run | docker-compose"), ("id" = i64, Path, description = "Tunnel id"), ("ssh_port" = i64, Path, description = "sshd port on the device"), ("key_path" = Option<String>, Query, description = "Private key path to embed (-i)"), ("username_id" = Option<i64>, Query, description = "autossh-service only: which target username runs the service")), responses((status = 200, body = super::schemas::ScriptResponse), (status = 403, description = "Owner / ADMIN only", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn script(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -299,6 +307,9 @@ async fn script(
         return Err(ApiError::drf_not_found());
     }
     let t = viewable_tunnel(&state, user.id, id).await?;
+    if !may_get_scripts(&state, user.id, &t).await? {
+        return Err(ApiError::forbidden(SCRIPTS_FORBIDDEN));
+    }
     let domain = server_domain(&headers, &state);
     let key_path = clean_key_path(q.get("key_path"));
     let username_id = q.get("username_id").and_then(|s| s.parse::<i64>().ok());
@@ -308,7 +319,7 @@ async fn script(
 }
 
 /// `OneTimeScriptTokenView`：`{"token", "url"}`；url 的 scheme/host 依 X-Forwarded-* 決定。
-#[utoipa::path(post, path = "/tunnels/server/script/one-time/token", tag = "Script", security(("bearer" = [])), request_body = super::schemas::OneTimeTokenRequest, responses((status = 200, description = "Single-use URL (10 minutes) that serves the script without auth", body = super::schemas::OneTimeToken), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(post, path = "/tunnels/server/script/one-time/token", tag = "Script", security(("bearer" = [])), request_body = super::schemas::OneTimeTokenRequest, responses((status = 200, description = "Single-use URL (10 minutes) that serves the script without auth", body = super::schemas::OneTimeToken), (status = 400, body = super::schemas::ErrorBody), (status = 403, description = "No access, or not the owner / an ADMIN sharee", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn one_time_token(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -333,6 +344,9 @@ async fn one_time_token(
     let t = db::tunnels::by_id(&state.db, server_id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
     if !permissions::check_access(&state.db, user.id, &t, Permission::View).await? {
         return Err(ApiError::forbidden("Access denied"));
+    }
+    if !may_get_scripts(&state, user.id, &t).await? {
+        return Err(ApiError::forbidden(SCRIPTS_FORBIDDEN));
     }
     let username_id = json_i64(&body, "username_id");
     if script_type == "autossh-service" {
@@ -388,10 +402,11 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
         Ok(None) => return plain(StatusCode::NOT_FOUND, "Tunnel not found".into()),
         Err(e) => return plain(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    match permissions::check_access(&state.db, user.id, &t, Permission::View).await {
+    // 取用時再看一次：網址發出後被降級或取消分享就不給。/ Checked again on use: a demotion or unshare since issuing wins.
+    match may_get_scripts(&state, user.id, &t).await {
         Ok(true) => {}
         Ok(false) => return plain(StatusCode::FORBIDDEN, "Access denied".into()),
-        Err(e) => return plain(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => return plain(e.status, "error".into()),
     }
     let domain = server_domain(&headers, &state);
     let key_path = payload.key_path.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());

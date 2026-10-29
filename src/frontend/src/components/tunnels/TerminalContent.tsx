@@ -6,6 +6,7 @@ import React, { RefObject, useEffect, useCallback, useRef } from "react";
 import { usePanelRef, type GroupImperativeHandle } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
+import { Callout } from "@/components/ui/callout";
 import { MobileKeyboard } from "@/components/tunnels/MobileKeyboard";
 import { useKeyboardController, type KeyboardMode } from "@/hooks/useKeyboardController";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -49,6 +50,8 @@ export interface TerminalContentProps {
     setServiceKeyModalOpen: (v: boolean) => void;
     loadingServiceKeys: boolean;
     serviceKeys: unknown[];
+    /** 不是 owner / ADMIN：服務金鑰不給看，改說明找誰。/ Not owner / ADMIN: explain who can see it instead. */
+    serviceKeysHidden?: boolean;
     onReconnect?: () => void;
     /** 目前的配色:終端機外框與分頁列跟著它的背景 / 前景色。/ Current scheme; the frame and tab bar follow it. */
     palette: TerminalPalette;
@@ -94,6 +97,7 @@ export function TerminalContent({
     setServiceKeyModalOpen,
     loadingServiceKeys,
     serviceKeys,
+    serviceKeysHidden = false,
     onReconnect,
     palette,
     commandBanner,
@@ -348,6 +352,8 @@ export function TerminalContent({
                     <div className="flex justify-center py-8">
                         <Loader2 className="size-6 animate-spin text-primary" />
                     </div>
+                ) : serviceKeysHidden ? (
+                    <Callout tone="info">{t("terminal.serviceKeysManagersOnly")}</Callout>
                 ) : (serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">{t("terminal.noServiceKeys")}</p>
                 ) : (

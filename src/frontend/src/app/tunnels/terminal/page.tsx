@@ -91,6 +91,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
         serviceKeyModalOpen, setServiceKeyModalOpen,
         serviceKeys,
         loadingServiceKeys,
+        serviceKeysHidden,
         username, setUsername,
         availableUsernames,
         lanHost,
@@ -289,6 +290,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     setServiceKeyModalOpen={setServiceKeyModalOpen}
                     loadingServiceKeys={loadingServiceKeys}
                     serviceKeys={serviceKeys}
+                    serviceKeysHidden={serviceKeysHidden}
                     onReconnect={reconnect}
                     palette={appearance.resolved.scheme.theme}
                     sideTab={sideTab}

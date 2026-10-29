@@ -90,6 +90,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     device_key_owner_disabled: { key: "logs.event.device_key_owner_disabled", tone: "warning", category: "change" },
     host_key_accepted: { key: "logs.event.host_key_accepted", tone: "warning", category: "change" },
     host_key_forgotten: { key: "logs.event.host_key_forgotten", tone: "secondary", category: "change" },
+    device_key_changed: { key: "logs.event.device_key_changed", tone: "warning", category: "change" },
+    reverse_port_changed: { key: "logs.event.reverse_port_changed", tone: "outline", category: "change" },
     lan_scan: { key: "logs.event.lan_scan", tone: "outline", category: "change" },
 };
 

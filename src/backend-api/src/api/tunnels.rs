@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,7 +14,8 @@ use super::serialize::{endpoint_json, presence_json, tunnel_json};
 use super::AppJson;
 use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
-use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}};
+use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}, users::User};
+use crate::device_keys::authorized_keys::parse_public_key;
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
@@ -141,8 +142,13 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
     v["labels"] = json!(db::tunnel_tags::labels_of(&state.db, t.id).await?);
     v["pinned"] = json!(db::tunnel_tags::pinned_by(&state.db, user_id).await?.contains(&t.id));
     v["group_id"] = json!(db::groups::tunnel_group_of(&state.db, user_id).await?.get(&t.id));
-    // 這條隧道自己的服務金鑰（裝置要授權的那把）。/ The tunnel's own service key (the one the device authorizes).
-    v["service_key"] = json!(crate::ssh::tunnel_keys::ensure(state, t.id).await?);
+    // 這條隧道自己的服務金鑰（裝置要授權的那把）：裝置維運的材料，只給 owner / ADMIN。
+    // The tunnel's own service key (the one the device authorizes): upkeep material, owner / ADMIN only.
+    v["service_key"] = if eff.is_some_and(|e| e.satisfies(Permission::Admin)) {
+        json!(crate::ssh::tunnel_keys::ensure(state, t.id).await?)
+    } else {
+        Value::Null
+    };
     Ok(v)
 }
 
@@ -287,12 +293,17 @@ async fn endpoint_for(state: &AppState, user_id: i64, is_superuser: bool, t: &Tu
     Ok(endpoint_json(live.as_ref(), last.as_ref(), &state.geoip))
 }
 
-async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, partial: bool) -> ApiResult<Json<Value>> {
-    let t = visible_tunnel(state, user_id, id).await?;
+/// 只有 owner / ADMIN 能動的欄位被改了：裝置金鑰（認得是哪台機器的那把）或隧道號碼。
+/// The fields only owner / ADMIN may change: the device key (what identifies the machine) or the tunnel's number.
+const IDENTITY_FORBIDDEN: &str = "Only the tunnel owner or an ADMIN sharee can change the device key or the reverse port.";
+
+async fn apply_update(state: &AppState, user: &User, headers: &HeaderMap, id: i64, body: Value, partial: bool) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(state, user.id, id).await?;
     if !partial {
         validate_full(&body)?;
     }
-    if !permissions::check_access(&state.db, user_id, &t, Permission::Edit).await? {
+    let eff = permissions::effective_for(&state.db, user.id, &t).await?;
+    if !eff.is_some_and(|e| e.satisfies(Permission::Edit)) {
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to edit this tunnel."));
     }
     let name = json_str(&body, "host_friendly_name");
@@ -302,8 +313,27 @@ async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, part
             return Err(ApiError::field("host_friendly_name", msg));
         }
     }
-    let key = json_str(&body, "key");
+    let key = json_str(&body, "key").map(|k| k.trim().to_string());
     let port = json_i64(&body, "reverse_port");
+    // 換裝置金鑰 = 把這條隧道指到另一台機器；換號碼也是維運的事。都只給 owner / ADMIN（沿用原值不算改）。
+    // A new device key points the tunnel at another machine; the number is upkeep too. Owner / ADMIN only
+    // (sending the current value is not a change).
+    let key_text_changed = key.as_deref().is_some_and(|k| k != t.key.trim());
+    let port_changed = port.is_some_and(|p| p != t.reverse_port);
+    if (key_text_changed || port_changed) && !eff.is_some_and(|e| e.satisfies(Permission::Admin)) {
+        return Err(ApiError::detail(StatusCode::FORBIDDEN, IDENTITY_FORBIDDEN));
+    }
+    // 只改註解不算換金鑰：不用再驗證、不斷線。/ A comment-only edit is not a new key: no reauth, no disconnect.
+    let bare = |k: &str| parse_public_key(k).map(|p| p.bare);
+    let key_changed = key_text_changed && key.as_deref().and_then(bare) != bare(&t.key);
+    if let Some(k) = key.as_deref().filter(|_| key_text_changed) {
+        if let Some(problem) = super::reverse_keys::device_key_problem_except(state, k, t.user_id, Some(t.id)).await? {
+            return Err(ApiError::field("key", problem.message()));
+        }
+    }
+    if key_changed || port_changed {
+        super::mfa::require_reauth(state, headers, user, body.get("reauth")).await?;
+    }
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));
     let default_username = body.get("default_username").map(|v| v.as_i64());
     let updated = db::tunnels::update(
@@ -319,18 +349,39 @@ async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, part
     )
     .await
     .map_err(unique_error)?;
+    if key_changed || port_changed {
+        identity_changed(state, user, &t, &updated, key_changed, port_changed).await;
+    }
     notify::tunnel_updated(state, &updated).await?;
-    Ok(Json(single_json(state, user_id, &updated).await?))
+    Ok(Json(single_json(state, user.id, &updated).await?))
 }
 
-#[utoipa::path(put, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelWrite, responses((status = 200, body = super::schemas::Tunnel), (status = 403, description = "Needs EDIT permission", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
-    apply_update(&state, user.id, id, body, false).await
+/// 裝置金鑰或號碼換了：記在這條隧道的紀錄裡，並斷開現在的連線 —— 舊金鑰的連線不該留著，
+/// 新號碼要等裝置重連才生效。指紋就好，不記整把金鑰。
+/// The device key or number changed: log it on the tunnel and drop the live connection — the old key's
+/// connection must not linger, and a new number takes effect when the device reconnects. Fingerprints only.
+async fn identity_changed(state: &AppState, user: &User, old: &Tunnel, new: &Tunnel, key_changed: bool, port_changed: bool) {
+    let port = u16::try_from(new.reverse_port).ok();
+    if key_changed {
+        let fp = |k: &str| parse_public_key(k).map(|p| p.fingerprint).unwrap_or_else(|| "?".into());
+        let msg = format!("{} changed the device key of tunnel {}: {} → {}", user.username, new.host_friendly_name, fp(&old.key), fp(&new.key));
+        state.gateway.event("device_key_changed", None, port, Some(new.id), msg).await;
+    }
+    if port_changed {
+        let msg = format!("{} changed the reverse port of tunnel {}: {} → {}", user.username, new.host_friendly_name, old.reverse_port, new.reverse_port);
+        state.gateway.event("reverse_port_changed", None, port, Some(new.id), msg).await;
+    }
+    state.gateway.disconnect_tunnel_because(new.id, if key_changed { "device key changed" } else { "reverse port changed" }).await;
 }
 
-#[utoipa::path(patch, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelPatch, responses((status = 200, body = super::schemas::Tunnel), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn partial_update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
-    apply_update(&state, user.id, id, body, true).await
+#[utoipa::path(put, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelWrite, responses((status = 200, body = super::schemas::Tunnel), (status = 403, description = "Needs EDIT permission; a new device key or reverse port needs owner / ADMIN and, with a second factor, `reauth` (reauth_required)", body = super::schemas::MfaError), (status = 404, body = super::schemas::ErrorBody)))]
+async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    apply_update(&state, &user, &headers, id, body, false).await
+}
+
+#[utoipa::path(patch, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelPatch, responses((status = 200, body = super::schemas::Tunnel), (status = 403, description = "Needs EDIT permission; a new device key or reverse port needs owner / ADMIN and, with a second factor, `reauth` (reauth_required)", body = super::schemas::MfaError), (status = 404, body = super::schemas::ErrorBody)))]
+async fn partial_update(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    apply_update(&state, &user, &headers, id, body, true).await
 }
 
 /// 碰得到這條隧道的有效 grant。不限隧道的只算看得到這條隧道的人的（其他人的授權本來就碰不到它）。

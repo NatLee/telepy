@@ -26,7 +26,8 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
         "user_permission": eff.map(Effective::label),
         "shared_with_count": shared_with_count,
         "host_friendly_name": t.host_friendly_name,
-        "key": t.key,
+        // 裝置金鑰認得是哪台機器：只給 owner / ADMIN（換它也只有他們能）。/ The device key identifies the machine: owner / ADMIN only.
+        "key": if can_admin { json!(t.key) } else { Value::Null },
         "reverse_port": t.reverse_port,
         "description": t.description,
         "created_at": db_to_iso(&t.created_at, tz),
