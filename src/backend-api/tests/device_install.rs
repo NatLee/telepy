@@ -277,3 +277,54 @@ async fn deleting_keeps_a_key_another_server_uses() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+/// 沒寫 `-i` 的服務用帳號的預設金鑰（hdre 遷移腳本遇到舊通道沒指定金鑰時就這樣裝）：盤點認得、刪除清得掉；
+/// 預設金鑰本身是那個人自己的檔案，留著。/ A service without `-i` uses the account's default key: the survey finds it,
+/// the delete removes it, and the default key itself (the person's own file) stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_service_without_a_key_file_is_found_by_the_default_key() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    let ssh = home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    // 這個帳號的預設金鑰就是這條通道的金鑰。/ The account's default key is the tunnel key.
+    std::fs::write(ssh.join("id_ed25519"), "private\n").unwrap();
+    std::fs::write(ssh.join("id_ed25519.pub"), format!("{}\n", dev.key.public)).unwrap();
+    // 一個沒寫金鑰、連這台 gateway 的服務腳本，與一個看起來像那樣在跑的程序（假的 ssh，只是睡著）。
+    // A script without a key that dials this gateway, and a process that looks like one (a fake ssh that sleeps).
+    let unit = home.join("telepy-natlee.sh");
+    std::fs::write(&unit, format!("ssh -N -o BatchMode=yes -p {} -R '*:0:localhost:22' telepy@127.0.0.1\n", lab.gw_port)).unwrap();
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    write_exec(&home.join("bin/ssh"), "#!/bin/sh\nsleep 600\n");
+    let _fake = Command::new(home.join("bin/ssh"))
+        .args(["-N", "-o", "BatchMode=yes", "-p", &lab.gw_port.to_string(), "-R", "*:0:localhost:22", "telepy@127.0.0.1"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    // 不連這台的、沒寫金鑰的腳本：不是它的。/ One without a key that dials elsewhere: not this tunnel's.
+    let other = home.join("elsewhere.sh");
+    std::fs::write(&other, "ssh -N -p 2222 -R '*:0:localhost:22' telepy@other.example\n").unwrap();
+
+    let r = lab.app.post(&format!("/api/reverse/server/{}/device-install/survey", dev.tunnel_id), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let parts = r.json["parts"].as_array().unwrap();
+    assert!(parts.iter().any(|p| p["kind"] == "script" && p["name"].as_str().unwrap_or("").ends_with("telepy-natlee.sh")), "{}", r.json);
+    assert!(parts.iter().any(|p| p["kind"] == "process" && p["name"].as_str().unwrap_or("").contains("bin/ssh -N")), "{}", r.json);
+    assert!(!parts.iter().any(|p| p["name"].as_str().unwrap_or("").contains("elsewhere")), "{}", r.json);
+
+    let r = lab.app.delete(&format!("/api/reverse/server/keys/{}?remove_device_keys=true&remove_service=true", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while unit.exists() || alive(&home.join("bin/ssh").to_string_lossy()) {
+        assert!(tokio::time::Instant::now() < deadline, "left behind: {}", r.json["service"]);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ssh.join("id_ed25519").exists() && other.exists(), "the person's own key and the unrelated script stay");
+}

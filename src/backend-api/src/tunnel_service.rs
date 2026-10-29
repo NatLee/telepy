@@ -268,11 +268,12 @@ pub async fn prepare_with(state: &AppState, tunnel: &Tunnel, accounts: &[String]
             continue;
         }
         let script = render(platform, tunnel, mode, ctx);
-        let command = match platform {
-            Platform::Posix => format!("sh -c {}", sh_quote(&script)),
-            Platform::Windows => powershell_command(&script),
+        // POSIX：長腳本分段送（dropbear 不收超過 9000 字的指令）。/ POSIX: long scripts go in pieces (dropbear's limit).
+        let ran = match platform {
+            Platform::Posix => exec::run_script(&conn.device, &script, SCRIPT_TIMEOUT, MAX_OUTPUT).await,
+            Platform::Windows => exec::run(&conn.device, &powershell_command(&script), SCRIPT_TIMEOUT, MAX_OUTPUT).await,
         };
-        match exec::run(&conn.device, &command, SCRIPT_TIMEOUT, MAX_OUTPUT).await {
+        match ran {
             Ok(r) => {
                 result.items = parse_items(&r.stdout.text);
                 if r.timed_out {
