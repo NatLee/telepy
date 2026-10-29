@@ -15,6 +15,7 @@ import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { HostKeyAlert } from "@/components/tunnels/HostKeyAlert";
 import { DeviceWarningChip } from "@/components/tunnels/DeviceFacts";
+import { DeviceNameChip } from "@/components/tunnels/DeviceInstall";
 import { SshNameChip } from "@/components/tunnels/TunnelNameHelp";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
@@ -72,6 +73,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     <TunnelLanChip endpoint={tunnel.endpoint} />
                     <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
                     <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
+                    <DeviceNameChip summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                     <SshNameChip name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "general")} />
                 </div>
             </td>

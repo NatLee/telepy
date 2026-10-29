@@ -309,8 +309,12 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
         )
         .await;
 
+    // 裝置上的名稱都用這個代號（不含使用者、伺服器或隧道名稱；重新加入沿用同一個）。
+    // Everything on the device is named after this id (no user, server or tunnel name; a rejoin keeps it).
+    let install_id = db::device_install::ensure(&state.db, tunnel.id).await.map_err(internal)?;
     let mut lines = vec![
         ("TUNNEL_ID", tunnel.id.to_string()),
+        ("INSTALL_ID", install_id),
         ("TUNNEL_NAME", tunnel.host_friendly_name.clone()),
         ("REVERSE_PORT", tunnel.reverse_port.to_string()),
         ("GATEWAY_HOST", gateway_host),
@@ -389,6 +393,15 @@ async fn advance(state: &AppState, t: Ticket) -> Ticket {
                 };
                 state.gateway.event("join", None, u16::try_from(port).ok(), tunnel_id, msg).await;
                 notify_owner(&state, &u);
+                // 記下腳本裝了什麼（等腳本寫完 uninstall 等檔案再看）。/ Record what the script installed (once it finished).
+                if phase == Phase::Verified {
+                    if let Some(id) = tunnel_id {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        if let Ok(Some(t)) = db::tunnels::by_id(&state.db, id).await {
+                            let _ = crate::device_install::survey_and_record(&state, &t).await;
+                        }
+                    }
+                }
             }
         });
     }

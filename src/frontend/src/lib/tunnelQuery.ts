@@ -193,6 +193,8 @@ function matchText(term: string, t: Tunnel, ctx: MatchContext): boolean {
         ...(t.presence?.sessions ?? []).map((s) => s.user),
         ...(t.labels ?? []),
         ...(ctx.groupLabels ?? []),
+        // 裝置上的服務叫 telepy-<安裝代號>：搜代號（或整個服務名）就找得到隧道。/ The install id, so a device's service name finds its tunnel.
+        t.device_install?.id ? `telepy-${t.device_install.id}` : "",
     ];
     return hay.some((h) => h.toLowerCase().includes(term));
 }

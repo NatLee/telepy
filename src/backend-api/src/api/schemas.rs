@@ -4173,3 +4173,108 @@ pub struct NotifyMuteBody {
     /// all (default) | status
     pub scope: Option<String>,
 }
+
+#[derive(ToSchema)]
+pub struct DeviceInstallNames {
+    /// systemd unit (`telepy-<install id>.service`)
+    pub systemd: String,
+    /// launchd label (`com.telepy.tunnel.<install id>`)
+    pub launchd: String,
+    /// The reconnect loop (`~/.ssh/telepy-<install id>.sh`)
+    #[schema(rename = "loop")]
+    pub loop_: String,
+    pub known_hosts: String,
+    /// Docker container name
+    pub container: String,
+    /// The unit / plist description (the install id only)
+    pub description: String,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallPart {
+    /// service | process | cron | container | script | file
+    pub kind: String,
+    /// systemd / systemd-user / launchd / loop / docker / key / known_hosts / log …
+    pub what: String,
+    /// Unit, label, container or path
+    pub name: String,
+    /// The login account whose survey found it
+    pub account: String,
+    /// Named after this tunnel's install id
+    pub private: bool,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallRenamePlan {
+    pub possible: bool,
+    /// not_surveyed | windows | nothing_to_rename | no_process | unparsed | needs_root | unknown_owner | odd_command (null when possible)
+    pub blocker: Option<String>,
+    /// systemd | systemd_user | launchd_daemon | launchd_agent | loop
+    pub method: Option<String>,
+    /// The login account that installs the new service
+    pub account: Option<String>,
+    /// The account the tunnel runs as
+    pub run_user: Option<String>,
+    pub new_name: Option<String>,
+    /// Older service names that would be replaced
+    pub old: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallAccount {
+    pub account: String,
+    /// posix | windows (null = could not log in)
+    pub platform: Option<String>,
+    pub os: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "A tunnel's names on its device (a random install id, so nothing reveals who set it up) and what the last survey found there")]
+pub struct DeviceInstall {
+    pub install_id: String,
+    pub names: DeviceInstallNames,
+    pub online: bool,
+    /// A rename is running
+    pub busy: bool,
+    pub surveyed_at: Option<String>,
+    pub survey_error: Option<String>,
+    pub accounts: Vec<DeviceInstallAccount>,
+    pub parts: Vec<DeviceInstallPart>,
+    /// Named services not named after the install id
+    pub older: Vec<String>,
+    pub rename: DeviceInstallRenamePlan,
+    pub renamed_at: Option<String>,
+    pub renamed_from: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallStep {
+    /// survey | install | standby | check | switch | remove | confirm
+    pub id: String,
+    /// done | failed
+    pub state: String,
+    pub detail: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallReport {
+    /// The new service took over and nothing of the old one is left
+    pub ok: bool,
+    pub steps: Vec<DeviceInstallStep>,
+    /// Failure code: a blocker, survey_failed, login_failed, install_failed, standby_timeout, check_failed, switch_failed, old_left, old_came_back
+    pub code: Option<String>,
+    pub error: Option<String>,
+    pub method: Option<String>,
+    pub account: Option<String>,
+    pub new_name: Option<String>,
+    pub old: Vec<String>,
+    /// The new service's last log lines when it did not connect
+    pub log: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallRename {
+    pub report: DeviceInstallReport,
+    pub view: DeviceInstall,
+}

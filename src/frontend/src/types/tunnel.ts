@@ -48,6 +48,8 @@ export interface Tunnel {
     host_key_changed?: boolean;
     /** 這條隧道指到的機器屬於別的帳號的隧道，連線被拒。/ The machine behind this tunnel belongs to another account's tunnel; refused. */
     device_claimed?: boolean;
+    /** owner / ADMIN：裝置上的安裝代號與上次盤點到的舊名稱服務。/ Managers: the install id and older-named services. */
+    device_install?: import("@/lib/deviceInstall").DeviceInstallSummary | null;
     /** 單筆才有：這條通道自己的服務公鑰（裝置要授權的那把）。/ Single retrieve only: the tunnel's own service key. */
     service_key?: string | null;
 }

@@ -10,6 +10,7 @@ pub mod browser;
 pub mod command_rules;
 pub mod credentials;
 pub mod desktop;
+pub mod device_install;
 pub mod device_keys;
 pub mod doc;
 pub mod groups;

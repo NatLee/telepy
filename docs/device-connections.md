@@ -234,3 +234,55 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 容器掛在 `/id_rsa` 的金鑰；旁邊的 `.pub` 或 `ssh-keygen -y` 要算出隧道金鑰），以前寫著號碼的舊腳本照舊用號碼認；
 一鍵加入的背景迴圈重跑時也用金鑰檔找舊的 ssh（不再用號碼，否則同一台的其他隧道會被誤殺）。
 `reverse_port` 的 u16 上限是純內部的，真的接近時再放寬型別。測試：`tests/key_identified.rs`、`tests/tunnel_delete.rs`。
+
+## 十一、裝置上的名稱：安裝代號、盤點、改名不離線（`device_install/`）
+
+**問題**：以前裝到裝置上的東西有些帶著人或伺服器的名字——hdre 遷移腳本的 `telepy-natlee.service` /
+`info.natlee.telepy` / `telepy_natlee_known_hosts`、一鍵加入 unit 說明裡的隧道名稱、所有隧道共用的 `telepy-tunnel.service`
+（同一台兩條隧道會互相覆蓋）與 `~/.ssh/telepy_known_hosts`（第二台伺服器加入時把第一台的 host key 蓋掉）。別的使用者的
+機器上出現 `telepy-natlee`，等於告訴他是誰在管這台伺服器；Telepy 也不知道當初裝了什麼，刪除時只能猜。
+
+**安裝代號**：每條隧道第一次需要時抽一個 8 字的隨機代號（`[a-hj-km-np-z2-9]`，`telepy_device_install`，全站唯一，跟著隧道刪），
+所有裝置端的名稱都從它取：`telepy-<id>.service`（systemd，system / --user、autossh 服務都一樣）、`com.telepy.tunnel.<id>`
+（launchd）、`~/.ssh/telepy-<id>.sh`（背景迴圈）、`telepy-<id>.known_hosts`、`telepy-<id>-uninstall.sh`、`telepy-<id>-ws.*`、
+Docker 容器 `telepy-<id>`；unit 的說明只寫 `Telepy reverse tunnel <id>`。代號不含使用者、網域或隧道名稱，隧道改名不必動裝置；
+在隧道頁搜尋代號就找得到那條隧道。不用雜湊：沒有紀錄的話算不回原名，`SECRET_KEY` 一換也全變；隨機 + 紀錄一樣乾淨。
+`telepy-` 前綴留著——裝置管理員看得出這是什麼，一個看不出來歷、一直往外連 SSH 的服務反而像惡意程式。ssh 指令本身仍會寫
+出它連的伺服器（`telepy@<網域>`、`HostKeyAlias`），那是連線本身需要的。
+
+**盤點（survey）**：刪除用的 `remove_tunnel.sh` 多了 `T_MODE=survey`：什麼都不改，只回報 `found` 項目（unit / plist 的路徑、
+迴圈、正在跑的 ssh 與它的擁有者 `owner <pid> <帳號> <家目錄>`、crontab 行、容器、金鑰、known_hosts）。結果存在
+`telepy_device_install.survey`，一鍵加入驗證後、device_info 每天那趟（沒盤點過或超過 7 天）、詳細資料按「重新檢查」時更新。
+Windows 的腳本只會移除，盤點還沒做（只回平台）。
+
+**連到別台伺服器的不碰**：同一把金鑰可能同時服務兩台 Telepy（hdre 與新站就是），以前「依金鑰比對」會把 hdre 的 unit 一起拆掉。
+現在檔案或命令列寫了 port（`-p N`、`'-p' 'N'`、`Port=N`、`SSH_REMOTE_PORT=N`）而且沒有一個是這台 gateway 的
+`REVERSE_SERVER_SSH_PORT`，就是別台的（`kept other-server`），刪除、盤點、改名都跳過。沒寫 port 的照舊認。
+
+**改名，先接上再拆舊的**：指令本身就是經這條隧道送過去的，先停舊的等於先把自己切斷。所以：
+1. 重新盤點，`plan::plan` 從正在跑的 ssh（`parse_ssh`：`-i`、`-p`、`-R` 的目標、`user@host`、ProxyCommand）與找到的舊服務排出
+   計畫：同一種方式（systemd system → system unit 以原本的 `User=`；--user / LaunchAgent / 迴圈 → 跑它的那個帳號；系統層要
+   root 或 `sudo -n`），金鑰、伺服器、port、轉發目標都照舊，known_hosts 改寫成這台 gateway 的 host key。擋下的原因（Windows、
+   要 root、讀不懂指令、相對金鑰路徑…）回成 `blocker`，網頁照著說明。
+2. gateway `arm_handover(port)`：這段時間同一條隧道（同一把隧道金鑰認出的）第二條連線的 `tcpip-forward` 不被拒，而是記成
+   **備援**（`standby`；回成功，新 ssh 的 `ExitOnForwardFailure` 不會退出），forward 仍在舊連線上。事件 `standby_forward`。
+3. 經舊連線跑安裝腳本（`plan::install_script`：檔案先寫旁邊再改名、啟動新服務）。
+4. 等備援出現（預設 45 秒）；`device::connect_standby` 經備援登入一次。
+5. `promote`：forward 移到新連線（事件 `handover`，記新的 endpoint）。舊連線還活著但不再帶隧道。
+6. 經**新**連線跑移除腳本的 `T_MODE=relabel`：跟刪除一樣找出這條隧道的東西，但跳過用代號取名的（`kept_new`）、留下金鑰，
+   舊 unit / plist / 迴圈 / crontab 行 / 舊 known_hosts（沒人再用的話）/ 舊的 uninstall 腳本拿掉，停止腳本照舊在背景跑。
+7. `finish_relabel`：舊連線斷了、forward 還在新連線上、13 秒內沒有別的連線冒出來（還有東西在重啟舊的）；再盤點一次存起來。
+   事件 `service_renamed`。
+
+2–5 任何一步失敗就經舊連線跑 `undo_script` 把剛裝的拆掉，關掉交接——舊的完全沒動過，隧道一直在線。舊連線剛好在途中自己
+斷了，備援會自動接手（`on_disconnect`），所以那也不會離線。代價：舊連線關掉時，這台裝置上開著的網頁終端機與檔案管理會重連一次
+（它們的 channel 在舊的 TCP 上）。
+
+**刪除用代號清**：刪除的移除腳本拿到 `T_INSTALL`，認得新名稱的 unit / label / 迴圈 / uninstall / ws 檔與
+`telepy-<id>.known_hosts`；known_hosts 只在沒有 unit、plist、迴圈、`~/.ssh/config` 或 CLI 設定還用它時才刪（裝置常常也是某人的
+筆電，`~/.ssh/telepy_known_hosts` 可能是筆電 ssh config 的）。
+
+一鍵加入重新跑時，若看到同一條隧道舊名稱的安裝（`telepy-tunnel-<id>`），先停掉、拿掉再裝新的，兩個不會搶同一條隧道。
+
+測試：`tests/device_install.rs`（真的 `/bin/sh` 裝置、真的重連迴圈當舊服務、`<home>/bin` 放假的 crontab / ssh，
+改名過程中 forward 一次都沒釋放；新服務連不上時自動復原），單元測試在 `device_install/plan.rs`、`names.rs`。

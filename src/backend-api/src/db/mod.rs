@@ -9,6 +9,7 @@ pub mod audit_chain;
 pub mod command_rules;
 pub mod snippets;
 pub mod credentials;
+pub mod device_install;
 pub mod device_keys;
 pub mod features;
 pub mod groups;

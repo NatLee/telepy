@@ -61,6 +61,13 @@ impl Identity {
     }
 }
 
+/// `register_forward` 的結果。/ What `register_forward` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Registered {
+    Primary,
+    Standby,
+}
+
 pub struct Forward {
     /// 隧道自己的號碼（內部 key）。/ The tunnel's own number (the internal key).
     pub port: u16,
@@ -122,6 +129,12 @@ pub struct Gateway {
     /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
     proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
+    /// 改名交接開著的 port（到期時間）：這段時間同一條隧道的第二條連線先當備援，不被拒絕。
+    /// Ports with a handover open (until when): a second connection of the same tunnel waits as a standby meanwhile.
+    handovers: DashMap<u16, Instant>,
+    /// 備援連線的 forward（還沒接手；確認能登入後 `promote`，或舊的斷線時自動接手）。
+    /// Standby forwards: promoted once checked, or automatically when the old connection drops.
+    standby: DashMap<u16, Arc<Forward>>,
     /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
     /// 所有活著的連線（含握手中、未認證的）；連線上限看這個，不然沒認證的連線不受限。
@@ -221,6 +234,8 @@ impl Gateway {
             features,
             proxy_from,
             forwards: DashMap::new(),
+            handovers: DashMap::new(),
+            standby: DashMap::new(),
             conns: DashMap::new(),
             live: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
@@ -337,6 +352,72 @@ impl Gateway {
         self.live.load(Ordering::SeqCst) >= self.config.gateway_max_connections
     }
 
+    /// 改名交接：接下來 `for` 這段時間，這條隧道的第二條連線先當備援（`crate::device_install`）。
+    /// Open a handover: for a while a second connection of this tunnel becomes a standby instead of being refused.
+    pub fn arm_handover(&self, port: u16, for_: Duration) {
+        self.handovers.insert(port, Instant::now() + for_);
+    }
+
+    /// 結束交接（沒接手的備援也丟掉；它的連線若還在，之後的要求照舊被拒）。/ Close the handover and drop an unpromoted standby.
+    pub fn disarm_handover(&self, port: u16) {
+        self.handovers.remove(&port);
+        self.standby.remove(&port);
+    }
+
+    fn handover_open(&self, port: u16) -> bool {
+        self.handovers.get(&port).is_some_and(|until| *until > Instant::now())
+    }
+
+    fn tunnel_of(&self, conn_id: u64) -> Option<i64> {
+        self.conns.get(&conn_id).and_then(|c| match c.identity {
+            Identity::Tunnel { tunnel_id, .. } => Some(tunnel_id),
+            Identity::User { .. } => None,
+        })
+    }
+
+    /// 現在持有這個 port 的連線。/ The connection holding this port's forward.
+    pub fn forward_conn(&self, port: u16) -> Option<u64> {
+        self.forwards.get(&port).map(|f| f.conn_id)
+    }
+
+    /// 備援連線（還活著的）。/ The live standby connection.
+    pub fn standby_conn(&self, port: u16) -> Option<u64> {
+        self.standby.get(&port).map(|f| f.conn_id).filter(|c| self.conns.contains_key(c))
+    }
+
+    pub fn conn_alive(&self, conn_id: u64) -> bool {
+        self.conns.contains_key(&conn_id)
+    }
+
+    /// 這條隧道（以隧道金鑰認出的）所有活著的連線。/ Every live connection identified as this tunnel.
+    pub fn tunnel_conns(&self, tunnel_id: i64) -> Vec<u64> {
+        self.conns.iter().filter(|c| matches!(c.identity, Identity::Tunnel { tunnel_id: t, .. } if t == tunnel_id)).map(|c| *c.key()).collect()
+    }
+
+    /// 在備援連線上開 forwarded-tcpip（接手前先確認它真的到得了裝置的 sshd）。/ A channel through the standby, to check it first.
+    pub async fn open_standby_stream(&self, port: u16) -> anyhow::Result<ChannelStream<Msg>> {
+        let fwd = self.standby.get(&port).map(|f| f.clone()).ok_or_else(|| anyhow::anyhow!("no standby connection on port {port}"))?;
+        let channel = fwd
+            .handle
+            .channel_open_forwarded_tcpip(fwd.address.clone(), fwd.client_port, "127.0.0.1", 0)
+            .await
+            .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
+        Ok(channel.into_stream())
+    }
+
+    /// 備援接手：forward 移到新的連線（舊連線還在，但之後的新通道都走新的）。/ Promote the standby to hold the forward.
+    pub async fn promote(&self, port: u16) -> bool {
+        let Some((_, s)) = self.standby.remove(&port) else { return false };
+        let Some(peer) = self.conns.get(&s.conn_id).map(|c| c.peer) else { return false };
+        let tunnel_id = self.tunnel_of(s.conn_id);
+        self.forwards.insert(port, s.clone());
+        self.handovers.remove(&port);
+        self.publish_status();
+        self.event("handover", Some(peer), Some(port), tunnel_id, format!("Remote forward on port {port} moved to the new connection from {} port {} (the device's service was renamed)", peer.ip(), peer.port())).await;
+        self.remember_endpoint(s.conn_id, port).await;
+        true
+    }
+
     /// 後端自己用：直接在裝置的隧道上開一條 forwarded-tcpip 通道（不經 loopback TCP、不占本機 port）。
     /// Open a forwarded-tcpip channel to the device in-process (no loopback TCP, no local port).
     pub async fn open_stream(&self, port: u16) -> anyhow::Result<ChannelStream<Msg>> {
@@ -354,7 +435,7 @@ impl Gateway {
     /// Tunnel deleted: drop the device's connections (their forwards go with them; it cannot reconnect).
     pub async fn disconnect_tunnel(&self, tunnel_id: i64) -> usize {
         let mut handles: HashMap<u64, Handle> = HashMap::new();
-        for f in self.forwards.iter() {
+        for f in self.forwards.iter().chain(self.standby.iter()) {
             let is_tunnel = self.conns.get(&f.conn_id).is_some_and(|c| matches!(c.identity, Identity::Tunnel { tunnel_id: t, .. } if t == tunnel_id));
             if is_tunnel {
                 handles.entry(f.conn_id).or_insert_with(|| f.handle.clone());
@@ -566,24 +647,36 @@ impl Gateway {
         })
     }
 
-    /// 記住 port → 這條連線（不綁本機 port）。/ Remember port → connection; nothing is bound locally.
-    fn register_forward(&self, conn_id: u64, address: &str, port: u16, client_port: u32, handle: Handle) -> anyhow::Result<()> {
+    /// 記住 port → 這條連線（不綁本機 port）。交接開著、而且是同一條隧道的第二條連線時，先當備援。
+    /// Remember port → connection; nothing is bound locally. During a handover a second connection of the same tunnel
+    /// becomes the standby instead of being refused.
+    fn register_forward(&self, conn_id: u64, address: &str, port: u16, client_port: u32, handle: Handle) -> anyhow::Result<Registered> {
+        let fwd = || Arc::new(Forward { port, address: address.to_string(), client_port, conn_id, handle: handle.clone() });
         if let Some(existing) = self.forwards.get(&port).map(|f| f.clone()) {
             if existing.conn_id == conn_id {
-                return Ok(());
+                return Ok(Registered::Primary);
             }
             if self.conns.contains_key(&existing.conn_id) {
+                let same_tunnel = self.tunnel_of(conn_id).is_some() && self.tunnel_of(conn_id) == self.tunnel_of(existing.conn_id);
+                if self.handover_open(port) && same_tunnel {
+                    if self.standby_conn(port).is_some_and(|c| c != conn_id) {
+                        bail!("port {port} already has a standby connection");
+                    }
+                    self.standby.insert(port, fwd());
+                    return Ok(Registered::Standby);
+                }
                 bail!("port {port} is already forwarded by another live connection");
             }
             // 擁有者已斷線但尚未清理：接手。/ Stale owner: take over.
             self.forwards.remove(&port);
         }
-        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), client_port, conn_id, handle }));
+        self.forwards.insert(port, fwd());
         self.publish_status();
-        Ok(())
+        Ok(Registered::Primary)
     }
 
     fn unregister_forward(&self, conn_id: u64, port: u16) -> bool {
+        self.standby.remove_if(&port, |_, f| f.conn_id == conn_id);
         let owned = self.forwards.get(&port).map(|f| f.conn_id == conn_id).unwrap_or(false);
         if owned {
             self.forwards.remove(&port);
@@ -592,8 +685,11 @@ impl Gateway {
         owned
     }
 
-    fn on_disconnect(&self, conn_id: u64) -> (Vec<u16>, Option<ConnInfo>) {
+    /// 斷線：放掉它的 forward；有活著的備援就由備援接手（回傳接手的 port 與新連線）。
+    /// Disconnect: release its forwards, except where a live standby takes over (returned with the new connection).
+    fn on_disconnect(&self, conn_id: u64) -> (Vec<u16>, Vec<(u16, u64)>, Option<ConnInfo>) {
         let info = self.conns.remove(&conn_id).map(|(_, v)| v);
+        self.standby.retain(|_, f| f.conn_id != conn_id);
         let mut dropped = Vec::new();
         self.forwards.retain(|port, f| {
             if f.conn_id == conn_id {
@@ -603,8 +699,17 @@ impl Gateway {
                 true
             }
         });
+        let mut promoted = Vec::new();
+        dropped.retain(|port| match self.standby.remove(port) {
+            Some((_, s)) if self.conns.contains_key(&s.conn_id) => {
+                promoted.push((*port, s.conn_id));
+                self.forwards.insert(*port, s);
+                false
+            }
+            _ => true,
+        });
         self.publish_status();
-        (dropped, info)
+        (dropped, promoted, info)
     }
 
     /// 每條 forward 開一條 forwarded-tcpip 通道、讀裝置 sshd banner 的第一個 byte，當作 RTT。
@@ -822,7 +927,11 @@ impl Handler for GatewayHandler {
         let client_port = if requested == 0 { u32::from(p) } else { requested };
         let asked = if requested != u32::from(p) { format!(" (the device asked for {requested})") } else { String::new() };
         match self.gw.register_forward(self.conn_id, address, p, client_port, session.handle()) {
-            Ok(()) => {
+            Ok(Registered::Standby) => {
+                self.gw.event("standby_forward", Some(self.peer), Some(p), tunnel_id, format!("Standby forward on port {p} from {} port {} (waiting to take over from the running connection)", self.peer.ip(), self.peer.port())).await;
+                Ok(true)
+            }
+            Ok(Registered::Primary) => {
                 self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}{asked}", self.peer.ip(), self.peer.port())).await;
                 self.gw.remember_endpoint(self.conn_id, p).await;
                 Ok(true)
@@ -996,7 +1105,7 @@ impl Handler for GatewayHandler {
 impl Drop for GatewayHandler {
     fn drop(&mut self) {
         self.gw.live.fetch_sub(1, Ordering::SeqCst);
-        let (dropped, info) = self.gw.on_disconnect(self.conn_id);
+        let (dropped, promoted, info) = self.gw.on_disconnect(self.conn_id);
         let gw = self.gw.clone();
         let peer = info.as_ref().map(|i| i.peer).unwrap_or(self.peer);
         let identity = info.map(|i| i.identity);
@@ -1019,6 +1128,10 @@ impl Drop for GatewayHandler {
                     for p in dropped {
                         gw.event("forward_released", Some(peer), Some(p), tunnel_id, format!("Remote forward on port {p} released ({} port {})", peer.ip(), peer.port())).await;
                         gw.remember_release(p).await;
+                    }
+                    for (p, new_conn) in promoted {
+                        gw.event("handover", Some(peer), Some(p), tunnel_id, format!("Remote forward on port {p} moved to the standby connection ({} port {} disconnected)", peer.ip(), peer.port())).await;
+                        gw.remember_endpoint(new_conn, p).await;
                     }
                 } else {
                     gw.event("preauth_close", Some(peer), None, None, format!("Connection closed by authenticating user {user} {} port {} [preauth]", peer.ip(), peer.port())).await;

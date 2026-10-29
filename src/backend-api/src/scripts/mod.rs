@@ -55,6 +55,9 @@ pub struct ScriptContext<'a> {
     /// SSH over WebSocket：裝置只能出網頁 port 時，ssh 經 `telepy-ws.py` 把連線包進 `/ws/gateway/`。
     /// SSH over WebSocket for devices that can only reach the web port.
     pub ws: Option<WsCarrier<'a>>,
+    /// 隧道的安裝代號：裝置上的檔案、服務、容器都用它取名（`crate::device_install::names`）。
+    /// The tunnel's install id: files, services and containers on the device are named after it.
+    pub install_id: &'a str,
 }
 
 /// SSH over WebSocket 需要的兩個位址。/ What the WebSocket carrier needs.
@@ -71,12 +74,12 @@ pub const WS_CLIENT_PATH: &str = "~/.ssh/telepy-ws.py";
 
 /// 使用者層級的 bash 腳本：下載小程式、組 ProxyCommand。回 (setup 區塊, ssh 選項)。
 /// User-level bash scripts: fetch the carrier, build the ProxyCommand. Returns (setup, option).
-fn bash_ws(ws: Option<WsCarrier>, dir: &str, python: &str) -> (String, String) {
+fn bash_ws(ws: Option<WsCarrier>, dir: &str, file: &str, python: &str) -> (String, String) {
     let Some(ws) = ws else { return (String::new(), String::new()) };
     let setup = format!(
         "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
          command -v {python} >/dev/null 2>&1 || {{ echo '{python} is required to carry the tunnel over the web port.'; exit 1; }}\n\
-         WS_CLIENT=\"{dir}/telepy-ws.py\"\n\
+         WS_CLIENT=\"{dir}/{file}\"\n\
          curl -fsSL '{}' -o \"$WS_CLIENT\" && chmod 700 \"$WS_CLIENT\" || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n",
         ws.client_url
     );
@@ -108,14 +111,19 @@ fn base_mapping(ctx: &ScriptContext) -> HashMap<&'static str, String> {
     m.insert("reverse_port", ctx.reverse_port.to_string());
     m.insert("ssh_port", ctx.ssh_port.to_string());
     m.insert("reverse_server_ssh_port", ctx.reverse_server_ssh_port.to_string());
+    let names = crate::device_install::names::Names::new(ctx.install_id);
+    m.insert("install_id", ctx.install_id.to_string());
+    m.insert("install_base", names.base());
+    m.insert("install_description", names.description());
+    m.insert("known_hosts_file", names.known_hosts());
     m
 }
 
 /// 「不驗證」的 ssh 選項（gateway 沒有 host key 時）。/ The no-check options (no gateway host key known).
 const NO_CHECK_OPTIONS: &str = "-o \"StrictHostKeyChecking=no\" \\\n-o \"UserKnownHostsFile=/dev/null\" \\\n";
 
-/// 使用者層級的 bash 腳本：先寫 `~/.ssh/telepy_known_hosts`，再用 `HostKeyAlias` 比對。回 (setup 區塊, ssh 選項)。
-/// User-level bash scripts: write `~/.ssh/telepy_known_hosts`, then pin through `HostKeyAlias`. Returns (setup, options).
+/// 使用者層級的 bash 腳本：先寫 `~/.ssh/telepy-<安裝代號>.known_hosts`，再用 `HostKeyAlias` 比對。回 (setup 區塊, ssh 選項)。
+/// User-level bash scripts: write `~/.ssh/telepy-<install id>.known_hosts`, then pin through `HostKeyAlias`.
 fn bash_pinning(ctx: &ScriptContext) -> (String, String) {
     if ctx.gateway_host_keys.is_empty() {
         return (String::new(), NO_CHECK_OPTIONS.to_string());
@@ -123,10 +131,11 @@ fn bash_pinning(ctx: &ScriptContext) -> (String, String) {
     let alias = gateway_alias(ctx.server_domain, ctx.reverse_server_ssh_port);
     let setup = format!(
         "\n# Telepy's SSH host key: this tunnel only ever talks to the real server (no prompt, no impostor).\n\
-         KNOWN_HOSTS=\"$HOME/.ssh/telepy_known_hosts\"\n\
+         KNOWN_HOSTS=\"$HOME/.ssh/{}\"\n\
          mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\"\n\
          cat > \"$KNOWN_HOSTS\" <<'TELEPY_HOST_KEYS'\n{}TELEPY_HOST_KEYS\n\
          chmod 600 \"$KNOWN_HOSTS\"\n",
+        crate::device_install::names::Names::new(ctx.install_id).known_hosts(),
         known_hosts_lines(&alias, ctx.gateway_host_keys)
     );
     let options = format!("-o \"StrictHostKeyChecking=yes\" \\\n-o \"UserKnownHostsFile=$KNOWN_HOSTS\" \\\n-o \"HostKeyAlias={alias}\" \\\n");
@@ -136,6 +145,7 @@ fn bash_pinning(ctx: &ScriptContext) -> (String, String) {
 /// `ssh_tunnel_script_factory(tunnel_type, ...).render()`；回 (script, language)。
 pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, &'static str), String> {
     let mut m = base_mapping(ctx);
+    let names = crate::device_install::names::Names::new(ctx.install_id);
     let alias = gateway_alias(ctx.server_domain, ctx.reverse_server_ssh_port);
     let pinned = !ctx.gateway_host_keys.is_empty();
     match tunnel_type.to_ascii_lowercase().as_str() {
@@ -144,7 +154,7 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             let (setup, options) = bash_pinning(ctx);
             m.insert("known_hosts_setup", setup);
             m.insert("host_key_options", options);
-            let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", "python3");
+            let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", &names.ws_py(), "python3");
             m.insert("ws_client_setup", ws_setup);
             m.insert("proxy_option", proxy);
             let tpl = if tunnel_type.eq_ignore_ascii_case("ssh") { SSH } else { AUTOSSH };
@@ -160,12 +170,13 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
                         format!(
                             "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
                              command -v python3 >/dev/null 2>&1 || {{ echo 'python3 is required to carry the tunnel over the web port.'; exit 1; }}\n\
-                             curl -fsSL '{}' | $SUDO tee /etc/ssh/telepy-ws.py > /dev/null || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n\
-                             $SUDO chmod 755 /etc/ssh/telepy-ws.py\n",
-                            ws.client_url
+                             curl -fsSL '{}' | $SUDO tee /etc/ssh/{py} > /dev/null || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n\
+                             $SUDO chmod 755 /etc/ssh/{py}\n",
+                            ws.client_url,
+                            py = names.ws_py()
                         ),
                     );
-                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/telepy-ws.py {}\" ", ws.url));
+                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/{} {}\" ", names.ws_py(), ws.url));
                 }
                 None => {
                     m.insert("ws_client_setup", String::new());
@@ -180,13 +191,14 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
                     "known_hosts_setup",
                     format!(
                         "\n# Telepy's SSH host key: the service only ever talks to the real server (no prompt, no impostor).\n\
-                         KNOWN_HOSTS=/etc/ssh/telepy_known_hosts\n\
+                         KNOWN_HOSTS=/etc/ssh/{}\n\
                          printf '%s' '{}' | $SUDO tee \"$KNOWN_HOSTS\" > /dev/null\n\
                          $SUDO chmod 644 \"$KNOWN_HOSTS\"\n",
+                        names.known_hosts(),
                         known_hosts_lines(&alias, ctx.gateway_host_keys)
                     ),
                 );
-                m.insert("host_key_options", format!("-o \"StrictHostKeyChecking=yes\" -o \"UserKnownHostsFile=/etc/ssh/telepy_known_hosts\" -o \"HostKeyAlias={alias}\" "));
+                m.insert("host_key_options", format!("-o \"StrictHostKeyChecking=yes\" -o \"UserKnownHostsFile=/etc/ssh/{}\" -o \"HostKeyAlias={alias}\" ", names.known_hosts()));
             } else {
                 m.insert("known_hosts_setup", String::new());
                 m.insert("host_key_options", "-o \"StrictHostKeyChecking=no\" -o \"UserKnownHostsFile=/dev/null\" ".into());
@@ -231,10 +243,11 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
                     "known_hosts_setup",
                     format!(
                         "\n# Telepy's SSH host key: the container only ever talks to the real server (no impostor).\n\
-                         KNOWN_HOSTS=\"$HOME/.ssh/telepy_known_hosts\"\n\
+                         KNOWN_HOSTS=\"$HOME/.ssh/{kh}\"\n\
                          mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\"\n\
                          cat > \"$KNOWN_HOSTS\" <<'TELEPY_HOST_KEYS'\n{host_lines}TELEPY_HOST_KEYS\n\
-                         chmod 644 \"$KNOWN_HOSTS\"\n"
+                         chmod 644 \"$KNOWN_HOSTS\"\n",
+                        kh = names.known_hosts()
                     ),
                 );
                 m.insert("known_hosts_mount", "  -v \"$KNOWN_HOSTS\":/known_hosts:ro \\\n  -e SSH_STRICT_HOST_IP_CHECK=false \\\n".into());
@@ -472,6 +485,7 @@ mod tests {
             telepy_public_key: None,
             gateway_host_keys: &[],
             ws: None,
+            install_id: "k7m2q9xd",
         };
         let (s, lang) = render_script("ssh", &ctx).unwrap();
         assert_eq!(lang, "bash");
@@ -501,6 +515,7 @@ mod tests {
             telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
             gateway_host_keys: &[],
             ws: None,
+            install_id: "k7m2q9xd",
         };
         let (s, lang) = render_script("docker-compose", &ctx).unwrap();
         assert_eq!(lang, "yaml");
@@ -514,7 +529,8 @@ mod tests {
         assert!(s.contains("docker compose -f telepy-docker-compose.yml up -d"));
         assert!(!s.contains("ports:"), "the reverse port is bound on the Telepy server, not on the device");
         assert!(!s.contains("${"), "every placeholder must be substituted (compose would try to expand it): {s}");
-        assert!(s.contains("\"My Box\""));
+        // 裝置上的名稱用安裝代號，不用隧道名稱。/ Named after the install id, not the tunnel.
+        assert!(s.contains("container_name: telepy-k7m2q9xd\n") && !s.contains("My Box"), "{s}");
 
         let (s, lang) = render_script("docker-run", &ScriptContext { key_path: Some("/keys/dev.pem"), ..ctx.clone() }).unwrap();
         assert_eq!(lang, "bash");
@@ -525,6 +541,7 @@ mod tests {
         assert!(s.contains("TELEPY_KEY='ssh-ed25519 AAAAtest web-service'"));
         assert!(s.contains(">> ~/.ssh/authorized_keys") && !s.contains(" > ~/.ssh/authorized_keys"), "append only: {s}");
         assert!(s.contains("jnovack/autossh:latest"));
+        assert!(s.contains("docker rm -f telepy-k7m2q9xd ") && s.contains("--name telepy-k7m2q9xd \\\n") && !s.contains("My Box"), "{s}");
         let (s, _) = render_script("docker-run", &ctx).unwrap();
         assert!(s.contains("KEY_FILE=$HOME/.ssh/id_rsa\n"), "{s}");
         let (s, _) = render_script("docker-run", &ScriptContext { telepy_public_key: None, ..ctx.clone() }).unwrap();
@@ -547,6 +564,7 @@ mod tests {
             telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
             gateway_host_keys: &keys,
             ws: None,
+            install_id: "k7m2q9xd",
         };
         for kind in ["ssh", "autossh"] {
             let (s, _) = render_script(kind, &ctx).unwrap();
@@ -554,11 +572,15 @@ mod tests {
             assert!(s.contains("-o \"StrictHostKeyChecking=yes\" \\\n-o \"UserKnownHostsFile=$KNOWN_HOSTS\" \\\n-o \"HostKeyAlias=telepy-telepy.test-24242\" \\\n"), "{kind}: {s}");
             assert!(!s.contains("StrictHostKeyChecking=no"), "{kind}: {s}");
             assert!(s.contains("chmod 600 \"$KNOWN_HOSTS\""), "{kind}: {s}");
+            assert!(s.contains("KNOWN_HOSTS=\"$HOME/.ssh/telepy-k7m2q9xd.known_hosts\""), "one file per tunnel: {kind}: {s}");
         }
         let (s, _) = render_script("autossh-service", &ctx).unwrap();
         assert!(s.contains("| $SUDO tee \"$KNOWN_HOSTS\""), "{s}");
-        assert!(s.contains("-o \"UserKnownHostsFile=/etc/ssh/telepy_known_hosts\" -o \"HostKeyAlias=telepy-telepy.test-24242\" -i ~/.ssh/id_rsa -p 24242"), "{s}");
+        assert!(s.contains("-o \"UserKnownHostsFile=/etc/ssh/telepy-k7m2q9xd.known_hosts\" -o \"HostKeyAlias=telepy-telepy.test-24242\" -i ~/.ssh/id_rsa -p 24242"), "{s}");
+        assert!(s.contains("SERVICE_PATH=\"/etc/systemd/system/telepy-k7m2q9xd.service\"") && s.contains("Description=Telepy reverse tunnel k7m2q9xd\n"), "{s}");
+        assert!(s.contains("LogsDirectory=telepy-k7m2q9xd\n") && s.contains("systemctl restart telepy-k7m2q9xd.service"), "{s}");
         let (s, _) = render_script("powershell", &ctx).unwrap();
+        assert!(s.contains("$knownHosts = \"$env:USERPROFILE\\.ssh\\telepy-k7m2q9xd.known_hosts\""), "{s}");
         assert!(s.contains("[IO.File]::WriteAllText($knownHosts, @'\ntelepy-telepy.test-24242 ssh-ed25519 AAAAgateway\ntelepy-telepy.test-24242 ssh-rsa AAAArsa\n'@"), "{s}");
         assert!(s.contains("$hostKeyOptions = \"-o StrictHostKeyChecking=yes -o UserKnownHostsFile=`\"$knownHosts`\" -o HostKeyAlias=telepy-telepy.test-24242\""), "{s}");
         assert!(s.contains("-o ServerAliveCountMax=3 $hostKeyOptions\""), "{s}");

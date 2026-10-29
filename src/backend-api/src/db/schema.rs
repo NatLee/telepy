@@ -921,9 +921,25 @@ const TABLES: &[(&str, &str)] = &[
             "applied_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：隧道在裝置上的名稱（隨機安裝代號）與最近一次盤點到的東西（JSON），隧道刪除時一併刪。
+    // A tunnel's names on its device (a random install id) and what the last survey found there; deleted with the tunnel.
+    (
+        "telepy_device_install",
+        r#"CREATE TABLE "telepy_device_install" (
+            "tunnel_id" integer NOT NULL PRIMARY KEY,
+            "install_id" varchar(16) NOT NULL,
+            "created_at" datetime NOT NULL,
+            "survey" text NULL,
+            "surveyed_at" datetime NULL,
+            "survey_error" text NULL,
+            "renamed_at" datetime NULL,
+            "renamed_from" text NULL
+        )"#,
+    ),
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_install_id" ON "telepy_device_install" ("install_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_grant" ON "telepy_api_call" ("grant_id", "at")"#,
