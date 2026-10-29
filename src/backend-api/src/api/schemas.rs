@@ -4202,6 +4202,17 @@ pub struct DeviceInstallPart {
     pub account: String,
     /// Named after this tunnel's install id
     pub private: bool,
+    /// One of Telepy's earlier standard names
+    pub earlier: bool,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallOther {
+    /// Unit / plist / script file name, or the running ssh command
+    pub name: String,
+    pub port: Option<u16>,
+    pub process: bool,
+    pub account: String,
 }
 
 #[derive(ToSchema)]
@@ -4241,8 +4252,16 @@ pub struct DeviceInstall {
     pub survey_error: Option<String>,
     pub accounts: Vec<DeviceInstallAccount>,
     pub parts: Vec<DeviceInstallPart>,
-    /// Named services not named after the install id
+    /// Services to rename: neither named after the install id nor one of Telepy's earlier standard names (e.g. a name that shows who set the device up)
     pub older: Vec<String>,
+    /// Telepy's earlier standard names (telepy-tunnel-<n>.service, com.telepy.tunnel.<n>, telepy-tunnel.service): fine to keep, may be renamed
+    pub earlier: Vec<String>,
+    /// Things on the device that dial another server; never touched by delete, survey or rename
+    pub others: Vec<DeviceInstallOther>,
+    /// The tunnel's key file when another server's tunnel uses it too (kept on delete)
+    pub shared_key: Option<String>,
+    /// The gateway port this server's devices dial
+    pub server_port: String,
     pub rename: DeviceInstallRenamePlan,
     pub renamed_at: Option<String>,
     pub renamed_from: Vec<String>,

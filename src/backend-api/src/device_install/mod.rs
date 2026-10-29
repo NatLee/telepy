@@ -137,6 +137,7 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
     let survey = row.as_ref().map(stored).unwrap_or_default();
     let parts = plan::parts(&survey, &names);
     let older = plan::older_services(&parts);
+    let earlier = plan::earlier_services(&parts);
     let planned = plan::plan(&survey, &names);
     let rename = match &planned {
         Ok(p) => json!({
@@ -148,7 +149,7 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
             "new_name": new_name(p.method, &names),
             "old": p.old,
         }),
-        Err(b) => json!({ "possible": false, "blocker": b, "old": older }),
+        Err(b) => json!({ "possible": false, "blocker": b, "old": older.iter().chain(earlier.iter()).collect::<Vec<_>>() }),
     };
     let accounts: Vec<Value> = survey.iter().map(|a| json!({ "account": a.account, "platform": a.platform, "os": a.os, "error": a.error })).collect();
     let renamed_from: Vec<String> = row.as_ref().and_then(|r| r.renamed_from.as_deref()).and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
@@ -169,6 +170,10 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
         "accounts": accounts,
         "parts": parts,
         "older": older,
+        "earlier": earlier,
+        "others": plan::others(&survey),
+        "shared_key": plan::shared_key(&survey),
+        "server_port": state.config.reverse_server_ssh_port.trim(),
         "rename": rename,
         "renamed_at": row.as_ref().and_then(|r| r.renamed_at.as_deref()).map(db_to_iso_utc_z),
         "renamed_from": renamed_from,
@@ -376,7 +381,9 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
 
     // 7. 再盤點一次記下現在的樣子。/ Survey once more to record the result.
     let after = survey_and_record(state, tunnel).await.unwrap_or_default();
-    let still_old = plan::older_services(&plan::parts(&after, &names));
+    let after_parts = plan::parts(&after, &names);
+    let mut still_old = plan::older_services(&after_parts);
+    still_old.extend(plan::earlier_services(&after_parts));
     let _ = db::device_install::record_rename(&state.db, tunnel.id, &p.old).await;
     let confirmed = removed_ok && still_old.is_empty();
     run.step("confirm", if confirmed { "done" } else { "failed" }, (!still_old.is_empty()).then(|| still_old.join(", "))).await;
