@@ -4,10 +4,20 @@
 # and name for the one-command install; nothing else is touched), remove its files right away and write
 # the stopping part into a one-shot stop script. Telepy starts the stop script last, because stopping the tunnel also cuts the
 # SSH session this runs in. Every result is a line "TELEPY|<kind>|<what>|<detail>".
+# Modes: delete (the above), survey (only report what is there: nothing is changed), relabel (the tunnel's service got
+# new names: remove the older ones, keep the key and everything named after the install id).
+# Anything that dials another server (its -p / Port / SSH_REMOTE_PORT is not this gateway's) is never touched.
 T_ID=${t_id}
 T_PORT=${t_port}
 T_NAME=${t_name}
 T_KEY=${t_key}
+T_MODE=${t_mode}
+T_INSTALL=${t_install}
+T_GW_PORT=${t_gw_port}
+SURVEY=0
+[ "$T_MODE" = survey ] && SURVEY=1
+KEEP_ID=""
+[ "$T_MODE" = relabel ] && KEEP_ID=$T_INSTALL
 
 out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
 # The forward as files write it (a unit, a plist line, a script): older scripts carry the number.
@@ -35,10 +45,10 @@ key_matches() {
     if [ -r "$km_file.pub" ] && awk '{print $2}' "$km_file.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then return 0; fi
     command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -y -f "$km_file" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
 }
-# Key files a text (file contents or a command line) refers to: -i <path>, IdentityFile,
-# docker's KEY_FILE= and <path>:/id_rsa.
+# Key files a text (file contents or a command line) refers to: -i <path> (also quoted word by word: '-i' '/k'),
+# IdentityFile, docker's KEY_FILE= and <path>:/id_rsa.
 key_paths() {
-    printf '%s\n' "$1" | grep -oE -- "-i ?['\"]?[^ '\"]+" | sed -E "s/^-i ?['\"]?//"
+    printf '%s\n' "$1" | grep -oE -- "-i['\"]? ?['\"]?[^ '\"]+" | sed -E "s/^-i['\"]? ?['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "IdentityFile[ =]['\"]?[^ '\"]+" | sed -E "s/^IdentityFile[ =]['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "KEY_FILE=['\"]?[^ '\"]+" | sed -E "s/^KEY_FILE=['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "[^\"' ]+:/id_rsa" | sed 's#:/id_rsa$##'
@@ -48,14 +58,43 @@ uses_key() {
     for uk_path in $(key_paths "$1"); do key_matches "$uk_path" && return 0; done
     return 1
 }
-# A file of this tunnel: it carries its number (older scripts) or refers to its key.
+# The new service of a rename (named after the install id): never touched in relabel mode.
+kept_new() {
+    [ -n "$KEEP_ID" ] || return 1
+    case "$1" in *"telepy-$KEEP_ID"*|*"tunnel.$KEEP_ID"*) return 0 ;; esac
+    return 1
+}
+# Ports a text dials: -p N (also -pN and '-p' 'N'), Port=N, SSH_REMOTE_PORT=N. Nothing = it does not say.
+dial_ports() {
+    printf '%s\n' "$1" | grep -oE -- "(^|[ '\"=])-p['\"]? ?['\"]?[0-9]+" | grep -oE '[0-9]+$'
+    printf '%s\n' "$1" | grep -oE -- "(Port[= ]['\"]?|SSH_REMOTE_PORT[=:] ?['\"]?)[0-9]+" | grep -oE '[0-9]+$'
+}
+# Goes to another server: it names a port and none is this gateway's (the same key may serve two Telepy servers).
+foreign() {
+    [ -n "$T_GW_PORT" ] || return 1
+    fp_list=$(dial_ports "$1")
+    [ -n "$fp_list" ] || return 1
+    printf '%s\n' "$fp_list" | grep -qx -- "$T_GW_PORT" && return 1
+    return 0
+}
+# A file of this tunnel: it carries its number (older scripts) or refers to its key, and dials this server.
 has_port() {
     [ -f "$1" ] || return 1
-    grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null && return 0
-    uses_key "$(cat "$1" 2>/dev/null)"
+    kept_new "$1" && return 1
+    hp_text=$(cat "$1" 2>/dev/null)
+    if grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null || uses_key "$hp_text"; then
+        if foreign "$hp_text"; then
+            out kept other-server "$1"
+            return 1
+        fi
+        return 0
+    fi
+    return 1
 }
 # A command line of this tunnel: -R with its number, or any -R plus its key (never a -L only client).
 line_is_mine() {
+    kept_new "$1" && return 1
+    foreign "$1" && return 1
     printf '%s' "$1" | grep -Eq -- "$PROC_RE" && return 0
     printf '%s' "$1" | grep -Eq -- "$ANY_R_RE" || return 1
     uses_key "$1"
@@ -79,27 +118,46 @@ if [ -z "$HOME" ] || [ ! -d "$HOME" ]; then
 fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$MY_UID}"
 
-STOP=$(mktemp "${TMPDIR:-/tmp}/telepy-stop-$T_ID.XXXXXX" 2>/dev/null) || STOP="$HOME/.telepy-stop-$T_ID.sh"
-if ! printf '#!/bin/sh\n# telepy-remove-tunnel stop script for tunnel #%s (deletes itself)\nsleep 2\n' "$T_ID" > "$STOP"; then
-    out failed stopscript "$STOP"
-    exit 0
+STOP=""
+if [ "$SURVEY" = 0 ]; then
+    STOP=$(mktemp "${TMPDIR:-/tmp}/telepy-stop-$T_ID.XXXXXX" 2>/dev/null) || STOP="$HOME/.telepy-stop-$T_ID.sh"
+    if ! printf '#!/bin/sh\n# telepy-remove-tunnel stop script for tunnel #%s (deletes itself)\nsleep 2\n' "$T_ID" > "$STOP"; then
+        out failed stopscript "$STOP"
+        exit 0
+    fi
+    chmod 700 "$STOP"
 fi
-chmod 700 "$STOP"
 STOPS=0
 LATE=""
 # Stopping steps go into the stop script; logs are deleted last, once their writers have stopped (LATE).
-later() { printf '%s\n' "$1" >> "$STOP"; STOPS=$((STOPS + 1)); out scheduled "$2" "$3"; }
-latelog() { LATE="$LATE$1
-"; STOPS=$((STOPS + 1)); out scheduled log "$2"; }
+# A survey only reports.
+later() { [ "$SURVEY" = 1 ] && return 0; printf '%s\n' "$1" >> "$STOP"; STOPS=$((STOPS + 1)); out scheduled "$2" "$3"; }
+latelog() {
+    if [ "$SURVEY" = 1 ]; then out found log "$2"; return 0; fi
+    LATE="$LATE$1
+"; STOPS=$((STOPS + 1)); out scheduled log "$2"
+}
+# known_hosts files the removed parts used (UserKnownHostsFile=…); deleted at the end when nothing else uses them.
+OLD_KH=""
+note_kh() {
+    for nk in $(printf '%s\n' "$1" | grep -oE -- "UserKnownHostsFile[= ]['\"]?[^ '\"]+" | sed -E "s/^UserKnownHostsFile[= ]['\"]?//"); do
+        nk=$(expand_path "$nk")
+        case "$nk" in /dev/null) continue ;; esac
+        case "$(basename "$nk")" in *telepy*) ;; *) continue ;; esac
+        kept_new "$nk" && continue
+        case " $OLD_KH " in *" $nk "*) ;; *) OLD_KH="$OLD_KH $nk" ;; esac
+    done
+}
 # Files the stop script deletes (left out when checking whether anything still uses known_hosts).
 GOING=" "
 FOUND_JOIN=0
 
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Delete; fall back to sudo; else report that root is needed.
+# Delete; fall back to sudo; else report that root is needed. A survey reports it as found.
 rmf() {
     [ -e "$1" ] || [ -L "$1" ] || return 0
+    if [ "$SURVEY" = 1 ]; then out found "$2" "$1"; return 0; fi
     rm -f "$1" 2>/dev/null
     if { [ -e "$1" ] || [ -L "$1" ]; } && [ -n "$SUDO" ]; then $SUDO rm -f "$1" 2>/dev/null; fi
     if [ -e "$1" ] || [ -L "$1" ]; then out needs_root "$2" "sudo rm -f $1"; else out removed "$2" "$1"; fi
@@ -110,8 +168,11 @@ if command -v systemctl >/dev/null 2>&1; then
     for f in /etc/systemd/system/*.service /lib/systemd/system/telepy*.service /usr/lib/systemd/system/telepy*.service; do
         has_port "$f" || continue
         name=$(basename "$f")
-        out found systemd "$name"
+        out found systemd "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
+        [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
+        note_kh "$(cat "$f" 2>/dev/null)"
+        [ "$SURVEY" = 1 ] && continue
         if [ "$ROOT" = 1 ]; then
             logdir=$(sed -n 's/^LogsDirectory=//p' "$f" 2>/dev/null | head -n 1)
             logfiles=$(sed -n 's/.*AUTOSSH_LOGFILE=\([^" ]*\).*/\1/p' "$f" 2>/dev/null)
@@ -136,8 +197,11 @@ if command -v systemctl >/dev/null 2>&1; then
     for f in "$HOME"/.config/systemd/user/*.service; do
         has_port "$f" || continue
         name=$(basename "$f")
-        out found systemd-user "$name"
+        out found systemd-user "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
+        [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
+        note_kh "$(cat "$f" 2>/dev/null)"
+        [ "$SURVEY" = 1 ] && continue
         systemctl --user disable "$name" >/dev/null 2>&1
         rmf "$f" unit
         for w in "$HOME"/.config/systemd/user/*.wants/"$name"; do
@@ -152,11 +216,13 @@ if command -v launchctl >/dev/null 2>&1; then
     for f in /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist; do
         has_port "$f" || continue
         label=$(basename "$f" .plist)
-        out found launchd "$label"
+        out found launchd "$f"
         [ "$label" = "com.telepy.tunnel.$T_ID" ] && FOUND_JOIN=1
+        [ -n "$T_INSTALL" ] && [ "$label" = "com.telepy.tunnel.$T_INSTALL" ] && FOUND_JOIN=1
+        note_kh "$(cat "$f" 2>/dev/null)"
         case "$f" in
             /Library/*)
-                if [ "$ROOT" = 0 ]; then
+                if [ "$ROOT" = 0 ] && [ "$SURVEY" = 0 ]; then
                     out needs_root launchd "sudo launchctl bootout system/$label; sudo rm -f $f"
                     continue
                 fi
@@ -177,10 +243,12 @@ fi
 # --- processes running this tunnel, and the scripts that started them ---------------------------------
 # (Background loops, ssh / autossh template scripts run by hand.)
 RUNNERS=""
-if has_port "$HOME/.ssh/telepy-tunnel-$T_ID.sh"; then
-    RUNNERS=" $HOME/.ssh/telepy-tunnel-$T_ID.sh"
-    FOUND_JOIN=1
-fi
+for r in "$HOME/.ssh/telepy-tunnel-$T_ID.sh" ${T_INSTALL:+"$HOME/.ssh/telepy-$T_INSTALL.sh"}; do
+    if has_port "$r"; then
+        RUNNERS="$RUNNERS $r"
+        FOUND_JOIN=1
+    fi
+done
 PIDS=""
 pinfo() {
     if [ -r "/proc/$1/cmdline" ]; then tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
@@ -189,6 +257,21 @@ pinfo() {
 uid_of() {
     if [ -r "/proc/$1/status" ]; then awk '/^Uid:/ { print $2; exit }' "/proc/$1/status" 2>/dev/null
     else ps -o uid= -p "$1" 2>/dev/null | tr -d ' '; fi
+}
+# Who runs a process, and their home (this account's own come from the login: HOME / LOGNAME).
+owner_of() {
+    oo_uid=$(uid_of "$1")
+    oo_name="" oo_home=""
+    if [ -n "$oo_uid" ] && [ "$oo_uid" = "$MY_UID" ]; then
+        oo_name=${LOGNAME:-$ME}
+        oo_home=$HOME
+    else
+        if [ -n "$oo_uid" ] && command -v getent >/dev/null 2>&1; then oo_name=$(getent passwd "$oo_uid" 2>/dev/null | cut -d: -f1); fi
+        [ -n "$oo_name" ] || oo_name=$(ps -o user= -p "$1" 2>/dev/null | tr -d ' ')
+        case "$oo_name" in ""|*[!A-Za-z0-9._-]*) return 0 ;; esac
+        oo_home=$(eval "printf '%s' ~$oo_name" 2>/dev/null)
+    fi
+    out found owner "$1 $oo_name $oo_home"
 }
 # Someone else's process: without root / sudo we cannot kill it, so report it as it is.
 check_owner() {
@@ -209,7 +292,9 @@ while IFS= read -r line; do
     pid=$(printf '%s' "$line" | awk '{print $1}')
     case "$pid" in ""|*[!0-9]*) continue ;; esac
     out found process "$line"
-    check_owner "$pid"
+    owner_of "$pid"
+    note_kh "$line"
+    [ "$SURVEY" = 1 ] || check_owner "$pid"
     PIDS="$PIDS $pid"
     pp=$(ppid_of "$pid")
     hops=0
@@ -221,7 +306,7 @@ while IFS= read -r line; do
             *) [ -d "/proc/$pp/cwd" ] && script="$(readlink "/proc/$pp/cwd" 2>/dev/null)/$script" ;;
         esac
         if [ -n "$script" ] && has_port "$script"; then
-            check_owner "$pp"
+            [ "$SURVEY" = 1 ] || check_owner "$pp"
             PIDS="$pp$PIDS"
             PIDS=" $PIDS"
             case "$RUNNERS " in *" $script "*) ;; *) RUNNERS="$RUNNERS $script" ;; esac
@@ -240,6 +325,7 @@ crontab_clean() {
     for r in $RUNNERS; do KEEP=$(printf '%s\n' "$KEEP" | grep -vF -- "$r"); done
     [ "$KEEP" = "$CR" ] && return 0
     printf '%s\n' "$CR" | grep -v -x -F -- "$KEEP" | while IFS= read -r l; do [ -n "$l" ] && out found cron "$l"; done
+    [ "$SURVEY" = 1 ] && return 0
     if [ -z "$KEEP" ]; then printf '' | $1 crontab - 2>/dev/null; else printf '%s\n' "$KEEP" | $1 crontab - 2>/dev/null; fi
     if [ "$?" = 0 ]; then out removed cron "crontab of $2"; else out failed cron "could not rewrite the crontab of $2"; fi
 }
@@ -249,19 +335,25 @@ if command -v crontab >/dev/null 2>&1; then
 fi
 for r in $RUNNERS; do
     out found loop "$r"
-    rmf "$r" file
-    log="${r%.sh}.log"
-    if [ -f "$log" ]; then
-        latelog "rm -f $(q "$log")" "$log"
-        GOING="$GOING$log "
-    fi
+    note_kh "$(cat "$r" 2>/dev/null)"
+    # Its log: next to it, or wherever it appends (`>> /path/x.log`).
+    logs="${r%.sh}.log $(sed -n 's/.*>> *\([^ ]*telepy[^ ]*\.log\).*/\1/p' "$r" 2>/dev/null | tr -d "'\"")"
+    [ "$SURVEY" = 1 ] || rmf "$r" file
+    GOING="$GOING$r "
+    for log in $logs; do
+        if [ -f "$log" ]; then
+            case "$GOING" in *" $log "*) continue ;; esac
+            latelog "rm -f $(q "$log")" "$log"
+            GOING="$GOING$log "
+        fi
+    done
 done
 
 # Downloaded scripts of this tunnel that are not running (ssh / autossh / docker templates).
 for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME"/Downloads/*.yml "$HOME"/Desktop/*.sh; do
     has_port "$f" || continue
     out found script "$f"
-    rmf "$f" file
+    [ "$SURVEY" = 1 ] || rmf "$f" file
 done
 
 # --- Docker (docker run / docker compose templates: jnovack/autossh with SSH_TUNNEL_PORT) -----------
@@ -295,40 +387,58 @@ if [ -n "$PIDS" ]; then
 fi
 
 # --- files of the one-command install ------------------------------------------------------------------
+# A rename keeps the key: the new service logs in with it.
 SSH_DIR="$HOME/.ssh"
-for k in "$SSH_DIR"/telepy_tunnel_*; do
-    case "$k" in *.pub) continue ;; esac
-    [ -f "$k.pub" ] || continue
-    if awk '{print $2}' "$k.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then
-        rmf "$k" key
-        rmf "$k.pub" key
-    else
-        out kept key "$k (another tunnel's key)"
+if [ "$T_MODE" != relabel ]; then
+    for k in "$SSH_DIR"/telepy_tunnel_*; do
+        case "$k" in *.pub) continue ;; esac
+        [ -f "$k.pub" ] || continue
+        if awk '{print $2}' "$k.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then
+            rmf "$k" key
+            rmf "$k.pub" key
+        else
+            out kept key "$k (another tunnel's key)"
+        fi
+    done
+fi
+for U in "$SSH_DIR/telepy-uninstall-$T_ID.sh" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL-uninstall.sh"}; do
+    kept_new "$U" && continue
+    if [ -f "$U" ] && grep -qF "(#$T_ID)" "$U" 2>/dev/null; then
+        if [ "$FOUND_JOIN" = 1 ] || grep -qF "tunnel $T_NAME (#$T_ID)" "$U" 2>/dev/null || grep -qF "tunnel $T_INSTALL (#$T_ID)" "$U" 2>/dev/null; then
+            out found join "$U"
+            rmf "$U" file
+        fi
     fi
 done
-U="$SSH_DIR/telepy-uninstall-$T_ID.sh"
-if [ -f "$U" ] && grep -qF "(#$T_ID)" "$U" 2>/dev/null; then
-    if [ "$FOUND_JOIN" = 1 ] || grep -qF "tunnel $T_NAME (#$T_ID)" "$U" 2>/dev/null; then
-        out found join "$U"
-        rmf "$U" file
-    fi
-fi
-# The SSH-over-WebSocket carrier (used by this tunnel only).
-for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh"; do
+# The SSH-over-WebSocket carrier (used by this tunnel only; a rename copied it to the new name first).
+for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL-ws.py" "$SSH_DIR/telepy-$T_INSTALL-ws.sh"}; do
+    kept_new "$f" && continue
     [ -f "$f" ] && rmf "$f" file
 done
-KH="$SSH_DIR/telepy_known_hosts"
-if [ -f "$KH" ]; then
+# known_hosts: the ones the removed parts used, plus (delete) the join's. Kept while anything else still uses one:
+# a unit, a plist, a loop, or this computer's own ssh config (a device is often someone's laptop too).
+KHS="$OLD_KH"
+if [ "$T_MODE" = delete ]; then
+    for k in "$SSH_DIR/telepy_known_hosts" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL.known_hosts"}; do
+        case " $KHS " in *" $k "*) ;; *) KHS="$KHS $k" ;; esac
+    done
+fi
+for KH in $KHS; do
+    [ -f "$KH" ] || continue
+    if [ "$SURVEY" = 1 ]; then out found known_hosts "$KH"; continue; fi
     USERS=""
-    for f in /etc/systemd/system/*.service "$HOME"/.config/systemd/user/*.service /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist "$SSH_DIR"/telepy-tunnel-*.sh; do
+    for f in /etc/systemd/system/*.service "$HOME"/.config/systemd/user/*.service /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist "$SSH_DIR"/telepy-*.sh "$SSH_DIR/config" "$SSH_DIR"/telepy/*.conf; do
         [ -f "$f" ] || continue
         case "$GOING" in *" $f "*) continue ;; esac
         grep -qF "$KH" "$f" 2>/dev/null && USERS="$USERS $f"
     done
+    case "$KH" in "$SSH_DIR"/telepy_known_hosts) grep -qF "telepy_known_hosts" "$SSH_DIR/config" 2>/dev/null && USERS="$USERS $SSH_DIR/config" ;; esac
     if [ -n "$USERS" ]; then out kept file "$KH (still used by$USERS)"; else rmf "$KH" file; fi
-fi
+done
 
-if [ "$STOPS" -gt 0 ]; then
+if [ "$SURVEY" = 1 ]; then
+    :
+elif [ "$STOPS" -gt 0 ]; then
     printf '%s' "$LATE" >> "$STOP"
     printf 'rm -f "$0"\n' >> "$STOP"
     out stopscript sh "$STOP"

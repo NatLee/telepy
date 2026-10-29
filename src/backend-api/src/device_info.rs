@@ -342,7 +342,12 @@ async fn run_cmd(conn: &device::DeviceConn, cmd: &str) -> String {
 pub async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_public: bool) {
     let Ok(Some(tunnel)) = db::tunnels::by_id(&state.db, tunnel_id).await else { return };
     let result = tokio::time::timeout(PROBE_TIMEOUT, probe(state, &tunnel, !peer_public)).await.unwrap_or_else(|_| Err("timed out".into()));
+    let reached = result.is_ok();
     store(state, &tunnel, port, peer_public, result).await;
+    // 同一趟順便記下裝置上跑這條隧道的是什麼（沒記過或超過一週）。/ While here, record what runs the tunnel (when due).
+    if reached {
+        crate::device_install::survey_if_due(state, &tunnel).await;
+    }
 }
 
 /// 「立即重新整理」：同一個腳本走連線池，存起來，回傳錯誤（如果有）。/ "Refresh now" over the pool; returns the error, if any.

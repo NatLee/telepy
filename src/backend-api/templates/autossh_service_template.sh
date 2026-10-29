@@ -14,11 +14,12 @@ fi
 
 command -v autossh >/dev/null 2>&1 || { echo 'autossh not found. Please install autossh (e.g. apt/yum) before running this script.'; exit 1; }
 ${known_hosts_setup}${ws_client_setup}
-SERVICE_PATH="/etc/systemd/system/telepy-tunnel.service"
+# Named after the tunnel's install id (no user, server or tunnel name).
+SERVICE_PATH="/etc/systemd/system/${install_base}.service"
 
 cat << 'EOF' | $SUDO tee "$SERVICE_PATH" > /dev/null
 [Unit]
-Description=AutoSSH tunnel service for reverse SSH tunnel
+Description=${install_description}
 After=network.target
 Wants=network-online.target
 After=network-online.target
@@ -26,9 +27,9 @@ After=network-online.target
 [Service]
 User=${username}
 
-LogsDirectory=telepy-autossh
+LogsDirectory=${install_base}
 Environment="AUTOSSH_DEBUG=1"
-Environment="AUTOSSH_LOGFILE=/var/log/telepy-autossh/autossh.log"
+Environment="AUTOSSH_LOGFILE=/var/log/${install_base}/autossh.log"
 Environment="AUTOSSH_GATETIME=0"
 
 ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" ${host_key_options}${proxy_option}${key_option}-p ${reverse_server_ssh_port} -NR '*:0:localhost:${ssh_port}' telepy@${server_domain}
@@ -56,8 +57,8 @@ EOF
 echo "[+] Service file created at $SERVICE_PATH"
 
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable telepy-tunnel.service
-$SUDO systemctl restart telepy-tunnel.service
+$SUDO systemctl enable ${install_base}.service
+$SUDO systemctl restart ${install_base}.service
 
 echo "[+] AutoSSH Service enabled and started."
-$SUDO systemctl status telepy-tunnel.service --no-pager
+$SUDO systemctl status ${install_base}.service --no-pager

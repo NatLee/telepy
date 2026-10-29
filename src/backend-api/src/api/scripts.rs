@@ -269,6 +269,7 @@ async fn render_for(
     // 腳本裡寫進 authorized_keys 的是這條隧道自己的服務金鑰。/ The scripts authorize the tunnel's own service key.
     let service_key = Some(crate::ssh::tunnel_keys::ensure(state, t.id).await?);
     let gateway_keys = state.gateway.host_public_keys();
+    let install_id = db::device_install::ensure(&state.db, t.id).await?;
     let ctx = ScriptContext {
         host_friendly_name: &t.host_friendly_name,
         server_domain: domain,
@@ -280,6 +281,7 @@ async fn render_for(
         telepy_public_key: service_key.as_deref(),
         gateway_host_keys: &gateway_keys,
         ws: ws.as_ref().map(|(url, client_url)| scripts::WsCarrier { url, client_url }),
+        install_id: &install_id,
     };
     scripts::render_script(kind, &ctx).map_err(ApiError::bad_request)
 }

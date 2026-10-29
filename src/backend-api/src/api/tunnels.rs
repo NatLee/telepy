@@ -81,6 +81,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let listen = state.status.listen_ports().unwrap_or_default();
     let key_alerts = db::host_keys::tunnels_with_rejected(&state.db).await?;
     let claimed = state.host_keys.claimed_tunnels();
+    let installs = db::device_install::all(&state.db).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -121,6 +122,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             v["host_key_changed"] = json!(key_alerts.contains(&t.id));
             // 這條隧道指到的機器屬於別的帳號，連線被拒。/ The machine behind this tunnel belongs to another account; refused.
             v["device_claimed"] = json!(claimed.contains(&t.id));
+            // owner / ADMIN：裝置上的名稱（安裝代號）與上次盤點到的舊名稱服務。/ Managers: the install id and older-named services.
+            v["device_install"] = if decides { crate::device_install::summary(installs.get(&t.id)) } else { Value::Null };
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
                 _ => Value::Null,
@@ -476,6 +479,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     db::api_tokens::detach_tunnel(&state.db, id).await?;
     state.api_tokens.invalidate();
     crate::ssh::tunnel_keys::forget(&state, id).await;
+    db::device_install::delete(&state.db, id).await?;
     // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.
     state.host_keys.invalidate(id);

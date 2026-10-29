@@ -48,6 +48,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::rustdesk::router())
         .merge(api::credentials::router())
         .merge(api::host_keys::router())
+        .merge(api::device_install::router())
         .merge(api::oauth::router())
         .merge(api::ai::router())
         .merge(api::mfa::router())

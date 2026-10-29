@@ -7,9 +7,12 @@
 #   1. creates an SSH key for the tunnel (~/.ssh/telepy_tunnel_ed25519) if there is none
 #   2. registers this machine with Telepy using the one-time token
 #   3. adds Telepy's service key to ~/.ssh/authorized_keys (append only, once)
-#   4. pins the Telepy gateway's host keys (~/.ssh/telepy_known_hosts)
+#   4. pins the Telepy gateway's host keys (~/.ssh/telepy-<id>.known_hosts)
 #   5. installs the reverse tunnel as a service (systemd or launchd; otherwise a background loop)
 #   6. waits until Telepy has logged in through the tunnel once
+#
+# Everything it installs is named after a random install id that Telepy records on the tunnel (telepy-<id>.service,
+# com.telepy.tunnel.<id>, ~/.ssh/telepy-<id>.*): no user, server or tunnel name, and Telepy knows what to clean up.
 #
 # Options:
 #   --token TOKEN     join token from Telepy (required; single use, expires after 30 minutes)
@@ -61,7 +64,7 @@ value() { printf '%s\n' "$HTTP_BODY" | sed -n "s/^$1=//p" | head -n 1; }
 
 write_uninstall() {
     {
-        printf '#!/bin/sh\n# Stops and removes the Telepy tunnel %s (#%s) installed by the join script.\n' "$TUNNEL_NAME" "$TUNNEL_ID"
+        printf '#!/bin/sh\n# Stops and removes the Telepy tunnel %s (#%s) installed by the join script.\n' "$INSTALL_ID" "$TUNNEL_ID"
         printf '%s\n' "$1"
         printf 'rm -f %s %s\n' "$KNOWN_HOSTS" "$UNINSTALL"
         printf 'echo "Stopped the tunnel. The key %s and the Telepy line in %s were kept; delete them if you no longer need them."\n' "$KEY" "$AUTH_KEYS"
@@ -75,7 +78,7 @@ start_background() {
     RUNNER="$SSH_DIR/$UNIT.sh"
     LOG_FILE="$SSH_DIR/$UNIT.log"
     {
-        printf '#!/bin/sh\n# Telepy reverse tunnel %s: reconnects forever.\n' "$TUNNEL_NAME"
+        printf '#!/bin/sh\n# Telepy reverse tunnel %s: reconnects forever.\n' "$INSTALL_ID"
         printf 'while :; do\n    %s %s\n    sleep 10\ndone\n' "$SSH_BIN" "$SSH_ARGS"
     } > "$RUNNER"
     chmod 700 "$RUNNER"
@@ -105,7 +108,7 @@ install_systemd_system() {
     UNIT_FILE="/etc/systemd/system/$UNIT.service"
     cat > "$UNIT_FILE" <<EOF
 [Unit]
-Description=Telepy reverse tunnel ($TUNNEL_NAME)
+Description=Telepy reverse tunnel $INSTALL_ID
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -134,7 +137,7 @@ install_systemd_user() {
     mkdir -p "$UNIT_DIR"
     cat > "$UNIT_FILE" <<EOF
 [Unit]
-Description=Telepy reverse tunnel ($TUNNEL_NAME)
+Description=Telepy reverse tunnel $INSTALL_ID
 StartLimitIntervalSec=0
 
 [Service]
@@ -158,7 +161,7 @@ EOF
 }
 
 install_launchd() {
-    LABEL="com.telepy.tunnel.$TUNNEL_ID"
+    LABEL="com.telepy.tunnel.$INSTALL_ID"
     if [ "$IS_ROOT" -eq 1 ]; then
         PLIST="/Library/LaunchDaemons/$LABEL.plist"
         DOMAIN=system
@@ -195,6 +198,49 @@ install_launchd() {
     say "installed the launchd job $LABEL"
     [ "$IS_ROOT" -eq 0 ] && warn "as a LaunchAgent the tunnel runs while $CURRENT_USER is logged in; re-run with sudo to keep it running all the time"
     write_uninstall "launchctl bootout $DOMAIN/$LABEL 2>/dev/null || launchctl unload -w $PLIST 2>/dev/null; rm -f $PLIST $LOG_FILE"
+}
+
+# An earlier one-command install of this tunnel under the older names (telepy-tunnel-<number>): stop and remove it,
+# so the two do not fight over the tunnel. The shared ~/.ssh/telepy_known_hosts stays (other tools may use it).
+remove_older_join() {
+    OLD="telepy-tunnel-$TUNNEL_ID"
+    [ "$UNIT" = "$OLD" ] && return 0
+    found=0
+    if [ "$IS_ROOT" -eq 1 ] && [ -f "/etc/systemd/system/$OLD.service" ]; then
+        systemctl disable --now "$OLD.service" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/$OLD.service"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        found=1
+    fi
+    if [ "$IS_ROOT" -eq 0 ] && [ -f "$TARGET_HOME/.config/systemd/user/$OLD.service" ]; then
+        systemctl --user disable --now "$OLD.service" >/dev/null 2>&1 || true
+        rm -f "$TARGET_HOME/.config/systemd/user/$OLD.service"
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        found=1
+    fi
+    for p in "/Library/LaunchDaemons/com.telepy.tunnel.$TUNNEL_ID.plist" "$TARGET_HOME/Library/LaunchAgents/com.telepy.tunnel.$TUNNEL_ID.plist"; do
+        [ -f "$p" ] || continue
+        case "$p" in
+            /Library/*)
+                [ "$IS_ROOT" -eq 1 ] || continue
+                launchctl bootout "system/com.telepy.tunnel.$TUNNEL_ID" >/dev/null 2>&1 || true ;;
+            *)
+                launchctl bootout "gui/$(id -u)/com.telepy.tunnel.$TUNNEL_ID" >/dev/null 2>&1 || launchctl bootout "user/$(id -u)/com.telepy.tunnel.$TUNNEL_ID" >/dev/null 2>&1 || true ;;
+        esac
+        rm -f "$p" "$TARGET_HOME/Library/Logs/$OLD.log"
+        found=1
+    done
+    if [ -f "$SSH_DIR/$OLD.sh" ]; then
+        pkill -f "$SSH_DIR/$OLD.sh" 2>/dev/null || true
+        if crontab -l 2>/dev/null | grep -qF "$SSH_DIR/$OLD.sh"; then
+            crontab -l 2>/dev/null | grep -vF "$SSH_DIR/$OLD.sh" | crontab - 2>/dev/null || true
+        fi
+        rm -f "$SSH_DIR/$OLD.sh" "$SSH_DIR/$OLD.log"
+        found=1
+    fi
+    rm -f "$SSH_DIR/telepy-uninstall-$TUNNEL_ID.sh" "$SSH_DIR/telepy-ws-$TUNNEL_ID.py" "$SSH_DIR/telepy-ws-$TUNNEL_ID.sh"
+    [ "$found" -eq 0 ] || say "removed the earlier install of this tunnel ($OLD)"
+    return 0
 }
 
 main() {
@@ -328,6 +374,7 @@ main() {
     esac
     TUNNEL_ID=$(value TUNNEL_ID)
     TUNNEL_NAME=$(value TUNNEL_NAME)
+    INSTALL_ID=$(value INSTALL_ID || true)
     REVERSE_PORT=$(value REVERSE_PORT)
     GATEWAY_HOST=$(value GATEWAY_HOST)
     GATEWAY_PORT=$(value GATEWAY_PORT)
@@ -339,6 +386,10 @@ main() {
     case "$TUNNEL_ID$REVERSE_PORT$GATEWAY_PORT" in ""|*[!0-9]*) die "unexpected answer from Telepy" ;; esac
     case "$GATEWAY_HOST$GATEWAY_USER$TUNNEL_NAME" in ""|*[!A-Za-z0-9._-]*) die "unexpected answer from Telepy" ;; esac
     case "$SERVICE_KEY" in ssh-*|ecdsa-*) ;; *) die "Telepy sent no service key" ;; esac
+    case "$INSTALL_ID" in
+        "") INSTALL_ID="tunnel-$TUNNEL_ID" ;;
+        *[!a-z0-9]*) die "unexpected answer from Telepy" ;;
+    esac
     say "registered as $TUNNEL_NAME (tunnel #$TUNNEL_ID)"
     SAME_MACHINE_AS=$(value SAME_MACHINE_AS || true)
     if [ -n "$SAME_MACHINE_AS" ]; then
@@ -359,7 +410,7 @@ main() {
     fi
 
     # --- gateway host keys --------------------------------------------------------------------------
-    KNOWN_HOSTS="$SSH_DIR/telepy_known_hosts"
+    KNOWN_HOSTS="$SSH_DIR/telepy-$INSTALL_ID.known_hosts"
     ALIAS="telepy-$GATEWAY_HOST-$GATEWAY_PORT"
     if [ -n "$HOST_KEYS" ]; then
         printf '%s\n' "$HOST_KEYS" | while IFS= read -r hk; do
@@ -385,12 +436,12 @@ main() {
     if [ "$VIA_WEB" -eq 1 ]; then
         step "Setting up the WebSocket carrier (web port only)"
         case "$WS_URL" in ws://*|wss://*) ;; *) die "Telepy sent no WebSocket address" ;; esac
-        WS_PY="$SSH_DIR/telepy-ws-$TUNNEL_ID.py"
-        WS_SH="$SSH_DIR/telepy-ws-$TUNNEL_ID.sh"
+        WS_PY="$SSH_DIR/telepy-$INSTALL_ID-ws.py"
+        WS_SH="$SSH_DIR/telepy-$INSTALL_ID-ws.sh"
         http GET "$TELEPY_URL/api/join/telepy-ws.py"
         case "$HTTP_STATUS" in 2*) ;; *) die "cannot download the WebSocket carrier (HTTP $HTTP_STATUS)" ;; esac
         printf '%s\n' "$HTTP_BODY" > "$WS_PY"
-        printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$TUNNEL_NAME" "$PYTHON" "$WS_PY" "$WS_URL" > "$WS_SH"
+        printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY" "$WS_URL" > "$WS_SH"
         chmod 700 "$WS_PY" "$WS_SH"
         [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$WS_PY" "$WS_SH"
         PROXY_OPT="-o ProxyCommand=$WS_SH "
@@ -400,13 +451,14 @@ main() {
     SSH_ARGS="-NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=$STRICT -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$ALIAS ${PROXY_OPT}-i $KEY -p $GATEWAY_PORT -R 0:localhost:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST"
 
     # --- run the tunnel -----------------------------------------------------------------------------
-    UNIT="telepy-tunnel-$TUNNEL_ID"
-    UNINSTALL="$SSH_DIR/telepy-uninstall-$TUNNEL_ID.sh"
+    UNIT="telepy-$INSTALL_ID"
+    UNINSTALL="$SSH_DIR/telepy-$INSTALL_ID-uninstall.sh"
     FILES="$KEY $KEY.pub $KNOWN_HOSTS $UNINSTALL"
     [ "$VIA_WEB" -eq 1 ] && FILES="$FILES $WS_PY $WS_SH"
     LOGS=""
 
     step "Starting the tunnel"
+    remove_older_join
     if [ "$NO_SERVICE" -eq 1 ]; then
         start_background
     elif [ "$OS" = Linux ] && [ "$IS_ROOT" -eq 1 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then

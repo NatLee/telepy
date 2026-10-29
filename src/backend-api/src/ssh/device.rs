@@ -126,13 +126,13 @@ async fn authenticate(state: &AppState, handle: &mut Handle<ClientHandler>, user
     }
 }
 
-async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
+async fn connect_inner(state: &AppState, username: &str, reverse_port: i64, standby: bool) -> anyhow::Result<DeviceConn> {
     let port = u16::try_from(reverse_port).context("invalid reverse port")?;
     let refused = Arc::new(std::sync::Mutex::new(None));
     let tunnel_id = crate::db::tunnels::by_port(&state.db, reverse_port).await.ok().and_then(|t| t.first().map(|t| t.id));
     let handler = || ClientHandler { pin: tunnel_id.map(|tunnel_id| PinCheck { state: state.clone(), tunnel_id, reverse_port: port, refused: refused.clone() }) };
     let connected = if state.config.gateway_enabled {
-        let stream = state.gateway.open_stream(port).await?;
+        let stream = if standby { state.gateway.open_standby_stream(port).await? } else { state.gateway.open_stream(port).await? };
         client::connect_stream(client_config(), stream, handler()).await.context("ssh handshake with the device")
     } else {
         let host = state.config.ssh_target_host.as_str();
@@ -158,7 +158,15 @@ async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> a
 /// 連線 + 認證，整體 30s 逾時。每次都是新的一條；要共用請走 `ssh::pool`。
 /// Connect and authenticate (30 s overall). Always a fresh connection; use `ssh::pool` to share one.
 pub async fn connect(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
-    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(state, username, reverse_port))
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(state, username, reverse_port, false))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out connecting to the device"))?
+}
+
+/// 經**備援**連線登入（改名交接時，確認新的服務真的到得了裝置，才讓它接手）。
+/// Log in through the standby connection (a rename checks the new service reaches the device before promoting it).
+pub async fn connect_standby(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(state, username, reverse_port, true))
         .await
         .map_err(|_| anyhow::anyhow!("timed out connecting to the device"))?
 }

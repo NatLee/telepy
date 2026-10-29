@@ -15,7 +15,7 @@ $sshRemoteForward = "*:0:localhost:${ssh_port}"
 $reverseServerSSHPort = "${reverse_server_ssh_port}"
 
 # Telepy's SSH host key: when Telepy knows it, the tunnel only ever talks to the real server (no prompt, no impostor).
-$knownHosts = "$env:USERPROFILE\.ssh\telepy_known_hosts"
+$knownHosts = "$env:USERPROFILE\.ssh\${known_hosts_file}"
 $hostKeyOptions = "-o StrictHostKeyChecking=no"
 ${known_hosts_setup}
 $sshOptions = "${key_option}-o ServerAliveInterval=15 -o ServerAliveCountMax=3 $hostKeyOptions"

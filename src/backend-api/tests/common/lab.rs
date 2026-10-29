@@ -515,10 +515,14 @@ impl server::Handler for SshdHandler {
                 if let Some(login) = login_shell {
                     sh.env("SHELL", login);
                 }
+                // `<home>/bin` 排在 PATH 最前面：測試在那裡放假的 crontab / ssh，不會碰到開發者的。
+                // `<home>/bin` goes first in PATH, so tests can stub crontab / ssh there instead of touching the developer's.
+                let path = format!("{}:{}", home.join("bin").display(), std::env::var("PATH").unwrap_or_default());
                 let out = sh
                     .arg("-c")
                     .arg(&cmd)
                     .current_dir(&home)
+                    .env("PATH", path)
                     .env("HOME", &home)
                     .env("TMPDIR", &tmp)
                     .env("USER", &user)

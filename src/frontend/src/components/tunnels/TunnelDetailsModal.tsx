@@ -25,6 +25,7 @@ import { useFeatures } from "@/hooks/useFeatures";
 import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
 import { ShellHistorySetting } from "@/components/tunnels/ShellHistorySetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
+import { DeviceInstallSection } from "@/components/tunnels/DeviceInstall";
 import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { sshSafeName, suggestTunnelName } from "@/lib/tunnelName";
 import { Activity, Cpu, Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag, UserCheck } from "lucide-react";
@@ -250,6 +251,8 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     {showDevice && (
                         <div role="tabpanel" hidden={activeTab !== "device"} className="space-y-6">
                             <DeviceFactsSection tunnelId={details.id} isOpen={isOpen} endpoint={details.endpoint} deviceName={details.host_friendly_name} canRefresh={manager} />
+                            {/* 裝置上跑它的是什麼、叫什麼名字（擁有者 / ADMIN）。/ What runs it on the device and its names (managers). */}
+                            {manager && <DeviceInstallSection tunnelId={details.id} isOpen={isOpen && activeTab === "device"} deviceName={details.host_friendly_name} onChanged={onUpdate} />}
                         </div>
                     )}
 

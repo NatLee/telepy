@@ -1,5 +1,5 @@
 #!/bin/bash
-# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port}
+# Telepy reverse tunnel ${install_id}: this machine -> ${server_domain}:${reverse_server_ssh_port}
 set -e
 
 command -v docker >/dev/null 2>&1 || { echo 'docker not found. Please install Docker first.'; exit 1; }
@@ -19,9 +19,9 @@ KEY_FILE=${key_path}
 [ -f "$KEY_FILE" ] || { echo "Private key not found: $KEY_FILE"; exit 1; }
 ${known_hosts_setup}
 # The container reaches this machine's sshd through host.docker.internal (Docker 20.10+ / Docker Desktop).
-docker rm -f telepy-tunnel >/dev/null 2>&1 || true
+docker rm -f ${install_base} >/dev/null 2>&1 || true
 docker run -d \
-  --name telepy-tunnel \
+  --name ${install_base} \
   --restart unless-stopped \
   --add-host host.docker.internal:host-gateway \
   -v "$KEY_FILE":/id_rsa:ro \
@@ -38,4 +38,4 @@ ${known_hosts_mount}  -e SSH_REMOTE_USER=telepy \
   -e AUTOSSH_GATETIME=0 \
   jnovack/autossh:latest
 
-echo "[+] Container started. Logs: docker logs -f telepy-tunnel"
+echo "[+] Container started. Logs: docker logs -f ${install_base}"

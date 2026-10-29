@@ -1,4 +1,4 @@
-# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port}
+# Telepy reverse tunnel ${install_id}: this machine -> ${server_domain}:${reverse_server_ssh_port}
 #
 # 1) Let the Telepy web terminal reach this machine: append the Telepy service key to the
 #    authorized_keys of the user you will log in as (keeps the keys that are already there):
@@ -20,7 +20,7 @@ ${known_hosts_step}#
 services:
   telepy-tunnel:
     image: jnovack/autossh:latest
-    container_name: telepy-tunnel
+    container_name: ${install_base}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

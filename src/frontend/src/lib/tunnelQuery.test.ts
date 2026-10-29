@@ -65,6 +65,9 @@ test("text matches name, description, port, IP and users", () => {
     });
     for (const q of ["NAS", "garage", "1024", "203.0", "alice", "ip:203.0.113", "user:ali", `"in the garage"`]) assert.ok(match(q, t), q);
     assert.ok(!match("nas basement", t), "all terms must match");
+    // 裝置上的服務名稱（安裝代號）也找得到。/ A device's service name (the install id) finds it too.
+    const named = tunnel({ device_install: { id: "k7m2q9xd", older: [] } });
+    for (const q of ["k7m2q9xd", "telepy-k7m2q9xd", "telepy-k7m2"]) assert.ok(match(q, named), q);
 });
 
 test("status sort puts degraded first, lastseen puts never last", () => {

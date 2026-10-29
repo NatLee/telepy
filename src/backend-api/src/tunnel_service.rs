@@ -40,16 +40,36 @@ const DROP_WAIT: Duration = Duration::from_secs(25);
 /// After the drop, watch this long for a comeback (join units and launchd restart after 10 s).
 const COMEBACK_WATCH: Duration = Duration::from_secs(13);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
     Posix,
     Windows,
 }
 
+/// 腳本做什麼：刪隧道（移除）、盤點（只回報，什麼都不改）、改名（移除舊名稱的，留下金鑰與用安裝代號取名的新服務）。
+/// What the script does: delete (remove), survey (report only, nothing changes), relabel (remove the older names, keep
+/// the key and the new service named after the install id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Delete,
+    Survey,
+    Relabel,
+}
+
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Mode::Delete => "delete",
+            Mode::Survey => "survey",
+            Mode::Relabel => "relabel",
+        }
+    }
+}
+
 /// 腳本回報的一行：`TELEPY|<kind>|<what>|<detail>`。
 /// kind：platform / found / removed / scheduled / needs_root / kept / note / failed / stopscript / launched / done。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Item {
     pub kind: String,
     pub what: String,
@@ -71,7 +91,7 @@ pub fn parse_items(stdout: &str) -> Vec<Item> {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct AccountResult {
     pub account: String,
     pub platform: Option<Platform>,
@@ -92,6 +112,9 @@ pub struct Removal {
     pub stopped: bool,
     /// 停了之後又連回來（還有東西在重啟它）。/ It came back afterwards (something restarts it).
     pub came_back: bool,
+    /// 改名：舊的連線斷了，forward 留在新的服務上。/ Relabel: the old connection dropped and the forward stayed on the new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handed_over: Option<bool>,
 }
 
 /// 第一段做完、還沒停的狀態：留著每個帳號的連線（等一下金鑰可能被移掉，新連線就登不進去了）。
@@ -114,8 +137,24 @@ fn key_body(key: &str) -> String {
     key.split_whitespace().nth(1).unwrap_or("").to_string()
 }
 
+/// 這條隧道在腳本裡的身分：安裝代號（還沒有 = 空）、裝置連的 gateway port（空 = 不比對伺服器）。
+/// The tunnel's install id (empty when none yet) and the gateway port devices dial (empty = no server check).
+#[derive(Debug, Clone, Default)]
+pub struct Context {
+    pub install_id: Option<String>,
+    pub gateway_port: String,
+}
+
+impl Context {
+    pub async fn load(state: &AppState, tunnel: &Tunnel) -> Self {
+        let install_id = crate::db::device_install::get(&state.db, tunnel.id).await.ok().flatten().map(|r| r.install_id);
+        let gateway_port = state.config.reverse_server_ssh_port.trim().to_string();
+        Self { install_id, gateway_port: if gateway_port.bytes().all(|b| b.is_ascii_digit()) { gateway_port } else { String::new() } }
+    }
+}
+
 /// 把範本填好。/ Fill in the template for a platform.
-pub fn render(platform: Platform, tunnel: &Tunnel) -> String {
+pub fn render(platform: Platform, tunnel: &Tunnel, mode: Mode, ctx: &Context) -> String {
     let mut m = std::collections::HashMap::new();
     m.insert("t_id", tunnel.id.to_string());
     m.insert("t_port", tunnel.reverse_port.to_string());
@@ -123,6 +162,10 @@ pub fn render(platform: Platform, tunnel: &Tunnel) -> String {
         Platform::Posix => {
             m.insert("t_name", sh_quote(&tunnel.host_friendly_name));
             m.insert("t_key", sh_quote(&key_body(&tunnel.key)));
+            m.insert("t_mode", mode.as_str().to_string());
+            let id = ctx.install_id.as_deref().filter(|i| crate::device_install::names::is_id(i)).unwrap_or("");
+            m.insert("t_install", id.to_string());
+            m.insert("t_gw_port", ctx.gateway_port.clone());
             safe_substitute(POSIX, &m)
         }
         Platform::Windows => {
@@ -189,6 +232,17 @@ async fn detect(conn: &DeviceConn) -> Option<(Platform, String)> {
 
 /// 第一段：每個帳號找出並刪掉檔案、寫好停止腳本。/ Phase 1 on every account.
 pub async fn prepare(state: &AppState, tunnel: &Tunnel, accounts: &[String]) -> Prepared {
+    let ctx = Context::load(state, tunnel).await;
+    prepare_with(state, tunnel, accounts, Mode::Delete, &ctx).await
+}
+
+/// 盤點：每個帳號跑一次「只回報」的腳本（Windows 還沒有，只回平台）。/ Survey every account (report only; not on Windows yet).
+pub async fn survey(state: &AppState, tunnel: &Tunnel, accounts: &[String]) -> Vec<AccountResult> {
+    let ctx = Context::load(state, tunnel).await;
+    prepare_with(state, tunnel, accounts, Mode::Survey, &ctx).await.accounts
+}
+
+pub async fn prepare_with(state: &AppState, tunnel: &Tunnel, accounts: &[String], mode: Mode, ctx: &Context) -> Prepared {
     let mut prepared = Prepared { accounts: Vec::new(), pending: Vec::new() };
     for account in order_accounts(accounts) {
         let mut result = AccountResult { account: account.clone(), platform: None, os: None, items: Vec::new(), error: None };
@@ -207,7 +261,13 @@ pub async fn prepare(state: &AppState, tunnel: &Tunnel, accounts: &[String]) -> 
         };
         result.platform = Some(platform);
         result.os = Some(os);
-        let script = render(platform, tunnel);
+        if platform == Platform::Windows && mode != Mode::Delete {
+            // Windows 的腳本只會移除：盤點 / 改名不跑它。/ The Windows script only removes: no survey or relabel there.
+            result.items.push(Item { kind: "note".into(), what: "windows".into(), detail: "listing what runs the tunnel is not available on Windows yet".into() });
+            prepared.accounts.push(result);
+            continue;
+        }
+        let script = render(platform, tunnel, mode, ctx);
         let command = match platform {
             Platform::Posix => format!("sh -c {}", sh_quote(&script)),
             Platform::Windows => powershell_command(&script),
@@ -273,7 +333,46 @@ pub async fn finish(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared) -
         }
     }
     tracing::info!(tunnel = tunnel.id, found, launched, stopped, came_back, "device tunnel service removal");
-    Removal { accounts: prepared.accounts, found, launched, stopped, came_back }
+    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: None }
+}
+
+/// 改名的第二段：舊服務的停止腳本跑在**新**連線上（舊的會斷，我們不在它上面）。確認舊連線斷了、forward 還在
+/// 新的那條上，而且沒有別的連線又冒出來（還有東西在重啟舊的）。
+/// Relabel phase 2: the stop scripts run over the new connection. Confirm the old connection dropped, the forward
+/// stayed on the new one, and nothing else came back (something still restarting the old service).
+pub async fn finish_relabel(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared, old_conn: u64) -> Removal {
+    let mut launched = false;
+    for (idx, conn, platform, path) in std::mem::take(&mut prepared.pending) {
+        let items = match exec::run(&conn.device, &launch_command(platform, &path), LAUNCH_TIMEOUT, 4096).await {
+            Ok(r) => parse_items(&r.stdout.text),
+            Err(e) => vec![Item { kind: "failed".into(), what: "launch".into(), detail: format!("{e:#}") }],
+        };
+        launched |= items.iter().any(|i| i.kind == "launched");
+        prepared.accounts[idx].items.extend(items);
+        drop(conn);
+    }
+    let found = prepared.accounts.iter().any(|a| a.items.iter().any(|i| i.kind == "found"));
+    let port = u16::try_from(tunnel.reverse_port).unwrap_or(0);
+    let deadline = tokio::time::Instant::now() + DROP_WAIT;
+    while state.gateway.conn_alive(old_conn) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let stopped = !state.gateway.conn_alive(old_conn);
+    let new_conn = state.gateway.forward_conn(port);
+    let mut came_back = false;
+    if stopped {
+        let watch = tokio::time::Instant::now() + COMEBACK_WATCH;
+        while tokio::time::Instant::now() < watch {
+            if state.gateway.tunnel_conns(tunnel.id).iter().any(|c| Some(*c) != new_conn) {
+                came_back = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    let handed_over = stopped && new_conn.is_some() && new_conn != Some(old_conn) && state.gateway.forward_conn(port) == new_conn;
+    tracing::info!(tunnel = tunnel.id, found, launched, stopped, came_back, handed_over, "device tunnel service relabel cleanup");
+    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: Some(handed_over) }
 }
 
 #[cfg(test)]
@@ -311,14 +410,17 @@ mod tests {
 
     #[test]
     fn templates_are_filled_without_touching_shell_syntax() {
-        let sh = render(Platform::Posix, &tunnel());
-        assert!(sh.contains("T_ID=7\nT_PORT=40001\nT_NAME='pi'\\''s lab'\nT_KEY='AAAAC3Nza+/='"), "{sh}");
+        let ctx = Context { install_id: Some("k7m2q9xd".into()), gateway_port: "24242".into() };
+        let sh = render(Platform::Posix, &tunnel(), Mode::Delete, &ctx);
+        assert!(sh.contains("T_ID=7\nT_PORT=40001\nT_NAME='pi'\\''s lab'\nT_KEY='AAAAC3Nza+/='\nT_MODE=delete\nT_INSTALL=k7m2q9xd\nT_GW_PORT=24242\n"), "{sh}");
+        let survey = render(Platform::Posix, &tunnel(), Mode::Survey, &Context { install_id: Some("bad id;".into()), gateway_port: String::new() });
+        assert!(survey.contains("T_MODE=survey\nT_INSTALL=\nT_GW_PORT=\n"), "an odd id never reaches the shell: {survey}");
         assert!(!sh.contains("${t_"), "every key is filled");
         for kept in ["${TMPDIR:-/tmp}", "${r%.sh}", "\"$0\"", "$((STOPS + 1))", "${d#/proc/}"] {
             assert!(sh.contains(kept), "{kept} survives");
         }
         assert!(sh.starts_with("# telepy-remove-tunnel"), "the marker that keeps the script out of its own process match");
-        let ps = render(Platform::Windows, &tunnel());
+        let ps = render(Platform::Windows, &tunnel(), Mode::Delete, &ctx);
         assert!(ps.contains("$TunnelId = 7\n$TunnelPort = 40001\n$TunnelKey = 'AAAAC3Nza+/='"), "{ps}");
         assert!(!ps.contains("${t_"));
         assert!(ps.contains("$PSCommandPath") && ps.contains("$_.Execute"));
