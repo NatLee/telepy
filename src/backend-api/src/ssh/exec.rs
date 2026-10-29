@@ -77,6 +77,58 @@ pub async fn run(handle: &Handle<ClientHandler>, command: &str, timeout: Duratio
     run_on(ch, command, timeout, max_output).await
 }
 
+/// 一個 exec 指令最多送這麼長（dropbear 的 `MAX_CMD_LEN` 是 9000，OpenWrt 路由器常用它；留餘量給引號）。
+/// The longest exec command sent at once: dropbear (common on OpenWrt routers) refuses commands over 9000 bytes.
+pub const MAX_COMMAND: usize = 6000;
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 把 POSIX 腳本拆成幾個夠短的 exec：先分段寫進暫存檔，最後一個跑它並刪掉（短的照舊一個 `sh -c`）。純函式，好測。
+/// Split a POSIX script into exec commands short enough for any sshd: append it in pieces to a temp file, then run
+/// and delete it with the last one (a short script stays one `sh -c`). Pure, for tests.
+pub fn script_commands(script: &str, tag: &str) -> Vec<String> {
+    let whole = format!("sh -c {}", sh_quote(script));
+    if whole.len() <= MAX_COMMAND {
+        return vec![whole];
+    }
+    let path = format!("\"${{TMPDIR:-/tmp}}/telepy-script-{tag}.sh\"");
+    let mut out = vec![format!("umask 077 && : > {path}")];
+    let mut piece = String::new();
+    for ch in script.chars() {
+        piece.push(ch);
+        // 引號會讓 ' 變四個字：估長時算進去。/ Quoting turns ' into four characters: count it.
+        if piece.len() + piece.matches('\'').count() * 3 >= MAX_COMMAND - 200 {
+            out.push(format!("printf '%s' {} >> {path}", sh_quote(&piece)));
+            piece.clear();
+        }
+    }
+    if !piece.is_empty() {
+        out.push(format!("printf '%s' {} >> {path}", sh_quote(&piece)));
+    }
+    out.push(format!("sh {path}; s=$?; rm -f {path}; exit $s"));
+    out
+}
+
+/// 跑一個 POSIX 腳本（長的分段送，見 [`script_commands`]）。前面寫檔的那幾段失敗就直接回報。
+/// Run a POSIX script, in pieces when long (see [`script_commands`]); a failed write step is reported as such.
+pub async fn run_script(handle: &Handle<ClientHandler>, script: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
+    let tag = crate::util::random_alnum(12).to_ascii_lowercase();
+    let commands = script_commands(script, &tag);
+    let last = commands.len() - 1;
+    for (i, cmd) in commands.iter().enumerate() {
+        let r = run(handle, cmd, if i == last { timeout } else { Duration::from_secs(20) }, max_output).await?;
+        if i == last {
+            return Ok(r);
+        }
+        if r.exit_code != Some(0) {
+            bail!("could not write the script to the device's temp folder (step {} of {}): {}", i + 1, last, r.stderr.text.trim());
+        }
+    }
+    unreachable!("script_commands always ends with the run step")
+}
+
 /// 在已經開好的 session channel 上跑指令（連線池的 `session_channel`）。/ Run on an already opened session channel.
 pub async fn run_on(mut ch: Channel<Msg>, command: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
     let started = Instant::now();
@@ -133,6 +185,26 @@ pub async fn run_on(mut ch: Channel<Msg>, command: &str, timeout: Duration, max_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_scripts_are_sent_in_pieces_short_enough_for_dropbear() {
+        assert_eq!(script_commands("echo hi", "t"), vec!["sh -c 'echo hi'".to_string()]);
+        let script: String = (0..3000).map(|i| format!("echo 'line {i}'\n")).collect();
+        let cmds = script_commands(&script, "abc");
+        assert!(cmds.len() > 3, "{}", cmds.len());
+        assert!(cmds.iter().all(|c| c.len() <= MAX_COMMAND), "{:?}", cmds.iter().map(|c| c.len()).max());
+        assert_eq!(cmds[0], "umask 077 && : > \"${TMPDIR:-/tmp}/telepy-script-abc.sh\"");
+        assert_eq!(cmds.last().unwrap(), "sh \"${TMPDIR:-/tmp}/telepy-script-abc.sh\"; s=$?; rm -f \"${TMPDIR:-/tmp}/telepy-script-abc.sh\"; exit $s");
+        // 每段解開引號後接起來 = 原腳本。/ The pieces, unquoted and joined, are the script.
+        let joined: String = cmds[1..cmds.len() - 1]
+            .iter()
+            .map(|c| {
+                let q = c.strip_prefix("printf '%s' ").unwrap().rsplit_once(" >> ").unwrap().0;
+                q[1..q.len() - 1].replace("'\\''", "'")
+            })
+            .collect();
+        assert_eq!(joined, script);
+    }
 
     #[test]
     fn head_tail_truncation() {

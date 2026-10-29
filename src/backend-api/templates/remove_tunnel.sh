@@ -95,12 +95,38 @@ foreign() {
     printf '%s\n' "$fp_list" | grep -qx -- "$T_GW_PORT" && return 1
     return 0
 }
+# A command that names no key file uses its account's default keys (what ssh tries on its own). It is this tunnel's
+# when it dials this very gateway (its port is named) with a -R forward and one of those defaults is the tunnel key.
+DEFAULT_KEYS="id_ed25519 id_ecdsa id_rsa id_ed25519_sk id_ecdsa_sk id_dsa"
+home_of() {
+    case "$1" in ""|*[!A-Za-z0-9._-]*) return 0 ;; esac
+    eval "printf '%s' ~$1" 2>/dev/null
+}
+dials_here_with_forward() {
+    [ -n "$T_GW_PORT" ] || return 1
+    dial_ports "$1" | grep -qx -- "$T_GW_PORT" || return 1
+    printf '%s\n' "$1" | grep -Eq -- "-[A-Za-z]*R['\"]? ?['\"]?([^ :'\"]*:)?[0-9]+:"
+}
+default_key_of() {
+    [ -n "$2" ] || return 1
+    [ -n "$(key_paths "$1")" ] && return 1
+    dials_here_with_forward "$1" || return 1
+    for dk in $DEFAULT_KEYS; do key_matches "$2/.ssh/$dk" && return 0; done
+    return 1
+}
+# Whose default keys a unit / plist / script would use: User= / UserName, root for system ones, else this account.
+file_home() {
+    fh_user=$(printf '%s\n' "$2" | sed -n 's/^User=//p' | head -n 1)
+    [ -n "$fh_user" ] || fh_user=$(printf '%s' "$2" | tr -d '\n' | sed -n 's:.*<key>UserName</key>[[:space:]]*<string>\([^<]*\)</string>.*:\1:p')
+    case "$1" in /etc/systemd/*|/lib/systemd/*|/usr/lib/systemd/*|/Library/LaunchDaemons/*) [ -n "$fh_user" ] || fh_user=root ;; esac
+    if [ -n "$fh_user" ]; then home_of "$fh_user"; else printf '%s' "$HOME"; fi
+}
 # A file of this tunnel: it carries its number (older scripts) or refers to its key, and dials this server.
 has_port() {
     exists "$1" || return 1
     kept_new "$1" && return 1
     hp_text=$(rd "$1")
-    if printf '%s\n' "$hp_text" | grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" || uses_key "$hp_text"; then
+    if printf '%s\n' "$hp_text" | grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" || uses_key "$hp_text" || default_key_of "$hp_text" "$(file_home "$1" "$hp_text")"; then
         if foreign "$hp_text"; then
             out kept other-server "$1 (port $(dial_ports "$hp_text" | head -n 1))"
             uses_key "$hp_text" && KEY_ELSEWHERE="$KEY_ELSEWHERE $1"
@@ -111,12 +137,19 @@ has_port() {
     return 1
 }
 # A command line of this tunnel: -R with its number, or any -R plus its key (never a -L only client).
+# A process line starts with its pid (its owner's default keys count); a crontab line belongs to this account.
 line_is_mine() {
     kept_new "$1" && return 1
     foreign "$1" && return 1
     printf '%s' "$1" | grep -Eq -- "$PROC_RE" && return 0
     printf '%s' "$1" | grep -Eq -- "$ANY_R_RE" || return 1
-    uses_key "$1"
+    uses_key "$1" && return 0
+    lm_pid=$(printf '%s' "$1" | awk '{print $1}')
+    case "$lm_pid" in
+        ""|*[!0-9]*) lm_home=$HOME ;;
+        *) lm_home=$(owner_home "$lm_pid") ;;
+    esac
+    default_key_of "$1" "$lm_home"
 }
 
 OS=$(uname -s 2>/dev/null || echo unknown)
@@ -276,6 +309,15 @@ pinfo() {
 uid_of() {
     if [ -r "/proc/$1/status" ]; then awk '/^Uid:/ { print $2; exit }' "/proc/$1/status" 2>/dev/null
     else ps -o uid= -p "$1" 2>/dev/null | tr -d ' '; fi
+}
+# The home of the account that runs a process (this account's own from the login's HOME).
+owner_home() {
+    oh_uid=$(uid_of "$1")
+    if [ -n "$oh_uid" ] && [ "$oh_uid" = "$MY_UID" ]; then printf '%s' "$HOME"; return 0; fi
+    oh_name=""
+    if [ -n "$oh_uid" ] && command -v getent >/dev/null 2>&1; then oh_name=$(getent passwd "$oh_uid" 2>/dev/null | cut -d: -f1); fi
+    [ -n "$oh_name" ] || oh_name=$(ps -o user= -p "$1" 2>/dev/null | tr -d ' ')
+    home_of "$oh_name"
 }
 # Who runs a process, and their home (this account's own come from the login: HOME / LOGNAME).
 owner_of() {

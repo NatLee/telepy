@@ -309,7 +309,7 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
         }
     };
     let script = plan::install_script(&p, &names, &args, if host_keys.is_empty() { "" } else { &known });
-    let installed = exec::run(&conn.device, &format!("sh -c {}", sh_quote(&script)), INSTALL_TIMEOUT, MAX_OUTPUT).await;
+    let installed = exec::run_script(&conn.device, &script, INSTALL_TIMEOUT, MAX_OUTPUT).await;
     let items = match installed {
         Ok(r) => {
             let items = tunnel_service::parse_items(&r.stdout.text);
@@ -416,7 +416,7 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
 /// 新服務沒成：經舊連線把剛裝的拆掉（舊服務沒動過），關掉交接。/ Undo the new service over the old connection.
 async fn undo(run: &mut Run<'_>, conn: &device::DeviceConn, p: &plan::Plan, names: &Names, port: u16) {
     let script = plan::undo_script(p, names);
-    let items = match exec::run(&conn.device, &format!("sh -c {}", sh_quote(&script)), INSTALL_TIMEOUT, MAX_OUTPUT).await {
+    let items = match exec::run_script(&conn.device, &script, INSTALL_TIMEOUT, MAX_OUTPUT).await {
         Ok(r) => tunnel_service::parse_items(&r.stdout.text),
         Err(e) => vec![Item { kind: "failed".into(), what: "undo".into(), detail: format!("{e:#}") }],
     };
