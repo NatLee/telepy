@@ -9,11 +9,12 @@
  * events the whole site should know about. The side panel lists what can be sent, who receives it and how delivery
  * works.
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { Plus, RadioTower, RefreshCw, Webhook as WebhookIcon } from "lucide-react";
+import { Plus, RadioTower, Webhook as WebhookIcon } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DeliveriesDialog } from "@/components/webhooks/DeliveriesDialog";
@@ -33,6 +34,8 @@ const SERVICES = ["Slack", "Discord", "Google Chat", "Microsoft Teams", "Telegra
 export function WebhooksView({ scope }: { scope: WebhookScope }) {
     const { t, locale } = useI18n();
     const page = useWebhooksPage(scope);
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     const [editing, setEditing] = useState<Webhook | "new" | null>(null);
     const [deleting, setDeleting] = useState<Webhook | null>(null);
     const [history, setHistory] = useState<Webhook | null>(null);
@@ -57,7 +60,7 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
     );
 
     return (
-        <div className="flex flex-col animate-fade-in-up">
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up">
             <PageHeader
                 className="mb-6"
                 icon={site ? <RadioTower /> : <WebhookIcon />}
@@ -66,10 +69,7 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
                 description={site ? t("webhooks.siteSubtitle") : t("webhooks.subtitle")}
                 actions={
                     <>
-                        <Button variant="outline" onClick={() => void page.reload()}>
-                            <RefreshCw size={16} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={page.reload} ripple={pageRef} label={t("common.refresh")} />
                         {addButton}
                     </>
                 }
@@ -105,7 +105,7 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
                             {canAdd && <div className="mt-5">{addButton}</div>}
                         </div>
                     ) : (
-                        <ul className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
+                        <ul data-refresh-list className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
                             {page.list.map((h) => (
                                 <WebhookCard
                                     key={h.id}

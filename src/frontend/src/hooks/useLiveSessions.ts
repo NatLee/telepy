@@ -22,18 +22,21 @@ export function useLiveSessions(scope: ViewScope = "mine") {
     const [sessions, setSessions] = useState<LiveSession[] | null>(null);
     const [failed, setFailed] = useState(false);
 
-    const reload = useCallback(async () => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
+    const reload = useCallback(async (): Promise<boolean> => {
         try {
             const res = await apiFetch(scope === "all" ? "/api/sessions?scope=all" : "/api/sessions");
             if (!res.ok) {
                 setFailed(true);
-                return;
+                return false;
             }
             const data = (await res.json()) as { sessions: LiveSession[] };
             setSessions(data.sessions);
             setFailed(false);
+            return true;
         } catch {
             setFailed(true);
+            return false;
         }
     }, [scope]);
 

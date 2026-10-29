@@ -147,7 +147,7 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
             {shown.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("network.table.empty")}</p>
             ) : (
-                <ul ref={listRef} onKeyDown={onKeyDown} className="divide-y divide-border">
+                <ul ref={listRef} onKeyDown={onKeyDown} data-refresh-list className="divide-y divide-border">
                     {page.map((r) => {
                         const { host, device: tn } = r;
                         const online = isOnline(tn);

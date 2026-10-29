@@ -12,9 +12,9 @@
  * section's Site command rules: admins add and change site-wide rules (every tunnel or picked ones). Both have the
  * command tester and the "how a command is decided" diagram beside them.
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Info, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowRight, Info, Plus, ShieldCheck } from "lucide-react";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ApprovalCard, useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -26,6 +26,7 @@ import { OffDialog } from "@/components/commands/OffDialog";
 import { RuleLayersDialog } from "@/components/commands/RuleLayers";
 import { RuleList, type RuleOverrides } from "@/components/commands/RuleList";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -57,6 +58,8 @@ function Empty({ title, hint, onAdd, addLabel }: { title: string; hint: string; 
 export function CommandRulesView({ view }: { view: RulesView }) {
     const { t } = useI18n();
     const page = useCommandRulesPage(view);
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     const { pending, decide } = useCommandApprovals();
     const [editing, setEditing] = useState<CommandRule | "new" | null>(null);
     const [deleting, setDeleting] = useState<CommandRule | null>(null);
@@ -144,7 +147,7 @@ export function CommandRulesView({ view }: { view: RulesView }) {
     );
 
     return (
-        <div className="flex flex-col animate-fade-in-up">
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up">
             <PageHeader
                 className="mb-6"
                 icon={<ShieldCheck />}
@@ -157,10 +160,7 @@ export function CommandRulesView({ view }: { view: RulesView }) {
                             <Info size={16} />
                             {t("commands.flow.button")}
                         </Button>
-                        <Button onClick={() => void page.reload()} variant="outline">
-                            <RefreshCw size={16} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={page.reload} ripple={pageRef} label={t("common.refresh")} />
                         {page.tab === "rules" && (
                             <Button onClick={() => setEditing("new")} disabled={!canAdd}>
                                 <Plus size={16} /> {addLabel}

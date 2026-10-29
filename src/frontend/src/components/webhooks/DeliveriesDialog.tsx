@@ -5,9 +5,10 @@
  * A webhook's recent deliveries: ok / failed / skipped, HTTP status, attempts, time taken and the error; expand a
  * row to see (and copy) what was sent.
  */
-import React, { useCallback, useEffect, useState } from "react";
-import { ChevronDown, History, RefreshCw, RotateCw, Send } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, History, RotateCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
 import { Chip } from "@/components/ui/section";
@@ -46,11 +47,14 @@ function Deliveries({ hook, onClose, load, onTest, onRedeliver }: Props & { hook
     const [failed, setFailed] = useState(false);
     const [open, setOpen] = useState<number | null>(null);
     const [busy, setBusy] = useState(false);
+    // 重新整理後畫面上的投遞紀錄依序淡入。/ After Refresh, the deliveries on screen fade back in.
+    const listRef = useRef<HTMLUListElement>(null);
 
     const refresh = useCallback(async () => {
         const r = await load(hook.id);
         setFailed(r === null);
         if (r) setRows(r);
+        return r !== null;
     }, [hook.id, load]);
 
     useEffect(() => {
@@ -86,9 +90,7 @@ function Deliveries({ hook, onClose, load, onTest, onRedeliver }: Props & { hook
                     <Button size="sm" onClick={() => void test()} disabled={busy}>
                         <Send size={15} /> {busy ? t("webhooks.card.testing") : t("webhooks.card.test")}
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => void refresh()}>
-                        <RefreshCw size={15} /> {t("common.refresh")}
-                    </Button>
+                    <RefreshButton size="sm" iconSize={15} onRefresh={refresh} ripple={listRef} label={t("common.refresh")} />
                 </div>
             }
             footer={
@@ -104,7 +106,7 @@ function Deliveries({ hook, onClose, load, onTest, onRedeliver }: Props & { hook
             ) : rows.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">{t("webhooks.deliveries.empty")}</p>
             ) : (
-                <ul className="divide-y divide-border rounded-lg border border-border">
+                <ul ref={listRef} data-refresh-list className="divide-y divide-border rounded-lg border border-border">
                     {rows.map((d) => {
                         const expanded = open === d.id;
                         const facts = [

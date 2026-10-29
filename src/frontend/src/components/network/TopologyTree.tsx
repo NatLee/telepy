@@ -370,7 +370,7 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
                 {/* 裝置 → 主機的橫線（只在寬螢幕）。/ Device → hosts connector on wide screens. */}
                 <span aria-hidden className={cn("mt-8 hidden w-6 shrink-0 border-t @3xl:block", online ? "border-success/60" : "border-dashed border-muted-foreground/40")} />
                 {tn.hosts.length > 0 ? (
-                    <ul className="ml-2.5 @md:ml-5 @3xl:ml-0">
+                    <ul data-refresh-list className="ml-2.5 @md:ml-5 @3xl:ml-0">
                         {hosts.map((h, i) => (
                             <Branch key={h.id} last={i === hosts.length - 1 && !paged} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
                                 <HostChip host={h} tunnel={tn} online={online} selected={h.id === selectedHostId} actions={hostActions} />

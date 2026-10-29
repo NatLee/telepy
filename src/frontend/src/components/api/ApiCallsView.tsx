@@ -9,9 +9,10 @@
  * calls). Shared by the API page's Activity (`mine`, filter by token) and the admin section's All API activity
  * (`all`, filter by user). Grouped by day, the page scrolls as a whole with the filter bar stuck under the header.
  */
-import React from "react";
-import { Bot, ChevronDown, KeyRound, Loader2, RefreshCw, Search, SquareTerminal } from "lucide-react";
+import React, { useRef } from "react";
+import { Bot, ChevronDown, KeyRound, Loader2, Search, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip } from "@/components/ui/section";
@@ -96,6 +97,8 @@ export function ApiCallsView({ scope, tokens, signIns }: { scope: ViewScope; tok
     const { all, rows, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, credFilter, userFilter, users, status, method, search, filtering, dropped } = state;
     const { refresh, setCredFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore } = actions;
     const { ref: barRef, style: barStyle } = useStickyBar();
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     const signInLabel = (g: OAuthGrant) => t("apiPage.calls.cliWho", { host: grantHost(g) || t("cliSignIns.unnamed") });
     // 篩選中的那一個不在清單上（被撤銷了、或是管理區看別人的）→ 從紀錄裡找名字。/ A filtered credential missing from the list: name from the rows.
     const [credKind, credId] = credFilter === ALL ? [null, null] : credFilter.split(":");
@@ -115,7 +118,7 @@ export function ApiCallsView({ scope, tokens, signIns }: { scope: ViewScope; tok
     const hasSignIns = !!signIns && signIns.length > 0;
 
     return (
-        <div className="flex flex-col" style={barStyle}>
+        <div ref={pageRef} className="flex flex-col" style={barStyle}>
             <div ref={barRef} className="z-20 flex flex-col gap-2 bg-background py-3 sm:sticky sm:top-16">
                 <div className="flex flex-col gap-2 lg:flex-row">
                     <div className="flex gap-2">
@@ -164,9 +167,7 @@ export function ApiCallsView({ scope, tokens, signIns }: { scope: ViewScope; tok
                                 </SelectContent>
                             </Select>
                         )}
-                        <Button variant="outline" size="icon" className="size-10 shrink-0" onClick={refresh} disabled={loading} aria-label={t("common.refresh")} title={t("common.refresh")}>
-                            <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
-                        </Button>
+                        <RefreshButton size="icon" className="size-10 shrink-0" onRefresh={refresh} busy={loading} ripple={pageRef} aria-label={t("common.refresh")} title={t("common.refresh")} />
                     </div>
                     <div className="relative flex-1">
                         <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">

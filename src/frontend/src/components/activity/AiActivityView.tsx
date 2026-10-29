@@ -12,8 +12,9 @@
  */
 import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { Bot, RefreshCw, Search, X, Activity, Loader2, ChevronDown, ListTree, BotMessageSquare, Plug, KeyRound, ArrowRight, SquareTerminal } from "lucide-react";
+import { Bot, Search, X, Activity, Loader2, ChevronDown, ListTree, BotMessageSquare, Plug, KeyRound, ArrowRight, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -109,7 +110,7 @@ function YourApps({
             ) : apps.length === 0 ? (
                 <p className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">{t("activity.appsEmpty")}</p>
             ) : (
-                <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <ul data-refresh-list className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {apps.map((g) => {
                         const open = sessions.filter((s) => s.grant_id === g.id && s.user.id === meId).length;
                         const showing = appFilter === String(g.id);
@@ -155,6 +156,8 @@ export function AiActivityView({ scope }: { scope: ViewScope }) {
     const [appId, setAppId] = useState<number | null>(null);
     // 日期標題黏在篩選列下方，所以要知道篩選列多高。/ Day headings stick under the filter bar, so they need its height.
     const { ref: barRef, style: barStyle } = useStickyBar();
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     const logRef = useRef<HTMLElement>(null);
     // app 的詳細資料只給授權的本人與管理員（隧道擁有者看得到 session，但不是他的授權）。
     // App details are for the person who authorized it and admins; tunnel owners see sessions, not the grant.
@@ -180,7 +183,7 @@ export function AiActivityView({ scope }: { scope: ViewScope }) {
     const appInList = !!apps?.some((g) => String(g.id) === appFilter);
 
     return (
-        <div className="flex flex-col animate-fade-in-up" style={barStyle}>
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up" style={barStyle}>
             <PageHeader
                 className="mb-6"
                 icon={<Bot />}
@@ -188,10 +191,7 @@ export function AiActivityView({ scope }: { scope: ViewScope }) {
                 titleAddon={all ? <AdminChip /> : undefined}
                 description={all ? t("activity.allSubtitle") : t("activity.subtitle")}
                 actions={
-                    <Button onClick={refresh} variant="outline" disabled={loading}>
-                        <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
-                        {t("common.refresh")}
-                    </Button>
+                    <RefreshButton onRefresh={refresh} busy={loading} ripple={pageRef} label={t("common.refresh")} />
                 }
             />
 
@@ -215,7 +215,7 @@ export function AiActivityView({ scope }: { scope: ViewScope }) {
                 {sessions.length === 0 ? (
                     <p className="text-xs text-muted-foreground rounded-xl border border-dashed border-border px-4 py-3">{t("activity.sessionsEmpty")}</p>
                 ) : (
-                    <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <ul data-refresh-list className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                         {sessions.map((s) => (
                             <li key={s.id} className="rounded-xl border border-border bg-card p-4 text-sm flex flex-col gap-2">
                                 <div className="flex items-start justify-between gap-2">

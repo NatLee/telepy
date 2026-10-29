@@ -8,13 +8,14 @@
  * pages share it: `mine` = the Recordings page (yours plus everyone's on tunnels you own or ADMIN, admins too);
  * `all` = the admin section's site-wide view (everyone's, with a user filter). `?tunnel=<id>` narrows to one tunnel.
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Clapperboard, Download, Film, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Clapperboard, Download, Film, Play, Trash2 } from "lucide-react";
 import { AdminChip, AdminViewLink, type ViewScope } from "@/components/layout/AdminViews";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { CastPlayer } from "@/components/recordings/CastPlayer";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Modal } from "@/components/ui/Modal";
@@ -40,6 +41,8 @@ export function RecordingsView({ scope }: { scope: ViewScope }) {
     const site = scope === "all";
     const tunnelId = Number(params.get("tunnel")) || null;
     const { list: fetched, failed, reload, fetchCast, download, remove } = useRecordings(tunnelId, scope);
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     // 管理區：只看某個人的（在前端篩，名單取自清單）。/ Admin section: only one person's (filtered here, names from the list).
     const [userId, setUserId] = useState<number | null>(null);
     const people = useMemo(() => usersIn(fetched ?? []), [fetched]);
@@ -59,7 +62,7 @@ export function RecordingsView({ scope }: { scope: ViewScope }) {
     };
 
     return (
-        <div className="flex flex-col animate-fade-in-up">
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up">
             <PageHeader
                 className="mb-6"
                 icon={site ? <Film /> : <Clapperboard />}
@@ -67,10 +70,7 @@ export function RecordingsView({ scope }: { scope: ViewScope }) {
                 titleAddon={site ? <AdminChip /> : undefined}
                 description={site ? t("recordings.allSubtitle") : t("recordings.subtitle")}
                 actions={
-                    <Button onClick={() => void reload()} variant="outline">
-                        <RefreshCw size={16} />
-                        {t("common.refresh")}
-                    </Button>
+                    <RefreshButton onRefresh={reload} ripple={pageRef} label={t("common.refresh")} />
                 }
             />
 
@@ -118,7 +118,7 @@ export function RecordingsView({ scope }: { scope: ViewScope }) {
                     <p className="mt-1 max-w-md text-xs text-muted-foreground">{site ? t("recordings.emptyHintAll") : t("recordings.emptyHint")}</p>
                 </div>
             ) : (
-                <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+                <ul data-refresh-list className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
                     {(list ?? []).map((r) => (
                         <li key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
                             <div className="min-w-0 flex-1">

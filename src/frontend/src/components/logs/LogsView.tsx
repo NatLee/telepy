@@ -10,10 +10,11 @@
  * site events, owners and the integrity check). The page itself scrolls: the filter bar sticks under the header (sm
  * and up) and each day's heading under the filter bar.
  */
-import React from "react";
-import { Search, FileText, AlertCircle, RefreshCw, Filter, X, ShieldCheck, ChevronDown, ScrollText } from "lucide-react";
+import React, { useRef } from "react";
+import { Search, FileText, AlertCircle, Filter, X, ShieldCheck, ChevronDown, ScrollText } from "lucide-react";
 import { AuditVerifyDialog } from "@/components/logs/AuditVerifyDialog";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Input } from "@/components/ui/input";
@@ -98,6 +99,8 @@ export function LogsView({ scope }: { scope: ViewScope }) {
     // 每天的標題黏在篩選列下方，所以要知道篩選列多高（會換行，選了隧道也會變）。
     // Day headings stick under the filter bar, so they need its height (it wraps, and grows with a tunnel selected).
     const { ref: barRef, style: barStyle } = useStickyBar();
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
 
     // 從某一列的隧道標籤切過去：換成那條隧道並回到頂端。/ From a row's tunnel chip: filter to it and go back to the top.
     const showTunnel = (id: number) => {
@@ -120,7 +123,7 @@ export function LogsView({ scope }: { scope: ViewScope }) {
     const filtering = search.trim() !== "" || category !== "all";
 
     return (
-        <div className="flex flex-col animate-fade-in-up" style={barStyle}>
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up" style={barStyle}>
             <PageHeader
                 className="mb-6"
                 icon={site ? <ScrollText /> : <FileText />}
@@ -135,10 +138,7 @@ export function LogsView({ scope }: { scope: ViewScope }) {
                                 {t("logs.verify.button")}
                             </Button>
                         )}
-                        <Button onClick={fetchLogs} variant="outline" disabled={loading}>
-                            <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={fetchLogs} busy={loading} ripple={pageRef} label={t("common.refresh")} />
                     </>
                 }
             />

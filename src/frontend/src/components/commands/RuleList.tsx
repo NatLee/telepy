@@ -156,7 +156,7 @@ export function RuleList({
 }) {
     const { t } = useI18n();
     return (
-        <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+        <ul data-refresh-list className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
             {rules.map((r) => {
                 const editable = typeof canEdit === "function" ? canEdit(r) : canEdit;
                 return (

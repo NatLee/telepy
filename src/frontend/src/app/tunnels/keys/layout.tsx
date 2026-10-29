@@ -7,11 +7,12 @@
  * (your keys / key groups / devices, also listed in the sidebar), and the shared data and dialogs
  * (`KeysAreaProvider`). The three parts used to share one page, which got long with many keys or devices.
  */
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { HardDrive, Info, Key as KeyIcon, KeyRound, Layers, Plus, RefreshCw } from "lucide-react";
+import { HardDrive, Info, Key as KeyIcon, KeyRound, Layers, Plus } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Segmented } from "@/components/ui/segmented";
 import { KeyListExplainerDialog } from "@/components/keys/KeyListExplainer";
 import { KeysAreaProvider, useKeysArea } from "@/components/keys/KeysArea";
@@ -50,9 +51,17 @@ function KeysShell({ children }: { children: React.ReactNode }) {
     // 「個人 SSH 金鑰」被管理員關掉：看得到、刪得掉現有的，不能新增（筆電經 gateway 也連不上）。
     // Personal keys turned off: existing keys can be seen and deleted, not added (laptop SSH is refused too).
     const keysOn = useFeatures().has("keys.personal");
+    // 重新整理後畫面上的金鑰 / 群組 / 裝置依序淡入。/ After Refresh, the keys / groups / devices on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
+    // 三個分頁共用一顆鈕：金鑰、裝置矩陣，連金鑰群組也重抓（以前「金鑰群組」頁按了不會更新群組）。
+    // One button for all three sub-pages: keys, the matrix and the key groups too (the groups page used to skip them).
+    const refreshAll = async () => {
+        const [ok] = await Promise.all([page.refresh(), keyGroups.load()]);
+        return ok;
+    };
 
     return (
-        <div className="animate-fade-in-up space-y-6">
+        <div ref={pageRef} className="animate-fade-in-up space-y-6">
             <PageHeader
                 icon={<KeyIcon />}
                 title={t("keys.title")}
@@ -62,10 +71,7 @@ function KeysShell({ children }: { children: React.ReactNode }) {
                         <Button variant="outline" onClick={() => setHowOpen(true)}>
                             <Info size={16} /> {t("keys.how.show")}
                         </Button>
-                        <Button variant="outline" onClick={page.refresh} disabled={page.loading} aria-label={t("keys.refreshAria")}>
-                            <RefreshCw size={16} className={page.loading ? "animate-spin" : ""} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={refreshAll} busy={page.loading} ripple={pageRef} label={t("common.refresh")} aria-label={t("keys.refreshAria")} />
                         {keysOn && (
                             <Button onClick={() => setAddOpen(true)}>
                                 <Plus size={16} />

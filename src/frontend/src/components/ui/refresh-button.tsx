@@ -21,14 +21,20 @@ import { cn } from "@/lib/utils";
 type Props = Omit<React.ComponentProps<typeof Button>, "onClick" | "children"> & {
     /** 做重新整理；回傳 false = 失敗（不打勾，錯誤由呼叫端自己說）。/ Does the refresh; false = failed (no check). */
     onRefresh: () => Promise<boolean | void> | boolean | void;
-    /** 頁面在背景載入中（也轉，不打勾）。/ The page is loading on its own (turns too, no check). */
+    /** 頁面在背景載入中（也轉，不打勾）。結果晚點才從 socket 回來的重新整理（檔案列表）：onRefresh 只送出要求，
+     * 轉到 busy 結束。/ The page is loading on its own (turns too, no check). A refresh whose answer arrives later over
+     * a socket (a file listing): onRefresh only sends the request and the icon turns until busy ends. */
     busy?: boolean;
+    /** 結果是錯誤（例如列表回了錯誤訊息）：停下時不打勾。/ The result is an error (e.g. the listing failed): no check. */
+    failed?: boolean;
     /** 按鈕文字；不給 = 只有圖示。/ Button text; none = icon only. */
     label?: React.ReactNode;
+    /** 成功後讓這裡面的列表項目依序淡入（見 rippleIn）。/ After a success, fade this element's list items back in (see rippleIn). */
+    ripple?: React.RefObject<HTMLElement | null>;
     iconSize?: number;
 };
 
-export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, variant = "outline", className, ...rest }: Props) {
+export function RefreshButton({ onRefresh, busy = false, failed = false, label, ripple, iconSize = 16, variant = "outline", className, ...rest }: Props) {
     const { t } = useI18n();
     const reduced = useReducedMotion();
     const [spinning, setSpinning] = useState(busy);
@@ -37,6 +43,7 @@ export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, v
     const working = useRef(false);
     const succeeded = useRef(false);
     const busyRef = useRef(busy);
+    const failedRef = useRef(failed);
     const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => {
         if (doneTimer.current) clearTimeout(doneTimer.current);
@@ -53,7 +60,7 @@ export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, v
     const settle = useCallback(() => {
         if (keepSpinning({ working: working.current, busy: busyRef.current })) return;
         setSpinning(false);
-        if (!succeeded.current) return;
+        if (!succeeded.current || failedRef.current) return;
         succeeded.current = false;
         showDone();
     }, [showDone]);
@@ -69,7 +76,8 @@ export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, v
     }
     useEffect(() => {
         busyRef.current = busy;
-    }, [busy]);
+        failedRef.current = failed;
+    }, [busy, failed]);
 
     const click = async () => {
         if (working.current) return;
@@ -85,12 +93,24 @@ export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, v
             ok = false;
         }
         working.current = false;
-        if (reduced) {
-            setSpinning(false);
-            if (ok) showDone();
-        } else {
-            succeeded.current = ok;
-        }
+        // 新資料這一輪畫完再動。/ Move once the render showing the new data is done.
+        if (ok && ripple && !reduced) requestAnimationFrame(() => rippleIn(ripple.current));
+        succeeded.current = ok;
+        if (reduced) waitQuietly();
+    };
+
+    // 減少動態時沒有「一圈」可等：每 100 ms 看一次，busy 結束（socket 的列表回來了）再停、再打勾。
+    // With reduced motion there is no turn to wait for: look every 100 ms and stop (and check) once busy ends (a
+    // socket listing arrived).
+    const waitQuietly = () => {
+        if (doneTimer.current) clearTimeout(doneTimer.current);
+        doneTimer.current = setTimeout(function look() {
+            if (busyRef.current) {
+                doneTimer.current = setTimeout(look, 100);
+                return;
+            }
+            settle();
+        }, 150);
     };
 
     const turning = spinning && !reduced;
@@ -113,14 +133,20 @@ export function RefreshButton({ onRefresh, busy = false, label, iconSize = 16, v
     );
 }
 
+/** 列表項目：標了 `data-refresh-item` 的元素，或 `data-refresh-list` 容器（ol、tbody、卡片格）的直接子元素。
+ * List items: elements marked `data-refresh-item`, or the direct children of a `data-refresh-list` container (an ol, a
+ * tbody, a card grid). */
+export const REFRESH_ITEMS = "[data-refresh-item], [data-refresh-list] > *";
+
 /**
- * 重新整理後讓列表項目（`data-refresh-item`）由淡到實、一項接一項浮回原位，表示「這是剛拿到的」；只動畫面內的項目，
- * 不重新掛載（卡片裡打開的選單不會掉）。減少動態時呼叫端不要叫它（Web Animations 不受 globals.css 的規則影響）。
- * After a refresh, list items (`data-refresh-item`) fade up into place one after another — "this just arrived". Only
- * items on screen move, nothing remounts (a card's open menu stays). Callers skip it under reduced motion (Web
- * Animations ignore the globals.css rule).
+ * 重新整理後讓列表項目（REFRESH_ITEMS）由淡到實、一項接一項浮回原位，表示「這是剛拿到的」；只動畫面內的項目，
+ * 不重新掛載（卡片裡打開的選單不會掉）。減少動態時不要叫它（Web Animations 不受 globals.css 的規則影響；
+ * RefreshButton 的 `ripple` 已經處理）。
+ * After a refresh, list items (REFRESH_ITEMS) fade up into place one after another — "this just arrived". Only items
+ * on screen move, nothing remounts (a card's open menu stays). Don't call it under reduced motion (Web Animations
+ * ignore the globals.css rule; RefreshButton's `ripple` already checks).
  */
-export function rippleIn(root: HTMLElement | null, selector = "[data-refresh-item]") {
+export function rippleIn(root: HTMLElement | null, selector = REFRESH_ITEMS) {
     if (!root || typeof root.animate !== "function") return;
     const height = window.innerHeight;
     const onScreen = Array.from(root.querySelectorAll<HTMLElement>(selector)).filter((el) => {

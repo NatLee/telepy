@@ -177,7 +177,8 @@ export function useLogsPage(scope: ViewScope = "mine") {
         };
     }, [scope]);
 
-    const fetchLogs = useCallback(async () => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
+    const fetchLogs = useCallback(async (): Promise<boolean> => {
         setLoading(true);
         try {
             const qs = new URLSearchParams({ limit: String(limit) });
@@ -188,7 +189,7 @@ export function useLogsPage(scope: ViewScope = "mine") {
                 setLogs([]);
                 setLogsFor(tunnelFilter);
                 showError(t("logs.fetchFailed"));
-                return;
+                return false;
             }
             const events: GatewayEvent[] = await res.json();
             const now = new Date();
@@ -221,8 +222,10 @@ export function useLogsPage(scope: ViewScope = "mine") {
             setFetchedAt(now);
             setLogsFor(tunnelFilter);
             setLogsLimit(limit);
+            return true;
         } catch (e) {
             showError(e instanceof Error ? e.message : t("logs.fetchFailed"));
+            return false;
         } finally {
             setLoading(false);
         }

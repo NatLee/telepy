@@ -38,7 +38,7 @@ export function TimelineDay({ label, count, level = 2, children }: { label: stri
                 <span>{label}</span>
                 <span className="text-muted-foreground tabular-nums">{count}</span>
             </Heading>
-            <ol className="divide-y divide-border">{children}</ol>
+            <ol data-refresh-list className="divide-y divide-border">{children}</ol>
         </section>
     );
 }

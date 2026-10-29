@@ -44,14 +44,18 @@ export function useKeysPage() {
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [syncing, setSyncing] = useState<Set<number>>(new Set());
 
-    const fetchKeys = useCallback(async () => {
+    const fetchKeys = useCallback(async (): Promise<boolean> => {
         try {
             const res = await apiFetch("/api/reverse/user/keys");
-            if (res.ok) setKeys(await res.json());
-            else showError(t("keys.fetchFailed"));
+            if (res.ok) {
+                setKeys(await res.json());
+                return true;
+            }
+            showError(t("keys.fetchFailed"));
         } catch (e) {
             showError(e instanceof Error ? e.message : t("keys.fetchFailed"));
         }
+        return false;
     }, [showError, t]);
 
     const fetchDevices = useCallback(async () => {
@@ -63,10 +67,12 @@ export function useKeysPage() {
         }
     }, []);
 
+    // 回傳金鑰有沒有拿到（裝置矩陣失敗時維持原樣，不算失敗）。/ Answers whether the keys arrived (a failed matrix keeps its rows).
     const refresh = useCallback(async () => {
         setLoading(true);
-        await Promise.all([fetchKeys(), fetchDevices()]);
+        const [ok] = await Promise.all([fetchKeys(), fetchDevices()]);
         setLoading(false);
+        return ok;
     }, [fetchKeys, fetchDevices]);
 
     useEffect(() => {
