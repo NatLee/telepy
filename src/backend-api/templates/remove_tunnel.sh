@@ -18,6 +18,8 @@ SURVEY=0
 [ "$T_MODE" = survey ] && SURVEY=1
 KEEP_ID=""
 [ "$T_MODE" = relabel ] && KEEP_ID=$T_INSTALL
+# Things of another server that use this tunnel's key (the same device key on two Telepy servers): the key stays then.
+KEY_ELSEWHERE=""
 
 out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
 # The forward as files write it (a unit, a plist line, a script): older scripts carry the number.
@@ -84,7 +86,8 @@ has_port() {
     hp_text=$(cat "$1" 2>/dev/null)
     if grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null || uses_key "$hp_text"; then
         if foreign "$hp_text"; then
-            out kept other-server "$1"
+            out kept other-server "$1 (port $(dial_ports "$hp_text" | head -n 1))"
+            uses_key "$hp_text" && KEY_ELSEWHERE="$KEY_ELSEWHERE $1"
             return 1
         fi
         return 0
@@ -288,6 +291,14 @@ else
     ALL=$(ps -A -o pid= -o args= 2>/dev/null)
 fi
 MATCHED=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do line_is_mine "$l" && printf '%s\n' "$l"; done)
+# A running tunnel to another server with this key: keep the key (and that tunnel).
+ELSEWHERE=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do foreign "$l" && uses_key "$l" && printf '%s\n' "$l"; done)
+if [ -n "$ELSEWHERE" ]; then
+    KEY_ELSEWHERE="$KEY_ELSEWHERE (a running ssh)"
+    printf '%s\n' "$ELSEWHERE" | while IFS= read -r l; do
+        [ -n "$l" ] && out kept other-server "$(printf '%s' "$l" | cut -c1-400) (port $(dial_ports "$l" | head -n 1))"
+    done
+fi
 while IFS= read -r line; do
     pid=$(printf '%s' "$line" | awk '{print $1}')
     case "$pid" in ""|*[!0-9]*) continue ;; esac
@@ -394,8 +405,13 @@ if [ "$T_MODE" != relabel ]; then
         case "$k" in *.pub) continue ;; esac
         [ -f "$k.pub" ] || continue
         if awk '{print $2}' "$k.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then
-            rmf "$k" key
-            rmf "$k.pub" key
+            if [ -n "$KEY_ELSEWHERE" ] && [ "$SURVEY" = 0 ]; then
+                out kept key "$k (a tunnel to another server uses it too:$KEY_ELSEWHERE)"
+            else
+                [ -n "$KEY_ELSEWHERE" ] && out note key-shared "$k"
+                rmf "$k" key
+                rmf "$k.pub" key
+            fi
         else
             out kept key "$k (another tunnel's key)"
         fi

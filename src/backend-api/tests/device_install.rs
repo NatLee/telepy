@@ -231,3 +231,49 @@ async fn a_rename_that_cannot_connect_is_undone() {
     assert!(lab.app.state.status.listen_ports().map(|p| p.contains(&dev.reverse_port)).unwrap_or(false), "still online");
     assert_eq!(lab.app.state.gateway.standby_conn(u16::try_from(dev.reverse_port).unwrap()), None);
 }
+
+/// 同一把裝置金鑰也給別台 Telepy 用（hdre 與新站就是）：刪這邊的隧道時，那把金鑰與連到別台的腳本都留著。
+/// The same device key also serves another Telepy server: deleting the tunnel here keeps the key and that server's script.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_keeps_a_key_another_server_uses() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    let ssh = home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    // 一鍵加入的金鑰檔就是這條隧道的金鑰；另一台伺服器（port 57575）的腳本也用它。/ The join key, also used for port 57575.
+    std::fs::write(ssh.join("telepy_tunnel_ed25519"), "private\n").unwrap();
+    std::fs::write(ssh.join("telepy_tunnel_ed25519.pub"), format!("{}\n", dev.key.public)).unwrap();
+    let other = home.join("hdre-tunnel.sh");
+    std::fs::write(&other, "ssh -i ~/.ssh/telepy_tunnel_ed25519 -p 57575 -NR '*:0:localhost:22' telepy@hdre.example\n").unwrap();
+    // 這台伺服器自己的舊腳本（同一把金鑰，連這台）照樣刪。/ This server's own script with the same key still goes.
+    let mine = home.join("telepy-ssh.sh");
+    std::fs::write(&mine, format!("ssh -i ~/.ssh/telepy_tunnel_ed25519 -p {} -NR '*:0:localhost:22' telepy@gw\n", lab.gw_port)).unwrap();
+
+    // 盤點畫得出那張圖：連到別台的腳本（port 57575）、兩邊共用的金鑰。/ The survey feeds the map: the other server, the shared key.
+    let r = lab.app.post(&format!("/api/reverse/server/{}/device-install/survey", dev.tunnel_id), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let others = r.json["others"].as_array().unwrap();
+    assert!(others.iter().any(|o| o["name"] == "hdre-tunnel.sh" && o["port"] == 57575 && o["process"] == false), "{}", r.json);
+    assert!(r.json["shared_key"].as_str().unwrap_or("").ends_with(".ssh/telepy_tunnel_ed25519"), "{}", r.json);
+    assert_eq!(r.json["server_port"], lab.gw_port.to_string());
+
+    let r = lab.app.delete(&format!("/api/reverse/server/keys/{}?remove_device_keys=true&remove_service=true", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let items = r.json["service"]["accounts"][0]["items"].as_array().unwrap().clone();
+    let has = |kind: &str, what: &str, detail: &str| items.iter().any(|i| i["kind"] == kind && i["what"] == what && i["detail"].as_str().unwrap_or("").contains(detail));
+    assert!(has("kept", "other-server", "hdre-tunnel.sh"), "{items:?}");
+    assert!(has("kept", "key", "another server"), "{items:?}");
+    assert!(ssh.join("telepy_tunnel_ed25519").exists() && ssh.join("telepy_tunnel_ed25519.pub").exists(), "the shared key stays");
+    assert!(other.exists(), "the other server's script stays");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while mine.exists() {
+        assert!(tokio::time::Instant::now() < deadline, "this server's own script was left behind: {items:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

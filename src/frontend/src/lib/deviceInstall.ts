@@ -20,6 +20,8 @@ export interface InstallPart {
     name: string;
     account: string;
     private: boolean;
+    /** Telepy 以前的標準名稱（不帶人名，可以留著）。/ One of Telepy's earlier standard names (fine to keep). */
+    earlier: boolean;
 }
 
 export interface DeviceInstallView {
@@ -31,10 +33,62 @@ export interface DeviceInstallView {
     survey_error: string | null;
     accounts: { account: string; platform: "posix" | "windows" | null; os: string | null; error: string | null }[];
     parts: InstallPart[];
+    /** 要改名的（可能看得出是誰裝的）。/ To rename (may show who set the device up). */
     older: string[];
+    /** Telepy 以前的標準名稱：可以留著，要改也行。/ Earlier standard names: fine to keep, may be renamed. */
+    earlier: string[];
+    /** 裝置上連到別台伺服器的東西（從不碰）。/ Things dialing another server (never touched). */
+    others: OtherServerPart[];
+    /** 別台伺服器的通道也在用的金鑰檔（刪除時留著）。/ The key file another server's tunnel uses too (kept on delete). */
+    shared_key: string | null;
+    /** 這台伺服器的 gateway port。/ This server's gateway port. */
+    server_port: string;
     rename: { possible: boolean; blocker: RenameBlocker | null; method?: InstallMethod; account?: string; run_user?: string; new_name?: string; old: string[] };
     renamed_at: string | null;
     renamed_from: string[];
+}
+
+export interface OtherServerPart {
+    name: string;
+    port: number | null;
+    process: boolean;
+    account: string;
+}
+
+/** 關係圖的一列：裝置上的服務 ─ 連到哪台伺服器。/ One row of the device map: services ─ the server they dial. */
+export interface MapRow {
+    kind: "this" | "other";
+    /** 別台的 port（this = 這台的）。/ The port dialed. */
+    port: string;
+    services: { name: string; note: "private" | "earlier" | "older" | "process" | "other" }[];
+}
+
+/**
+ * 裝置上的東西依「連到哪台伺服器」分列：先這條通道（這台伺服器），再每個別台的 port 一列。
+ * 正在跑的 ssh 只在那一列沒有別的名字時才列出（unit / 腳本比較好認）。
+ * Rows of the device map by the server each thing dials: this tunnel first, then one row per other port. A running ssh
+ * is listed only when its row has no named service (a unit or script is easier to recognise).
+ */
+export function mapRows(view: Pick<DeviceInstallView, "parts" | "others" | "server_port">): MapRow[] {
+    const mine = view.parts.filter((p) => p.kind === "service" || p.kind === "container");
+    const thisRow: MapRow = {
+        kind: "this",
+        port: view.server_port,
+        services: mine.map((p) => ({ name: p.name, note: p.private ? "private" : p.earlier ? "earlier" : "older" })),
+    };
+    if (thisRow.services.length === 0 && view.parts.some((p) => p.kind === "process")) thisRow.services.push({ name: "ssh", note: "process" });
+    const byPort = new Map<string, OtherServerPart[]>();
+    for (const o of view.others) {
+        const key = o.port == null ? "?" : String(o.port);
+        byPort.set(key, [...(byPort.get(key) ?? []), o]);
+    }
+    const rows: MapRow[] = [thisRow];
+    for (const [port, list] of byPort) {
+        const named = list.filter((o) => !o.process);
+        const shown = named.length > 0 ? named : list.slice(0, 1);
+        rows.push({ kind: "other", port, services: shown.map((o) => ({ name: o.process ? "ssh" : o.name, note: o.process ? "process" : "other" })) });
+    }
+    return rows;
 }
 
 export const RENAME_STEPS = ["survey", "install", "standby", "check", "switch", "remove", "confirm"] as const;

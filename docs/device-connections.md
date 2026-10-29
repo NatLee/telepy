@@ -232,7 +232,8 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 裝置端腳本一律寫 `-R 0`（Docker 版 `SSH_TUNNEL_PORT=0`，一鍵加入也是）：號碼只存在伺服器裡。網頁刪除隧道時的移除腳本
 改用**金鑰**辨認這條隧道的東西（命令列或檔案裡的 `-i <金鑰檔>`、`IdentityFile`、docker 的 `KEY_FILE=` / `<path>:/id_rsa`、
 容器掛在 `/id_rsa` 的金鑰；旁邊的 `.pub` 或 `ssh-keygen -y` 要算出隧道金鑰），以前寫著號碼的舊腳本照舊用號碼認；
-一鍵加入的背景迴圈重跑時也用金鑰檔找舊的 ssh（不再用號碼，否則同一台的其他隧道會被誤殺）。
+一鍵加入的背景迴圈重跑時用這條隧道自己的 known_hosts 檔（`telepy-<安裝代號>.known_hosts`）找舊的 ssh：號碼認不出它，
+金鑰檔又可能同時給別台 Telepy 的隧道用（見第十一節）。
 `reverse_port` 的 u16 上限是純內部的，真的接近時再放寬型別。測試：`tests/key_identified.rs`、`tests/tunnel_delete.rs`。
 
 ## 十一、裝置上的名稱：安裝代號、盤點、改名不離線（`device_install/`）
@@ -277,6 +278,20 @@ Windows 的腳本只會移除，盤點還沒做（只回平台）。
 2–5 任何一步失敗就經舊連線跑 `undo_script` 把剛裝的拆掉，關掉交接——舊的完全沒動過，隧道一直在線。舊連線剛好在途中自己
 斷了，備援會自動接手（`on_disconnect`），所以那也不會離線。代價：舊連線關掉時，這台裝置上開著的網頁終端機與檔案管理會重連一次
 （它們的 channel 在舊的 TCP 上）。
+
+**哪些名稱要改**：只有「不是 Telepy 取的」名稱（手寫或遷移腳本建立的，例如 `telepy-natlee.service`、`info.natlee.telepy`）會被標成
+要改、列表出現標記。Telepy 以前自己的標準名稱——一鍵加入的 `telepy-tunnel-<n>.service` / `com.telepy.tunnel.<n>` /
+`telepy-tunnel-<n>.sh`、autossh 的 `telepy-tunnel.service`、容器 `telepy-tunnel`——不帶人名、刪除腳本也認得，只顯示「Telepy 先前的
+名稱」，要改也可以（`plan::earlier_name`）。
+
+**同一台機器多人、多台伺服器**：不同 Telepy 帳號不能把隧道指到同一台機器（第七節）。不同 OS 帳號、或連到不同伺服器時，以前會互相
+覆蓋的系統共用名稱（`telepy-tunnel.service`、容器 `telepy-tunnel`、`/etc/ssh/telepy_known_hosts`、`~/.ssh/telepy_known_hosts`、
+用隧道編號取名的 `telepy-tunnel-<n>`——兩台伺服器的資料庫是複製的話編號相同）都換成代號了。同一個 OS 帳號用**同一把金鑰**連兩台
+伺服器時：刪除時只要還有連到別台的東西（unit、腳本、正在跑的 ssh）用這把金鑰，`~/.ssh/telepy_tunnel_*` 就留著
+（`kept key … another server`）；一鍵加入的迴圈只停自己的 ssh（認 known_hosts 檔，不認金鑰）。盤點把連到別台的東西回成
+`kept other-server "<檔案或 ssh> (port N)"`、共用金鑰回成 `note key-shared <路徑>`，網頁的「這台裝置連到哪裡」圖（`DeviceMap`）照這些
+一台伺服器畫一列。注意：把資料庫整份複製去跑第二台
+伺服器時，安裝代號也會一模一樣，兩台在同一台裝置上裝的東西會同名。
 
 **刪除用代號清**：刪除的移除腳本拿到 `T_INSTALL`，認得新名稱的 unit / label / 迴圈 / uninstall / ws 檔與
 `telepy-<id>.known_hosts`；known_hosts 只在沒有 unit、plist、迴圈、`~/.ssh/config` 或 CLI 設定還用它時才刪（裝置常常也是某人的
