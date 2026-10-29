@@ -41,11 +41,27 @@ expand_path() {
 }
 # Is this private key the tunnel's: the .pub next to it first, else ssh-keygen derives the public key.
 # (No locals in sh: names here must not clash with callers' loop variables.)
+# Files the login account cannot read (a root-run unit's key in /root, another account's loop) are read with
+# sudo -n when the account has it; nothing is ever changed this way.
+rd() { cat "$1" 2>/dev/null || { [ -n "$SUDO" ] && $SUDO cat "$1" 2>/dev/null; }; }
+exists() { [ -f "$1" ] || { [ -n "$SUDO" ] && $SUDO test -f "$1" 2>/dev/null; }; }
+km_check() {
+    exists "$1" || return 1
+    if rd "$1.pub" | awk '{print $2}' | grep -qxF -- "$T_KEY"; then return 0; fi
+    command -v ssh-keygen >/dev/null 2>&1 || return 1
+    ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY" && return 0
+    [ -n "$SUDO" ] && $SUDO ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
+}
+# Answers are remembered per path (so sudo is asked once per key file, not once per line).
+KM_YES=" "
+KM_NO=" "
 key_matches() {
     km_file=$(expand_path "$1")
-    [ -f "$km_file" ] || return 1
-    if [ -r "$km_file.pub" ] && awk '{print $2}' "$km_file.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then return 0; fi
-    command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -y -f "$km_file" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
+    case "$KM_YES" in *" $km_file "*) return 0 ;; esac
+    case "$KM_NO" in *" $km_file "*) return 1 ;; esac
+    if km_check "$km_file"; then KM_YES="$KM_YES$km_file "; return 0; fi
+    KM_NO="$KM_NO$km_file "
+    return 1
 }
 # Key files a text (file contents or a command line) refers to: -i <path> (also quoted word by word: '-i' '/k'),
 # IdentityFile, docker's KEY_FILE= and <path>:/id_rsa.
@@ -81,10 +97,10 @@ foreign() {
 }
 # A file of this tunnel: it carries its number (older scripts) or refers to its key, and dials this server.
 has_port() {
-    [ -f "$1" ] || return 1
+    exists "$1" || return 1
     kept_new "$1" && return 1
-    hp_text=$(cat "$1" 2>/dev/null)
-    if grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null || uses_key "$hp_text"; then
+    hp_text=$(rd "$1")
+    if printf '%s\n' "$hp_text" | grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" || uses_key "$hp_text"; then
         if foreign "$hp_text"; then
             out kept other-server "$1 (port $(dial_ports "$hp_text" | head -n 1))"
             uses_key "$hp_text" && KEY_ELSEWHERE="$KEY_ELSEWHERE $1"
@@ -174,7 +190,7 @@ if command -v systemctl >/dev/null 2>&1; then
         out found systemd "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
-        note_kh "$(cat "$f" 2>/dev/null)"
+        note_kh "$(rd "$f")"
         [ "$SURVEY" = 1 ] && continue
         if [ "$ROOT" = 1 ]; then
             logdir=$(sed -n 's/^LogsDirectory=//p' "$f" 2>/dev/null | head -n 1)
@@ -203,7 +219,7 @@ if command -v systemctl >/dev/null 2>&1; then
         out found systemd-user "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
-        note_kh "$(cat "$f" 2>/dev/null)"
+        note_kh "$(rd "$f")"
         [ "$SURVEY" = 1 ] && continue
         systemctl --user disable "$name" >/dev/null 2>&1
         rmf "$f" unit
@@ -222,7 +238,7 @@ if command -v launchctl >/dev/null 2>&1; then
         out found launchd "$f"
         [ "$label" = "com.telepy.tunnel.$T_ID" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$label" = "com.telepy.tunnel.$T_INSTALL" ] && FOUND_JOIN=1
-        note_kh "$(cat "$f" 2>/dev/null)"
+        note_kh "$(rd "$f")"
         case "$f" in
             /Library/*)
                 if [ "$ROOT" = 0 ] && [ "$SURVEY" = 0 ]; then
@@ -346,9 +362,9 @@ if command -v crontab >/dev/null 2>&1; then
 fi
 for r in $RUNNERS; do
     out found loop "$r"
-    note_kh "$(cat "$r" 2>/dev/null)"
+    note_kh "$(rd "$r")"
     # Its log: next to it, or wherever it appends (`>> /path/x.log`).
-    logs="${r%.sh}.log $(sed -n 's/.*>> *\([^ ]*telepy[^ ]*\.log\).*/\1/p' "$r" 2>/dev/null | tr -d "'\"")"
+    logs="${r%.sh}.log $(rd "$r" | sed -n 's/.*>> *\([^ ]*telepy[^ ]*\.log\).*/\1/p' | tr -d "'\"")"
     [ "$SURVEY" = 1 ] || rmf "$r" file
     GOING="$GOING$r "
     for log in $logs; do
