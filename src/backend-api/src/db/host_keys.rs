@@ -84,6 +84,18 @@ pub async fn pinned_lines(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<String>> 
         .await
 }
 
+/// 每條隧道釘住的 host key 行（多台 ssh config 一次查完）。/ Every tunnel's pinned host-key lines (the bulk ssh config).
+pub async fn pinned_lines_by_tunnel(db: &Db) -> sqlx::Result<std::collections::HashMap<i64, Vec<String>>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT tunnel_id, public_key FROM telepy_device_host_key WHERE status = 'pinned' ORDER BY id")
+        .fetch_all(&db.read)
+        .await?;
+    let mut out: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    for (t, line) in rows {
+        out.entry(t).or_default().push(line);
+    }
+    Ok(out)
+}
+
 /// 記成釘選（已經有同一把就不動）。`source` = `first_use` | `join` | `accepted`。回傳是否真的新增。
 /// Pin it (no-op when the same key is already there). Returns whether a row was added.
 pub async fn pin(db: &Db, tunnel_id: i64, key_type: &str, fingerprint: &str, line: &str, source: &str) -> sqlx::Result<bool> {

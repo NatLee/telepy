@@ -91,6 +91,23 @@ pub fn gateway_alias(server_domain: &str, reverse_server_ssh_port: &str) -> Stri
     format!("telepy-{server_domain}-{reverse_server_ssh_port}")
 }
 
+/// 裝置的 host key 在筆電 known_hosts 裡的別名：`<伺服器別名>-device-<隧道 id>`——改名不影響，兩台 Telepy 也不會撞。
+/// The device's alias in the laptop's known_hosts: `<server alias>-device-<tunnel id>` — survives renames, and two
+/// Telepy servers never collide.
+pub fn device_key_alias(server_domain: &str, reverse_server_ssh_port: &str, tunnel_id: i64) -> String {
+    format!("{}-device-{tunnel_id}", server_alias(server_domain, reverse_server_ssh_port))
+}
+
+/// 裝置區塊怎麼核對裝置自己的 host key：known_hosts 裡的別名，以及 Telepy 有沒有釘住它（有 = 只認那把；還沒有 =
+/// 第一次連線記下來、之後不同就拒絕，跟 Telepy 自己的第一次使用一樣）。
+/// How a device stanza checks the device's own host key: its known_hosts alias, and whether Telepy has it pinned
+/// (pinned = only that key; not yet = remember it on the first connection and refuse a different one later, like
+/// Telepy's own first use).
+pub struct DeviceHostKey<'a> {
+    pub alias: &'a str,
+    pub pinned: bool,
+}
+
 /// `<alias> <type> <base64>` 行（搭配 `HostKeyAlias`）。/ known_hosts lines keyed by the alias (for `HostKeyAlias`).
 pub fn known_hosts_lines(alias: &str, keys: &[String]) -> String {
     keys.iter().map(|k| format!("{alias} {k}\n")).collect()
@@ -374,14 +391,16 @@ pub const LAPTOP_KNOWN_HOSTS: &str = "~/.ssh/telepy_known_hosts";
 
 /// `SshClientTemplate`：筆電 `~/.ssh/config` 的裝置區塊（經伺服器區塊 [`server_alias`] 跳板）。`HostName` 是隧道的名稱：
 /// gateway 的 direct-tcpip 以名稱認隧道（名稱全站唯一），port 只是給 ssh 看的（裝置的 sshd 在隧道另一端），舊的
-/// `localhost:<號碼>` 寫法照常可用。裝置的 host key 不在這裡釘（ProxyCommand 後面那一跳照舊不驗證）。
+/// `localhost:<號碼>` 寫法照常可用。裝置自己的 host key 跟伺服器的放在同一個 `~/.ssh/telepy_known_hosts`，用
+/// [`device_key_alias`] 核對（見 [`DeviceHostKey`]）——不然拿到隧道金鑰的人就能在筆電這端冒充裝置。
 /// 名稱不能當 ssh 主機名稱的舊隧道（有空白、`%`…，見 [`crate::tunnel_name`]）改寫 `HostName localhost` /
 /// `Port <號碼>`：閘道照樣認得，ssh 也不會讀壞設定。
 /// The laptop's device stanza: `HostName` is the tunnel's name (the gateway resolves it; the old
 /// `localhost:<number>` form keeps working). An older tunnel whose name can't be an ssh host name (spaces, `%`…, see
 /// [`crate::tunnel_name`]) gets `HostName localhost` / `Port <number>` instead, which the gateway resolves just the same.
-/// The device's own host key is not pinned here.
-pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel_name: &str, reverse_port: i64, server_alias: &str) -> String {
+/// The device's own host key is checked against the same `~/.ssh/telepy_known_hosts` under [`device_key_alias`] (see
+/// [`DeviceHostKey`]) — otherwise whoever holds the tunnel key could pose as the device to laptops.
+pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel_name: &str, reverse_port: i64, server_alias: &str, key: &DeviceHostKey) -> String {
     let (host, port) = if crate::tunnel_name::ssh_safe(tunnel_name) { (tunnel_name.to_string(), "22".to_string()) } else { ("localhost".to_string(), reverse_port.to_string()) };
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
@@ -391,7 +410,8 @@ pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel
     m.insert("reverse_server_ssh_port", String::new());
     m.insert("ssh_username", ssh_username.into());
     m.insert("host_friendly_name", sanitize_host_alias(host_friendly_name));
-    m.insert("host_key_lines", "StrictHostKeyChecking no".into());
+    let strict = if key.pinned { "yes" } else { "accept-new" };
+    m.insert("host_key_lines", format!("StrictHostKeyChecking {strict}\n    UserKnownHostsFile {LAPTOP_KNOWN_HOSTS}\n    HostKeyAlias {}", key.alias));
     m.insert("client_proxy_command", format!("ProxyCommand ssh -W %h:%p {server_alias}"));
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
@@ -623,14 +643,23 @@ mod tests {
         assert!(server.contains("Port  24242\n"));
         assert!(server.contains("User telepy\n"));
         assert!(server.ends_with('\n'));
-        let client = render_client_config("MyBox", "ubuntu", "MyBox", 30101, "telepy-telepy.test-24242");
+        let alias = device_key_alias("telepy.test", "24242", 7);
+        assert_eq!(alias, "telepy-telepy.test-24242-device-7");
+        assert_eq!(device_key_alias("telepy.test", "", 7), "telepy-telepy.test-device-7", "built on the cleaned server alias");
+        let client = render_client_config("MyBox", "ubuntu", "MyBox", 30101, "telepy-telepy.test-24242", &DeviceHostKey { alias: &alias, pinned: true });
         assert!(client.starts_with("Host MyBox\n"), "{client}");
+        assert!(
+            client.contains("    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.test-24242-device-7\n"),
+            "a pinned device is checked like the server: {client}"
+        );
+        let fresh = render_client_config("MyBox", "ubuntu", "MyBox", 30101, "telepy-telepy.test-24242", &DeviceHostKey { alias: &alias, pinned: false });
+        assert!(fresh.contains("    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n"), "nothing pinned yet: first use: {fresh}");
         assert!(client.contains("HostName MyBox\n"), "the tunnel's name picks the tunnel at the gateway: {client}");
         assert!(client.contains("Port 22 \n"));
         assert!(client.contains("ProxyCommand ssh -W %h:%p telepy-telepy.test-24242\n"), "{client}");
         // 舊名稱不能當主機名稱（空白會讓 ssh 讀壞設定）：改用閘道的 `localhost:<號碼>`。
         // An older name that can't be a host name (a space breaks the config): the gateway's `localhost:<number>`.
-        let old = render_client_config("My Box!", "ubuntu", "My Box!", 30101, "telepy-telepy.test-24242");
+        let old = render_client_config("My Box!", "ubuntu", "My Box!", 30101, "telepy-telepy.test-24242", &DeviceHostKey { alias: &alias, pinned: true });
         assert!(old.starts_with("Host My-Box\n"), "{old}");
         assert!(old.contains("HostName localhost\n") && old.contains("Port 30101 \n"), "{old}");
         assert_eq!(sanitize_host_alias("   "), "telepy-endpoint");

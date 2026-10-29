@@ -142,6 +142,13 @@ OpenSSH 容器，現在是後端行程裡的 gateway（russh）。
 使用者、只認服務金鑰，而拿到隧道金鑰的人可以把 `-R` 指到自己的 sshd 冒充裝置，接住終端機輸入、上傳的檔案與遠端桌面
 的密碼；釘選之後這種冒充在握手時就被擋下，服務金鑰的登入也不會送出。測試：`tests/host_keys.rs`。
 
+筆電也一樣：產生的 ssh config 裡，裝置區塊用 `UserKnownHostsFile ~/.ssh/telepy_known_hosts` +
+`HostKeyAlias <伺服器別名>-device-<隧道 id>` 核對裝置的 host key。Telepy 已經釘住時是 `StrictHostKeyChecking yes`，
+釘住的那幾行跟伺服器的放在同一個檔（安裝指令、`telepy config install` / `telepy ssh` 都會一起存）；還沒釘住時是
+`accept-new`，筆電第一次連線自己記下、之後不同就拒絕。以前裝置區塊是 `StrictHostKeyChecking no`，拿到隧道金鑰的人把
+隧道接到自己的 sshd，筆電的 `ssh <裝置>` 就直接連進去。擁有者改信任新金鑰之後，筆電要重跑一次安裝指令。
+測試：`tests/laptop_device_host_key.rs`（含冒牌 sshd 與舊寫法的對照）。
+
 ## 七、一台機器一個主人（host key = 機器身分）
 
 裝置分不出 Telepy 使用者：所有人都用同一把服務金鑰登入，誰能把隧道指到那台 sshd（`-R <port>:<那台>:22`，從它本機的

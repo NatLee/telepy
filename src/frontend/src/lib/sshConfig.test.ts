@@ -113,6 +113,16 @@ test("two Telepy servers keep their own server blocks and known_hosts lines", ()
     assert.equal(h.knownHosts(), `${other} ssh-ed25519 AAAAother\n${ME} ssh-ed25519 AAAAnew\n`, "re-running adds nothing");
 });
 
+test("device host keys: a re-pinned device is replaced, one the laptop learned itself (accept-new) stays", () => {
+    const h = fakeHome(null);
+    const pi = `${ME}-device-3`;
+    const cam = `${ME}-device-4`;
+    // cam 還沒被 Telepy 釘住：筆電自己第一次連線時記下的那行。/ cam isn't pinned yet: the line the laptop learned itself.
+    h.writeKnownHosts(`${pi} ssh-ed25519 AAAAoldpi\n${cam} ssh-ed25519 AAAAcam\n`);
+    h.run(installCommand("posix", [server("telepy.example"), device("pi"), device("cam")], `${KEYS}${pi} ssh-ed25519 AAAAnewpi\n`));
+    assert.equal(h.knownHosts(), `${cam} ssh-ed25519 AAAAcam\n${ME} ssh-ed25519 AAAAnew\n${pi} ssh-ed25519 AAAAnewpi\n`);
+});
+
 test("the old shared server block goes once nothing uses it, and only if it is this server's", () => {
     // pi 換成新的區塊，沒有人再跳 telepy-ssh-server → 舊區塊拿掉 / pi re-added, nothing jumps through it → removed
     let h = fakeHome("Host github.com\n" + legacyServer() + legacyDevice("pi"));
