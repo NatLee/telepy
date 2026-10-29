@@ -71,6 +71,22 @@ struct ServerPart {
     alias: String,
     /// 回應裡除了裝置以外的欄位。/ The response fields that are not about devices.
     fields: serde_json::Map<String, Value>,
+    /// 網域（裝置在 known_hosts 裡的別名要用）。/ The domain (for the devices' known_hosts aliases).
+    domain: String,
+}
+
+impl ServerPart {
+    /// 一台裝置的 host key 怎麼核對，並把釘住的那幾行接到回應的 `known_hosts` 後面（安裝指令一起存）。
+    /// How one device's host key is checked; its pinned lines go after the response's `known_hosts` (saved together).
+    fn device_key(&mut self, state: &AppState, tunnel_id: i64, pins: &[String]) -> (String, bool) {
+        let alias = scripts::device_key_alias(&self.domain, &state.config.reverse_server_ssh_port, tunnel_id);
+        if !pins.is_empty() {
+            let mut known = self.fields.get("known_hosts").and_then(Value::as_str).unwrap_or_default().to_string();
+            known.push_str(&scripts::known_hosts_lines(&alias, pins));
+            self.fields.insert("known_hosts".into(), json!(known));
+        }
+        (alias, !pins.is_empty())
+    }
 }
 
 fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> ApiResult<ServerPart> {
@@ -100,7 +116,7 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     }) else {
         unreachable!()
     };
-    Ok(ServerPart { text, alias, fields })
+    Ok(ServerPart { text, alias, fields, domain })
 }
 
 /// 這個人的裝置別名前綴（個人設定，空 = 不加）。/ This person's device alias prefix (personal setting; empty = none).
@@ -110,7 +126,7 @@ async fn alias_prefix(state: &AppState, user_id: i64) -> ApiResult<String> {
 
 /// 一台裝置的 Host 區塊（附在 `out` 後面）與給前端的別名清單。`used` = 已經用掉的別名（多台時避免重複）。
 /// One device's Host stanzas (appended to `out`) and the alias list for the frontend; `used` = aliases taken already.
-fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], server_alias: &str, prefix: &str, used: &mut HashSet<String>) -> Vec<Value> {
+fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], server_alias: &str, prefix: &str, used: &mut HashSet<String>, key: &scripts::DeviceHostKey) -> Vec<Value> {
     let names: Vec<&str> = accounts.iter().map(|u| u.username.as_str()).collect();
     let aliases = scripts::device_aliases(prefix, &t.host_friendly_name, &names, used);
     // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
@@ -119,7 +135,7 @@ fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::U
         .iter()
         .zip(aliases)
         .map(|(u, alias)| {
-            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name, t.reverse_port, server_alias));
+            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name, t.reverse_port, server_alias, key));
             json!({ "alias": alias, "username": u.username, "username_id": u.id })
         })
         .collect()
@@ -135,7 +151,7 @@ async fn config(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let t = viewable_tunnel(&state, user.id, id).await?;
-    let ServerPart { text: mut out, alias: server_alias, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
+    let mut part = server_part(&state, &headers, q.get("transport").cloned())?;
 
     let all = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let usernames_list: Vec<Value> = all
@@ -153,10 +169,14 @@ async fn config(
         None => all.iter().collect(),
     };
     if !selected.is_empty() {
-        out.push_str(CLIENT_STEM);
+        part.text.push_str(CLIENT_STEM);
     }
     let prefix = alias_prefix(&state, user.id).await?;
-    let hosts = push_device_stanzas(&mut out, &t, &selected, &server_alias, &prefix, &mut HashSet::from([server_alias.clone()]));
+    let pins = if selected.is_empty() { Vec::new() } else { db::host_keys::pinned_lines(&state.db, t.id).await? };
+    let (key_alias, pinned) = part.device_key(&state, t.id, &pins);
+    let ServerPart { text: mut out, alias: server_alias, mut fields, .. } = part;
+    let key = scripts::DeviceHostKey { alias: &key_alias, pinned };
+    let hosts = push_device_stanzas(&mut out, &t, &selected, &server_alias, &prefix, &mut HashSet::from([server_alias.clone()]), &key);
     fields.insert("alias_prefix".into(), json!(prefix));
     // 隧道的預設帳號（我能用的話），前端拿來決定一開始勾哪個。/ The tunnel's default account, when I may use it.
     let default_id = t.default_username_id.filter(|d| all.iter().any(|u| u.id == *d));
@@ -201,7 +221,9 @@ async fn config_many(
         ),
     };
     let picks = scripts::parse_picks(q.get("pick").map(String::as_str).unwrap_or("")).map_err(|_| ApiError::field("pick", "Use <tunnel id>:<username id>.<username id>, separated by commas."))?;
-    let ServerPart { text: mut out, alias: server_alias, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
+    let mut part = server_part(&state, &headers, q.get("transport").cloned())?;
+    let server_alias = part.alias.clone();
+    let all_pins = db::host_keys::pinned_lines_by_tunnel(&state.db).await?;
 
     let mut tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
     if let Some(w) = &wanted {
@@ -228,13 +250,16 @@ async fn config_many(
             vec![allowed.iter().find(|u| Some(u.id) == t.default_username_id).unwrap_or(&allowed[0])]
         };
         if listed.is_empty() {
-            out.push_str(CLIENT_STEM);
+            part.text.push_str(CLIENT_STEM);
         }
-        let hosts = push_device_stanzas(&mut out, t, &chosen, &server_alias, &prefix, &mut used);
+        let (key_alias, pinned) = part.device_key(&state, t.id, all_pins.get(&t.id).map(Vec::as_slice).unwrap_or_default());
+        let key = scripts::DeviceHostKey { alias: &key_alias, pinned };
+        let hosts = push_device_stanzas(&mut part.text, t, &chosen, &server_alias, &prefix, &mut used, &key);
         let usernames: Vec<Value> = allowed.iter().map(|u| json!({ "id": u.id, "username": u.username })).collect();
         let default_id = t.default_username_id.filter(|d| allowed.iter().any(|u| u.id == *d));
         listed.push(json!({ "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port, "hosts": hosts, "usernames": usernames, "default_username_id": default_id, "picked": picks.contains_key(&t.id) }));
     }
+    let ServerPart { text: out, mut fields, .. } = part;
     fields.insert("config".into(), json!(out));
     fields.insert("accounts".into(), json!(if every_account { "all" } else { "default" }));
     fields.insert("alias_prefix".into(), json!(prefix));

@@ -852,7 +852,7 @@ pub struct ConfigResponse {
     pub alias_prefix: String,
     #[schema(example = 10022)]
     pub reverse_port: i64,
-    /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`, one per gateway host key); empty when the gateway has no host keys
+    /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`): one per gateway host key, then one per pinned host key of each device in the config (alias `<server alias>-device-<tunnel id>`, the device stanza's `HostKeyAlias`); empty when nothing is known
     pub known_hosts: String,
     #[schema(example = "~/.ssh/telepy_known_hosts")]
     pub known_hosts_path: String,
@@ -881,6 +881,7 @@ pub struct BulkConfigResponse {
     pub tunnels: Vec<BulkConfigTunnel>,
     /// 看得到但沒有可用帳號的裝置。/ Devices you can see but have no login account on.
     pub skipped: Vec<BulkConfigSkipped>,
+    /// As in the single config: the gateway's host keys, then every listed device's pinned host keys
     pub known_hosts: String,
     #[schema(example = "~/.ssh/telepy_known_hosts")]
     pub known_hosts_path: String,
