@@ -106,6 +106,11 @@
   --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-pop-out: pop-out 0.12s ease-in forwards;
   --animate-toast-in: toast-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 重新整理：一圈 0.7s（頭尾放緩，停在一圈的終點），完成的勾勾彈出來。lib/refreshMotion.ts 的 SPIN_TURN_MS 要一致。
+     Refresh: one 0.7s turn (eased ends, stops where a turn ends) and the done check pops in; keep SPIN_TURN_MS in
+     lib/refreshMotion.ts in sync. */
+  --animate-refresh-turn: refresh-turn 0.7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  --animate-refresh-done: refresh-done 0.32s cubic-bezier(0.16, 1, 0.3, 1);
   /* 彩蛋 / easter eggs：Tapi 飄啊飄、logo 沿著折返線重畫、粉圓掉下去。 */
   --animate-tapi-bob: tapi-bob 2.4s ease-in-out infinite;
   --animate-glyph-draw: glyph-draw 0.9s ease-out both;
@@ -282,6 +287,17 @@
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(-8px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes refresh-turn {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes refresh-done {
+    0% { opacity: 0; transform: scale(0.4) rotate(-30deg); }
+    60% { opacity: 1; transform: scale(1.15) rotate(0deg); }
+    100% { opacity: 1; transform: scale(1) rotate(0deg); }
   }
 
   @keyframes tapi-bob {
