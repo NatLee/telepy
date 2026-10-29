@@ -19,6 +19,7 @@ export const en = {
     "common.edit": "Edit",
     "common.add": "Add",
     "common.refresh": "Refresh",
+    "common.updated": "Updated",
     "common.back": "Back",
     "common.nextStep": "Next Step",
     "common.copy": "Copy",

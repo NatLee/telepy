@@ -263,6 +263,10 @@ Docker 容器 `telepy-<id>`；unit 的說明只寫 `Telepy reverse tunnel <id>`�
 `telepy_device_install.survey`，一鍵加入驗證後、device_info 每天那趟（沒盤點過或超過 7 天）、詳細資料按「重新檢查」時更新。
 Windows 的腳本只會移除，盤點還沒做（只回平台）。
 
+**登入帳號讀不到的檔案**：以 root 跑的 unit 常把金鑰放在 `/root/.ssh`，登入帳號（例如 `ubuntu`）讀不到就認不出那是這條隧道的。
+登入帳號有 `sudo -n` 時，金鑰、unit、迴圈腳本改用 `sudo -n cat` / `test -f` / `ssh-keygen -y -P ''` 讀（只讀，同一個檔案只問一次）；
+正式站第一輪盤點就是卡在這裡，只認出金鑰剛好放在 `/home/ubuntu` 的那一台。
+
 **連到別台伺服器的不碰**：同一把金鑰可能同時服務兩台 Telepy（hdre 與新站就是），以前「依金鑰比對」會把 hdre 的 unit 一起拆掉。
 現在檔案或命令列寫了 port（`-p N`、`'-p' 'N'`、`Port=N`、`SSH_REMOTE_PORT=N`）而且沒有一個是這台 gateway 的
 `REVERSE_SERVER_SSH_PORT`，就是別台的（`kept other-server`），刪除、盤點、改名都跳過。沒寫 port 的照舊認。

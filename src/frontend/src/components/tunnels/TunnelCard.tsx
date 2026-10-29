@@ -36,6 +36,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
     const health = liveHealth(tunnel, isActive);
     return (
         <article
+            data-refresh-item
             className="group relative flex flex-col h-full overflow-hidden rounded-xl border border-border bg-card shadow-card transition-[border-color] duration-150 hover:border-foreground/25"
         >
             <div className="flex items-start gap-3 p-4 pb-3">

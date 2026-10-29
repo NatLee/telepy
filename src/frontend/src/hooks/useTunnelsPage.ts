@@ -32,8 +32,9 @@ export function useTunnelsPage() {
     const { showSuccess, showError, showToast } = useToast();
     const { user } = useAuth();
 
-    // silent = 背景重抓（不轉圈、失敗不吵）。/ silent = background refresh: no spinner, no error toast.
-    const load = useCallback(async (silent: boolean) => {
+    // silent = 背景重抓（不轉圈、失敗不吵）；回傳有沒有拿到列表。/ silent = background refresh: no spinner, no error
+    // toast. Answers whether the list arrived.
+    const load = useCallback(async (silent: boolean): Promise<boolean> => {
         try {
             if (!silent) setLoading(true);
             // 單一「一次到位」端點：一個請求就拿到 tunnels + ports + latency（取代先前 keys/ports/latency
@@ -52,11 +53,13 @@ export function useTunnelsPage() {
                 setPortsMap(data?.ports && typeof data.ports === "object" ? data.ports : {});
                 // 首屏延遲：有值才套用（後續由 WebSocket 持續更新）。
                 if (data?.latency && typeof data.latency === "object") setLatencyMap(data.latency);
-            } else if (!silent) {
-                showError(t("tunnels.fetchFailed"));
+                return true;
             }
+            if (!silent) showError(t("tunnels.fetchFailed"));
+            return false;
         } catch (e) {
             if (!silent) showError((e instanceof Error && e.message) || t("tunnels.fetchFailed"));
+            return false;
         } finally {
             if (!silent) setLoading(false);
         }

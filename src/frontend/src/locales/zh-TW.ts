@@ -14,6 +14,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "common.edit": "編輯",
     "common.add": "新增",
     "common.refresh": "重新整理",
+    "common.updated": "已更新",
     "common.back": "上一步",
     "common.nextStep": "下一步",
     "common.copy": "複製",
