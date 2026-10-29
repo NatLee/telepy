@@ -9,8 +9,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Plus, Network, Info, RefreshCw, SearchX, FolderTree, FolderPlus, FileCode2 } from "lucide-react";
+import { Plus, Network, Info, SearchX, FolderTree, FolderPlus, FileCode2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton, rippleIn } from "@/components/ui/refresh-button";
 import {
     Tooltip,
     TooltipContent,
@@ -32,6 +33,7 @@ import { groupOf, groupSections, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, type Sec
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
@@ -211,6 +213,17 @@ export default function TunnelsPage() {
     );
     const CARD_GRID = "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5";
 
+    // 點「重新整理」：拿到新列表後，畫面上的卡片 / 列一張接一張浮回來（等這一輪畫完再動）。
+    // Clicking Refresh: once the new list arrives, the cards / rows on screen fade up one after another (after the
+    // render that shows it).
+    const listArea = useRef<HTMLDivElement>(null);
+    const reducedMotion = useReducedMotion();
+    const refresh = async () => {
+        const ok = await fetchData();
+        if (ok && !reducedMotion) requestAnimationFrame(() => rippleIn(listArea.current));
+        return ok;
+    };
+
     const clearFilters = () => {
         setFilter("all");
         setQuery("");
@@ -239,10 +252,7 @@ export default function TunnelsPage() {
                 description={t("tunnels.subtitle")}
                 actions={
                     <>
-                        <Button variant="outline" onClick={fetchData} disabled={loading} aria-label={t("tunnels.refreshAria")}>
-                            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={refresh} busy={loading} label={t("common.refresh")} aria-label={t("tunnels.refreshAria")} />
                         {tunnels.length > 0 && (
                             <Button variant="outline" onClick={() => setBulkConfigOpen(true)} title={t("config.bulk.openHint")}>
                                 <FileCode2 size={16} />
@@ -338,86 +348,88 @@ export default function TunnelsPage() {
                         }
                     />
 
-                    {visible.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-input bg-card p-12 text-center">
-                            <SearchX size={32} className="text-muted-foreground/60" aria-hidden />
-                            <p className="text-sm text-muted-foreground">{t("tunnels.noMatch")}</p>
-                            <Button variant="outline" size="sm" onClick={clearFilters}>{t("tunnels.clearFilters")}</Button>
-                        </div>
-                    ) : grouped && viewMode === "card" ? (
-                        <div className="space-y-6">
-                            {sections.map((sec) => {
-                                const h = headerProps(sec);
-                                const { pg, items } = sectionPage(sec);
-                                return (
-                                    <section key={sectionKey(sec.group)} className="space-y-3">
-                                        <GroupHeader {...h} />
-                                        {!h.collapsed &&
-                                            (sec.items.length > 0 ? (
-                                                <>
-                                                    <div className={CARD_GRID}>{items.map(card)}</div>
-                                                    <Pagination pager={pg} anchor={() => document.getElementById(h.id!)} />
-                                                </>
-                                            ) : (
-                                                <EmptyGroup />
-                                            ))}
-                                    </section>
-                                );
-                            })}
-                        </div>
-                    ) : viewMode === "card" ? (
-                        <div ref={listTop} className="scroll-mt-20 space-y-4">
-                            <div className={CARD_GRID}>{flatItems.map(card)}</div>
-                            <Pagination pager={pager} anchor={listTop} />
-                        </div>
-                    ) : (
-                        <div ref={listTop} className="scroll-mt-20 space-y-4">
-                            <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card">
-                                <table className="min-w-full divide-y divide-border">
-                                    <thead className="bg-surface">
-                                        <tr>
-                                            <th scope="col" className={TH}>{t("tunnels.thName")}</th>
-                                            <th scope="col" className={TH}>{t("tunnels.thStatus")}</th>
-                                            <th scope="col" className={TH}>{t("tunnels.thPort")}</th>
-                                            <th scope="col" className={TH}>{t("tunnels.thAccess")}</th>
-                                            <th scope="col" className={`${TH} text-right`}>{t("tunnels.thActions")}</th>
-                                        </tr>
-                                    </thead>
-                                    {grouped ? (
-                                        sections.map((sec) => {
-                                            const h = headerProps(sec);
-                                            const { pg, items } = sectionPage(sec);
-                                            return (
-                                                <tbody key={sectionKey(sec.group)} className="divide-y divide-border border-t border-border">
-                                                    <GroupHeaderRow colSpan={5} {...h} />
-                                                    {!h.collapsed &&
-                                                        (sec.items.length > 0 ? (
-                                                            <>
-                                                                {items.map(row)}
-                                                                {sec.items.length > pg.sizes[0] && (
-                                                                    <tr>
-                                                                        <td colSpan={5} className="px-4 py-2">
-                                                                            <Pagination pager={pg} anchor={() => document.getElementById(h.id!)} />
-                                                                        </td>
-                                                                    </tr>
-                                                                )}
-                                                            </>
-                                                        ) : (
-                                                            <tr>
-                                                                <td colSpan={5} className="px-4 py-3 text-center text-sm text-muted-foreground">{t("groups.tunnel.emptySection")}</td>
-                                                            </tr>
-                                                        ))}
-                                                </tbody>
-                                            );
-                                        })
-                                    ) : (
-                                        <tbody className="divide-y divide-border">{flatItems.map(row)}</tbody>
-                                    )}
-                                </table>
+                    <div ref={listArea}>
+                        {visible.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-input bg-card p-12 text-center">
+                                <SearchX size={32} className="text-muted-foreground/60" aria-hidden />
+                                <p className="text-sm text-muted-foreground">{t("tunnels.noMatch")}</p>
+                                <Button variant="outline" size="sm" onClick={clearFilters}>{t("tunnels.clearFilters")}</Button>
                             </div>
-                            {!grouped && <Pagination pager={pager} anchor={listTop} />}
-                        </div>
-                    )}
+                        ) : grouped && viewMode === "card" ? (
+                            <div className="space-y-6">
+                                {sections.map((sec) => {
+                                    const h = headerProps(sec);
+                                    const { pg, items } = sectionPage(sec);
+                                    return (
+                                        <section key={sectionKey(sec.group)} className="space-y-3">
+                                            <GroupHeader {...h} />
+                                            {!h.collapsed &&
+                                                (sec.items.length > 0 ? (
+                                                    <>
+                                                        <div className={CARD_GRID}>{items.map(card)}</div>
+                                                        <Pagination pager={pg} anchor={() => document.getElementById(h.id!)} />
+                                                    </>
+                                                ) : (
+                                                    <EmptyGroup />
+                                                ))}
+                                        </section>
+                                    );
+                                })}
+                            </div>
+                        ) : viewMode === "card" ? (
+                            <div ref={listTop} className="scroll-mt-20 space-y-4">
+                                <div className={CARD_GRID}>{flatItems.map(card)}</div>
+                                <Pagination pager={pager} anchor={listTop} />
+                            </div>
+                        ) : (
+                            <div ref={listTop} className="scroll-mt-20 space-y-4">
+                                <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card">
+                                    <table className="min-w-full divide-y divide-border">
+                                        <thead className="bg-surface">
+                                            <tr>
+                                                <th scope="col" className={TH}>{t("tunnels.thName")}</th>
+                                                <th scope="col" className={TH}>{t("tunnels.thStatus")}</th>
+                                                <th scope="col" className={TH}>{t("tunnels.thPort")}</th>
+                                                <th scope="col" className={TH}>{t("tunnels.thAccess")}</th>
+                                                <th scope="col" className={`${TH} text-right`}>{t("tunnels.thActions")}</th>
+                                            </tr>
+                                        </thead>
+                                        {grouped ? (
+                                            sections.map((sec) => {
+                                                const h = headerProps(sec);
+                                                const { pg, items } = sectionPage(sec);
+                                                return (
+                                                    <tbody key={sectionKey(sec.group)} className="divide-y divide-border border-t border-border">
+                                                        <GroupHeaderRow colSpan={5} {...h} />
+                                                        {!h.collapsed &&
+                                                            (sec.items.length > 0 ? (
+                                                                <>
+                                                                    {items.map(row)}
+                                                                    {sec.items.length > pg.sizes[0] && (
+                                                                        <tr>
+                                                                            <td colSpan={5} className="px-4 py-2">
+                                                                                <Pagination pager={pg} anchor={() => document.getElementById(h.id!)} />
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                </>
+                                                            ) : (
+                                                                <tr>
+                                                                    <td colSpan={5} className="px-4 py-3 text-center text-sm text-muted-foreground">{t("groups.tunnel.emptySection")}</td>
+                                                                </tr>
+                                                            ))}
+                                                    </tbody>
+                                                );
+                                            })
+                                        ) : (
+                                            <tbody className="divide-y divide-border">{flatItems.map(row)}</tbody>
+                                        )}
+                                    </table>
+                                </div>
+                                {!grouped && <Pagination pager={pager} anchor={listTop} />}
+                            </div>
+                        )}
+                    </div>
                 </>
             )}
 

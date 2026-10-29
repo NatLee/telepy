@@ -14,6 +14,7 @@ export const ja: Record<TranslationKey, string> = {
     "common.edit": "編集",
     "common.add": "追加",
     "common.refresh": "更新",
+    "common.updated": "更新しました",
     "common.back": "戻る",
     "common.nextStep": "次へ",
     "common.copy": "コピー",

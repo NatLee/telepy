@@ -31,7 +31,7 @@ interface TunnelTableRowProps extends TunnelActionHandlers {
 export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelTableRowProps) {
     const health = liveHealth(tunnel, isActive);
     return (
-        <tr className="group hover:bg-surface transition-colors">
+        <tr data-refresh-item className="group hover:bg-surface transition-colors">
             <td className="px-4 py-3">
                 <div className="flex items-center gap-3 min-w-0">
                     <div
