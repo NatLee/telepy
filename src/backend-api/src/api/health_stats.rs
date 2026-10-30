@@ -30,16 +30,17 @@ pub const HOURS: usize = 24;
 pub const WALK_CAP: usize = 20_000;
 
 /// 算成「有問題」的閘道事件種類 = Logs 頁「需要注意」那一類（前端 `lib/gatewayLogs.ts` 的 `problem`）：
-/// 被拒的連線 / forward / direct-tcpip / PROXY header、金鑰認證失敗、未知帳號、過期金鑰、主機金鑰不符、
+/// 被拒的連線 / forward / direct-tcpip / PROXY header、沒列為來源的 PROXY header、金鑰認證失敗、未知帳號、過期金鑰、主機金鑰不符、
 /// 別的帳號宣稱這台機器、裝置警示、降級、需要再次驗證、被擋下的指令。
 /// Gateway event kinds counted as problems = the Logs page's "needs attention" category (`problem` in
-/// `lib/gatewayLogs.ts`): refused connections / forwards / direct-tcpip / PROXY headers, failed public keys,
+/// `lib/gatewayLogs.ts`): refused connections / forwards / direct-tcpip / PROXY headers, PROXY headers from unlisted sources, failed public keys,
 /// unknown users, expired keys, host-key mismatches, claims on someone else's machine, device warnings,
 /// degraded tunnels, step-up required and blocked commands.
 pub const PROBLEM_KINDS: &[&str] = &[
     "refused_forward",
     "refused_direct",
     "refused_proxy",
+    "proxy_unlisted",
     "failed_publickey",
     "invalid_user",
     "expired_key",

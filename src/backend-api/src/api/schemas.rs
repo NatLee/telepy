@@ -4530,6 +4530,45 @@ pub struct DeviceInstallRename {
     pub view: DeviceInstall,
 }
 
+/// `GET /api/site/address-sources`：「PROXY protocol 來源」的選項（管理員）。/ Options for PROXY protocol sources (superusers).
+#[derive(ToSchema)]
+pub struct AddressSources {
+    /// gateway 從何時開始記（後端啟動的時間）。/ When the gateway started counting (backend start).
+    #[schema(example = "2026-10-30T01:02:03Z")]
+    pub since: String,
+    /// 送過 PROXY header、內網或已列出的位址，送過 header 的在前。/ Header senders, private and listed addresses; header senders first.
+    pub peers: Vec<AddressSourcePeer>,
+    /// 其他公網位址（裝置或掃描器）的數量，不列出。/ How many other public addresses (devices or scanners) were seen, not listed.
+    pub other_public: u64,
+    pub presets: Vec<AddressSourcePreset>,
+}
+
+#[derive(ToSchema)]
+pub struct AddressSourcePeer {
+    #[schema(example = "10.0.0.5")]
+    pub ip: String,
+    /// public / private / loopback / link_local / shared_nat / reserved
+    #[schema(example = "private")]
+    pub scope: String,
+    /// 送了資料的連線數。/ Connections that sent data.
+    pub connections: u64,
+    /// 其中開頭是 PROXY protocol header 的。/ Of those, the ones that began with a PROXY protocol header.
+    pub proxy_headers: u64,
+    pub first_at: String,
+    pub last_at: String,
+    pub last_header_at: Option<String>,
+    /// 現在是不是 PROXY protocol 來源（沒列出的 header 從不被讀）。/ Whether it is a source now (an unlisted one's header is never read).
+    pub listed: bool,
+}
+
+#[derive(ToSchema)]
+pub struct AddressSourcePreset {
+    /// loopback / private / cloudflare
+    #[schema(example = "private")]
+    pub id: String,
+    pub cidrs: Vec<String>,
+}
+
 /// `GET /api/site/health/stats`：伺服器狀態頁的數字（管理員）。/ The Server health page's numbers (superusers).
 #[derive(ToSchema)]
 pub struct ServerStats {

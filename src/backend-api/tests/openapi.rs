@@ -77,6 +77,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/site/health", vec!["get"]),
         ("/api/site/health/audit", vec!["get"]),
         ("/api/site/health/audit/reseal", vec!["post"]),
+        ("/api/site/address-sources", vec!["get"]),
         ("/api/reverse/server/{id}/lan/hosts", vec!["get", "post"]),
         ("/api/reverse/server/{id}/lan/hosts/{host_id}", vec!["patch", "delete"]),
         ("/api/reverse/server/{id}/lan/scan", vec!["get", "post"]),
