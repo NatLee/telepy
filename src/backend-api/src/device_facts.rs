@@ -10,8 +10,14 @@ use serde::{Deserialize, Serialize};
 
 /// 磁碟剩不到這個比例（%）或 [`DISK_MIN_FREE_KB`] 就警示。/ Warn when the root disk has less than this % free…
 pub const DISK_MIN_FREE_PCT: u64 = 10;
-/// …或剩不到 2 GB。/ …or less than 2 GB.
+/// …或剩不到 2 GB（但不超過整顆的一半：路由器 100 MB 的根目錄永遠不到 2 GB，只看比例）。
+/// …or less than 2 GB — capped at half the disk, so a router's 100 MB root is judged by the percentage alone.
 pub const DISK_MIN_FREE_KB: u64 = 2 * 1024 * 1024;
+
+/// 這顆磁碟的絕對下限：2 GB，小磁碟最多一半。/ The absolute floor for this disk: 2 GB, at most half of a small one.
+pub fn disk_floor_kb(total_kb: u64) -> u64 {
+    DISK_MIN_FREE_KB.min(total_kb / 2)
+}
 /// 可用記憶體不到這個比例（%）。/ Warn when less than this % of memory is available.
 pub const MEM_MIN_AVAIL_PCT: u64 = 10;
 /// 1 分鐘負載超過 CPU 數的幾倍。/ Warn when the 1-minute load exceeds this many times the CPU count.
@@ -176,12 +182,12 @@ fn pct(part: u64, whole: u64) -> u64 {
     part.saturating_mul(100).checked_div(whole).unwrap_or(0)
 }
 
-/// 門檻 → 警示（純函式）：磁碟剩不到 10 % 或 2 GB、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數兩倍、等著重開機。
-/// Thresholds → warnings: disk < 10 % or < 2 GB free, memory < 10 % available, load1 > 2 × CPUs, reboot pending.
+/// 門檻 → 警示（純函式）：磁碟剩不到 10 % 或 2 GB（小磁碟：一半）、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數兩倍、等著重開機。
+/// Thresholds → warnings: disk < 10 % or < 2 GB free (small disks: half), memory < 10 % available, load1 > 2 × CPUs, reboot pending.
 pub fn warnings(f: &Facts) -> Vec<Warning> {
     let mut out = Vec::new();
     if let (Some(total), Some(avail)) = (f.disk_total_kb, f.disk_avail_kb) {
-        if total > 0 && (avail.saturating_mul(100) < total.saturating_mul(DISK_MIN_FREE_PCT) || avail < DISK_MIN_FREE_KB) {
+        if total > 0 && (avail.saturating_mul(100) < total.saturating_mul(DISK_MIN_FREE_PCT) || avail < disk_floor_kb(total)) {
             out.push(Warning { kind: "disk".into(), detail: format!("root disk: {} free of {} ({}%)", fmt_kb(avail), fmt_kb(total), pct(avail, total)) });
         }
     }
@@ -313,9 +319,15 @@ ssh=OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2\r\n";
         let f = Facts { load: Some([8.1, 1.0, 1.0]), disk_avail_kb: Some(9 * 1024 * 1024), mem_avail_kb: Some(99), reboot_required: Some(true), ..base.clone() };
         let kinds: Vec<String> = warnings(&f).into_iter().map(|w| w.kind).collect();
         assert_eq!(kinds, vec!["disk", "memory", "load", "reboot"]);
-        // 小磁碟：比例沒問題但剩不到 2 GB。/ A small disk: fine by percentage, but under 2 GB.
-        let small = Facts { disk_total_kb: Some(3 * 1024 * 1024), disk_avail_kb: Some(1900 * 1024), ..Default::default() };
+        // 小磁碟：比例沒問題但剩不到 2 GB（3 GB 的一半是 1.5 GB）。/ A small disk: fine by percentage, but under its floor.
+        let small = Facts { disk_total_kb: Some(3 * 1024 * 1024), disk_avail_kb: Some(1400 * 1024), ..Default::default() };
         assert_eq!(warnings(&small)[0].kind, "disk");
+        assert!(warnings(&Facts { disk_avail_kb: Some(1900 * 1024), ..small.clone() }).is_empty(), "1.9 GB free of 3 GB is fine");
+        // 路由器（GL-AR750S）：98 MB 的根目錄剩 91 MB 沒事，剩 8 MB 才警示。/ A router's 98 MB root: 91 MB free is fine, 8 MB is not.
+        let router = Facts { disk_total_kb: Some(98 * 1024), disk_avail_kb: Some(91 * 1024), ..Default::default() };
+        assert!(warnings(&router).is_empty(), "{:?}", warnings(&router));
+        assert_eq!(warnings(&Facts { disk_avail_kb: Some(8 * 1024), ..router })[0].kind, "disk");
+        assert_eq!(disk_floor_kb(500 * 1024 * 1024), DISK_MIN_FREE_KB);
         assert_eq!(fmt_kb(1900 * 1024), "1.9 GB");
         assert_eq!(fmt_kb(512), "512 KB");
         assert_eq!(fmt_kb(250 * 1024 * 1024), "250 GB");

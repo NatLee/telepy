@@ -13,7 +13,7 @@ import type { TranslationKey } from "@/locales/en";
 
 export type InstallMethod = "systemd" | "systemd_user" | "launchd_daemon" | "launchd_agent" | "loop";
 
-export type RenameBlocker = "not_surveyed" | "windows" | "nothing_to_rename" | "no_process" | "unparsed" | "needs_root" | "unknown_owner" | "odd_command" | "unsupported";
+export type RenameBlocker = "not_surveyed" | "windows" | "nothing_to_rename" | "no_process" | "unparsed" | "needs_root" | "unknown_owner" | "odd_command" | "unsupported" | "extra" | "nothing_extra";
 
 export interface InstallPart {
     kind: "service" | "process" | "cron" | "container" | "script" | "file";
@@ -23,6 +23,22 @@ export interface InstallPart {
     private: boolean;
     /** Telepy 以前的標準名稱（不帶人名，可以留著）。/ One of Telepy's earlier standard names (fine to keep). */
     earlier: boolean;
+    /**
+     * 多出來的一份：隧道已經由用代號取名的服務在跑，這個也用同一把金鑰連這台伺服器（開機時會搶）。看證據，不看名字。
+     * An extra copy: the tunnel already runs from its install-id service, and this one dials this server with the same
+     * key too (they fight on boot). Decided from evidence, not the name.
+     */
+    extra?: boolean;
+    /** 名稱裡的代號屬於一條刪掉的隧道（帳本）。/ The id in the name belongs to a deleted tunnel (the ledger). */
+    retired?: RetiredRef;
+}
+
+export interface RetiredRef {
+    install_id: string;
+    /** 只有同一個擁有者才有。/ Only for the same owner. */
+    tunnel_id: number | null;
+    tunnel_name: string | null;
+    retired_at: string;
 }
 
 export interface DeviceInstallView {
@@ -38,6 +54,8 @@ export interface DeviceInstallView {
     older: string[];
     /** Telepy 以前的標準名稱：可以留著，要改也行。/ Earlier standard names: fine to keep, may be renamed. */
     earlier: string[];
+    /** 多出來的那份（要拿掉，不是改名）。/ Extra copies (to remove, not to rename). */
+    extra?: string[];
     /** 裝置上連到別台伺服器的東西（從不碰）。/ Things dialing another server (never touched). */
     others: OtherServerPart[];
     /** 別台伺服器的通道也在用的金鑰檔（刪除時留著）。/ The key file another server's tunnel uses too (kept on delete). */
@@ -45,6 +63,8 @@ export interface DeviceInstallView {
     /** 這台伺服器的 gateway port。/ This server's gateway port. */
     server_port: string;
     rename: { possible: boolean; blocker: RenameBlocker | null; method?: InstallMethod; account?: string; run_user?: string; new_name?: string; old: string[] };
+    /** 拿掉多出來的那份。/ Removing the extra copies. */
+    tidy?: { possible: boolean; blocker: RenameBlocker | null; names: string[] };
     renamed_at: string | null;
     renamed_from: string[];
     /** 一鍵加入腳本回報的環境（沒有一鍵加入過 = null）。/ What the join script found (null when never joined that way). */
@@ -58,12 +78,17 @@ export interface OtherServerPart {
     account: string;
 }
 
+/** 一個服務的標記：多出來的優先（不管名字長怎樣）。/ A service's note: an extra copy wins, whatever its name. */
+export function noteOf(p: Pick<InstallPart, "private" | "earlier" | "extra">): "private" | "earlier" | "older" | "extra" {
+    return p.private ? "private" : p.extra ? "extra" : p.earlier ? "earlier" : "older";
+}
+
 /** 關係圖的一列：裝置上的服務 ─ 連到哪台伺服器。/ One row of the device map: services ─ the server they dial. */
 export interface MapRow {
     kind: "this" | "other";
     /** 別台的 port（this = 這台的）。/ The port dialed. */
     port: string;
-    services: { name: string; note: "private" | "earlier" | "older" | "process" | "other" }[];
+    services: { name: string; note: "private" | "earlier" | "older" | "extra" | "process" | "other" }[];
 }
 
 /**
@@ -77,7 +102,7 @@ export function mapRows(view: Pick<DeviceInstallView, "parts" | "others" | "serv
     const thisRow: MapRow = {
         kind: "this",
         port: view.server_port,
-        services: mine.map((p) => ({ name: p.name, note: p.private ? "private" : p.earlier ? "earlier" : "older" })),
+        services: mine.map((p) => ({ name: p.name, note: noteOf(p) })),
     };
     if (thisRow.services.length === 0 && view.parts.some((p) => p.kind === "process")) thisRow.services.push({ name: "ssh", note: "process" });
     const byPort = new Map<string, OtherServerPart[]>();
@@ -96,6 +121,8 @@ export function mapRows(view: Pick<DeviceInstallView, "parts" | "others" | "serv
 
 export const RENAME_STEPS = ["survey", "install", "standby", "check", "switch", "remove", "confirm"] as const;
 export type RenameStep = (typeof RENAME_STEPS)[number];
+/** 拿掉多出來那份的三步（經現在的連線，不換手）。/ The three steps of removing an extra copy (over the current connection). */
+export const TIDY_STEPS = ["survey", "remove", "confirm"] as const satisfies readonly RenameStep[];
 
 export interface ReportedStep {
     id: RenameStep;
@@ -119,6 +146,13 @@ export interface RenameReport {
 export interface DeviceInstallSummary {
     id: string;
     older: string[];
+    extra?: string[];
+}
+
+/** 列表上要不要標：有要改名的，或有多出來的。/ Should the list flag it: older names or extra copies. */
+export function needsAttention(summary: DeviceInstallSummary | null | undefined): string[] {
+    if (!summary) return [];
+    return [...(summary.extra ?? []), ...summary.older];
 }
 
 /** 盤點到的東西分組（服務在最前）。/ Group the parts, services first. */
@@ -128,11 +162,11 @@ export function groupParts(parts: InstallPart[]): { kind: InstallPart["kind"]; p
 }
 
 /** 每一步現在的狀態：回報過的照回報、正在跑的下一步是進行中、其餘待命。/ Each step's state. */
-export function stepStates(reported: ReportedStep[], running: boolean): Record<RenameStep, SpotState> {
+export function stepStates(reported: ReportedStep[], running: boolean, order: readonly RenameStep[] = RENAME_STEPS): Record<RenameStep, SpotState> {
     const out = {} as Record<RenameStep, SpotState>;
     let next: RenameStep | null = null;
     const failed = reported.some((s) => s.state === "failed" && s.id !== "remove" && s.id !== "confirm");
-    for (const id of RENAME_STEPS) {
+    for (const id of order) {
         const r = reported.find((s) => s.id === id);
         if (r) out[id] = r.state === "done" ? "ok" : "failed";
         else {
@@ -166,6 +200,8 @@ export const BLOCKER_KEY: Record<RenameBlocker, TranslationKey> = {
     unknown_owner: "deviceInstall.block.unknown_owner",
     odd_command: "deviceInstall.block.odd_command",
     unsupported: "deviceInstall.block.unsupported",
+    extra: "deviceInstall.block.extra",
+    nothing_extra: "deviceInstall.block.nothing_extra",
 };
 
 const FAILURE_KEY: Record<string, TranslationKey> = {
@@ -178,6 +214,7 @@ const FAILURE_KEY: Record<string, TranslationKey> = {
     old_left: "deviceInstall.fail.old_left",
     old_came_back: "deviceInstall.fail.old_came_back",
     device_offline: "deviceInstall.fail.device_offline",
+    connection_lost: "deviceInstall.fail.connection_lost",
 };
 
 /** 失敗的說明：先看是不是盤點擋下（blocker），再看失敗代碼。/ Explain a failure: a blocker first, then the code. */

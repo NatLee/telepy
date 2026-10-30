@@ -530,7 +530,9 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     db::api_tokens::detach_tunnel(&state.db, id).await?;
     state.api_tokens.invalidate();
     crate::ssh::tunnel_keys::forget(&state, id).await;
-    db::device_install::delete(&state.db, id).await?;
+    // 安裝代號進帳本：之後在同一台機器上看到 `telepy-<代號>` 就知道是這條刪掉的隧道留下的。
+    // The install id goes to the ledger, so a leftover `telepy-<id>` on the machine is recognised later.
+    db::device_install::retire(&state.db, id, &t.host_friendly_name, t.user_id).await?;
     // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.
     state.host_keys.invalidate(id);

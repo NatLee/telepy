@@ -10,7 +10,7 @@ import type { DeviceFacts, DeviceWarningKind, TunnelEndpoint } from "../types/tu
 
 export const WARNING_KINDS: DeviceWarningKind[] = ["disk", "memory", "load", "reboot"];
 
-/** 跟後端一樣的門檻。/ The backend's thresholds. */
+/** 跟後端一樣的門檻（磁碟的絕對下限最多是整顆的一半，見 `device_facts::disk_floor_kb`）。/ The backend's thresholds (the disk floor is at most half the disk). */
 export const THRESHOLDS = {
     diskMinFreePct: 10,
     diskMinFreeKb: 2 * 1024 * 1024,

@@ -938,6 +938,20 @@ const TABLES: &[(&str, &str)] = &[
             "join_facts_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：發過、隧道已經刪掉的安裝代號（帳本）。裝置上留下的 `telepy-<代號>` 對得上這裡，就知道是哪條刪掉的
+    // 隧道留下的，不必猜名字的形狀；新代號也不會跟它們重複。
+    // Install ids of deleted tunnels (the ledger): a `telepy-<id>` left on a device is matched here instead of guessed
+    // from its shape, and new ids never repeat them.
+    (
+        "telepy_device_install_retired",
+        r#"CREATE TABLE "telepy_device_install_retired" (
+            "install_id" varchar(16) NOT NULL PRIMARY KEY,
+            "tunnel_id" integer NOT NULL,
+            "tunnel_name" varchar(255) NOT NULL,
+            "user_id" integer NOT NULL,
+            "retired_at" datetime NOT NULL
+        )"#,
+    ),
 ];
 
 const INDEXES: &[&str] = &[

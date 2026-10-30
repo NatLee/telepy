@@ -1,7 +1,7 @@
 // node --test（Node 23 會直接拿掉型別）。/ Run with `npm test` (Node strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { failureKey, groupParts, lanes, mapRows, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
+import { TIDY_STEPS, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
 
 const part = (kind: InstallPart["kind"], name: string, priv = false): InstallPart => ({ kind, what: "x", name, account: "pi", private: priv, earlier: false });
 
@@ -65,4 +65,23 @@ test("the device map has this tunnel first, then one row per other server", () =
     ]);
     // 只有在跑的 ssh、沒有服務名稱：那一列寫 ssh。/ Only a running ssh: the row says ssh.
     assert.deepEqual(mapRows({ server_port: "1", parts: [{ kind: "process", what: "process", name: "x", account: "a", private: false, earlier: false }], others: [] })[0].services, [{ name: "ssh", note: "process" }]);
+});
+
+test("an extra copy is told apart from a name to change, whatever it is called", () => {
+    const extra = { ...part("service", "telepy-6m35fshq"), extra: true };
+    assert.equal(noteOf(extra), "extra");
+    assert.equal(noteOf({ ...extra, earlier: true }), "extra", "an earlier name that is a second copy is still extra");
+    assert.equal(noteOf(part("service", "telepy-natlee.service")), "older");
+    assert.equal(noteOf(part("service", "telepy-47xzwr2e", true)), "private");
+    const rows = mapRows({ parts: [part("service", "telepy-47xzwr2e", true), extra], others: [], server_port: "56767" });
+    assert.deepEqual(rows[0].services.map((s) => s.note), ["private", "extra"]);
+    assert.deepEqual(needsAttention({ id: "x", older: ["a"], extra: ["b"] }), ["b", "a"]);
+    assert.deepEqual(needsAttention({ id: "x", older: [] }), [], "an older backend sends no extra");
+    assert.equal(failureKey("extra"), "deviceInstall.block.extra");
+    assert.equal(failureKey("connection_lost"), "deviceInstall.fail.connection_lost");
+});
+
+test("removing an extra copy has three steps of its own", () => {
+    const s = stepStates([{ id: "survey", state: "done" }], true, TIDY_STEPS);
+    assert.deepEqual([s.survey, s.remove, s.confirm], ["ok", "active", "waiting"]);
 });

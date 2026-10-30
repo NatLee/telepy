@@ -28,6 +28,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     standby_forward: { key: "logs.event.standby_forward", tone: "outline", category: "connection" },
     handover: { key: "logs.event.handover", tone: "default", category: "connection" },
     service_renamed: { key: "logs.event.service_renamed", tone: "outline", category: "change" },
+    service_extra_removed: { key: "logs.event.service_extra_removed", tone: "outline", category: "change" },
     disconnect: { key: "logs.event.disconnect", tone: "secondary", category: "connection" },
     preauth_close: { key: "logs.event.preauth_close", tone: "outline", category: "connection" },
     recovered: { key: "logs.event.recovered", tone: "success", category: "connection" },

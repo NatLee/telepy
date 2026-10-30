@@ -5,9 +5,11 @@
 //! plan the switch to private names, and render the new service (unit / plist / loop) plus its install and undo
 //! scripts. The I/O lives in `super`.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
-use super::names::Names;
+use super::names::{self, Names};
 use crate::tunnel_service::{sh_quote, AccountResult, Item, Platform};
 
 /// 跑隧道的方式。/ How the tunnel is kept running.
@@ -65,6 +67,33 @@ pub struct Part {
     /// 不帶人名、刪除腳本也認得，可以不改。/ Telepy's earlier standard names: no person in them and the removal
     /// script knows them, so they may stay.
     pub earlier: bool,
+    /// 多出來的一份：這條隧道已經由用自己代號取名的服務在跑（盤點看到的 ssh 都是它的），這個卻也用同一把金鑰連
+    /// 這台伺服器——開機時兩個會搶同一條隧道。判斷靠證據（金鑰、伺服器、哪個在跑），不靠名字長什麼樣。
+    /// An extra copy: the tunnel already runs from its own install-id service (every ssh the survey saw is that one's),
+    /// yet this also dials this server with the same key, so on boot the two fight over the tunnel. Decided from
+    /// evidence (key, server, what runs), not from what the name looks like.
+    pub extra: bool,
+    /// 名稱裡的代號是一條已經刪掉的隧道的（帳本對得上）。/ The id in the name belongs to a deleted tunnel (per the ledger).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired: Option<RetiredRef>,
+}
+
+/// 帳本裡那條刪掉的隧道（名稱只給同一個擁有者看）。/ The deleted tunnel the ledger names (its name only for the same owner).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RetiredRef {
+    pub install_id: String,
+    pub tunnel_id: Option<i64>,
+    pub tunnel_name: Option<String>,
+    pub retired_at: String,
+}
+
+/// 名稱帶的安裝代號（`telepy-<id>…`、`com.telepy.tunnel.<id>`）：只是候選，要帳本對得上才算數。
+/// The install id a name carries, if any: only a candidate until the ledger confirms it.
+pub fn id_in_name(name: &str) -> Option<String> {
+    let base = base_name(name);
+    let rest = base.strip_prefix("com.telepy.tunnel.").or_else(|| base.strip_prefix("telepy-"))?;
+    let id: String = rest.chars().take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).collect();
+    (names::is_id(&id) && id != "tunnel" && !id.bytes().all(|b| b.is_ascii_digit())).then_some(id)
 }
 
 /// Telepy 以前自己的標準名稱嗎（不是代號、也不是別人取的）。/ One of Telepy's earlier standard names?
@@ -100,14 +129,77 @@ pub fn parts(accounts: &[AccountResult], names: &Names) -> Vec<Part> {
             };
             let private = names.owns(&i.detail);
             let earlier = !private && (kind == "service" || kind == "container") && earlier_name(&name);
-            let part = Part { kind, what: i.what.clone(), name, account: a.account.clone(), private, earlier };
+            let part = Part { kind, what: i.what.clone(), name, account: a.account.clone(), private, earlier, extra: false, retired: None };
             // 每個帳號都看得到系統層的 unit：同一個只列一次。/ System units show up in every account: list once.
             if !out.iter().any(|p| p.kind == part.kind && p.what == part.what && p.name == part.name && (part.kind != "file" || p.account == part.account)) {
                 out.push(part);
             }
         }
     }
+    mark_extras(&mut out);
     out
+}
+
+/// 在跑的 ssh 全是用代號取名的那個時，其他跑這條隧道的服務 / 容器就是多出來的。
+/// When every running ssh is the install-id one, every other service / container of the tunnel is an extra copy.
+fn mark_extras(parts: &mut [Part]) {
+    let procs: Vec<bool> = parts.iter().filter(|p| p.kind == "process").map(|p| p.private).collect();
+    if procs.is_empty() || procs.iter().any(|private| !private) {
+        return;
+    }
+    for p in parts.iter_mut().filter(|p| (p.kind == "service" || p.kind == "container") && !p.private) {
+        p.extra = true;
+    }
+}
+
+/// 名稱裡的代號在帳本上的，標出是哪條刪掉的隧道。/ Mark names whose id the ledger knows.
+pub fn mark_retired(parts: &mut [Part], ledger: &HashMap<String, RetiredRef>) {
+    for p in parts.iter_mut().filter(|p| !p.private) {
+        if let Some(r) = id_in_name(&p.name).and_then(|id| ledger.get(&id)) {
+            p.retired = Some(r.clone());
+        }
+    }
+}
+
+/// 盤點裡出現、可能是代號的字（給帳本查）。/ Candidate ids in the survey, to look up in the ledger.
+pub fn candidate_ids(parts: &[Part]) -> Vec<String> {
+    let mut ids: Vec<String> = parts.iter().filter(|p| !p.private).filter_map(|p| id_in_name(&p.name)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// 多出來的服務 / 容器。/ The extra services and containers.
+pub fn extra_services(parts: &[Part]) -> Vec<String> {
+    let mut out: Vec<String> = parts.iter().filter(|p| p.extra).map(|p| p.name.clone()).collect();
+    out.dedup();
+    out
+}
+
+/// 能不能把多出來的那份拿掉（經現在這條連線，`relabel` 模式：留下金鑰與用代號取名的一切）。
+/// Can the extra copies be removed (over the current connection, relabel mode: the key and everything named after
+/// the install id stay)?
+pub fn tidy_check(accounts: &[AccountResult], names: &Names) -> Result<Vec<String>, Blocker> {
+    if accounts.is_empty() || accounts.iter().all(|a| a.platform.is_none()) {
+        return Err(Blocker::NotSurveyed);
+    }
+    if accounts.iter().any(|a| a.platform == Some(Platform::Windows)) {
+        return Err(Blocker::Windows);
+    }
+    let parts = parts(accounts, names);
+    let extra = extra_services(&parts);
+    if extra.is_empty() {
+        return Err(Blocker::NothingExtra);
+    }
+    // 系統層的（/etc 底下的 unit、init.d、LaunchDaemon）要有能用 root 的登入帳號。/ System-level ones need a root login.
+    let system = accounts.iter().flat_map(|a| a.items.iter()).filter(|i| i.kind == "found").any(|i| {
+        let under_root = ["/etc/", "/lib/", "/usr/lib/", "/Library/LaunchDaemons/"].iter().any(|d| i.detail.starts_with(d));
+        under_root && parts.iter().any(|p| p.extra && p.what == i.what && i.detail.contains(&p.name))
+    });
+    if system && !accounts.iter().any(|a| platform_of(a).0) {
+        return Err(Blocker::NeedsRoot);
+    }
+    Ok(extra)
 }
 
 /// 裝置上連到**別台**伺服器的東西（盤點時標成 `kept other-server`，什麼模式都不碰）。
@@ -151,14 +243,14 @@ pub fn shared_key(accounts: &[AccountResult]) -> Option<String> {
 /// 要改名的服務：不是用安裝代號、也不是 Telepy 以前的標準名稱（例如 `telepy-natlee.service`，可能看得出是誰裝的）。
 /// Services to rename: neither named after the install id nor one of Telepy's earlier standard names.
 pub fn older_services(parts: &[Part]) -> Vec<String> {
-    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && !p.private && !p.earlier).map(|p| p.name.clone()).collect();
+    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && !p.private && !p.earlier && !p.extra).map(|p| p.name.clone()).collect();
     out.dedup();
     out
 }
 
 /// Telepy 以前的標準名稱（可以留著；要改也行）。/ Earlier standard names (fine to keep, may be renamed).
 pub fn earlier_services(parts: &[Part]) -> Vec<String> {
-    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && p.earlier).map(|p| p.name.clone()).collect();
+    let mut out: Vec<String> = parts.iter().filter(|p| (p.kind == "service" || p.kind == "container") && p.earlier && !p.extra).map(|p| p.name.clone()).collect();
     out.dedup();
     out
 }
@@ -295,6 +387,11 @@ pub enum Blocker {
     OddCommand,
     /// 只有 Telepy 不會自動換的種類（OpenWrt 的 init.d 腳本）。/ Only kinds Telepy does not replace (OpenWrt init scripts).
     Unsupported,
+    /// 已經由用代號取名的服務在跑，剩下的是多出來的一份：拿掉它，不必改名。/ Already running under its own name; what
+    /// is left is an extra copy to remove, not to rename.
+    Extra,
+    /// 沒有多出來的。/ No extra copy.
+    NothingExtra,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -329,6 +426,9 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
     }
     if accounts.iter().any(|a| a.platform == Some(Platform::Windows)) {
         return Err(Blocker::Windows);
+    }
+    if !extra_services(&parts(accounts, names)).is_empty() {
+        return Err(Blocker::Extra);
     }
     // 舊的、有名字的服務（每個找到它的帳號都算一次）。/ Older named services, with the account that found them.
     let mut services: Vec<(Method, &AccountResult, &Item)> = Vec::new();
@@ -681,6 +781,76 @@ mod tests {
         for name in ["telepy-tunnel-.service", "com.telepy.tunnel.", "com.telepy.tunnel.abc", "telepy-tunnel-7x.sh", "telepy-natlee.service"] {
             assert!(!earlier_name(name), "{name}");
         }
+    }
+
+    /// 真實的 GL-AR750S 路由器：重新加入後跑的是 `telepy-47xzwr2e`，刪掉的隧道留下的 `telepy-6m35fshq` 用同一把金鑰。
+    /// A real GL-AR750S router: after a rejoin `telepy-47xzwr2e` runs, and a deleted tunnel's `telepy-6m35fshq` uses the same key.
+    fn survey_router() -> Vec<AccountResult> {
+        vec![account(
+            "root",
+            true,
+            vec![
+                item("found", "process", "15185 /usr/bin/ssh -NT -o ExitOnForwardFailure=yes -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/telepy-47xzwr2e.known_hosts -o HostKeyAlias=telepy-telepy.natlee.info-56767 -i /root/.ssh/telepy_tunnel_ed25519 -p 56767 -R 0:127.0.0.1:22 telepy@telepy.natlee.info"),
+                item("found", "owner", "15185 root /root"),
+                item("found", "initd", "/etc/init.d/telepy-47xzwr2e"),
+                item("found", "initd", "/etc/init.d/telepy-6m35fshq"),
+                item("found", "key", "/root/.ssh/telepy_tunnel_ed25519"),
+                item("found", "known_hosts", "/root/.ssh/telepy-6m35fshq.known_hosts"),
+            ],
+        )]
+    }
+
+    #[test]
+    fn a_leftover_copy_is_extra_not_a_name_to_change() {
+        let names = Names::new("47xzwr2e");
+        let s = survey_router();
+        let mut p = parts(&s, &names);
+        assert_eq!(extra_services(&p), vec!["telepy-6m35fshq".to_string()]);
+        assert!(older_services(&p).is_empty(), "not 'to change': it is an extra copy");
+        assert_eq!(plan(&s, &names).unwrap_err(), Blocker::Extra);
+        assert_eq!(tidy_check(&s, &names).unwrap(), vec!["telepy-6m35fshq".to_string()]);
+        // 帳本對得上就標出是哪條刪掉的隧道。/ The ledger names the deleted tunnel.
+        assert_eq!(candidate_ids(&p), vec!["6m35fshq".to_string()]);
+        let r = RetiredRef { install_id: "6m35fshq".into(), tunnel_id: Some(33), tunnel_name: Some("router-gl-ar750s".into()), retired_at: "2026-10-29T18:50:00Z".into() };
+        mark_retired(&mut p, &HashMap::from([("6m35fshq".to_string(), r.clone())]));
+        assert_eq!(p.iter().find(|x| x.name == "telepy-6m35fshq" && x.kind == "service").unwrap().retired, Some(r));
+        // 沒有 root 的登入帳號就拿不掉 init.d。/ An init script needs a root login.
+        let mut no_root = survey_router();
+        no_root[0].items[0] = item("platform", "Linux", "pi root=0");
+        no_root[0].items.insert(1, item("found", "process", "15185 /usr/bin/ssh -o UserKnownHostsFile=/root/.ssh/telepy-47xzwr2e.known_hosts -R 0:127.0.0.1:22 telepy@h"));
+        assert_eq!(tidy_check(&no_root, &names).unwrap_err(), Blocker::NeedsRoot);
+    }
+
+    #[test]
+    fn nothing_is_extra_while_another_ssh_runs() {
+        // 舊名稱的 ssh 還在跑（例如改名前）：那是改名，不是多一份。/ An older-named ssh still runs: a rename, not an extra.
+        let names = Names::new("k7m2q9xd");
+        let mut s = survey_hdre();
+        s[0].items.push(item("found", "systemd", "/etc/systemd/system/telepy-k7m2q9xd.service"));
+        let p = parts(&s, &names);
+        assert!(extra_services(&p).is_empty());
+        assert_eq!(older_services(&p), vec!["telepy-natlee.service".to_string()]);
+        assert_eq!(tidy_check(&s, &names).unwrap_err(), Blocker::NothingExtra);
+        // 只有代號那個在跑：舊名稱的就是多出來的。/ Only the id one runs: the older-named one is extra.
+        let mut s = survey_hdre();
+        for a in &mut s {
+            a.items.retain(|i| i.what != "process" && i.what != "owner");
+            a.items.push(item("found", "process", "99 /usr/bin/ssh -o UserKnownHostsFile=/home/pi/.ssh/telepy-k7m2q9xd.known_hosts -R 0:localhost:22 telepy@h"));
+            a.items.push(item("found", "systemd", "/etc/systemd/system/telepy-k7m2q9xd.service"));
+        }
+        assert_eq!(extra_services(&parts(&s, &names)), vec!["telepy-natlee.service".to_string()]);
+    }
+
+    #[test]
+    fn ids_in_names_are_only_candidates() {
+        assert_eq!(id_in_name("/etc/init.d/telepy-6m35fshq").as_deref(), Some("6m35fshq"));
+        assert_eq!(id_in_name("com.telepy.tunnel.k7m2q9xd").as_deref(), Some("k7m2q9xd"));
+        assert_eq!(id_in_name("/root/.ssh/telepy-k7m2q9xd.known_hosts").as_deref(), Some("k7m2q9xd"));
+        for none in ["telepy-tunnel-7.service", "telepy-tunnel.service", "com.telepy.tunnel.62", "info.natlee.telepy", "telepy_known_hosts", "telepy-ab"] {
+            assert_eq!(id_in_name(none), None, "{none}");
+        }
+        // 人名也可能長得像代號：要帳本對得上才算數。/ A person's name may look like one: only the ledger confirms it.
+        assert_eq!(id_in_name("telepy-natlee.service").as_deref(), Some("natlee"));
     }
 
     #[test]
