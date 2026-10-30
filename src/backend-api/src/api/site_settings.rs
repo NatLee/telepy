@@ -87,6 +87,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "server_openapi_enabled", kind: Kind::Bool, label: "API reference (Swagger)", description: "Serve the API reference page and /api/openapi.json to signed-in people. Off = both answer 404. Applies at once. OPENAPI_ENABLED in .env takes over." },
     FieldMeta { name: "server_google_client_id", kind: Kind::Opt(256), label: "Google client ID", description: "The OAuth client ID of Google sign-in: the sign-in button uses it and Google sign-ins are checked against it. Blank = no Google sign-in. Applies at once. SOCIAL_GOOGLE_CLIENT_ID in .env takes over." },
     FieldMeta { name: "server_public_url", kind: Kind::Url(512), label: "Public address", description: "The address people open Telepy at, like https://telepy.example.com (no path). Used for the OAuth issuer, links in scripts and webhooks, the passkey domain and devices' address lookups. Blank = taken from each request's X-Forwarded-* headers. Changing it makes passkeys registered under another domain stop working. Applies at once. PUBLIC_URL in .env takes over." },
+    FieldMeta { name: "server_ssh_host", kind: Kind::Opt(253), label: "SSH host", description: "The name devices and laptops connect their SSH to (the gateway port). Blank = the same name as the web. Set it when the web name goes through a proxy that only carries web ports (Cloudflare, another CDN, an HTTP load balancer…): that name then cannot reach the SSH port, so give SSH a name that goes straight to this server. Only new scripts and SSH configs use it; installed devices keep the name they were set up with. SSH_SERVER_DOMAIN in .env takes over." },
     FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
@@ -139,6 +140,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("server_openapi_enabled".into(), json!(s.server_openapi_enabled));
     m.insert("server_google_client_id".into(), json!(s.server_google_client_id));
     m.insert("server_public_url".into(), json!(s.server_public_url));
+    m.insert("server_ssh_host".into(), json!(s.server_ssh_host));
     Value::Object(m)
 }
 
@@ -388,6 +390,7 @@ fn normalize(name: &str, value: SettingValue) -> Result<SettingValue, ApiError> 
         "server_log_level" => ss::check_log_level(s),
         "server_google_client_id" => ss::check_google_client_id(s),
         "server_public_url" => ss::check_public_url(s),
+        "server_ssh_host" => ss::check_ssh_host(s),
         _ => return Ok(value),
     };
     checked.map(SettingValue::Str).map_err(|msg| ApiError::field(name, msg))

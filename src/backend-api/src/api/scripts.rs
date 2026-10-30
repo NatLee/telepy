@@ -41,6 +41,14 @@ pub(crate) fn server_domain(headers: &HeaderMap, state: &AppState) -> String {
         .unwrap_or_default()
 }
 
+/// ssh 實際連的主機：`SSH_SERVER_DOMAIN`（網站設定 → 伺服器 → SSH 主機），沒設就跟網頁同一個（[`server_domain`]）。
+/// 網頁走 Cloudflare 這類只轉 HTTP(S) 的代理時，網頁的名稱連不到 gateway 的 port，所以要能分開。
+/// The host ssh dials: SSH_SERVER_DOMAIN (Site settings → Server → SSH host), else the web host ([`server_domain`]).
+/// Separate because a web name behind a proxy that only carries HTTP(S), such as Cloudflare's, cannot reach the gateway port.
+pub(crate) fn ssh_host(headers: &HeaderMap, state: &AppState) -> String {
+    state.config.ssh_host().unwrap_or_else(|| server_domain(headers, state))
+}
+
 /// 連線（安裝）腳本是把隧道裝上裝置的材料（服務金鑰、號碼、安裝代號）：只給 owner / ADMIN。
 /// Connection (install) scripts set the tunnel up on the device (service key, number, install id): owner / ADMIN only.
 const SCRIPTS_FORBIDDEN: &str = "Only the tunnel owner or an ADMIN sharee can get its connection scripts.";
@@ -91,6 +99,7 @@ impl ServerPart {
 
 fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> ApiResult<ServerPart> {
     let domain = server_domain(headers, state);
+    let host = ssh_host(headers, state);
     let gateway_keys = state.gateway.host_public_keys();
     // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
     // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
@@ -99,10 +108,10 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     let ws_url = super::join::ws_url(&base);
     let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
     let mut text = String::from(SERVER_STEM);
-    text.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
+    text.push_str(&scripts::render_server_config(&domain, &host, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
     let alias = scripts::server_alias(&domain, &state.config.reverse_server_ssh_port);
     // legacy_alias：舊版的共用別名，安裝指令確定是這台的、又沒人用時會拿掉。/ The old shared alias install commands clean up.
-    let server = json!({ "alias": alias, "legacy_alias": scripts::LEGACY_SERVER_ALIAS, "host": domain, "port": state.config.reverse_server_ssh_port });
+    let server = json!({ "alias": alias, "legacy_alias": scripts::LEGACY_SERVER_ALIAS, "host": host, "domain": domain, "port": state.config.reverse_server_ssh_port });
     // 筆電要存的 known_hosts（`HostKeyAlias` 的別名 + gateway 的 host key）；gateway 沒有金鑰時是空字串。
     // The known_hosts the laptop saves (alias for `HostKeyAlias` + the gateway's host keys); empty without gateway keys.
     let known_hosts = scripts::known_hosts_lines(&scripts::gateway_alias(&domain, &state.config.reverse_server_ssh_port), &gateway_keys);
@@ -287,6 +296,7 @@ async fn render_for(
     key_path: Option<&str>,
     username_id: Option<i64>,
     domain: &str,
+    ssh_host: &str,
     ws: Option<(String, String)>,
 ) -> Result<(String, &'static str), ApiError> {
     let username = if kind == "autossh-service" {
@@ -306,6 +316,7 @@ async fn render_for(
     let ctx = ScriptContext {
         host_friendly_name: &t.host_friendly_name,
         server_domain: domain,
+        ssh_host,
         reverse_port: t.reverse_port,
         ssh_port,
         reverse_server_ssh_port: &state.config.reverse_server_ssh_port,
@@ -339,7 +350,7 @@ async fn script(
     let key_path = clean_key_path(q.get("key_path"));
     let username_id = q.get("username_id").and_then(|s| s.parse::<i64>().ok());
     let ws = ws_carrier(&state, &headers, q.get("transport").cloned())?;
-    let (script, language) = render_for(&state, user.id, &t, &kind, ssh_port, key_path.as_deref(), username_id, &domain, ws).await?;
+    let (script, language) = render_for(&state, user.id, &t, &kind, ssh_port, key_path.as_deref(), username_id, &domain, &ssh_host(&headers, &state), ws).await?;
     Ok(Json(json!({ "script": script, "language": language })))
 }
 
@@ -440,7 +451,7 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
         Err(e) => return plain(StatusCode::BAD_REQUEST, format!("{:?}", e.body)),
     };
     let way = if ws.is_some() { "websocket" } else { "ssh" };
-    match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain, ws).await {
+    match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain, &ssh_host(&headers, &state), ws).await {
         Ok((script, _)) => {
             // 裝置拿走了腳本：它就是這樣加進來的（重新安裝就覆蓋）。/ The device took the script: this is how it is added.
             if let Err(e) = db::tunnels::set_way_in(&state.db, t.id, way).await {

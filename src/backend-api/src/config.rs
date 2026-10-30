@@ -28,6 +28,8 @@ pub struct Config {
     /// X-Forwarded-* / Host 推導。這裡只是 `PUBLIC_URL` 環境變數；用的地方讀 [`Config::public_base`]（環境變數 →
     /// 網站設定 → 沒有）。/ Only the PUBLIC_URL variable; consumers read [`Config::public_base`] (env → site setting).
     pub public_url: Option<String>,
+    /// SSH_SERVER_DOMAIN：裝置與筆電的 SSH 連到這個名稱（空 = 跟網頁同一個）。/ The host devices' and laptops' SSH dial (blank = the web host).
+    pub ssh_server_domain: Option<String>,
     /// `SOCIAL_GOOGLE_CLIENT_ID`；用的地方讀 [`Config::google_client`]。/ The variable; consumers read `google_client`.
     pub google_client_id: Option<String>,
     pub internal_api_token: String,
@@ -171,6 +173,7 @@ impl Config {
             server_domain: env("SERVER_DOMAIN"),
             public_url: env("PUBLIC_URL").map(|u| u.trim().trim_end_matches('/').to_string()),
             google_client_id: env("SOCIAL_GOOGLE_CLIENT_ID"),
+            ssh_server_domain: env("SSH_SERVER_DOMAIN"),
             internal_api_token: env("INTERNAL_API_TOKEN").unwrap_or_default(),
             db_path: env("DB_PATH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("db.sqlite3")),
             data_dir,

@@ -926,13 +926,16 @@ main() {
     http GET "$TELEPY_URL/api/join/gateway" || { http_hint; die "cannot reach $TELEPY_URL"; }
     [ "$HTTP_STATUS" = 200 ] || die "$(value ERROR || true) (HTTP $HTTP_STATUS)"
     GATEWAY_HOST=$(value GATEWAY_HOST)
+    # The server's name for itself in known_hosts (older servers send none: derive it as before).
+    GATEWAY_ALIAS=$(value GATEWAY_ALIAS || true)
     GATEWAY_PORT=$(value GATEWAY_PORT)
     GATEWAY_USER=$(value GATEWAY_USER)
     WS_URL=$(value WS_URL)
     GW_HOST_KEYS=$(values HOST_KEY)
     case "$GATEWAY_PORT" in ""|*[!0-9]*) die "unexpected answer from Telepy (gateway port)" ;; esac
     case "$GATEWAY_HOST$GATEWAY_USER" in ""|*[!A-Za-z0-9._-]*) die "unexpected answer from Telepy (gateway host)" ;; esac
-    ALIAS="telepy-$GATEWAY_HOST-$GATEWAY_PORT"
+    case "$GATEWAY_ALIAS" in *[!A-Za-z0-9._-]*) die "unexpected answer from Telepy (gateway alias)" ;; esac
+    ALIAS=${GATEWAY_ALIAS:-telepy-$GATEWAY_HOST-$GATEWAY_PORT}
     mkdir -p "$TMP/gw-home/.ssh"
     KNOWN_HOSTS_TMP="$TMP/gateway.known_hosts"
     : > "$KNOWN_HOSTS_TMP"

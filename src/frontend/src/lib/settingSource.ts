@@ -59,6 +59,7 @@ export const BUILTIN_DEFAULTS: Record<string, string | boolean> = {
     server_openapi_enabled: true,
     server_google_client_id: "",
     server_public_url: "",
+    server_ssh_host: "",
 };
 
 /** 同一個值嗎（字串比較，開關用 true / false）。/ Same value (compared as strings). */
@@ -113,7 +114,7 @@ export function layerStates(src: SettingSource): Record<SettingLayer, LayerState
 /** 伺服器分頁的分組（key 的順序就是畫面上的順序）。/ The Server tab's groups, in display order. */
 export const SERVER_GROUPS = [
     { id: "visitor", keys: ["client_ip_hops", "client_ip_header", "client_ip_cloudflare"] },
-    { id: "devices", keys: ["server_device_probe", "server_keep_shared_service_key", "server_gateway_proxy_protocol_from"] },
+    { id: "devices", keys: ["server_ssh_host", "server_device_probe", "server_keep_shared_service_key", "server_gateway_proxy_protocol_from"] },
     { id: "logs", keys: ["server_log_level", "server_openapi_enabled"] },
     { id: "signin", keys: ["server_google_client_id", "server_public_url"] },
 ] as const;

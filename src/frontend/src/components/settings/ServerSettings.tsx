@@ -23,6 +23,7 @@ import type { TranslationKey } from "@/locales/en";
 import { ClientIpHeaderControl, ProxySourcesControl } from "./AddressOptions";
 import { SettingRow } from "./SettingRow";
 import { SettingSourceDialog } from "./SettingSourceDialog";
+import { SshHostControl } from "./SshHost";
 
 const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKey; hint: TranslationKey; anchor: string }> = {
     visitor: { icon: Network, title: "settingsEnv.group.visitor", hint: "settingsEnv.group.visitorHint", anchor: "visitor-addresses" },
@@ -32,7 +33,7 @@ const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKe
 };
 
 /** 自訂編輯器的 key（整列寬）。/ Keys with a custom, full-width editor. */
-const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from"];
+const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from", "server_ssh_host"];
 
 /** 代理層數：自動，或固定 0–10 層。/ Trusted proxies: automatic, or a fixed 0–10. */
 function HopsControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
@@ -147,6 +148,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
         client_ip_cloudflare: CloudflareControl,
         client_ip_header: ClientIpHeaderControl,
         server_gateway_proxy_protocol_from: ProxySourcesControl,
+        server_ssh_host: SshHostControl,
     };
     const custom = (key: string) => {
         const Editor = EDITORS[key];

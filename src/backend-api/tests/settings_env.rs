@@ -32,6 +32,7 @@ fn unset(c: &mut telepy_server::config::Config) {
     c.openapi_enabled = None;
     c.google_client_id = None;
     c.public_url = None;
+    c.ssh_server_domain = None;
 }
 
 #[tokio::test]
@@ -185,6 +186,9 @@ async fn invalid_values_are_field_errors() {
         ("server_public_url", json!("https://t.example.com/app")),
         ("server_public_url", json!("telepy.example.com")),
         ("server_google_client_id", json!("a b")),
+        ("server_ssh_host", json!("ssh.example.com/x y")),
+        ("server_ssh_host", json!("-bad.example.com")),
+        ("server_ssh_host", json!("fe80::1")),
         ("server_device_probe", json!("maybe")),
     ] {
         let r = app.post("/api/site/settings", Some(&admin), json!({ key: value })).await;
@@ -205,4 +209,81 @@ async fn invalid_values_are_field_errors() {
     assert!(!c.device_probe_on() && c.keep_shared_key());
     assert!(c.proxy_protocol_from().contains("172.16.3.4".parse().unwrap()));
     assert_eq!(c.log_level_effective(), "debug");
+}
+
+const DEVICE_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq4u5n7tS1kO6o4m3yQ0tYQd6v7Jc5Zq8Hh3n5Vt7Wk device-a";
+
+fn kv(text: &str) -> std::collections::HashMap<String, String> {
+    text.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).rev().collect()
+}
+
+/// SSH 主機另外設：一鍵加入、腳本、筆電 SSH config 都改連它；known_hosts 別名（伺服器身分）照舊用網域，所以舊的
+/// 設定與裝置不會被當成另一台 Telepy。`.env` 的 SSH_SERVER_DOMAIN 優先並鎖住欄位。
+/// A separate SSH host: the join facts, scripts and the laptop's SSH config dial it; the known_hosts alias (the
+/// server's identity) stays the domain. SSH_SERVER_DOMAIN in .env wins and locks the field.
+#[tokio::test]
+async fn a_separate_ssh_host_is_what_devices_and_laptops_dial() {
+    let app = common::spawn_with(unset).await;
+    let admin = app.login("admin", "pw").await;
+    let r = app.get("/api/reverse/issue/token", Some(&admin)).await;
+    let t = r.json["token"].as_str().unwrap().to_string();
+    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&admin), json!({"host_friendly_name": "box-a", "key": DEVICE_KEY, "ssh_port": 22})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let id = r.json["id"].as_i64().unwrap();
+    app.post("/api/reverse/server/usernames", Some(&admin), json!({"reverse_server": id, "username": "ubuntu"})).await;
+
+    // 沒設：跟網頁同一個名稱。/ Unset: the web's name.
+    let m = kv(&app.get("/api/join/gateway", None).await.text);
+    assert_eq!((m["GATEWAY_HOST"].as_str(), m["GATEWAY_ALIAS"].as_str()), ("telepy.test", "telepy-telepy.test-24242"));
+    let r = app.get(&format!("/tunnels/server/config/{id}"), Some(&admin)).await;
+    assert_eq!(r.json["server"]["host"], "telepy.test");
+
+    let r = app.post("/api/site/settings", Some(&admin), json!({"server_ssh_host": " SSH.Telepy.test. "})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["values"]["server_ssh_host"], "ssh.telepy.test");
+    assert_eq!(r.json["env"]["server_ssh_host"], json!({"var": "SSH_SERVER_DOMAIN", "set": false, "value": null}));
+
+    // 一鍵加入：連 SSH 主機，known_hosts 別名還是網域的。/ Join: dial the SSH host, alias still the domain's.
+    let m = kv(&app.get("/api/join/gateway", None).await.text);
+    assert_eq!((m["GATEWAY_HOST"].as_str(), m["GATEWAY_ALIAS"].as_str()), ("ssh.telepy.test", "telepy-telepy.test-24242"));
+    // 筆電：HostName 換了，區塊名稱與 HostKeyAlias 不變。/ Laptop: new HostName, same block name and HostKeyAlias.
+    let r = app.get(&format!("/tunnels/server/config/{id}"), Some(&admin)).await;
+    let cfg = r.json["config"].as_str().unwrap();
+    assert!(cfg.contains("Host telepy-telepy.test-24242\n") && cfg.contains("HostName ssh.telepy.test\n"), "{cfg}");
+    assert_eq!((r.json["server"]["host"].as_str(), r.json["server"]["domain"].as_str()), (Some("ssh.telepy.test"), Some("telepy.test")));
+    // 安裝腳本。/ Install scripts.
+    let r = app.get(&format!("/tunnels/server/script/ssh/{id}/22"), Some(&admin)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(r.json["script"].as_str().unwrap().contains("telepy@ssh.telepy.test"), "{}", r.text);
+
+    // 檢查端點：管理員才能看。/ The check endpoint is admin-only.
+    let r = app.get("/api/site/ssh-host", Some(&admin)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["ssh"]["host"].as_str(), r.json["ssh"]["source"].as_str(), r.json["same"].as_bool()), (Some("ssh.telepy.test"), Some("setting"), Some(false)));
+    assert_eq!(r.json["ssh"]["port"], "24242");
+    assert_eq!(r.json["web"]["from"], "request");
+    app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;
+    let bob = app.login("bob", "pw").await;
+    let r = app.get("/api/site/ssh-host", Some(&bob)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")));
+}
+
+/// `.env` 的 SSH_SERVER_DOMAIN 優先：存不了，腳本用它。/ SSH_SERVER_DOMAIN in .env wins: no saving, scripts use it.
+#[tokio::test]
+async fn ssh_server_domain_in_env_locks_the_field() {
+    let app = common::spawn_with(|c| {
+        unset(c);
+        c.ssh_server_domain = Some("ssh://Gate.telepy.test:24242/".into());
+    })
+    .await;
+    let admin = app.login("admin", "pw").await;
+    let r = app.get("/api/site/settings", Some(&admin)).await;
+    assert_eq!(r.json["env"]["server_ssh_host"]["set"], true);
+    let r = app.post("/api/site/settings", Some(&admin), json!({"server_ssh_host": "other.telepy.test"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["server_ssh_host"][0].as_str().unwrap().contains("SSH_SERVER_DOMAIN"), "{}", r.text);
+    let m = kv(&app.get("/api/join/gateway", None).await.text);
+    assert_eq!(m["GATEWAY_HOST"], "gate.telepy.test", "scheme, port and case tolerated in .env");
+    let r = app.get("/api/site/ssh-host", Some(&admin)).await;
+    assert_eq!(r.json["ssh"]["source"], "env");
 }

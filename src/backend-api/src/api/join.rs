@@ -173,14 +173,15 @@ async fn install_script(State(state): State<AppState>, headers: HeaderMap) -> Re
 /// 預檢用的 gateway 資料（公開：位址、port、帳號、host key、WebSocket 位址都不是祕密）。腳本在**消耗 token 之前**
 /// 就能測連得到 gateway、釘住它的 host key，並比對開 / 不開 ServerAlive 的握手（OpenWrt 32 位元 musl 的 ppoll 問題）。
 /// Public gateway facts for the preflight: reachability, host-key pinning and the keepalive probe happen before any token is used.
-#[utoipa::path(get, path = "/api/join/gateway", tag = "Device join", params(("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "KEY=value lines: GATEWAY_HOST, GATEWAY_PORT, GATEWAY_USER, HOST_KEY (one per gateway host key), WS_URL, SERVER_URL", content_type = "text/plain", body = String), (status = 503, description = "ERROR=… (SERVER_DOMAIN unknown)", content_type = "text/plain", body = String)))]
+#[utoipa::path(get, path = "/api/join/gateway", tag = "Device join", params(("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "KEY=value lines: GATEWAY_HOST, GATEWAY_ALIAS, GATEWAY_PORT, GATEWAY_USER, HOST_KEY (one per gateway host key), WS_URL, SERVER_URL", content_type = "text/plain", body = String), (status = 503, description = "ERROR=… (SERVER_DOMAIN unknown)", content_type = "text/plain", body = String)))]
 async fn gateway_info(State(state): State<AppState>, headers: HeaderMap, Query(q): SoftQuery) -> Response {
     let soft = join::wants_soft(&q);
-    let gateway_host = crate::api::scripts::server_domain(&headers, &state);
+    let gateway_host = crate::api::scripts::ssh_host(&headers, &state);
+    let gateway_alias = crate::scripts::gateway_alias(&crate::api::scripts::server_domain(&headers, &state), &gateway_port(&state));
     if gateway_host.is_empty() {
         return device_error(StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.", soft);
     }
-    let mut lines = vec![("GATEWAY_HOST", gateway_host), ("GATEWAY_PORT", gateway_port(&state)), ("GATEWAY_USER", state.config.gateway_user.clone())];
+    let mut lines = vec![("GATEWAY_HOST", gateway_host), ("GATEWAY_ALIAS", gateway_alias), ("GATEWAY_PORT", gateway_port(&state)), ("GATEWAY_USER", state.config.gateway_user.clone())];
     for k in state.gateway.host_public_keys() {
         lines.push(("HOST_KEY", k));
     }
@@ -194,7 +195,7 @@ fn gateway_port(state: &AppState) -> String {
     Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string()
 }
 
-#[utoipa::path(post, path = "/api/join/{token}", tag = "Device join", params(("token" = String, Path, description = "Join token"), ("soft" = Option<String>, Query, description = "1 = always answer 200 with a first line STATUS=<code> (for HTTP clients that hide the status code)")), request_body = super::schemas::JoinRegistration, responses((status = 201, description = "KEY=value lines: TUNNEL_ID, INSTALL_ID, TUNNEL_NAME, REVERSE_PORT, GATEWAY_HOST, GATEWAY_PORT, GATEWAY_USER, SERVICE_KEY, HOST_KEY (one per gateway host key), WEB_URL, WS_URL", content_type = "text/plain", body = String), (status = 400, description = "ERROR=… (invalid input)", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (unknown or expired token)", content_type = "text/plain", body = String), (status = 409, description = "ERROR=… (token used, or key owned by someone else)", content_type = "text/plain", body = String)))]
+#[utoipa::path(post, path = "/api/join/{token}", tag = "Device join", params(("token" = String, Path, description = "Join token"), ("soft" = Option<String>, Query, description = "1 = always answer 200 with a first line STATUS=<code> (for HTTP clients that hide the status code)")), request_body = super::schemas::JoinRegistration, responses((status = 201, description = "KEY=value lines: TUNNEL_ID, INSTALL_ID, TUNNEL_NAME, REVERSE_PORT, GATEWAY_HOST, GATEWAY_ALIAS, GATEWAY_PORT, GATEWAY_USER, SERVICE_KEY, HOST_KEY (one per gateway host key), WEB_URL, WS_URL", content_type = "text/plain", body = String), (status = 400, description = "ERROR=… (invalid input)", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (unknown or expired token)", content_type = "text/plain", body = String), (status = 409, description = "ERROR=… (token used, or key owned by someone else)", content_type = "text/plain", body = String)))]
 async fn register(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>, Query(q): SoftQuery, raw: Bytes) -> Response {
     let soft = join::wants_soft(&q);
     // 不看 Content-Type：uclient-fetch / BusyBox wget 送不了 header（`--post-data` 是 x-www-form-urlencoded）。
@@ -367,7 +368,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     notify::tunnel_updated(state, &tunnel).await.map_err(internal)?;
 
     // 先確認 gateway 位址（沒有就別註冊）。/ The gateway host must be known before anything is recorded.
-    if crate::api::scripts::server_domain(headers, state).is_empty() {
+    if crate::api::scripts::ssh_host(headers, state).is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.".into()));
     }
 
@@ -399,7 +400,8 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
 async fn config_lines(state: &AppState, headers: &HeaderMap, tunnel: &db::tunnels::Tunnel, username: &str, same_machine_as: Option<&join::SameMachine>) -> DeviceResult<String> {
     // 裝置只授權這條隧道自己的服務金鑰。/ The device authorizes this tunnel's own service key only.
     let service_key = crate::ssh::tunnel_keys::ensure(state, tunnel.id).await.map_err(internal)?;
-    let gateway_host = crate::api::scripts::server_domain(headers, state);
+    let gateway_host = crate::api::scripts::ssh_host(headers, state);
+    let gateway_alias = crate::scripts::gateway_alias(&crate::api::scripts::server_domain(headers, state), &gateway_port(state));
     if gateway_host.is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.".into()));
     }
@@ -413,6 +415,7 @@ async fn config_lines(state: &AppState, headers: &HeaderMap, tunnel: &db::tunnel
         ("REVERSE_PORT", tunnel.reverse_port.to_string()),
         ("USERNAME", username.to_string()),
         ("GATEWAY_HOST", gateway_host),
+        ("GATEWAY_ALIAS", gateway_alias),
         ("GATEWAY_PORT", gateway_port(state)),
         ("GATEWAY_USER", state.config.gateway_user.clone()),
         ("SERVICE_KEY", service_key.trim().to_string()),

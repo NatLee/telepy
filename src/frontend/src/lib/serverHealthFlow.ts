@@ -29,7 +29,7 @@ export const SPOT_CHECKS: Record<HealthSpot, readonly HealthCheckId[] | null> = 
     proxy: ["client_addresses"],
     backend: ["secret_key", "public_url", "internal_api_token"],
     disk: ["data_dir", "log_dir", "database", "accounts", "audit_log"],
-    gateway: ["tunnel_keys", "service_key", "shared_key", "gateway"],
+    gateway: ["tunnel_keys", "service_key", "shared_key", "gateway", "ssh_host"],
     devices: null,
     guacd: ["guacd"],
     kasm: ["kasm"],
