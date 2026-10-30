@@ -470,3 +470,67 @@ async fn a_deleted_tunnels_leftover_is_an_extra_copy_removed_without_a_drop() {
     let row: (i64, String) = sqlx::query_as("SELECT tunnel_id, tunnel_name FROM telepy_device_install_retired WHERE install_id = ?").bind(&install).fetch_one(&lab.app.state.db.read).await.unwrap();
     assert_eq!(row, (id, "router".to_string()));
 }
+
+/// 換成自動：新服務用新的安裝代號（才能跟現在的並存）、經小程式（`--tcp` 先 SSH 的 port）連上，先接上再拆舊的；之後
+/// 隧道用新代號，舊代號進紀錄（同一條隧道），`way_in` = auto。
+/// Switching to automatic: the new service gets a fresh install id (so it runs next to the current one) and comes in
+/// through the carrier (`--tcp`, the SSH port first), make-before-break; afterwards the tunnel uses the new id, the old
+/// one is in the ledger under the same tunnel, and `way_in` = auto.
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
+    let Some(lab) = Lab::start().await else { return };
+    if !common::lab::have("python3") {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("auto-box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let dev = lab.device_requesting(&alice, "auto-box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    let id = dev.tunnel_id;
+    lab.disconnect_device(&dev).await;
+    let (old_runner, _old) = start_old_loop(&lab, &dev, &home).await;
+    stub_crontab(&home, &format!("@reboot sh {} >/dev/null 2>&1\n", old_runner.display()));
+
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/survey"), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let before = r.json["install_id"].as_str().unwrap().to_string();
+    assert_eq!(r.json["switch"]["possible"], true, "{}", r.json);
+
+    let bad = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "pigeon"})).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.text);
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "auto"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rep = &r.json["report"];
+    assert_eq!((rep["ok"].as_bool(), rep["transport"].as_str()), (Some(true), Some("auto")), "{rep:#}");
+    let steps: Vec<&str> = rep["steps"].as_array().unwrap().iter().map(|s| s["state"].as_str().unwrap()).collect();
+    assert!(steps.iter().all(|s| *s == "done") && steps.len() == 7, "{rep:#}");
+
+    // 新代號、舊的進紀錄。/ A fresh id; the old one is in the ledger under this tunnel.
+    let after = r.json["view"]["install_id"].as_str().unwrap().to_string();
+    assert_ne!(after, before);
+    let ledger: Option<i64> = sqlx::query_scalar("SELECT tunnel_id FROM telepy_device_install_retired WHERE install_id = ?").bind(&before).fetch_optional(&lab.app.state.db.read).await.unwrap();
+    assert_eq!(ledger, Some(id));
+    // 新服務經小程式連：包裝腳本帶 --tcp <gateway> 與網頁的 /ws/gateway/。/ The new service rides the carrier.
+    let runner = std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}.sh"))).unwrap();
+    assert!(runner.contains(&format!("ProxyCommand={}/.ssh/telepy-{after}-ws.sh", home.display())), "{runner}");
+    let wrapper = std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}-ws.sh"))).unwrap();
+    assert!(wrapper.contains(&format!("--tcp 127.0.0.1:{} ", lab.gw_port)) && wrapper.contains("/ws/gateway/"), "{wrapper}");
+    assert!(std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}-ws.py"))).unwrap().starts_with("#!/usr/bin/env python3"));
+    // 舊迴圈走了，新的在跑，隧道在線；way_in = auto。/ The old loop is gone, the new one runs, online, way_in auto.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while old_runner.exists() || alive(&old_runner.to_string_lossy()) {
+        assert!(tokio::time::Instant::now() < deadline, "the old loop was left behind");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    wait_online(&lab, &dev, true).await;
+    let t = lab.app.get(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await;
+    assert_eq!(t.json["way_in"]["setup"], "auto", "{}", t.text);
+    let ev = events(&lab);
+    assert!(ev.iter().any(|e| e == "service_switched") && ev.iter().any(|e| e == "handover"), "{ev:?}");
+    assert!(names(&r.json["view"], "older").is_empty(), "{}", r.json["view"]);
+}

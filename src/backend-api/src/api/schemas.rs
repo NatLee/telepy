@@ -4520,6 +4520,8 @@ pub struct DeviceInstall {
     pub server_port: String,
     pub rename: DeviceInstallRenamePlan,
     pub tidy: DeviceInstallTidyPlan,
+    /// 換連線方式（例如改成自動）。/ Switching how it connects (e.g. to automatic).
+    pub switch: DeviceInstallSwitchPlan,
     pub renamed_at: Option<String>,
     pub renamed_from: Vec<String>,
 }
@@ -4547,6 +4549,26 @@ pub struct DeviceInstallReport {
     pub old: Vec<String>,
     /// The new service's last log lines when it did not connect
     pub log: Option<String>,
+}
+
+/// `POST …/device-install/switch` 的內容。/ The switch request.
+#[derive(ToSchema)]
+pub struct DeviceInstallSwitchRequest {
+    /// `auto`（SSH port 優先，被擋時走網頁 port）/ `websocket`（只走網頁 port）/ `ssh`（只走 SSH port）。
+    #[schema(example = "auto")]
+    pub transport: String,
+}
+
+/// 換連線方式能不能做、現在怎麼設定的。/ Whether a switch is possible, and how the device is set up now.
+#[derive(ToSchema)]
+pub struct DeviceInstallSwitchPlan {
+    pub possible: bool,
+    /// 不能做的原因（同改名的 blocker）。/ Why not (the rename's blockers).
+    pub blocker: Option<String>,
+    /// 隧道的 `way_in`（`ssh` / `websocket` / `auto`；null = 不知道）。/ The tunnel's way in.
+    pub way_in: Option<String>,
+    /// 會被換掉的服務（現在跑這條隧道的）。/ The services a switch replaces (what runs the tunnel now).
+    pub old: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]

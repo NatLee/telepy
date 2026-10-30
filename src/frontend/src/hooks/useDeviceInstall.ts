@@ -14,7 +14,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
-import { RENAME_STEPS, type DeviceInstallView, type RenameReport, type ReportedStep } from "@/lib/deviceInstall";
+import { RENAME_STEPS, type DeviceInstallView, type RenameReport, type ReportedStep, type WayInSetup } from "@/lib/deviceInstall";
 
 export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabled: boolean, onChanged?: () => void) {
     const { t } = useI18n();
@@ -147,10 +147,38 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
         }
     }, [tunnelId, renaming, onChanged, showSuccess, t]);
 
+    // 換連線方式：跟改名同一套步驟與回報。/ Switching how it connects: the rename's steps and report.
+    const switchTransport = useCallback(
+        async (transport: WayInSetup) => {
+            if (!tunnelId || renaming) return;
+            setRenaming(true);
+            setSteps([]);
+            setReport(null);
+            try {
+                const res = await apiFetch(`/api/reverse/server/${tunnelId}/device-install/switch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transport }) });
+                const body = await readJson<{ report?: RenameReport; view?: DeviceInstallView; code?: string; error?: string }>(res);
+                if (res.ok && body?.report) {
+                    setReport(body.report);
+                    setSteps(body.report.steps);
+                    if (body.view) setView({ id: tunnelId, view: body.view });
+                    if (body.report.ok) showSuccess(t("deviceInstall.switch.doneToast"));
+                    onChanged?.();
+                } else {
+                    setReport({ ok: false, steps: [], code: body?.code ?? "other", error: body?.error, old: [] });
+                }
+            } catch (e) {
+                setReport({ ok: false, steps: [], code: "other", error: e instanceof Error ? e.message : undefined, old: [] });
+            } finally {
+                setRenaming(false);
+            }
+        },
+        [tunnelId, renaming, onChanged, showSuccess, t]
+    );
+
     const resetRename = useCallback(() => {
         setReport(null);
         setSteps([]);
     }, []);
 
-    return { view: current, error, surveying, survey, renaming, steps, report, rename, tidy, resetRename, reload: load };
+    return { view: current, error, surveying, survey, renaming, steps, report, rename, tidy, switchTransport, resetRename, reload: load };
 }

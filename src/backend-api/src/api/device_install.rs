@@ -9,7 +9,7 @@
 //! A tunnel's names and footprint on its device; owner and ADMIN sharees only.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde_json::{json, Value};
 
@@ -22,7 +22,7 @@ use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(show)).routes(routes!(survey)).routes(routes!(rename)).routes(routes!(tidy))
+    OpenApiRouter::new().routes(routes!(show)).routes(routes!(survey)).routes(routes!(rename)).routes(routes!(tidy)).routes(routes!(switch))
 }
 
 fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
@@ -82,6 +82,30 @@ async fn tidy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id):
         Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
         Err(RenameError::NoAccounts) => return Err(coded(StatusCode::CONFLICT, "no_accounts", "The tunnel has no login accounts, so Telepy cannot log in to the device.")),
     };
+    let view = device_install::view(&state, &tunnel).await?;
+    Ok(Json(json!({ "report": report, "view": view })))
+}
+
+/// 換連線方式（`{transport: auto | websocket | ssh}`）：同改名的先接上再拆舊的，新服務用新的安裝代號、連現在的 SSH 主機。
+/// Switch how the device connects: the rename's make-before-break with a fresh install id and the current SSH host.
+#[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/switch", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DeviceInstallSwitchRequest, responses((status = 200, description = "The switch ran (see ok / steps / code — no_python when the device has no python3); the view after it", body = super::schemas::DeviceInstallRename), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
+async fn switch(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, headers: HeaderMap, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    let tunnel = load(&state, user.id, id).await?;
+    let transport = match body.get("transport").and_then(Value::as_str).map(str::trim) {
+        Some("auto") => "auto",
+        Some("websocket") => "websocket",
+        Some("ssh") => "ssh",
+        _ => return Err(ApiError::field("transport", "Use \"auto\", \"ssh\" or \"websocket\".")),
+    };
+    let base = crate::oauth::issuer(state.config.public_base().as_deref(), &headers);
+    let sw = device_install::Switch { transport, ws_url: super::join::ws_url(&base) };
+    let report = match device_install::switch_transport(&state, &tunnel, &user.username, sw).await {
+        Ok(r) => r,
+        Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being changed right now.")),
+        Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
+        Err(RenameError::NoAccounts) => return Err(coded(StatusCode::CONFLICT, "no_accounts", "The tunnel has no login accounts, so Telepy cannot log in to the device.")),
+    };
+    let tunnel = db::tunnels::by_id(&state.db, tunnel.id).await?.unwrap_or(tunnel);
     let view = device_install::view(&state, &tunnel).await?;
     Ok(Json(json!({ "report": report, "view": view })))
 }
