@@ -52,6 +52,7 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: 
             "live": false,
             "connected_at": db_to_iso_utc_z(&l.connected_at),
             "last_seen_at": db_to_iso_utc_z(&l.last_seen_at),
+            "transport": l.transport,
         }),
         (None, None) => return Value::Null,
     };

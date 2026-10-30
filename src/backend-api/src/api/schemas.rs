@@ -360,6 +360,10 @@ pub struct TunnelEndpoint {
     pub connected_at: String,
     /// 離線時：forward 釋放的時間；連著時 null。/ When the forward went away; null while live.
     pub last_seen_at: Option<String>,
+    /// 裝置怎麼連上 gateway（離線時 = 最後一次）：`tcp` = SSH port，`websocket` = 網頁 port；升級前連的是 null。
+    /// How the device reached the gateway (offline: the last time): `tcp` = SSH port, `websocket` = web port; null before the upgrade.
+    #[schema(example = "tcp")]
+    pub transport: Option<String>,
     pub geo: Option<IpGeo>,
     /// 最近一次換「公網 IP」之前的位址（從沒換過是 null）。/ The public address before the latest change; null if it never changed.
     #[schema(example = "198.51.100.20")]

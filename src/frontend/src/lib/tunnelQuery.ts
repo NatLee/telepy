@@ -16,13 +16,16 @@
  *   pinned:yes|no                                   我有沒有釘選
  *   group:prod | group:none                         我把它放在哪個通道群組（名稱不分大小寫；none = 未分組）
  *   warn:disk|memory|load|reboot|any                裝置的警示（磁碟快滿、記憶體不足、負載高、要重開機）
+ *   os:linux|macos|windows|raspberrypi|openwrt|unix 裝置的作業系統（裝置資訊讀到的；linux 含樹莓派）
+ *   via:ssh|http                                    裝置怎麼連 Telepy（SSH port / 網頁 port；離線 = 最後一次）
  *
  * 純函式、不依賴 React，`tunnelQuery.test.ts` 有測試。/ Pure functions; tested in tunnelQuery.test.ts.
  */
 import type { Tunnel, TunnelHealth } from "../types/tunnel";
 import { warningKinds } from "./deviceFacts.ts";
+import { matchesOs, OS_QUERY, platformOf, VIA_QUERY, viaOf } from "./devicePlatforms.ts";
 
-export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned", "warn", "group"] as const;
+export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned", "warn", "group", "os", "via"] as const;
 export type QueryKey = (typeof QUERY_KEYS)[number];
 
 export interface QueryFilter {
@@ -86,6 +89,10 @@ function validValue(key: QueryKey, v: string): boolean {
             return v === "yes" || v === "no";
         case "warn":
             return WARN.has(v);
+        case "os":
+            return OS_QUERY.has(v);
+        case "via":
+            return VIA_QUERY.has(v);
     }
 }
 
@@ -180,6 +187,10 @@ function matchOne(f: QueryFilter, v: string, t: Tunnel, ctx: MatchContext): bool
             const kinds: string[] = warningKinds(t.endpoint);
             return v === "any" ? kinds.length > 0 : kinds.includes(v);
         }
+        case "os":
+            return matchesOs(v, platformOf(t.endpoint?.facts));
+        case "via":
+            return viaOf(t.endpoint) === v;
     }
 }
 

@@ -92,6 +92,19 @@ async fn a_device_can_dial_the_gateway_through_the_websocket() {
     let accepted = r.json.as_array().unwrap().iter().find(|e| e["event"] == "accepted").unwrap();
     assert!(accepted["message"].as_str().unwrap().ends_with("(over websocket)"), "{}", accepted["message"]);
 
+    // 斷線後仍記得是走 WebSocket（離線的卡片也標 HTTP）。/ After a disconnect the last transport is kept.
+    lab.disconnect_device(&dev).await;
+    let mut last = serde_json::Value::Null;
+    for _ in 0..100 {
+        let r = app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+        last = r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == dev.tunnel_id).unwrap()["endpoint"].clone();
+        if last["live"] == false {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!((last["live"].as_bool(), last["transport"].as_str()), (Some(false), Some("websocket")), "{last}");
+
     // 一鍵加入：票可以選 websocket，指令多 --via-web，註冊回答帶 WS_URL。/ Join: the ticket carries the transport.
     let r = app.post("/api/reverse/join", Some(&alice.token), json!({"transport": "websocket"})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
