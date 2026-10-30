@@ -933,7 +933,9 @@ const TABLES: &[(&str, &str)] = &[
             "surveyed_at" datetime NULL,
             "survey_error" text NULL,
             "renamed_at" datetime NULL,
-            "renamed_from" text NULL
+            "renamed_from" text NULL,
+            "join_facts" text NULL,
+            "join_facts_at" datetime NULL
         )"#,
     ),
     // Rust 自有：發過、隧道已經刪掉的安裝代號（帳本）。裝置上留下的 `telepy-<代號>` 對得上這裡，就知道是哪條刪掉的
@@ -1020,6 +1022,9 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
+    ("telepy_device_install", "join_facts", "text NULL"),
+    ("telepy_device_install", "join_facts_at", "datetime NULL"),
     ("telepy_tunnel_endpoint", "previous_ip", "varchar(64) NULL"),
     ("telepy_tunnel_endpoint", "changed_at", "datetime NULL"),
     ("telepy_tunnel_endpoint", "public_ip", "varchar(64) NULL"),

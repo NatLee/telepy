@@ -116,6 +116,7 @@ pub fn parts(accounts: &[AccountResult], names: &Names) -> Vec<Part> {
     for a in accounts {
         for i in a.items.iter().filter(|i| i.kind == "found") {
             let (kind, name) = match i.what.as_str() {
+                // initd = `/etc/init.d/…`（OpenWrt 的 procd 服務也在那裡）。/ initd: `/etc/init.d/…` (OpenWrt's procd services too).
                 "systemd" | "systemd-user" | "loop" | "initd" => ("service", base_name(&i.detail).to_string()),
                 "launchd" => ("service", base_name(&i.detail).trim_end_matches(".plist").to_string()),
                 "task" | "service" | "run-key" | "startup" => ("service", i.detail.clone()),

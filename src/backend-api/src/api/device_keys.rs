@@ -176,10 +176,14 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
     // 同一個 port 以前那條隧道留下的不算。/ Ignore snapshots left by an earlier tunnel on the same port.
     let since = parse_db_datetime(&t.created_at).map(|d| d.and_utc());
     let mut snapshots: HashMap<String, view::Snapshot> = HashMap::new();
+    let mut file_paths: HashMap<String, String> = HashMap::new();
     for a in accounts {
         let Some(s) = state.device_keys.snapshot(t.reverse_port, a) else { continue };
         if since.is_some_and(|c| s.at < c) {
             continue;
+        }
+        if let Some(p) = s.path.clone() {
+            file_paths.insert(a.clone(), p);
         }
         match s.error {
             Some(e) => {
@@ -230,6 +234,7 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
         installed: &installed,
         sync_errors: &errors,
         snapshots: &snapshots,
+        file_paths: &file_paths,
         service: &service,
         shared: &shared,
         known: &known,

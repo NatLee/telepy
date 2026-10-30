@@ -422,6 +422,8 @@ if [ -f /etc/rc.common ]; then
         has_port "$f" || continue
         name=$(basename "$f")
         out found initd "$f"
+        # The one-command join's procd service is named after the install id (`/etc/init.d/telepy-<id>`).
+        [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL" ] && FOUND_JOIN=1
         note_kh "$(text_of "$f")"
         [ "$SURVEY" = 1 ] && continue
         if [ "$ROOT" = 1 ]; then
@@ -533,6 +535,28 @@ for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh" ${T_INSTALL
     kept_new "$f" && continue
     [ -f "$f" ] && rmf "$f" file
 done
+# The install record the join script wrote (what it installed, where, as whom; no secrets). A survey reports it.
+# dbclient has no UserKnownHostsFile: the join pinned the gateway in the account's ~/.ssh/known_hosts and listed the
+# exact lines it added in the record (KNOWN_HOSTS_LINE=…). Only those lines go; the account's other known hosts stay.
+REC="$SSH_DIR/telepy-$T_INSTALL.install"
+if [ -n "$T_INSTALL" ] && [ -f "$REC" ]; then
+    out found record "$REC"
+    DBKH=$(sed -n 's/^DBCLIENT_KNOWN_HOSTS=//p' "$REC" 2>/dev/null | head -n 1)
+    if [ -n "$DBKH" ] && [ -f "$DBKH" ] && grep -q '^KNOWN_HOSTS_LINE=' "$REC" 2>/dev/null; then
+        if [ "$SURVEY" = 1 ] || [ "$T_MODE" = relabel ]; then
+            out found known_hosts "$DBKH (lines listed in $REC)"
+        else
+            sed -n 's/^KNOWN_HOSTS_LINE=//p' "$REC" > "$DBKH.telepy-lines"
+            if grep -vxF -f "$DBKH.telepy-lines" "$DBKH" > "$DBKH.telepy-tmp" 2>/dev/null || [ ! -s "$DBKH.telepy-tmp" ]; then
+                cat "$DBKH.telepy-tmp" > "$DBKH" && out removed known_hosts "$DBKH (the lines the join added)"
+            else
+                out failed known_hosts "$DBKH"
+            fi
+            rm -f "$DBKH.telepy-tmp" "$DBKH.telepy-lines"
+        fi
+    fi
+    [ "$SURVEY" = 1 ] || [ "$T_MODE" = relabel ] || rmf "$REC" record
+fi
 # known_hosts: the ones the removed parts used, plus (delete) the join's. Kept while anything else still uses one:
 # a unit, a plist, a loop, or this computer's own ssh config (a device is often someone's laptop too).
 KHS="$OLD_KH"
@@ -545,7 +569,7 @@ for KH in $KHS; do
     [ -f "$KH" ] || continue
     if [ "$SURVEY" = 1 ]; then out found known_hosts "$KH"; continue; fi
     USERS=""
-    for f in /etc/systemd/system/*.service "$HOME"/.config/systemd/user/*.service /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist "$SSH_DIR"/telepy-*.sh "$SSH_DIR/config" "$SSH_DIR"/telepy/*.conf; do
+    for f in /etc/systemd/system/*.service "$HOME"/.config/systemd/user/*.service /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist /etc/init.d/telepy* "$SSH_DIR"/telepy-*.sh "$SSH_DIR/config" "$SSH_DIR"/telepy/*.conf; do
         [ -f "$f" ] || continue
         case "$GOING" in *" $f "*) continue ;; esac
         grep -qF "$KH" "$f" 2>/dev/null && USERS="$USERS $f"

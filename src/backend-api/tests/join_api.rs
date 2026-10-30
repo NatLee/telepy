@@ -199,3 +199,89 @@ async fn one_command_join() {
     assert_eq!(device_post(app, &tok, json!({"public_key": lab.keygen("x").public, "username": "ubuntu"})).await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.get("/api/join/tpj_nope/status", None).await.status, StatusCode::NOT_FOUND);
 }
+
+/// 精簡裝置（OpenWrt 的 uclient-fetch）需要的那些：`?soft=1` 把狀態碼放進 body、不看 Content-Type 的註冊、預檢用的
+/// `/api/join/gateway`、回應丟了之後再拿一次的 `/config`，以及腳本回報的環境記在票、事件與隧道上。
+/// What a minimal device (OpenWrt's uclient-fetch) needs: `?soft=1`, registration regardless of Content-Type, the
+/// public `/api/join/gateway` for the preflight, `/config` after a lost answer, and the facts on ticket, event and tunnel.
+#[tokio::test]
+async fn soft_answers_gateway_info_config_recovery_and_facts() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+
+    // 預檢資料：公開、不用 token；soft 時第一行 STATUS=200。/ Public gateway facts; STATUS first with soft.
+    let r = app.get("/api/join/gateway", None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let m = kv(&r.text);
+    assert_eq!(one(&m, "GATEWAY_PORT"), lab.gw_port.to_string());
+    assert_eq!(one(&m, "GATEWAY_USER"), "telepy");
+    assert!(m.get("HOST_KEY").is_some_and(|k| !k.is_empty()) && one(&m, "WS_URL").starts_with("ws://"), "{}", r.text);
+    let r = app.get("/api/join/gateway?soft=1", None).await;
+    assert!(r.text.starts_with("STATUS=200\nGATEWAY_HOST="), "{}", r.text);
+
+    // soft 的錯誤：200 + STATUS=404 + ERROR。/ A soft error: 200 with STATUS=404.
+    let r = app.get("/api/join/tpj_nope/status?soft=1", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.text.starts_with("STATUS=404\nERROR="), "{}", r.text);
+    assert_eq!(app.get("/api/join/tpj_nope/config", None).await.status, StatusCode::NOT_FOUND);
+
+    let token = app.post("/api/reverse/join", Some(&alice.token), json!({"name": "wrt"})).await.json["token"].as_str().unwrap().to_string();
+    assert_eq!(app.get(&format!("/api/join/{token}/config"), None).await.status, StatusCode::CONFLICT, "not registered yet");
+
+    // uclient-fetch 的 POST：x-www-form-urlencoded、看不到狀態碡 → soft。/ A uclient-fetch style POST: form content type + soft.
+    let key = lab.keygen("wrt-device");
+    let body = json!({"public_key": key.public, "hostname": "GL-AR750S", "username": "root", "ssh_port": 22, "os": "Linux mips",
+        "facts": {"shell": "ash (BusyBox v1.36.1)", "client": "OpenSSH_8.9p1", "server": "Dropbear 2022.82", "init": "procd", "keepalive": "tcp", "http": "uclient-fetch", "compat": ["no_server_alive"], "token": "leak?"}});
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/join/{token}?soft=1"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let reg = app.send(req).await;
+    assert_eq!(reg.status, StatusCode::OK, "{}", reg.text);
+    assert!(reg.text.starts_with("STATUS=201\n"), "{}", reg.text);
+    let m = kv(&reg.text);
+    assert_eq!(one(&m, "TUNNEL_NAME"), "wrt");
+    assert_eq!(one(&m, "USERNAME"), "root");
+    let tunnel_id: i64 = one(&m, "TUNNEL_ID").parse().unwrap();
+
+    // 回應丟了：同一張票再拿一次設定，內容相同。/ Lost answer: the config comes again, identical.
+    let again = app.get(&format!("/api/join/{token}/config"), None).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.text);
+    let m2 = kv(&again.text);
+    for k in ["TUNNEL_ID", "INSTALL_ID", "SERVICE_KEY", "GATEWAY_HOST", "GATEWAY_PORT", "WEB_URL", "USERNAME"] {
+        assert_eq!(one(&m, k), one(&m2, k), "{k}");
+    }
+    assert_eq!(m.get("HOST_KEY"), m2.get("HOST_KEY"));
+    // 再 POST 同一張票 = 已用過（不會建第二條隧道）。/ Posting again is refused; no second tunnel.
+    let dup = device_post(app, &token, json!({"public_key": key.public, "username": "root"})).await;
+    assert_eq!(dup.status, StatusCode::CONFLICT);
+    assert_eq!(app.get("/api/reverse/server/dashboard", Some(&alice.token)).await.json["tunnels"].as_array().unwrap().len(), 1);
+
+    // 腳本回報的環境：票上有（白名單，token 欄位丟掉）、事件一句話、隧道的 device-install 也有。
+    // The facts: on the ticket (allow-listed), in the event line, on the tunnel's device-install view.
+    let t = app.state.join.by_token(&token).unwrap();
+    let facts = t.facts.expect("facts recorded");
+    assert_eq!(facts["server"], "Dropbear 2022.82");
+    assert_eq!(facts["compat"], json!(["no_server_alive"]));
+    assert!(facts.get("token").is_none());
+    let web = app.get(&format!("/api/reverse/join/{}", t.id), Some(&alice.token)).await;
+    assert_eq!(web.json["facts"]["init"], "procd", "{}", web.text);
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={tunnel_id}"), Some(&alice.token)).await;
+    let join_msg = events.json.as_array().unwrap().iter().find(|e| e["event"] == "join").unwrap()["message"].as_str().unwrap().to_string();
+    assert!(join_msg.contains("found: ash (BusyBox v1.36.1), OpenSSH_8.9p1 → Dropbear 2022.82, procd, keepalive tcp, compat: no_server_alive"), "{join_msg}");
+    let view = app.get(&format!("/api/reverse/server/{tunnel_id}/device-install"), Some(&alice.token)).await;
+    assert_eq!(view.json["join"]["facts"]["client"], "OpenSSH_8.9p1", "{}", view.text);
+    assert!(view.json["join"]["summary"].as_str().unwrap().contains("compat: no_server_alive"));
+    assert!(view.json["join"]["at"].is_string());
+
+    // 非 JSON 的 body：清楚的 400。/ A body that is not JSON: a clear 400.
+    let token2 = app.post("/api/reverse/join", Some(&alice.token), json!({})).await.json["token"].as_str().unwrap().to_string();
+    let req = Request::builder().method(Method::POST).uri(format!("/api/join/{token2}")).body(Body::from("public_key=ssh-ed25519")).unwrap();
+    let r = app.send(req).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.text.contains("not JSON"), "{}", r.text);
+    assert!(app.state.join.by_token(&token2).unwrap().open(), "a bad body does not consume the ticket");
+}

@@ -8,6 +8,7 @@
  * and both the step list and the old / new lanes of the diagram are derived from the reported steps.
  */
 import type { SpotState } from "@/lib/flow";
+import type { JoinFacts } from "@/lib/joinScript";
 import type { TranslationKey } from "@/locales/en";
 
 export type InstallMethod = "systemd" | "systemd_user" | "launchd_daemon" | "launchd_agent" | "loop";
@@ -66,6 +67,8 @@ export interface DeviceInstallView {
     tidy?: { possible: boolean; blocker: RenameBlocker | null; names: string[] };
     renamed_at: string | null;
     renamed_from: string[];
+    /** 一鍵加入腳本回報的環境（沒有一鍵加入過 = null）。/ What the join script found (null when never joined that way). */
+    join?: { facts: JoinFacts; summary: string; at: string | null } | null;
 }
 
 export interface OtherServerPart {

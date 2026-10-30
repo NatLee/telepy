@@ -83,8 +83,9 @@ pub struct Sources {
 pub struct AccountView {
     pub username: String,
     /// 這個帳號的金鑰檔：`~/.ssh/authorized_keys`，Windows 管理員是共用的 `%ProgramData%\ssh\administrators_authorized_keys`。
-    /// Which file holds this account's keys.
-    pub file: &'static str,
+    /// Which file holds this account's keys: the path actually read / written when known (exec mode reports it), else the
+    /// platform's label (`~/.ssh/authorized_keys`, the Windows admin file).
+    pub file: String,
     /// Windows 本機管理員：sshd 不看它自己的 `~/.ssh/authorized_keys`。/ A Windows administrator (own file ignored by sshd).
     pub windows_admin: bool,
     /// 最近一次讀到檔案的時間；None = 還沒讀過。/ When the file was last read; None = never.
@@ -118,6 +119,8 @@ pub struct Inputs<'a> {
     pub installed: &'a [(String, String, String, Option<i64>)],
     pub sync_errors: &'a HashMap<String, String>,
     pub snapshots: &'a HashMap<String, Snapshot>,
+    /// 帳號 → 實際讀 / 寫的檔案路徑（知道的才有）。/ Account → the file actually read / written, when known.
+    pub file_paths: &'a HashMap<String, String>,
     /// Telepy 的服務金鑰（這條隧道自己的 + 全站共用的）。/ Telepy's service keys (the tunnel's own + the shared one).
     pub service: &'a BTreeSet<String>,
     /// 其中全站共用的那把（舊；隧道都用自己的金鑰後會被移掉）。/ The shared one among them (legacy).
@@ -314,7 +317,8 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         rows.retain(|r| r.mine);
     }
     rows.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| a.name.cmp(&b.name)).then_with(|| a.line_no.cmp(&b.line_no)));
-    let (_, file, windows_admin) = i.platform.map(|p| p.file_for(acct)).unwrap_or((None, USER_FILE_LABEL, false));
+    let (_, label, windows_admin) = i.platform.map(|p| p.file_for(acct)).unwrap_or((None, USER_FILE_LABEL, false));
+    let file = i.file_paths.get(acct).cloned().unwrap_or_else(|| label.to_string());
     AccountView {
         username: acct.to_string(),
         file,
@@ -378,7 +382,9 @@ mod tests {
             }
         }
         fn build(&self, viewer: i64, manager: bool) -> AccountView {
+            let no_paths = HashMap::new();
             let i = Inputs {
+                file_paths: &no_paths,
                 accounts: &self.accounts,
                 desired: &self.desired,
                 installed: &self.installed,
@@ -506,7 +512,9 @@ mod tests {
         f.platform = Some(Platform { windows: true, program_data: Some("/C:/ProgramData".into()), admins: BTreeSet::from(["nat".to_string()]), error: None });
         f.desired.insert("nat".into(), BTreeSet::from([bare(ALICE)]));
         f.restrictions.insert(1, vec![7]);
+        let no_paths = HashMap::new();
         let i = Inputs {
+            file_paths: &no_paths,
             accounts: &f.accounts,
             desired: &f.desired,
             installed: &f.installed,
@@ -524,11 +532,16 @@ mod tests {
             disabled: &f.disabled,
         };
         let v = build(&i);
-        assert_eq!((v[0].file, v[0].windows_admin), (super::super::platform::ADMIN_FILE_LABEL, true));
-        assert_eq!((v[1].file, v[1].windows_admin), (USER_FILE_LABEL, false));
+        assert_eq!((v[0].file.as_str(), v[0].windows_admin), (super::super::platform::ADMIN_FILE_LABEL, true));
+        assert_eq!((v[1].file.as_str(), v[1].windows_admin), (USER_FILE_LABEL, false));
         assert_eq!(v[0].rows[0].accounts, Some(vec![7]));
         // 沒探測過：預設是帳號自己的檔案。/ Not probed: the account's own file.
         assert_eq!(Fixture::new().build(10, true).file, USER_FILE_LABEL);
+        // exec 模式回報了實際路徑（OpenWrt 的 Dropbear：root 讀 /etc/dropbear/authorized_keys）。/ Exec mode reported the real path.
+        let paths = HashMap::from([("ubuntu".to_string(), "/etc/dropbear/authorized_keys".to_string())]);
+        let f = Fixture::new();
+        let i = Inputs { file_paths: &paths, accounts: &f.accounts, desired: &f.desired, installed: &f.installed, sync_errors: &f.errors, snapshots: &f.snapshots, service: &f.service, shared: &BTreeSet::new(), known: &f.known, users: &f.users, viewer: 10, manager: true, platform: None, restrictions: &f.restrictions, sources: &f.sources, disabled: &f.disabled };
+        assert_eq!(build(&i)[0].file, "/etc/dropbear/authorized_keys");
     }
 
     #[test]

@@ -2886,8 +2886,11 @@ pub struct JoinRegistration {
     pub ssh_port: Option<i64>,
     pub os: Option<String>,
     pub name: Option<String>,
-    /// This machine's SSH host keys (`type base64`, from ssh-keyscan). Pinned at once; a machine another account's tunnel already pins is refused (409)
+    /// This machine's SSH host keys (`type base64`, verified by the script with a strict handshake). Pinned at once; a machine another account's tunnel already pins is refused (409)
     pub host_keys: Option<Vec<String>>,
+    /// What the script found on the device: `shell`, `os`, `arch`, `http`, `client`, `server`, `init`, `keepalive` (ssh | tcp), `key_format`, `authorized_keys`, `ssh_host`, `compat` (list, e.g. `no_server_alive`). Allow-listed, ≤ 120 chars each
+    #[schema(value_type = Object)]
+    pub facts: Option<serde_json::Value>,
 }
 
 #[derive(ToSchema)]

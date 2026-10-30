@@ -71,6 +71,31 @@ pub struct ExecResult {
     pub stderr: Captured,
 }
 
+/// 把 `content` 分段寫到裝置的 `path`（POSIX sh；`printf '%s'`，第一段 `>` 其餘 `>>`，`umask 077`），回傳要依序執行的指令，
+/// 每道都在 [`MAX_COMMAND`] 以內。給不是「腳本」的檔案用（authorized_keys）；腳本用 [`script_commands`]。
+/// The commands that write `content` to `path` in pieces (first `>`, then `>>`, under `umask 077`), each within
+/// [`MAX_COMMAND`]. For files that are not scripts (authorized_keys); scripts use [`script_commands`].
+pub fn upload_commands(path: &str, content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut piece = String::new();
+    let mut first = true;
+    let flush = |piece: &mut String, first: &mut bool, out: &mut Vec<String>| {
+        out.push(format!("umask 077; printf '%s' {} {} {}", sh_quote(piece), if *first { ">" } else { ">>" }, sh_quote(path)));
+        *first = false;
+        piece.clear();
+    };
+    for ch in content.chars() {
+        piece.push(ch);
+        if piece.len() + piece.matches('\'').count() * 3 >= MAX_COMMAND - 200 {
+            flush(&mut piece, &mut first, &mut out);
+        }
+    }
+    if !piece.is_empty() || first {
+        flush(&mut piece, &mut first, &mut out);
+    }
+    out
+}
+
 /// 開一個 exec channel 跑指令。/ Open an exec channel and run the command.
 pub async fn run(handle: &Handle<ClientHandler>, command: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
     let ch = handle.channel_open_session().await.context("open a channel (is the device still connected?)")?;
@@ -185,6 +210,22 @@ pub async fn run_on(mut ch: Channel<Msg>, command: &str, timeout: Duration, max_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_uploads_are_chunked_under_dropbears_command_limit() {
+        let content = format!("ssh-ed25519 AAAA it's\n{}", "k".repeat(MAX_COMMAND * 2));
+        let cmds = upload_commands("/etc/dropbear/.tmp", &content);
+        assert!(cmds.len() >= 3, "{}", cmds.len());
+        assert!(cmds[0].starts_with("umask 077; printf '%s' 'ssh-ed25519 AAAA it'\\''s\n") && cmds[0].ends_with("> '/etc/dropbear/.tmp'"), "{}", cmds[0]);
+        assert!(cmds[1].contains(">> '/etc/dropbear/.tmp'"));
+        assert!(cmds.iter().all(|c| c.len() <= MAX_COMMAND), "every command fits Dropbear's MAX_CMD_LEN");
+        let joined: String = cmds.iter().map(|c| {
+            let q = c.strip_prefix("umask 077; printf '%s' ").unwrap().rsplit_once(" >").unwrap().0.trim_end_matches('>');
+            q.trim()[1..q.trim().len() - 1].replace("'\\''", "'")
+        }).collect();
+        assert_eq!(joined, content, "the pieces, unquoted and joined, are the file");
+        assert_eq!(upload_commands("/tmp/x", "").len(), 1, "an empty file is still created");
+    }
 
     #[test]
     fn long_scripts_are_sent_in_pieces_short_enough_for_dropbear() {

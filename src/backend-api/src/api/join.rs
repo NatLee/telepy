@@ -1,13 +1,17 @@
 //! 一行指令加入裝置（#14）。網頁（要登入）：`POST /api/reverse/join` 發票、`GET/DELETE /api/reverse/join/{id}`
-//! 查進度 / 撤銷。裝置（公開，只靠 token）：`GET /api/join/install.sh`、`POST /api/join/{token}` 註冊、
-//! `GET /api/join/{token}/status` 查驗證結果。給裝置的回應是 `KEY=value` 純文字（腳本不需要 jq）。
+//! 查進度 / 撤銷。裝置（公開，只靠 token）：`GET /api/join/install.sh`、`GET /api/join/gateway`（預檢用：gateway 位址
+//! 與 host key，不用 token）、`POST /api/join/{token}` 註冊、`GET /api/join/{token}/config`（註冊回應丟了再拿一次）、
+//! `GET /api/join/{token}/status` 查驗證結果。給裝置的回應是 `KEY=value` 純文字（腳本不需要 jq）；加 `?soft=1` 時一律
+//! 200 並以第一行 `STATUS=` 帶原本的狀態碼（OpenWrt 的 uclient-fetch 看不到狀態碼、錯誤時不存 body）。
 //! One-command device join: the web mints a ticket; the device registers with it and polls the result.
-//! Device-facing answers are `KEY=value` text so the POSIX script needs no JSON parser.
+//! Device-facing answers are `KEY=value` text so the POSIX script needs no JSON parser; `?soft=1` moves the status
+//! code into the body for HTTP clients that hide it (uclient-fetch, BusyBox wget).
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -31,9 +35,13 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(ticket_status, revoke_ticket))
         .routes(routes!(install_script))
         .routes(routes!(ws_client))
+        .routes(routes!(gateway_info))
         .routes(routes!(register))
+        .routes(routes!(device_config))
         .routes(routes!(device_status))
 }
+
+type SoftQuery = Query<HashMap<String, String>>;
 
 const INSTALL: &str = include_str!("../../templates/join_install.sh");
 /// SSH over WebSocket 的裝置端小程式（純 python3 標準函式庫）。/ The device-side WebSocket carrier (python3 stdlib only).
@@ -61,8 +69,17 @@ fn text(status: StatusCode, body: String) -> Response {
     (status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
 }
 
-fn device_error(status: StatusCode, msg: &str) -> Response {
-    text(status, join::kv_lines(&[("ERROR", msg.to_string())]))
+/// 給裝置的回應；`soft` 時狀態碼進 body（見模組說明）。/ A device answer; with `soft` the status moves into the body.
+fn answer(status: StatusCode, body: String, soft: bool) -> Response {
+    if soft {
+        text(StatusCode::OK, join::soft_body(status.as_u16(), &body))
+    } else {
+        text(status, body)
+    }
+}
+
+fn device_error(status: StatusCode, msg: &str, soft: bool) -> Response {
+    answer(status, join::kv_lines(&[("ERROR", msg.to_string())]), soft)
 }
 
 fn join_error(status: StatusCode, code: &str, msg: &str) -> ApiError {
@@ -146,26 +163,86 @@ async fn ws_client() -> Response {
     text(StatusCode::OK, WS_CLIENT.to_string())
 }
 
-#[utoipa::path(get, path = "/api/join/install.sh", tag = "Device join", responses((status = 200, description = "The POSIX install script (run with --token)", content_type = "text/plain", body = String)))]
+#[utoipa::path(get, path = "/api/join/install.sh", tag = "Device join", responses((status = 200, description = "The POSIX install script (run with --token, or --check for a preflight without a token). Its last line is `# telepy-sha256: <hex>` over everything before it, which the script verifies when run from a file", content_type = "text/plain", body = String)))]
 async fn install_script(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let mut m = HashMap::new();
     m.insert("server_url", base_url(&state, &headers));
-    text(StatusCode::OK, crate::scripts::safe_substitute(INSTALL, &m))
+    text(StatusCode::OK, join::with_checksum(&crate::scripts::safe_substitute(INSTALL, &m)))
 }
 
-#[utoipa::path(post, path = "/api/join/{token}", tag = "Device join", params(("token" = String, Path, description = "Join token")), request_body = super::schemas::JoinRegistration, responses((status = 201, description = "KEY=value lines: TUNNEL_ID, TUNNEL_NAME, REVERSE_PORT, GATEWAY_HOST, GATEWAY_PORT, GATEWAY_USER, SERVICE_KEY, HOST_KEY (one per gateway host key), WEB_URL", content_type = "text/plain", body = String), (status = 400, description = "ERROR=… (invalid input)", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (unknown or expired token)", content_type = "text/plain", body = String), (status = 409, description = "ERROR=… (token used, or key owned by someone else)", content_type = "text/plain", body = String)))]
-async fn register(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> Response {
+/// 預檢用的 gateway 資料（公開：位址、port、帳號、host key、WebSocket 位址都不是祕密）。腳本在**消耗 token 之前**
+/// 就能測連得到 gateway、釘住它的 host key，並比對開 / 不開 ServerAlive 的握手（OpenWrt 32 位元 musl 的 ppoll 問題）。
+/// Public gateway facts for the preflight: reachability, host-key pinning and the keepalive probe happen before any token is used.
+#[utoipa::path(get, path = "/api/join/gateway", tag = "Device join", params(("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "KEY=value lines: GATEWAY_HOST, GATEWAY_PORT, GATEWAY_USER, HOST_KEY (one per gateway host key), WS_URL, SERVER_URL", content_type = "text/plain", body = String), (status = 503, description = "ERROR=… (SERVER_DOMAIN unknown)", content_type = "text/plain", body = String)))]
+async fn gateway_info(State(state): State<AppState>, headers: HeaderMap, Query(q): SoftQuery) -> Response {
+    let soft = join::wants_soft(&q);
+    let gateway_host = crate::api::scripts::server_domain(&headers, &state);
+    if gateway_host.is_empty() {
+        return device_error(StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.", soft);
+    }
+    let mut lines = vec![("GATEWAY_HOST", gateway_host), ("GATEWAY_PORT", gateway_port(&state)), ("GATEWAY_USER", state.config.gateway_user.clone())];
+    for k in state.gateway.host_public_keys() {
+        lines.push(("HOST_KEY", k));
+    }
+    let base = base_url(&state, &headers);
+    lines.push(("WS_URL", ws_url(&base)));
+    lines.push(("SERVER_URL", base));
+    answer(StatusCode::OK, join::kv_lines(&lines), soft)
+}
+
+fn gateway_port(state: &AppState) -> String {
+    Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string()
+}
+
+#[utoipa::path(post, path = "/api/join/{token}", tag = "Device join", params(("token" = String, Path, description = "Join token"), ("soft" = Option<String>, Query, description = "1 = always answer 200 with a first line STATUS=<code> (for HTTP clients that hide the status code)")), request_body = super::schemas::JoinRegistration, responses((status = 201, description = "KEY=value lines: TUNNEL_ID, INSTALL_ID, TUNNEL_NAME, REVERSE_PORT, GATEWAY_HOST, GATEWAY_PORT, GATEWAY_USER, SERVICE_KEY, HOST_KEY (one per gateway host key), WEB_URL, WS_URL", content_type = "text/plain", body = String), (status = 400, description = "ERROR=… (invalid input)", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (unknown or expired token)", content_type = "text/plain", body = String), (status = 409, description = "ERROR=… (token used, or key owned by someone else)", content_type = "text/plain", body = String)))]
+async fn register(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>, Query(q): SoftQuery, raw: Bytes) -> Response {
+    let soft = join::wants_soft(&q);
+    // 不看 Content-Type：uclient-fetch / BusyBox wget 送不了 header（`--post-data` 是 x-www-form-urlencoded）。
+    // The body is parsed as JSON whatever the Content-Type says: uclient-fetch / BusyBox wget cannot set headers.
+    let body: Value = if raw.iter().all(u8::is_ascii_whitespace) {
+        json!({})
+    } else {
+        match serde_json::from_slice(&raw) {
+            Ok(v) => v,
+            Err(_) => return device_error(StatusCode::BAD_REQUEST, "The registration body is not JSON.", soft),
+        }
+    };
     let t = match state.join.claim(&token) {
         Ok(t) => t,
-        Err(TakeError::Invalid) => return device_error(StatusCode::NOT_FOUND, "This join command is invalid or has expired. Create a new one in Telepy."),
-        Err(TakeError::Used) => return device_error(StatusCode::CONFLICT, "This join command was already used. Create a new one in Telepy."),
+        Err(TakeError::Invalid) => return device_error(StatusCode::NOT_FOUND, "This join command is invalid or has expired. Create a new one in Telepy.", soft),
+        Err(TakeError::Used) => return device_error(StatusCode::CONFLICT, "This join command was already used. Create a new one in Telepy.", soft),
     };
     match do_register(&state, &headers, &t, &body).await {
-        Ok(resp) => resp,
+        Ok(lines) => answer(StatusCode::CREATED, lines, soft),
         Err((status, msg)) => {
             state.join.release(&t.token_hash);
-            device_error(status, &msg)
+            device_error(status, &msg, soft)
         }
+    }
+}
+
+/// 註冊回應在路上丟了（路由器斷線、curl 被殺）：同一張票再拿一次設定。沒註冊的票回 409（不能跳過註冊）。
+/// The registration answer was lost: fetch the same configuration again with the same token.
+#[utoipa::path(get, path = "/api/join/{token}/config", tag = "Device join", params(("token" = String, Path, description = "Join token"), ("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "The same KEY=value lines the registration answered", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (unknown or expired token, or the tunnel was deleted)", content_type = "text/plain", body = String), (status = 409, description = "ERROR=… (not registered yet)", content_type = "text/plain", body = String)))]
+async fn device_config(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>, Query(q): SoftQuery) -> Response {
+    let soft = join::wants_soft(&q);
+    let Some(t) = state.join.by_token(&token) else {
+        return device_error(StatusCode::NOT_FOUND, "This join command is invalid or has expired.", soft);
+    };
+    let (Some(tunnel_id), Some(username)) = (t.tunnel_id, t.username.clone()) else {
+        return device_error(StatusCode::CONFLICT, "This join command has not registered a device yet.", soft);
+    };
+    let tunnel = match db::tunnels::by_id(&state.db, tunnel_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return device_error(StatusCode::NOT_FOUND, "The tunnel was deleted in Telepy.", soft),
+        Err(e) => {
+            let (s, m) = internal(e);
+            return device_error(s, &m, soft);
+        }
+    };
+    match config_lines(&state, &headers, &tunnel, &username, t.same_machine_as.as_ref()).await {
+        Ok(lines) => answer(StatusCode::OK, lines, soft),
+        Err((s, m)) => device_error(s, &m, soft),
     }
 }
 
@@ -176,8 +253,11 @@ fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, "Telepy could not register this machine; see the server logs.".into())
 }
 
-async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &Value) -> DeviceResult<Response> {
+async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &Value) -> DeviceResult<String> {
     let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    // 腳本偵測到的環境（shell、client、server、init、keepalive 模式）：白名單欄位，記在票與隧道上。
+    // What the script found on the device: allow-listed, kept on the ticket and the tunnel's install row.
+    let facts = join::parse_facts(body.get("facts"));
     let user = db::users::by_id(&state.db, t.user_id).await.map_err(internal)?.filter(|u| u.is_active).ok_or((StatusCode::FORBIDDEN, "The Telepy account that created this command is disabled.".to_string()))?;
 
     let key_line = json_str(body, "public_key").unwrap_or_default();
@@ -286,18 +366,16 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     state.device_keys.kick(tunnel.id);
     notify::tunnel_updated(state, &tunnel).await.map_err(internal)?;
 
-    // 裝置只授權這條隧道自己的服務金鑰。/ The device authorizes this tunnel's own service key only.
-    let service_key = crate::ssh::tunnel_keys::ensure(state, tunnel.id).await.map_err(internal)?;
-    let gateway_host = crate::api::scripts::server_domain(headers, state);
-    if gateway_host.is_empty() {
+    // 先確認 gateway 位址（沒有就別註冊）。/ The gateway host must be known before anything is recorded.
+    if crate::api::scripts::server_domain(headers, state).is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.".into()));
     }
-    let gateway_port = Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string();
 
-    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), ssh_port, hostname: hostname.clone(), os: os.clone(), same_machine_as: same_machine_as.clone() };
+    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), ssh_port, hostname: hostname.clone(), os: os.clone(), same_machine_as: same_machine_as.clone(), facts: facts.clone() };
     if let Some(updated) = state.join.registered(&t.token_hash, reg) {
         notify_owner(state, &updated);
     }
+    let found = facts.as_ref().map(join::facts_summary).filter(|s| !s.is_empty()).map(|s| format!("; found: {s}")).unwrap_or_default();
     state
         .gateway
         .event(
@@ -305,10 +383,24 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
             None,
             u16::try_from(tunnel.reverse_port).ok(),
             Some(tunnel.id),
-            format!("Device {} joined as '{}' with a one-command install by {} (login {username})", if hostname.is_empty() { "?" } else { &hostname }, tunnel.host_friendly_name, user.username),
+            format!("Device {} joined as '{}' with a one-command install by {} (login {username}{found})", if hostname.is_empty() { "?" } else { &hostname }, tunnel.host_friendly_name, user.username),
         )
         .await;
+    if let Some(f) = &facts {
+        let _ = db::device_install::record_join_facts(&state.db, tunnel.id, &f.to_string()).await;
+    }
+    config_lines(state, headers, &tunnel, &username, same_machine_as.as_ref()).await
+}
 
+/// 註冊的回答（`GET …/config` 再拿一次也是這些）：隧道、安裝代號、gateway、服務金鑰、host key、網址。
+/// The registration answer, also served again by `GET …/config`.
+async fn config_lines(state: &AppState, headers: &HeaderMap, tunnel: &db::tunnels::Tunnel, username: &str, same_machine_as: Option<&join::SameMachine>) -> DeviceResult<String> {
+    // 裝置只授權這條隧道自己的服務金鑰。/ The device authorizes this tunnel's own service key only.
+    let service_key = crate::ssh::tunnel_keys::ensure(state, tunnel.id).await.map_err(internal)?;
+    let gateway_host = crate::api::scripts::server_domain(headers, state);
+    if gateway_host.is_empty() {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.".into()));
+    }
     // 裝置上的名稱都用這個代號（不含使用者、伺服器或隧道名稱；重新加入沿用同一個）。
     // Everything on the device is named after this id (no user, server or tunnel name; a rejoin keeps it).
     let install_id = db::device_install::ensure(&state.db, tunnel.id).await.map_err(internal)?;
@@ -317,21 +409,22 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
         ("INSTALL_ID", install_id),
         ("TUNNEL_NAME", tunnel.host_friendly_name.clone()),
         ("REVERSE_PORT", tunnel.reverse_port.to_string()),
+        ("USERNAME", username.to_string()),
         ("GATEWAY_HOST", gateway_host),
-        ("GATEWAY_PORT", gateway_port),
+        ("GATEWAY_PORT", gateway_port(state)),
         ("GATEWAY_USER", state.config.gateway_user.clone()),
         ("SERVICE_KEY", service_key.trim().to_string()),
     ];
     for k in state.gateway.host_public_keys() {
         lines.push(("HOST_KEY", k));
     }
-    if let Some(same) = &same_machine_as {
+    if let Some(same) = same_machine_as {
         lines.push(("SAME_MACHINE_AS", same.name.clone()));
         lines.push(("SAME_MACHINE_ID", same.id.to_string()));
     }
     lines.push(("WEB_URL", format!("{}/tunnels", base_url(state, headers))));
     lines.push(("WS_URL", ws_url(&base_url(state, headers))));
-    Ok(text(StatusCode::CREATED, join::kv_lines(&lines)))
+    Ok(join::kv_lines(&lines))
 }
 
 /// 建新隧道：名稱撞到就加 `-2`…，反向 port 撞到（同時建立）就重選。/ Create with a free name and port.
@@ -408,15 +501,17 @@ async fn advance(state: &AppState, t: Ticket) -> Ticket {
     current
 }
 
-#[utoipa::path(get, path = "/api/join/{token}/status", tag = "Device join", params(("token" = String, Path, description = "Join token")), responses((status = 200, description = "KEY=value lines: PHASE (waiting | registered | connected | verified | failed), DETAIL, TUNNEL_ID", content_type = "text/plain", body = String), (status = 404, description = "ERROR=…", content_type = "text/plain", body = String)))]
-async fn device_status(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+#[utoipa::path(get, path = "/api/join/{token}/status", tag = "Device join", params(("token" = String, Path, description = "Join token"), ("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "KEY=value lines: PHASE (waiting | registered | connected | verified | failed), DETAIL, TUNNEL_ID", content_type = "text/plain", body = String), (status = 404, description = "ERROR=…", content_type = "text/plain", body = String)))]
+async fn device_status(State(state): State<AppState>, Path(token): Path<String>, Query(q): SoftQuery) -> Response {
+    let soft = join::wants_soft(&q);
     let Some(t) = state.join.by_token(&token) else {
-        return device_error(StatusCode::NOT_FOUND, "This join command is invalid or has expired.");
+        return device_error(StatusCode::NOT_FOUND, "This join command is invalid or has expired.", soft);
     };
     let t = advance(&state, t).await;
     let phase = serde_json::to_value(t.phase).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-    text(
+    answer(
         StatusCode::OK,
         join::kv_lines(&[("PHASE", phase), ("DETAIL", t.detail.clone().unwrap_or_default()), ("TUNNEL_ID", t.tunnel_id.map(|i| i.to_string()).unwrap_or_default())]),
+        soft,
     )
 }
