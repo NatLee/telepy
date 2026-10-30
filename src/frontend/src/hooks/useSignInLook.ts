@@ -7,7 +7,7 @@
  * empty frame, so the static HTML and the first frame are the same for both looks and never flash the product copy.
  */
 import { useSyncExternalStore } from "react";
-import { DEFAULT_LOOK, parseSignInLook, type SignInLook } from "@/lib/signinLook";
+import { DEFAULT_LOOK, effectiveGoogleClientId, parseSignInLook, type SignInLook } from "@/lib/signinLook";
 
 const STORAGE_KEY = "telepy.signinLook";
 const listeners = new Set<() => void>();
@@ -31,7 +31,8 @@ function publish(next: SignInLook) {
         current.oauthStyle === next.oauthStyle &&
         current.cliStyle === next.cliStyle &&
         current.consentStyle === next.consentStyle &&
-        current.message === next.message;
+        current.message === next.message &&
+        current.googleClientId === next.googleClientId;
     current = next;
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -71,7 +72,8 @@ function subscribe(listener: () => void) {
 
 /** 網站設定存好後更新這個瀏覽器的快取（登出時馬上是新的樣子）。/ Refresh this browser's cache after a save. */
 export function rememberSignInLook(look: SignInLook) {
-    publish(look);
+    // 網站設定頁組出來的樣子沒有 Google client ID：沿用已知的。/ The settings page's look has no client ID: keep the known one.
+    publish({ ...look, googleClientId: look.googleClientId ?? current?.googleClientId ?? null });
 }
 
 function snapshot(): SignInLook | null {
@@ -81,4 +83,12 @@ function snapshot(): SignInLook | null {
 
 export function useSignInLook(): SignInLook | null {
     return useSyncExternalStore(subscribe, snapshot, () => null);
+}
+
+/**
+ * 登入按鈕的 Google client ID（從同一支公開端點、同一份快取）；還不知道 = undefined。
+ * The Google client ID for the sign-in buttons, from the same endpoint and cache; undefined until known.
+ */
+export function useGoogleClientId(): string | undefined {
+    return effectiveGoogleClientId(useSignInLook(), process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
 }

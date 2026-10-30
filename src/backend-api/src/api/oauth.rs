@@ -52,7 +52,7 @@ fn oauth_error(status: StatusCode, error: &str, description: impl Into<String>) 
 }
 
 fn issuer(state: &AppState, headers: &HeaderMap) -> String {
-    oauth::issuer(state.config.public_url.as_deref(), headers)
+    oauth::issuer(state.config.public_base().as_deref(), headers)
 }
 
 // ---------------------------------------------------------------- discovery

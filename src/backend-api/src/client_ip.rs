@@ -18,6 +18,7 @@ use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::{header, request::Parts, HeaderMap};
 
 use crate::config::Config;
+use crate::server_settings::{is_cloudflare, Cloudflare};
 use crate::state::AppState;
 
 const USER_AGENT_MAX: usize = 512;
@@ -61,14 +62,34 @@ impl Hops {
 }
 
 /// 純函式：解析來源 IP。`peer` = socket 對端（測試或沒有 ConnectInfo 時是 None）。
-/// 固定層數時，鏈比層數還短就取最左邊（只經過可信代理，或根本沒有代理）。
+/// 固定層數時，鏈比層數還短就取最左邊（只經過可信代理，或根本沒有代理）。不看 `CF-Connecting-IP`（見 [`resolve_with`]）。
 /// Resolve the client address; with a fixed count and fewer entries than that, the leftmost one is used.
+/// Ignores `CF-Connecting-IP` (see [`resolve_with`]).
 pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>) -> Option<IpAddr> {
-    if let Some(name) = header_override {
-        let ip = headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip);
-        if ip.is_some() {
-            return ip;
-        }
+    resolve_with(headers, peer, trusted_hops, header_override, Cloudflare::Off)
+}
+
+/// 標頭第一個逗號前的位址。/ The address before a header's first comma.
+fn first_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
+    headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip)
+}
+
+/// [`resolve`] 加上 Cloudflare：指定的標頭優先；`always` = 有 `CF-Connecting-IP` 就用；`auto` = 鏈上被選中的那段是
+/// Cloudflare 的位址時才用它（沒有從 Cloudflare 連進來就偽造不了）；`off` = 不看。
+/// [`resolve`] plus Cloudflare: the configured header first; `always` = `CF-Connecting-IP` whenever it parses; `auto` =
+/// only when the chain's chosen hop is a Cloudflare address (unspoofable without connecting from Cloudflare); `off` = ignored.
+pub fn resolve_with(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>, cloudflare: Cloudflare) -> Option<IpAddr> {
+    resolve_traced(headers, peer, trusted_hops, header_override, cloudflare).0
+}
+
+/// 同 [`resolve_with`]，另外說位址從哪來：`header` / `cloudflare` / `chain`。/ Also says where it came from.
+fn resolve_traced(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>, cloudflare: Cloudflare) -> (Option<IpAddr>, Option<&'static str>) {
+    if let Some(ip) = header_override.and_then(|name| first_ip(headers, name)) {
+        return (Some(ip), Some("header"));
+    }
+    let cf = first_ip(headers, CF_HEADER);
+    if let (Cloudflare::Always, Some(ip)) = (cloudflare, cf) {
+        return (Some(ip), Some("cloudflare"));
     }
     let mut chain: Vec<IpAddr> = headers
         .get_all("x-forwarded-for")
@@ -78,8 +99,16 @@ pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, he
         .filter_map(parse_ip)
         .collect();
     chain.extend(peer.map(|p| p.to_canonical()));
-    chain.get(chosen_index(&chain, trusted_hops)?).copied()
+    let chosen = chosen_index(&chain, trusted_hops).and_then(|i| chain.get(i).copied());
+    match (cloudflare, chosen, cf) {
+        (Cloudflare::Auto, Some(hop), Some(ip)) if is_cloudflare(hop) => (Some(ip), Some("cloudflare")),
+        (_, Some(hop), _) => (Some(hop), Some("chain")),
+        _ => (None, None),
+    }
 }
+
+/// Cloudflare 放訪客位址的標頭。/ The header Cloudflare puts the visitor's address in.
+pub const CF_HEADER: &str = "cf-connecting-ip";
 
 /// `1.2.3.4`、`1.2.3.4:80`、`[::1]:80`、`"::1"`；IPv4-mapped 轉回 IPv4。/ Accepts bare IPs and ip:port forms.
 fn parse_ip(s: &str) -> Option<IpAddr> {
@@ -156,6 +185,23 @@ pub struct Diagnosis {
     pub header_absent: bool,
     /// 這個請求實際被當成代理跳過的段數（自動模式下才有意思）。/ Entries skipped as proxies on this request.
     pub skipped_hops: usize,
+    /// Cloudflare 那一段怎麼判斷。/ How Cloudflare was judged.
+    pub cloudflare: CloudflareSeen,
+    /// 額外的提示碼（`cloudflare_masked`）。/ Extra hint codes (`cloudflare_masked`).
+    pub hints: Vec<&'static str>,
+}
+
+/// 診斷用：`CF-Connecting-IP` 與 Cloudflare 的邊緣節點。/ `CF-Connecting-IP` and Cloudflare's edge, for the diagnostic.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CloudflareSeen {
+    /// auto / always / off
+    pub mode: &'static str,
+    /// `CF-Connecting-IP` 的原文（沒有 = None）。/ The header as sent, if any.
+    pub header: Option<String>,
+    /// 鏈上有 Cloudflare 的位址。/ A Cloudflare address is on the chain.
+    pub edge_seen: bool,
+    /// 位址取自 `CF-Connecting-IP`。/ The address was taken from `CF-Connecting-IP`.
+    pub used: bool,
 }
 
 fn is_public(ip: IpAddr) -> bool {
@@ -165,6 +211,11 @@ fn is_public(ip: IpAddr) -> bool {
 /// 純函式：把 [`resolve`] 的每一步攤開，並判斷問題出在哪、該怎麼設。
 /// Spell out every step of [`resolve`] and say what is wrong and what to set.
 pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>) -> Diagnosis {
+    diagnose_with(headers, peer, trusted_hops, header_override, Cloudflare::Off)
+}
+
+/// [`diagnose`] 加上 Cloudflare 的用法（跟 [`resolve_with`] 同一個規則）。/ [`diagnose`] with the Cloudflare mode.
+pub fn diagnose_with(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>, cloudflare: Cloudflare) -> Diagnosis {
     let scope_of = |ip: IpAddr| crate::geoip::scope(ip).as_str();
     let mut raw: Vec<(IpAddr, &'static str)> = headers
         .get_all("x-forwarded-for")
@@ -203,20 +254,26 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, h
         seen.push(HeaderSeen { name: name.to_ascii_lowercase(), value: value.chars().take(200).collect(), addresses });
     }
 
-    let resolved = resolve(headers, peer, trusted_hops, header_override);
-    // resolve 的同一個規則：設定的標頭有讀得出的位址就用它。/ Same rule as `resolve`.
-    let from_header = header_override.is_some_and(|h| headers.get(h).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip).is_some());
+    let (resolved, source) = resolve_traced(headers, peer, trusted_hops, header_override, cloudflare);
+    let from_header = source == Some("header");
+    let cf_used = source == Some("cloudflare");
+    // 以下的判斷把 Cloudflare 標頭當成「指定的標頭」一樣看。/ Below, the Cloudflare header counts like a configured one.
+    let via_header = from_header || cf_used;
     let header_absent = header_override.is_some() && !from_header;
+    let cf_raw: Option<String> = headers.get(CF_HEADER).and_then(|v| v.to_str().ok()).map(|v| v.chars().take(200).collect());
+    let edge_seen = raw.iter().any(|(ip, _)| is_cloudflare(*ip));
+    let mut hints = Vec::new();
+    // 有 CF-Connecting-IP 卻看不到 Cloudflare 的位址：前面還有一層代理把它換掉了（例如 Docker 裡的 NPM）。
+    // The header is there but no Cloudflare address is: a proxy in front replaced it (NPM in Docker, say).
+    if cloudflare == Cloudflare::Auto && cf_raw.is_some() && !edge_seen && !from_header {
+        hints.push("cloudflare_masked");
+    }
     let short_chain = trusted_hops.fixed().is_some_and(|n| !raw.is_empty() && raw.len() <= n);
     let skipped_hops = match idx {
         Some(c) => raw.len() - 1 - c,
         None => 0,
     };
-    let from = match (resolved, from_header) {
-        (None, _) => None,
-        (Some(_), true) => Some("header"),
-        (Some(_), false) => Some("chain"),
-    };
+    let from = source;
 
     let (mut verdict, mut suggest_hops, mut suggest_header) = ("unknown", None, None);
     match resolved {
@@ -224,7 +281,7 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, h
         // 被當成訪客了。自己的瀏覽器不會塞 X-Forwarded-For，所以這裡不是偽造。固定層數時左邊的公網位址才是訪客能塞的。
         // Auto takes the rightmost public address; another public one left of it = a proxy with a public IP (a VPS
         // nginx, say) taken for the visitor. The admin's own browser sends no X-Forwarded-For, so this is not a spoof.
-        Some(ip) if is_public(ip) && !from_header && trusted_hops == Hops::Auto && idx.is_some_and(|c| (0..c).any(|i| is_public(raw[i].0))) => {
+        Some(ip) if is_public(ip) && !via_header && trusted_hops == Hops::Auto && idx.is_some_and(|c| (0..c).any(|i| is_public(raw[i].0))) => {
             let c = idx.unwrap_or(0);
             let i = (0..c).rev().find(|&i| is_public(raw[i].0)).unwrap_or(0);
             verdict = "hops_too_low";
@@ -232,7 +289,7 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, h
         }
         Some(ip) if is_public(ip) => verdict = "ok",
         // 指定的標頭本身就是內部位址：那個標頭不對（或上游沒設好）。/ The configured header itself is internal.
-        Some(_) if from_header => verdict = "header_private",
+        Some(_) if via_header => verdict = "header_private",
         Some(_) => {
             let c = idx.unwrap_or(0);
             let left = (0..c).rev().find(|&i| is_public(raw[i].0));
@@ -265,6 +322,8 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, h
         short_chain,
         header_absent,
         skipped_hops,
+        cloudflare: CloudflareSeen { mode: cloudflare.as_str(), header: cf_raw, edge_seen, used: cf_used },
+        hints,
     }
 }
 
@@ -282,7 +341,9 @@ impl ClientMeta {
     }
 
     pub fn from_headers(headers: &HeaderMap, peer: Option<IpAddr>, config: &Config) -> Self {
-        let ip = resolve(headers, peer, config.trusted_proxy_hops, config.client_ip_header.as_deref()).map(|ip| ip.to_string());
+        // 用的當下讀生效的設定（環境變數 → 網站設定 → 預設）。/ The settings in effect, read now.
+        let header = config.client_ip_header_name();
+        let ip = resolve_with(headers, peer, config.client_ip_hops(), header.as_deref(), config.client_ip_cloudflare()).map(|ip| ip.to_string());
         let user_agent = headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
@@ -456,6 +517,38 @@ mod tests {
         assert_eq!(Hops::parse(Some("two")), Hops::Auto);
         assert_eq!((Hops::Auto.setting(), Hops::Fixed(2).setting()), ("auto".to_string(), "2".to_string()));
         assert_eq!((Hops::Auto.fixed(), Hops::Fixed(3).fixed()), (None, Some(3)));
+    }
+
+    #[test]
+    fn cloudflare_header_only_from_a_cloudflare_hop() {
+        const EDGE: &str = "104.16.1.1";
+        let mut m = h(&["198.51.100.7, 104.16.1.1"]);
+        m.insert("cf-connecting-ip", "203.0.113.50".parse().unwrap());
+        // auto：被選中的是 Cloudflare 的位址 → 用標頭。/ The chosen hop is Cloudflare's → the header.
+        assert_eq!(resolve_with(&m, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Auto), ip("203.0.113.50"));
+        assert_eq!(resolve_with(&m, ip(TRAEFIK), Hops::Fixed(1), None, Cloudflare::Auto), ip("203.0.113.50"));
+        assert_eq!(resolve_with(&m, ip(TRAEFIK), Hops::Fixed(1), None, Cloudflare::Off), ip(EDGE));
+        // 被選中的不是 Cloudflare：auto 不採用（任何人都能塞這個標頭）。/ Not Cloudflare → auto ignores it.
+        let mut m2 = h(&["198.51.100.7"]);
+        m2.insert("cf-connecting-ip", "203.0.113.50".parse().unwrap());
+        assert_eq!(resolve_with(&m2, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Auto), ip("198.51.100.7"));
+        assert_eq!(resolve_with(&m2, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Always), ip("203.0.113.50"));
+        // 指定的標頭還是最優先。/ The configured header still wins.
+        m2.insert("x-real-ip", "198.51.100.99".parse().unwrap());
+        assert_eq!(resolve_with(&m2, ip(TRAEFIK), Hops::Auto, Some("X-Real-IP"), Cloudflare::Always), ip("198.51.100.99"));
+
+        let r = diagnose_with(&m, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Auto);
+        assert_eq!((r.ip.as_deref(), r.from, r.verdict), (Some("203.0.113.50"), Some("cloudflare"), "ok"));
+        assert_eq!((r.cloudflare.edge_seen, r.cloudflare.used, r.cloudflare.header.as_deref()), (true, true, Some("203.0.113.50")));
+        assert!(r.hints.is_empty());
+        // 前面的代理把 Cloudflare 的位址換掉了。/ A proxy in front replaced Cloudflare's address.
+        let mut m3 = h(&["172.19.0.1"]);
+        m3.insert("cf-connecting-ip", "203.0.113.50".parse().unwrap());
+        let r = diagnose_with(&m3, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Auto);
+        assert_eq!((r.cloudflare.edge_seen, r.cloudflare.used, r.hints.clone()), (false, false, vec!["cloudflare_masked"]));
+        assert_eq!(r.verdict, "use_header");
+        let r = diagnose_with(&m3, ip(TRAEFIK), Hops::Auto, None, Cloudflare::Off);
+        assert!(r.hints.is_empty());
     }
 
     #[test]

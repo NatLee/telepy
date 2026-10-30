@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{fmt, layer::SubscriberExt, reload, util::SubscriberInitExt, EnvFilter, Layer};
 
 use telepy_server::auth::password::make_password;
 use telepy_server::config::Config;
@@ -57,29 +57,34 @@ enum Command {
 }
 
 fn init_logging(config: &Config) -> Vec<tracing_appender::non_blocking::WorkerGuard> {
-    // LOG_LEVEL 可以是單一等級或完整的 EnvFilter 指令；單一 `debug` 時把 sqlx/hyper/russh 的內部 debug 壓掉
-    // （否則每個 SQL 都會印一行，DEBUG=true 跑幾小時就是幾 MB）。
-    // A bare `debug` keeps our own modules verbose but silences sqlx/hyper/russh internals.
-    let directive = match config.log_level.to_ascii_lowercase().as_str() {
-        "debug" => "debug,sqlx=warn,hyper=info,hyper_util=info,h2=info,russh=info,tokio_tungstenite=info,tungstenite=info".to_string(),
-        "trace" => "trace,sqlx=info,hyper=info,hyper_util=info,h2=info".to_string(),
-        other => other.to_string(),
-    };
+    // 啟動時還沒讀資料庫，先用環境變數（或預設）；網站設定的 log 等級在 serve 讀完設定後經 reload handle 套上，
+    // 存檔時也一樣（`server_settings::apply_log_level`）。
+    // The database isn't read yet: start from the variable (or the default); the site setting's level is applied
+    // through the reload handles once serve has read the settings, and again on every save.
+    let directive = telepy_server::server_settings::log_directive(&config.log_level_effective());
     let filter = move || EnvFilter::try_new(&directive).unwrap_or_else(|_| EnvFilter::new("info"));
     let mut guards = Vec::new();
-    let stdout = fmt::layer().with_target(true).with_filter(filter());
+    let (stdout_filter, stdout_handle) = reload::Layer::new(filter());
+    let stdout = fmt::layer().with_target(true).with_filter(stdout_filter);
     let registry = tracing_subscriber::registry().with(stdout);
     if std::fs::create_dir_all(&config.log_root).is_ok() {
         let (all, g1) = tracing_appender::non_blocking(tracing_appender::rolling::daily(&config.log_root, "telepy.log"));
         let (err, g2) = tracing_appender::non_blocking(tracing_appender::rolling::daily(&config.log_root, "error.log"));
         guards.push(g1);
         guards.push(g2);
+        let (file_filter, file_handle) = reload::Layer::new(filter());
         registry
-            .with(fmt::layer().with_ansi(false).with_writer(all).with_filter(filter()))
+            .with(fmt::layer().with_ansi(false).with_writer(all).with_filter(file_filter))
             .with(fmt::layer().with_ansi(false).with_writer(err).with_filter(EnvFilter::new("warn")))
             .init();
+        telepy_server::server_settings::set_log_reloader(move |d| {
+            let f = || EnvFilter::try_new(d).map_err(|e| e.to_string());
+            stdout_handle.reload(f()?).map_err(|e| e.to_string())?;
+            file_handle.reload(f()?).map_err(|e| e.to_string())
+        });
     } else {
         registry.init();
+        telepy_server::server_settings::set_log_reloader(move |d| stdout_handle.reload(EnvFilter::try_new(d).map_err(|e| e.to_string())?).map_err(|e| e.to_string()));
     }
     guards
 }
@@ -113,6 +118,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     }
     tracing::info!(db = ?config.db_path, bind = %config.bind, debug = config.debug, "starting telepy-server");
     let db = open_db(&config).await?;
+    // 網站設定裡的伺服器設定（環境變數有設的照樣優先）；log 等級在這裡換成生效的那個。
+    // The saved server settings (set variables still win); the log level switches to the one in effect here.
+    config.reload_saved(&db).await?;
     seed_service_key(&db, &config.web_service_pubkey_path).await?;
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
@@ -145,8 +153,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     }
     tokio::spawn(telepy_server::oauth::run_cleanup(state.db.clone()));
     tokio::spawn(telepy_server::db::retention::run(state.db.clone()));
-    // 裝置自己的位址（hostname / 內網 / 公網 IP），每次連上問一次。/ Ask each device for its addresses once per connection.
-    if config.gateway_enabled && config.device_probe {
+    // 裝置自己的位址（hostname / 內網 / 公網 IP），每次連上問一次；開關每一輪讀。
+    // Ask each device for its addresses once per connection; the switch is read every round.
+    if config.gateway_enabled {
         tokio::spawn(telepy_server::device_info::run(state.clone()));
     }
     // 終端機錄影：收重啟前沒收尾的、每小時清過期的。/ Terminal recordings: close leftovers, purge hourly.

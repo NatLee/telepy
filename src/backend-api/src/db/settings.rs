@@ -54,6 +54,20 @@ pub struct SiteSettings {
     pub signin_cli_style: String,
     /// 授權（同意）頁與 `telepy login` 的完成頁：standard | discreet。/ The approval page and the CLI's done page.
     pub signin_consent_style: String,
+    // --- 伺服器設定（環境變數有設時以環境變數為準，見 `server_settings`）/ Server settings (a set env var wins) ---
+    /// `auto` 或 0–10（TRUSTED_PROXY_HOPS）。/ `auto` or 0–10.
+    pub client_ip_hops: String,
+    /// 指定的來源 IP 標頭（CLIENT_IP_HEADER），空白 = 不用。/ Trusted client-IP header; blank = none.
+    pub client_ip_header: String,
+    /// `auto` / `always` / `off`：怎麼看 Cloudflare 的 `CF-Connecting-IP`。/ How `CF-Connecting-IP` is used.
+    pub client_ip_cloudflare: String,
+    pub server_device_probe: bool,
+    pub server_keep_shared_service_key: bool,
+    pub server_gateway_proxy_protocol_from: String,
+    pub server_log_level: String,
+    pub server_openapi_enabled: bool,
+    pub server_google_client_id: String,
+    pub server_public_url: String,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -95,6 +109,16 @@ pub const FIELDS: &[&str] = &[
     "signin_cli_style",
     "signin_consent_style",
     "signin_page_message",
+    "client_ip_hops",
+    "client_ip_header",
+    "client_ip_cloudflare",
+    "server_device_probe",
+    "server_keep_shared_service_key",
+    "server_gateway_proxy_protocol_from",
+    "server_log_level",
+    "server_openapi_enabled",
+    "server_google_client_id",
+    "server_public_url",
 ];
 
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
@@ -102,7 +126,9 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
     ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
     desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_file_transfer, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime, terminal_detach_max_secs, \
-    signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style";
+    signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
+    client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \
+    server_gateway_proxy_protocol_from, server_log_level, server_openapi_enabled, server_google_client_id, server_public_url";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

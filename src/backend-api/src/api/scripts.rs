@@ -95,7 +95,7 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
     // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
     let via_web = super::join::parse_transport(transport)? == "websocket";
-    let base = crate::oauth::issuer(state.config.public_url.as_deref(), headers);
+    let base = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
     let ws_url = super::join::ws_url(&base);
     let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
     let mut text = String::from(SERVER_STEM);
@@ -273,7 +273,7 @@ fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) 
     if super::join::parse_transport(transport)? != "websocket" {
         return Ok(None);
     }
-    let base = crate::oauth::issuer(state.config.public_url.as_deref(), headers);
+    let base = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
     Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"))))
 }
 

@@ -169,14 +169,18 @@ pub async fn run(config: &Config) -> Vec<Check> {
 /// `Err` = why it could not be opened.
 pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     let mut out = Vec::new();
+    // 網站設定裡的伺服器設定（環境變數有設的照樣優先），報告的是生效的值。/ Report the values in effect.
+    if let Ok(db) = &db {
+        let _ = config.live.load(db).await;
+    }
 
     out.push(if config.secret_key_is_default {
         check("secret_key", "SECRET_KEY", Status::Warn, "not set: the legacy default signs every login token. Set a long random SECRET_KEY in .env (existing sessions and TOTP secrets will need to be renewed).")
     } else {
         check("secret_key", "SECRET_KEY", Status::Ok, "set")
     });
-    out.push(match &config.public_url {
-        Some(u) => check("public_url", "PUBLIC_URL", Status::Ok, u.clone()),
+    out.push(match config.public_base() {
+        Some(u) => check("public_url", "PUBLIC_URL", Status::Ok, format!("{u} ({})", source_label(config, "server_public_url"))),
         None => check("public_url", "PUBLIC_URL", Status::Info, "not set: links and the OAuth issuer come from the request's X-Forwarded-* headers"),
     });
     out.push(if config.internal_api_token.is_empty() {
@@ -264,8 +268,8 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
             }
         }
     });
-    if config.keep_shared_service_key {
-        out.push(check("shared_key", "shared key", Status::Info, "KEEP_SHARED_SERVICE_KEY: kept on devices after tunnels move to their own keys"));
+    if config.keep_shared_key() {
+        out.push(check("shared_key", "shared key", Status::Info, format!("kept on devices after tunnels move to their own keys ({})", source_label(config, "server_keep_shared_service_key"))));
     }
 
     // gateway host keys。/ Gateway host keys.
@@ -319,7 +323,16 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
             .fetch_all(&db.read)
             .await
             .unwrap_or_default();
-        let (status, detail, key) = client_addresses(&ips, config.trusted_proxy_hops, config.client_ip_header.as_deref());
+        let header = config.client_ip_header_name();
+        let mut setting = format!("client_ip_hops={} ({})", config.client_ip_hops().setting(), source_label(config, "client_ip_hops"));
+        if let Some(h) = &header {
+            setting = format!("client_ip_header={h} ({}), {setting}", source_label(config, "client_ip_header"));
+        }
+        let cf = config.client_ip_cloudflare();
+        if cf != crate::server_settings::Cloudflare::Auto {
+            setting.push_str(&format!(", client_ip_cloudflare={}", cf.as_str()));
+        }
+        let (status, detail, key) = client_addresses(&ips, config.client_ip_hops(), header.as_deref(), &setting);
         out.push(check("client_addresses", "client addresses", status, detail).fp(&[&key]));
     }
 
@@ -381,28 +394,42 @@ fn audit_problem(t: &db::audit_chain::TableReport) -> String {
 /// 純函式：最近登入的來源 IP 有幾個是公網位址。第三個值 = 指紋用（設定 + 排序後的內部位址，不含會變的筆數）。
 /// How many recent sign-in addresses are public. The third value feeds the fingerprint: the setting plus the
 /// sorted internal addresses, never the counts (they change with every sign-in).
-fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option<&str>) -> (Status, String, String) {
+/// 一個設定由誰決定，給人看的：環境變數名稱 / `site setting` / `default`。/ Who decides a value, for people.
+fn source_label(config: &Config, key: &str) -> String {
+    use crate::server_settings::Source;
+    match config.effective(key).1 {
+        Source::Env => crate::server_settings::env_var(key).unwrap_or("env").to_string(),
+        Source::Setting => "site setting".into(),
+        Source::Default => "default".into(),
+    }
+}
+
+/// `described` = 給人看的設定（含來源）；指紋鍵只看生效的值，寫法跟以前一樣，確認過的結果才不會因為改成在網站設定裡設就失效。
+/// `described` = the settings for people (with their source); the fingerprint key holds only the values in effect,
+/// written as before, so an acknowledgement survives moving a value from .env to the site setting.
+fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option<&str>, described: &str) -> (Status, String, String) {
     let hops = hops.setting();
-    let setting = match header {
+    let key_setting = match header {
         Some(h) => format!("CLIENT_IP_HEADER={h}, TRUSTED_PROXY_HOPS={hops}"),
         None => format!("TRUSTED_PROXY_HOPS={hops}"),
     };
+    let setting = described.to_string();
     let parsed: Vec<std::net::IpAddr> = ips.iter().filter_map(|ip| ip.parse().ok()).collect();
     if parsed.is_empty() {
-        return (Status::Info, format!("no sign-ins with an address in the last 30 days ({setting})"), setting);
+        return (Status::Info, format!("no sign-ins with an address in the last 30 days ({setting})"), key_setting);
     }
     // 全是本機（loopback）= 在伺服器上自己登入／本機開發，看不出位址路徑。/ All loopback = signing in on the server itself, so the address path can't be judged.
     if parsed.iter().all(|ip| crate::geoip::scope(*ip) == crate::geoip::Scope::Loopback) {
-        return (Status::Info, format!("the last {} sign-ins were all from this machine (loopback), so the address path can't be judged from them ({setting}). If people sign in from elsewhere too, a proxy on this machine is replacing their address: check \"How Telepy sees your address\" from another computer", parsed.len()), setting);
+        return (Status::Info, format!("the last {} sign-ins were all from this machine (loopback), so the address path can't be judged from them ({setting}). If people sign in from elsewhere too, a proxy on this machine is replacing their address: check \"How Telepy sees your address\" from another computer", parsed.len()), key_setting);
     }
     let internal: Vec<&std::net::IpAddr> = parsed.iter().filter(|ip| crate::geoip::scope(**ip) != crate::geoip::Scope::Public).collect();
     if internal.len() < parsed.len() {
-        return (Status::Ok, format!("{} of the last {} sign-ins came from public addresses ({setting})", parsed.len() - internal.len(), parsed.len()), setting);
+        return (Status::Ok, format!("{} of the last {} sign-ins came from public addresses ({setting})", parsed.len() - internal.len(), parsed.len()), key_setting);
     }
     let mut distinct: Vec<String> = internal.iter().map(|ip| ip.to_string()).collect();
     distinct.sort();
     distinct.dedup();
-    let key = format!("{setting}|{}", distinct.join(","));
+    let key = format!("{key_setting}|{}", distinct.join(","));
     (
         Status::Warn,
         format!(
@@ -445,23 +472,25 @@ mod tests {
     fn client_addresses_warn_when_every_sign_in_is_internal() {
         use crate::client_ip::Hops;
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(client_addresses(&v(&[]), Hops::Fixed(2), None).0, Status::Info);
+        let ca = |ips: &[String], h: Hops, hd: Option<&str>| client_addresses(ips, h, hd, &format!("client_ip_hops={} (TRUSTED_PROXY_HOPS)", h.setting()));
+        assert_eq!(ca(&v(&[]), Hops::Fixed(2), None).0, Status::Info);
         // 指紋鍵不含筆數：多一筆同樣的內部位址不變，換一個位址就變。/ The key ignores counts but not the addresses.
-        let k = |a: &[&str]| client_addresses(&v(a), Hops::Fixed(2), None).2;
+        let k = |a: &[&str]| ca(&v(a), Hops::Fixed(2), None).2;
         assert_eq!(k(&["172.19.0.1"]), k(&["172.19.0.1", "172.19.0.1"]));
         assert_ne!(k(&["172.19.0.1"]), k(&["172.19.0.1", "10.0.0.2"]));
-        assert_ne!(k(&["172.19.0.1"]), client_addresses(&v(&["172.19.0.1"]), Hops::Fixed(1), None).2);
-        assert_eq!(client_addresses(&v(&["172.19.0.1", "198.51.100.7"]), Hops::Fixed(2), None).0, Status::Ok);
-        let (s, d, _) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), Hops::Fixed(2), None);
+        assert_ne!(k(&["172.19.0.1"]), ca(&v(&["172.19.0.1"]), Hops::Fixed(1), None).2);
+        assert_eq!(ca(&v(&["172.19.0.1", "198.51.100.7"]), Hops::Fixed(2), None).0, Status::Ok);
+        let (s, d, _) = ca(&v(&["172.19.0.1", "172.19.0.1"]), Hops::Fixed(2), None);
         assert_eq!(s, Status::Warn);
-        assert!(d.contains("172.19.0.1;") && d.contains("TRUSTED_PROXY_HOPS=2") && d.contains("Server health"), "{d}");
-        let (s, d, _) = client_addresses(&v(&["127.0.0.1", "::1"]), Hops::Auto, None);
+        assert!(d.contains("172.19.0.1;") && d.contains("client_ip_hops=2 (TRUSTED_PROXY_HOPS)") && d.contains("Server health"), "{d}");
+        let (s, d, _) = ca(&v(&["127.0.0.1", "::1"]), Hops::Auto, None);
         assert_eq!(s, Status::Info);
         assert!(d.contains("loopback"), "{d}");
-        assert_eq!(client_addresses(&v(&["127.0.0.1", "192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
-        assert_eq!(client_addresses(&v(&["192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
-        let (_, d, _) = client_addresses(&v(&["10.0.0.9"]), Hops::Auto, Some("CF-Connecting-IP"));
-        assert!(d.contains("CLIENT_IP_HEADER=CF-Connecting-IP, TRUSTED_PROXY_HOPS=auto"), "{d}");
+        assert_eq!(ca(&v(&["127.0.0.1", "192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
+        assert_eq!(ca(&v(&["192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
+        // 指紋鍵的寫法跟以前一樣（不管值來自 .env 還是網站設定）。/ The key is written as before, wherever the value comes from.
+        let (_, _, key) = ca(&v(&["10.0.0.9"]), Hops::Auto, Some("CF-Connecting-IP"));
+        assert!(key.starts_with("CLIENT_IP_HEADER=CF-Connecting-IP, TRUSTED_PROXY_HOPS=auto|"), "{key}");
     }
 
     #[test]

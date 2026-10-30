@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, PREVIEW_MIN_HEIGHT, allStandard, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, previewHeight, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, PREVIEW_MIN_HEIGHT, allStandard, effectiveGoogleClientId, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, previewHeight, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
     assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", consent_style: "discreet", message: "Hi" }), {
@@ -9,6 +9,7 @@ test("the public endpoint and the cache both parse", () => {
         cliStyle: "discreet",
         consentStyle: "discreet",
         message: "Hi",
+        googleClientId: null,
     });
     assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", consentStyle: "standard", message: "" }), {
         style: "standard",
@@ -16,6 +17,7 @@ test("the public endpoint and the cache both parse", () => {
         cliStyle: "standard",
         consentStyle: "standard",
         message: "",
+        googleClientId: null,
     });
     // 舊後端 / 舊快取沒有授權頁那個：一般（以前就是這樣）。/ No approval-page look = standard, as before.
     assert.equal(parseSignInLook({ style: "discreet", oauth_style: "discreet", cli_style: "discreet" })?.consentStyle, "standard");
@@ -126,4 +128,22 @@ test("preview screens fit the tallest page, never below the minimum, in steps of
     assert.equal(previewHeight(1060), 1060);
     assert.equal(previewHeight(1153.4), 1160);
     for (const h of [801, 999, 1052, 1153, 2047]) assert.ok(previewHeight(h) >= h && previewHeight(h) - h < 20);
+});
+
+test("the Google client ID comes from the server, with the build-time one for older backends", () => {
+    const base = { style: "standard", oauth_style: "standard" };
+    assert.equal(parseSignInLook({ ...base, google_client_id: " 123.apps.googleusercontent.com " })!.googleClientId, "123.apps.googleusercontent.com");
+    assert.equal(parseSignInLook({ ...base, google_client_id: "" })!.googleClientId, "");
+    assert.equal(parseSignInLook(base)!.googleClientId, null, "an older backend does not say");
+    assert.equal(parseSignInLook({ ...base, google_client_id: 42 })!.googleClientId, null);
+    // 快取用 camelCase，讀回來一樣。/ The cache round-trips through camelCase.
+    const cached = parseSignInLook(JSON.parse(JSON.stringify(parseSignInLook({ ...base, google_client_id: "abc" }))))!;
+    assert.equal(cached.googleClientId, "abc");
+
+    const look = (googleClientId: string | null) => ({ ...DEFAULT_LOOK, googleClientId });
+    assert.equal(effectiveGoogleClientId(look("server-id"), "build-id"), "server-id", "the server wins");
+    assert.equal(effectiveGoogleClientId(look(""), "build-id"), undefined, "empty = no Google button, even with a build-time id");
+    assert.equal(effectiveGoogleClientId(look(null), "build-id"), "build-id", "older backend: the build-time id");
+    assert.equal(effectiveGoogleClientId(look(null), undefined), undefined);
+    assert.equal(effectiveGoogleClientId(null, "build-id"), undefined, "not known yet = no button yet");
 });

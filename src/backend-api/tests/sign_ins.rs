@@ -176,7 +176,7 @@ async fn client_ip_check_explains_the_chain() {
     assert_eq!((r.json["ip"].as_str(), r.json["verdict"].as_str(), r.json["suggest"]["trusted_proxy_hops"].as_i64()), (Some("203.0.113.9"), Some("hops_too_low"), Some(2)), "{}", r.text);
 
     // 固定層數 1（只有 Traefik）：多一層代理沒算到就建議 2。/ Fixed 1: an uncounted proxy suggests 2.
-    let app = common::spawn_with(|c| c.trusted_proxy_hops = telepy_server::client_ip::Hops::Fixed(1)).await;
+    let app = common::spawn_with(|c| c.trusted_proxy_hops = Some(telepy_server::client_ip::Hops::Fixed(1))).await;
     let admin = app.login("admin", "pw").await;
     let r = ip_check(&app, &admin, "198.51.100.7, 10.0.0.2", &[]).await;
     assert_eq!((r.json["hops_mode"].as_str(), r.json["trusted_proxy_hops"].as_i64()), (Some("fixed"), Some(1)), "{}", r.text);
@@ -220,7 +220,7 @@ async fn server_health_runs_the_doctor_checks_for_admins() {
     assert_eq!(find("audit log")["status"], "ok", "{}", r.text);
     // 剛才兩次登入都經 Traefik 記成公網位址。/ Both sign-ins above were recorded with public addresses.
     assert_eq!(find("client addresses")["status"], "ok", "{}", r.text);
-    assert!(find("client addresses")["detail"].as_str().unwrap().contains("TRUSTED_PROXY_HOPS=auto"), "{}", r.text);
+    assert!(find("client addresses")["detail"].as_str().unwrap().contains("client_ip_hops=auto ("), "{}", r.text);
     let total = r.json["ok"].as_u64().unwrap() + r.json["info"].as_u64().unwrap() + r.json["warnings"].as_u64().unwrap() + r.json["failures"].as_u64().unwrap();
     assert_eq!(total as usize, checks.len());
     assert!(r.json["ran_at"].as_str().unwrap().ends_with('Z'));

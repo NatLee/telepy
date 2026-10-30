@@ -158,7 +158,7 @@ async fn the_shared_key_waits_for_every_tunnel_on_the_machine() {
 
 #[tokio::test]
 async fn keep_shared_service_key_leaves_the_shared_key_on_the_device() {
-    let Some(lab) = Lab::start_with(|c| c.keep_shared_service_key = true).await else { return };
+    let Some(lab) = Lab::start_with(|c| c.keep_shared_service_key = Some(true)).await else { return };
     let app = &lab.app;
     let alice = lab.user("alice").await;
     // 和上一個測試同一台舊裝置，但伺服器設定成保留共用金鑰（另一台 Telepy 還用它登入）。

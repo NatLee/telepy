@@ -11,14 +11,15 @@
  * `TRUSTED_PROXY_HOPS` is `auto` (every internal address is a proxy) or a fixed count; the wording follows.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { FlaskConical, Globe, Monitor, Network, Server } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, FlaskConical, Globe, Monitor, Network, Server } from "lucide-react";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { Chip, Property, PropertyList, SectionHeading } from "@/components/ui/section";
 import { apiFetch, readJson } from "@/lib/api";
-import { checkPassed, hopState, hopsSetting, isPublicScope, parseClientIpCheck, probeHeaders, probeOutcome, viaCdn, type ClientIpCheck, type ProbeOutcome } from "@/lib/clientIp";
+import { VISITOR_SETTINGS_HREF, checkPassed, hopState, hopsSetting, isPublicScope, parseClientIpCheck, probeHeaders, probeOutcome, viaCdn, type ClientIpCheck, type CloudflareMode, type ProbeOutcome } from "@/lib/clientIp";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
@@ -41,6 +42,26 @@ const ROLE_KEY: Record<string, TranslationKey> = {
     client: "clientIp.role.client",
     proxy: "clientIp.role.proxy",
 };
+
+const CF_MODE_KEY: Record<CloudflareMode, TranslationKey> = {
+    auto: "settingsEnv.cf.auto",
+    always: "settingsEnv.cf.always",
+    off: "settingsEnv.cf.off",
+};
+
+/**
+ * 「設定 → 伺服器 → 訪客位址」的連結：修法都指到那裡（.env 有設的值仍以 .env 為準，那裡會鎖住並說明）。
+ * The link to Settings → Server → Visitor addresses, where every fix points (a value set in .env still wins; the
+ * page shows it locked and says so).
+ */
+function WhereLink() {
+    const { t } = useI18n();
+    return (
+        <Link href={VISITOR_SETTINGS_HREF} prefetch={false} className="inline-flex items-center gap-0.5 text-foreground underline underline-offset-2">
+            {t("clientIp.where")} <ArrowRight size={12} className="opacity-60" aria-hidden />
+        </Link>
+    );
+}
 
 async function runCheck(probe: boolean): Promise<ClientIpCheck | null> {
     const res = await apiFetch(ENDPOINT, probe ? { headers: probeHeaders() } : {});
@@ -121,15 +142,16 @@ function VerdictCallout({ check }: { check: ClientIpCheck }) {
     // 自動模式下只有「前面有一台公網 IP 的代理」會到這裡（被當成訪客了），要改成固定層數；固定層數時是層數算錯，
     // 也可以改成 auto。/ In auto mode only a public-address proxy in front lands here (taken for the visitor): set a
     // fixed count. With a fixed count the number is off — or switch to auto.
+    const where = <WhereLink />;
     const hopsBody =
         check.hopsMode === "auto"
-            ? tn("clientIp.v.hopsBodyAuto", { setting: code(`TRUSTED_PROXY_HOPS=${vars.n}`) })
-            : tn("clientIp.v.hopsBody", { setting: code(`TRUSTED_PROXY_HOPS=${vars.n}`), auto: code("TRUSTED_PROXY_HOPS=auto") });
+            ? tn("clientIp.v.hopsBodyAuto", { setting: code(vars.n), where })
+            : tn("clientIp.v.hopsBody", { setting: code(vars.n), auto: code("auto"), where });
     const body: Record<Exclude<typeof v, "ok">, React.ReactNode> = {
         hops_too_low: hopsBody,
         hops_too_high: hopsBody,
-        use_header: tn("clientIp.v.useHeaderBody", { setting: code(`CLIENT_IP_HEADER=${vars.header}`) }),
-        header_private: tn("clientIp.v.headerPrivateBody", { header: code(vars.header), ip: code(vars.ip) }),
+        use_header: tn("clientIp.v.useHeaderBody", { setting: code(vars.header), where }),
+        header_private: tn("clientIp.v.headerPrivateBody", { header: code(vars.header), ip: code(vars.ip), where }),
         // 完全沒有 X-Forwarded-For：沒經過代理，直接連到後端（同一台機器 / 同一個網路）。
         // No X-Forwarded-For at all: nothing in front, the backend was reached directly.
         all_private: check.chain.every((h) => h.source === "peer") ? tn("clientIp.v.directBody", { ip: code(vars.ip) }) : tn("clientIp.v.allPrivateBody", { ip: code(vars.ip) }),
@@ -143,9 +165,33 @@ function VerdictCallout({ check }: { check: ClientIpCheck }) {
         all_private: t("clientIp.v.allPrivateTitle"),
         unknown: t("clientIp.v.unknownTitle"),
     };
+    // 指到設定頁的修法都提一句：.env 有設的值以 .env 為準。/ Fixes that point at the page add: .env still wins.
+    const pointsAtPage = v === "hops_too_low" || v === "hops_too_high" || v === "use_header" || v === "header_private";
     return (
         <Callout tone="warning" title={title[v]}>
             {body[v]}
+            {pointsAtPage && <p className="mt-1.5">{tn("clientIp.envWins", { hops: code("TRUSTED_PROXY_HOPS"), header: code("CLIENT_IP_HEADER") })}</p>}
+        </Callout>
+    );
+}
+
+/**
+ * Cloudflare 的標頭到了，卻看不到 Cloudflare 的位址：Telepy 前面的代理（例如 Docker 裡的 Nginx Proxy Manager）把
+ * Cloudflare 的位址換成了自己網路的，自動模式不能信這個標頭。修代理，或確定每個請求都經過 Cloudflare 時才選「一律採用」。
+ * The Cloudflare header arrived but no Cloudflare address is visible: the proxy in front replaced it, so auto mode
+ * can't trust the header. Fix the proxy, or choose "Always" only if every request comes through Cloudflare.
+ */
+function CloudflareMasked({ check }: { check: ClientIpCheck }) {
+    const { t, tn } = useI18n();
+    const code = (s: string) => <code>{s}</code>;
+    return (
+        <Callout tone="warning" title={t("clientIp.cf.maskedTitle")}>
+            {tn("clientIp.cf.maskedBody", {
+                header: code("CF-Connecting-IP"),
+                ip: code(check.cloudflare?.header ?? "?"),
+                always: <span className="text-foreground">{t("settingsEnv.cf.always")}</span>,
+                where: <WhereLink />,
+            })}
         </Callout>
     );
 }
@@ -166,8 +212,8 @@ function ProxyFix({ check }: { check: ClientIpCheck }) {
             <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
                 <li>{tn("clientIp.fix.hostNet", { mode: code("network_mode: host") })}</li>
                 <li>{tn("clientIp.fix.ipv6", { setting: code('"userland-proxy": false') })}</li>
-                {!viaCdn(check) && <li>{tn("clientIp.fix.noCdn", { header: code("CF-Connecting-IP"), setting: code("CLIENT_IP_HEADER") })}</li>}
-                <li>{tn("clientIp.fix.after", { setting: code("TRUSTED_PROXY_HOPS") })}</li>
+                {!viaCdn(check) && <li>{tn("clientIp.fix.noCdn", { header: code("CF-Connecting-IP"), setting: <span className="text-foreground">{t("siteSettings.client_ip_header.label")}</span> })}</li>}
+                <li>{tn("clientIp.fix.after", { setting: code("auto"), where: <WhereLink /> })}</li>
                 <li>{t("clientIp.fix.outside")}</li>
             </ul>
         </div>
@@ -241,11 +287,11 @@ export function ClientIpCheckPanel() {
                     // 自動模式 + 管理員自己在內網：內部位址都算代理，所以越過了自己的位址。只有內網的人能這樣，而且只能改自己的紀錄。
                     // Auto mode with the admin on an internal address: every internal address is a proxy, so theirs was skipped.
                     <Callout tone="warning" title={t("clientIp.probe.autoInternalTitle")}>
-                        {tn("clientIp.probe.autoInternal", { ip: code(probe.ip ?? ""), setting: code("TRUSTED_PROXY_HOPS=auto"), fixed: code("TRUSTED_PROXY_HOPS") })}
+                        {tn("clientIp.probe.autoInternal", { ip: code(probe.ip ?? ""), setting: code("auto"), where: <WhereLink /> })}
                     </Callout>
                 ) : (
                     <Callout tone="danger" title={t("clientIp.probe.spoofableTitle")}>
-                        {tn("clientIp.probe.forwardedFor", { ip: code(probe.ip ?? ""), setting: code(`TRUSTED_PROXY_HOPS=${hopsSetting(c)}`) })}
+                        {tn("clientIp.probe.forwardedFor", { ip: code(probe.ip ?? ""), setting: code(hopsSetting(c)), where: <WhereLink /> })}
                     </Callout>
                 ))}
         </div>
@@ -287,7 +333,8 @@ export function ClientIpCheckPanel() {
                             <div className="space-y-4 @4xl:col-start-2 @4xl:row-start-1">
                                 <VerdictCallout check={check} />
                                 {showFix && <ProxyFix check={check} />}
-                                {check.shortChain && <Callout tone="warning">{tn("clientIp.shortChain", { setting: code(`TRUSTED_PROXY_HOPS=${hopsSetting(check)}`) })}</Callout>}
+                                {check.cloudflareMasked && <CloudflareMasked check={check} />}
+                                {check.shortChain && <Callout tone="warning">{tn("clientIp.shortChain", { setting: code(hopsSetting(check)), where: <WhereLink /> })}</Callout>}
                                 {check.headerAbsent && check.clientIpHeader && <Callout tone="info">{tn("clientIp.headerAbsent", { header: code(check.clientIpHeader) })}</Callout>}
                             </div>
                             <div className="space-y-2 @4xl:col-start-1 @4xl:row-span-2 @4xl:row-start-1">
@@ -305,15 +352,28 @@ export function ClientIpCheckPanel() {
                                     </Property>
                                     <Property className={STACK} label={t("clientIp.hops")}>
                                         <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1">
-                                            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">TRUSTED_PROXY_HOPS={hopsSetting(check)}</span>
+                                            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{hopsSetting(check)}</span>
                                             <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                                                 {check.hopsMode === "auto" ? t("clientIp.hopsAuto", { n: String(check.skippedHops) }) : t("clientIp.hopsFixed")}
                                             </span>
                                         </span>
                                     </Property>
                                     <Property className={STACK} label={t("clientIp.header")}>
-                                        {check.clientIpHeader ? <span className="font-mono [overflow-wrap:anywhere]">CLIENT_IP_HEADER={check.clientIpHeader}</span> : <span className="text-muted-foreground">{t("clientIp.headerUnset")}</span>}
+                                        {check.clientIpHeader ? <span className="font-mono [overflow-wrap:anywhere]">{check.clientIpHeader}</span> : <span className="text-muted-foreground">{t("clientIp.headerUnset")}</span>}
                                     </Property>
+                                    {check.cloudflare && (
+                                        <Property className={STACK} label="Cloudflare">
+                                            <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1">
+                                                <span>{t(CF_MODE_KEY[check.cloudflare.mode])}</span>
+                                                <Chip tone={check.cloudflare.used ? "success" : "neutral"}>{t(check.cloudflare.used ? "clientIp.cf.used" : "clientIp.cf.notUsed")}</Chip>
+                                            </span>
+                                            <span className="mt-0.5 block text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                                                CF-Connecting-IP: {check.cloudflare.header ? <span className="font-mono text-foreground">{check.cloudflare.header}</span> : t("clientIp.cf.noHeader")}
+                                                {" · "}
+                                                {t(check.cloudflare.edgeSeen ? "clientIp.cf.edgeSeen" : "clientIp.cf.edgeNotSeen")}
+                                            </span>
+                                        </Property>
+                                    )}
                                     <Property className={STACK} label={t("clientIp.otherHeaders")}>
                                         {check.headers.length === 0 ? (
                                             <span className="text-muted-foreground">{t("clientIp.none")}</span>

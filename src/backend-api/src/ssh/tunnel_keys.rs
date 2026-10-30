@@ -131,7 +131,7 @@ pub async fn forget(state: &AppState, tunnel_id: i64) {
 /// 金鑰登入過它。`KEEP_SHARED_SERVICE_KEY` 時永遠不行。/ May the shared key leave this account: every tunnel on the machine
 /// that lists it has verified its own key there. Never with `KEEP_SHARED_SERVICE_KEY`.
 pub async fn shared_removable(state: &AppState, tunnel_id: i64, account: &str) -> anyhow::Result<bool> {
-    if state.config.keep_shared_service_key {
+    if state.config.keep_shared_key() {
         return Ok(false);
     }
     let mut mates = vec![tunnel_id];

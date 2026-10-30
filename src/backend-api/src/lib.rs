@@ -39,6 +39,7 @@ pub mod recording;
 pub mod remote_browser;
 pub mod rustdesk;
 pub mod scripts;
+pub mod server_settings;
 pub mod session_audit;
 pub mod shell_history;
 pub mod terminal_detach;

@@ -1202,6 +1202,18 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 登入後的授權（同意）頁 /oauth/authorize 的樣子（`telepy login` 的完成頁也跟著它）；以前一律是一般樣子。
     // The approval (consent) page's look, /oauth/authorize (telepy login's done page follows it); always standard before.
     ("site_settings_sitesettings", "signin_consent_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    // 以前只能放在 .env 的伺服器設定；環境變數有設時仍然以它為準（`server_settings`）。
+    // Server settings that used to live only in .env; a set environment variable still wins (`server_settings`).
+    ("site_settings_sitesettings", "client_ip_hops", "varchar(8) NOT NULL DEFAULT 'auto'"),
+    ("site_settings_sitesettings", "client_ip_header", "varchar(64) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "client_ip_cloudflare", "varchar(16) NOT NULL DEFAULT 'auto'"),
+    ("site_settings_sitesettings", "server_device_probe", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "server_keep_shared_service_key", "bool NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "server_gateway_proxy_protocol_from", "varchar(512) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "server_log_level", "varchar(256) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "server_openapi_enabled", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "server_google_client_id", "varchar(256) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "server_public_url", "varchar(512) NOT NULL DEFAULT ''"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

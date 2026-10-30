@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::auth::AuthUser;
-use crate::client_ip::{diagnose, ClientMeta};
+use crate::client_ip::{diagnose_with, ClientMeta};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -40,17 +40,28 @@ async fn client_ip_check(State(state): State<AppState>, AuthUser(me): AuthUser, 
     }
     let cfg = &state.config;
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
-    let d = diagnose(&parts.headers, peer, cfg.trusted_proxy_hops, cfg.client_ip_header.as_deref());
+    // 生效的設定（環境變數 → 網站設定 → 預設）。/ The settings in effect (env → site setting → default).
+    let hops = cfg.client_ip_hops();
+    let header = cfg.client_ip_header_name();
+    let d = diagnose_with(&parts.headers, peer, hops, header.as_deref(), cfg.client_ip_cloudflare());
     let body: Value = json!({
         "ip": d.ip,
         "scope": d.scope,
         "from": d.from,
         "geo": d.ip.as_deref().map(|ip| state.geoip.json(Some(ip))),
         // auto = 內部位址都算代理（trusted_proxy_hops 為 null）；fixed = 固定層數。/ auto (hops null) or fixed.
-        "hops_mode": if cfg.trusted_proxy_hops.fixed().is_some() { "fixed" } else { "auto" },
-        "trusted_proxy_hops": cfg.trusted_proxy_hops.fixed(),
+        "hops_mode": if hops.fixed().is_some() { "fixed" } else { "auto" },
+        "trusted_proxy_hops": hops.fixed(),
         "skipped_hops": d.skipped_hops,
-        "client_ip_header": cfg.client_ip_header,
+        "client_ip_header": header,
+        // 每個值是誰決定的（env / setting / default）。/ Which layer decides each value.
+        "sources": {
+            "client_ip_hops": cfg.effective("client_ip_hops").1.as_str(),
+            "client_ip_header": cfg.effective("client_ip_header").1.as_str(),
+            "client_ip_cloudflare": cfg.effective("client_ip_cloudflare").1.as_str(),
+        },
+        "cloudflare": d.cloudflare,
+        "hints": d.hints,
         "chain": d.chain,
         "headers": d.headers.iter().map(|h| json!({
             "name": h.name,

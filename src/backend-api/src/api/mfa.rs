@@ -56,7 +56,7 @@ fn mfa_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError
 }
 
 fn rp(state: &AppState, headers: &HeaderMap) -> ApiResult<Webauthn> {
-    let issuer = crate::oauth::issuer(state.config.public_url.as_deref(), headers);
+    let issuer = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
     relying_party(&issuer).map_err(|e| mfa_error(StatusCode::BAD_REQUEST, "passkey_unavailable", e))
 }
 
@@ -373,7 +373,7 @@ async fn totp_setup(State(state): State<AppState>, AuthUser(user): AuthUser, hea
     db::mfa::ensure(&state.db, user.id).await?;
     let secret = mfa::new_totp_secret();
     db::mfa::set_pending_totp(&state.db, user.id, &state.mfa.secrets.seal(&secret)).await?;
-    let issuer = crate::oauth::issuer(state.config.public_url.as_deref(), &headers);
+    let issuer = crate::oauth::issuer(state.config.public_base().as_deref(), &headers);
     let host = url::Url::parse(&issuer).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
     let b32 = mfa::base32_encode(&secret);
     let uri = mfa::otpauth_uri("Telepy", &format!("{}@{host}", user.username), &b32);

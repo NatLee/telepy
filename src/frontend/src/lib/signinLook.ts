@@ -27,10 +27,16 @@ export interface SignInLook {
     consentStyle: SignInStyle;
     /** 低調頁的句子，一行一句；空白 = 輪播內建的問候語。/ The discreet page's lines, one per line; blank = the built-in ones. */
     message: string;
+    /**
+     * 生效中的 Google client ID（.env > 網站設定 > 空）；空字串 = 沒有 Google 按鈕；null = 後端沒說（舊後端），用建置時的值。
+     * The Google client ID in effect (.env > site setting > ""); "" = no Google button; null = the backend didn't say
+     * (an older one), so the build-time value applies.
+     */
+    googleClientId: string | null;
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
-export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "" };
+export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
 export const LINE_MAX = 80;
@@ -53,7 +59,27 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
     if (!style || !oauthStyle) return null;
     const cliStyle = asStyle(o.cli_style ?? o.cliStyle) ?? oauthStyle;
     const consentStyle = asStyle(o.consent_style ?? o.consentStyle) ?? "standard";
-    return { style, oauthStyle, cliStyle, consentStyle, message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "" };
+    const google = o.google_client_id !== undefined ? o.google_client_id : o.googleClientId;
+    return {
+        style,
+        oauthStyle,
+        cliStyle,
+        consentStyle,
+        message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "",
+        googleClientId: typeof google === "string" ? google.trim() : null,
+    };
+}
+
+/**
+ * 登入按鈕要用的 Google client ID：還不知道登入頁設定 = 先不畫（undefined）；後端沒給 = 建置時的
+ * NEXT_PUBLIC_GOOGLE_CLIENT_ID；空字串 = 沒有 Google 按鈕。
+ * The Google client ID for the button: look not known yet = none for now; the backend didn't say = the build-time
+ * NEXT_PUBLIC_GOOGLE_CLIENT_ID; an empty string = no Google button.
+ */
+export function effectiveGoogleClientId(look: SignInLook | null, buildTime: string | undefined): string | undefined {
+    if (!look) return undefined;
+    const id = look.googleClientId ?? buildTime ?? "";
+    return id || undefined;
 }
 
 export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle =>

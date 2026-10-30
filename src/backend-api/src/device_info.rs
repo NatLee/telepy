@@ -118,7 +118,7 @@ impl DeviceInfo {
 /// The whoami URLs a device tries; only URLs made of safe characters (they go into a shell command).
 pub fn whoami_urls(config: &Config) -> Vec<String> {
     let mut bases = Vec::new();
-    if let Some(u) = config.public_url.as_deref() {
+    if let Some(u) = config.public_base().as_deref() {
         bases.push(u.trim_end_matches('/').to_string());
     }
     if let Some(host) = config.server_host() {
@@ -451,6 +451,10 @@ pub async fn run(state: AppState) {
     tracing::info!("device info probe started");
     loop {
         tokio::time::sleep(LOOP_INTERVAL).await;
+        // 每一輪看一次開關（DEVICE_PROBE / 網站設定），存檔不必重啟。/ The switch is read every round: no restart needed.
+        if !state.config.device_probe_on() {
+            continue;
+        }
         let live = state.status.endpoints();
         if live.is_empty() {
             continue;
