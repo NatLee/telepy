@@ -151,5 +151,5 @@ docker exec telepy-wrt sh -c 'opkg update && opkg install openssh-client openssh
   `dropbearconvert`，所以換 client 時金鑰不能互轉。WebSocket 傳輸用 `-J`（仍需 python3）。
 - compat 模式是繞開，不是修復：SSH 心跳關閉，斷線偵測慢。
 - 非 root 的 OpenWrt：讀不到 `/etc/dropbear/*_host_key`，又沒有 `/etc/ssh/*.pub` 或 ssh-keyscan 時，host key 沒有來源，腳本會停下來說明。
-- 在裝置上改名（rename）不支援 procd。
+- 在裝置上改名 / 換連線方式支援 procd（`/etc/init.d/telepy-<代號>`，跟一鍵加入裝的一樣；在 OpenWrt 23.05 rootfs 上實測）；`/etc/rc.local` 裡手寫的一行仍然不自動換。路由器通常沒有 python3，「改成自動」會裝成只走 SSH port 的新服務並說明（`no_python`）。
 - 腳本把裝置的 SSH server 綁定位址當隧道回送目標；若 server 綁了多個非 loopback 位址，取第一個。
