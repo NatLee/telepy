@@ -1,5 +1,7 @@
 # README screenshots
 
+<p align="center"><b>English</b> | <a href="./README.zh-TW.md">繁體中文</a> | <a href="./README.ja.md">日本語</a></p>
+
 The README in each language shows the screenshots in `en/`, `zh-TW/` and `ja/` — the same thirteen screens, each taken
 with the interface in that language.
 
@@ -36,3 +38,12 @@ scale factor of 2, light theme, time zone Asia/Taipei, then resized to 1920 px w
 
 When the interface changes enough that a screenshot is misleading, retake all three languages of it so the READMEs
 stay in step.
+
+## The diagrams and recordings in the docs
+
+`docs/images/<lang>/` holds what the documents embed, from the same demo server: each info dialog (path diagrams,
+timelines, impact maps) opened by a script and captured at 1440 px wide with a device scale factor of 2, then resized to
+at most 1200 px; the GIFs are timed screenshots of a real run (a device running the one command, a tunnel being deleted,
+a remote browser starting, the create page's network scene, the API page's "Four ways in", the discreet sign-in page),
+assembled with sharp at about 8–10 frames a second. The file names are the same in every language, so a changed dialog
+is retaken in all three.

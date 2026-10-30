@@ -1,280 +1,284 @@
-# Remote Browser(KasmVNC)
+# Remote Browser (KasmVNC)
 
-> 讓使用者在網頁上操作一個「經目標機器出口上網」的真實 Chromium 桌面。
-> 本文是 KasmVNC 版的**架構文件**(2026-07-03 遷移完成;過程紀錄見
-> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](articles/2026-07-03-kasmvnc-migration-warstory.md))。
->
-> **現況(2026-10):** 後端已改寫為 Rust 單一程序(見 [`rust-migration-plan.md`](rust-migration-plan.md)):
-> - session store 在記憶體(另存一張小表 `telepy_remote_browser_session`,只給重啟後回收 kasm 側的孤兒用),
->   沒有 gunicorn 多 worker、沒有 Redis。
-> - SOCKS 代理在**行程內**(`ssh/socks.rs`):每個 CONNECT 是連線池那條裝置連線上的一條 direct-tcpip channel,
->   由裝置的 sshd 連出去 —— 和以前的 `ssh -D` 同一個機制,但不再 spawn 子程序。
-> - KasmVNC / Chromium / session-manager、WS 握手與反爬蟲旗標不變。
->
-> 文中標「歷史」的段落描述 Django 版的 `ssh -D` / Redis / gunicorn,只留作設計脈絡。
+<p align="center"><b>English</b> | <a href="./remote-browser.zh-TW.md">繁體中文</a> | <a href="./remote-browser.ja.md">日本語</a></p>
 
-## 架構總覽
+> Lets a user drive a real Chromium desktop in the web UI, with its traffic leaving through the target machine.
+> This is the **architecture document** for the KasmVNC version (migration finished 2026-07-03; for the story of how it went, see
+> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](articles/2026-07-03-kasmvnc-migration-warstory.md)).
+>
+> **Current state (2026-10):** the backend was rewritten as a single Rust process (see [`rust-migration-plan.md`](rust-migration-plan.md)):
+> - The session store lives in memory (plus one small table, `telepy_remote_browser_session`, used only to clean up orphaned kasm-side sessions after a restart).
+>   There are no gunicorn workers and no Redis.
+> - The SOCKS proxy runs **in-process** (`ssh/socks.rs`): every CONNECT is a direct-tcpip channel on the pooled device connection,
+>   opened by the device's sshd — the same mechanism as the old `ssh -D`, but without spawning a child process.
+> - KasmVNC, Chromium, the session-manager, the WS handshake and the anti-detection flags are unchanged.
+>
+> Paragraphs marked "History" describe the Django-era `ssh -D` / Redis / gunicorn setup and are kept only as design context.
+
+## Architecture overview
 
 ```
 Browser (vendored KasmVNC noVNC-fork client)
-   │  wss /ws/remote-browser/<session_id>/(JWT 首訊息認證)
+   │  wss /ws/remote-browser/<session_id>/ (JWT in the first message)
    ▼
-backend ws/remote_browser.rs（Rust）
-   │  1. 驗 JWT(首訊息)+ 功能權限 remote_browser(4012)+ tunnel VIEW 權限(session 的 server_id 二次驗證)
-   │  2. WS↔WS 透明中繼(逐訊息轉發,不解析協定);ws::Heartbeat 每 20s Ping,40s 沒回應就當人走了
+backend ws/remote_browser.rs (Rust)
+   │  1. verify JWT (first message) + feature permission remote_browser (4012) + tunnel VIEW permission (second check on the session's server_id)
+   │  2. transparent WS↔WS relay (forwards message by message, does not parse the protocol); ws::Heartbeat pings every 20s, no answer in 40s = the peer is gone
    ▼
-kasm-browser 容器 :<ws_port>(KasmVNC websocket,Basic Auth)
-   ├─ Xkasmvnc :N(每 session 一個 display;ws_port = 8443 + N)
-   ├─ openbox + chromium(respawn 迴圈包裹;每 session 專屬臨時 profile)
-   └─ session-manager(:7000,X-Internal-Token 保護的 HTTP API)
+kasm-browser container :<ws_port> (KasmVNC websocket, Basic Auth)
+   ├─ Xkasmvnc :N (one display per session; ws_port = 8443 + N)
+   ├─ openbox + chromium (wrapped in a respawn loop; a temporary profile per session)
+   └─ session-manager (:7000, HTTP API protected by X-Internal-Token)
 
 chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>'
    ▲
-   └─ backend 行程內的 SOCKS5(ssh/socks.rs,只做 CONNECT、不認證,埠只在 docker network 內)
-      每個 CONNECT = 連線池那條裝置連線上的 direct-tcpip,由裝置 sshd 連出去 = 出口 IP
-      (localhost/127.0.0.1 亦經此送到目標機,見下方 --proxy-bypass-list 說明;
-       名稱目標先經 ssh::resolve —— macOS 的 sshd 收到名稱的 direct-tcpip 會整條連線斷掉)
+   └─ in-process SOCKS5 in the backend (ssh/socks.rs, CONNECT only, no auth, port reachable only inside the docker network)
+      every CONNECT = a direct-tcpip on the pooled device connection, opened by the device's sshd = the exit IP
+      (localhost/127.0.0.1 also go to the target machine this way, see the --proxy-bypass-list note below;
+       name targets go through ssh::resolve first — macOS sshd drops the whole connection on a direct-tcpip to a name)
 ```
 
-- **為什麼是 WS↔WS 而不是 raw-RFB TCP:** KasmVNC 已脫離 RFB 規範,只開
-  websocket、不開傳統 VNC 埠,且 **stock noVNC 連不上**(黑畫面),必須用它
-  自家 fork 的 client(已 vendor,見下)。
-- **握手順序**(VNC 是 server 先說話,不能漏 greeting):前端 `auth` →
-  後端連上游、回 `ready` → 前端把同一條 WS 交給 RFB client → 回 `begin` →
-  後端才開始 pump 上游 bytes。
-- **為什麼 chromium 要帶 `--proxy-bypass-list='<-loopback>'`:** chromium 對 loopback
-  目的地(`localhost` / `127.0.0.1/8` / `::1` / `*.localhost`)**內建「一律直連、不走 proxy」的
-  隱含規則**。少了這旗標,使用者在代理瀏覽器輸入 `http://localhost:PORT` 會被 chromium **直連**到
-  kasm-browser **容器自己**的 loopback(空的),而非目標機器 → 回報「代理瀏覽器不能完全以目標機
-  身分訪問,連 localhost 都連不到」。`<-loopback>` 是 chromium 專門用來**移除**該隱含 loopback
-  bypass 的 token;移除後 loopback 目的地改由 `--proxy-server` 的 SOCKS 送到目標機、在目標機
-  上 `connect(127.0.0.1:PORT)`(這條 SOCKS 的出口就是目標機 sshd,`127.0.0.1` = 目標機自己),代理
-  瀏覽器才真正「完全以目標機身分」訪問其本機服務。**單引號不可省**:整條 `BROWSER_CMD` 最後經
-  `open-browser.sh` 的 `sh -c "$BROWSER_CMD"` **二次** shell 解析,`<` / `>` 不引起來會被當成
-  重導向 metacharacter。一般外網瀏覽照走 proxy(出口 IP)不變;`<-loopback>` 移除的是 chromium 對
-  loopback **與 link-local** 的隱含 bypass(整組為 `localhost` / `*.localhost` / `[::1]` /
-  `127.0.0.1/8` / `169.254/16` / `[FE80::]/10`),故這些「本地位址」一併改走 proxy → 目標機網路
-  (對本用途無害,正合「以目標機身分」);VNC 傳輸(Xkasmvnc 自家 websocket,與 chromium 網路層
-  無關)不受影響。
+- **Why WS↔WS and not raw-RFB TCP:** KasmVNC has moved away from the RFB spec. It only opens a
+  websocket, not the traditional VNC port, and **stock noVNC cannot connect** (black screen); you must use its
+  own fork of the client (vendored, see below).
+- **Handshake order** (VNC is server-speaks-first, so the greeting must not be missed): the frontend sends `auth` →
+  the backend connects upstream and answers `ready` → the frontend hands the same WS to the RFB client and replies `begin` →
+  only then does the backend start pumping upstream bytes.
+- **Why chromium needs `--proxy-bypass-list='<-loopback>'`:** for loopback
+  destinations (`localhost` / `127.0.0.1/8` / `::1` / `*.localhost`) chromium has an **implicit built-in rule: always connect directly, never via the proxy**. Without this flag,
+  a user typing `http://localhost:PORT` in the proxied browser would be connected **directly** to the loopback of the
+  kasm-browser **container itself** (which is empty), not the target machine — reported as "the proxied browser can't act fully
+  as the target machine, not even localhost". `<-loopback>` is the token chromium provides to **remove** that implicit loopback
+  bypass; once removed, loopback destinations go through the `--proxy-server` SOCKS to the target machine, where
+  `connect(127.0.0.1:PORT)` happens (this SOCKS exits at the target's sshd, so `127.0.0.1` = the target machine itself), and the proxied
+  browser really acts "fully as the target machine" for its local services. **The single quotes are required:** the whole `BROWSER_CMD` is parsed by the shell a **second time**
+  through `sh -c "$BROWSER_CMD"` in `open-browser.sh`, and unquoted `<` / `>` would be taken as
+  redirection metacharacters. Ordinary internet browsing still goes through the proxy (exit IP) as before; what `<-loopback>` removes is chromium's implicit bypass for
+  loopback **and link-local** (the full set is `localhost` / `*.localhost` / `[::1]` /
+  `127.0.0.1/8` / `169.254/16` / `[FE80::]/10`), so these "local addresses" now also go through the proxy → the target machine's network
+  (harmless for this purpose, in fact exactly "as the target machine"); the VNC transport (Xkasmvnc's own websocket, unrelated to
+  chromium's network stack) is not affected.
 
-## 元件地圖
+## Component map
 
-| 元件 | 位置 | 職責 |
+| Component | Location | Responsibility |
 |---|---|---|
-| REST start/stop/ping | `src/backend-api/src/api/remote_browser.rs` + `remote_browser/mod.rs` | 借池的裝置連線、開行程內 SOCKS(含重試)、呼叫 session-manager、記憶體 session store（重啟回收用的小表）、reaper |
-| 行程內 SOCKS5 | `src/backend-api/src/ssh/socks.rs` | 只做 CONNECT;每條連線 = 裝置連線上的 direct-tcpip(傳輸 lease,不占 session 額度) |
-| session-manager client | `src/backend-api/src/remote_browser/kasm.rs` | 對 kasm-browser :7000 的 HTTP client(建立 / 停止 / CDP) |
-| WS 中繼 | `src/backend-api/src/ws/remote_browser.rs` | JWT+功能+權限、上游連線(含 scheme/path 自動退回)、雙向 pump、presence、心跳 |
-| agent / 腳本開的瀏覽器 | `src/backend-api/src/ai/browser.rs`、`mcp/`、`api/browser.rs` | MCP `browser_*` 工具與 REST `/api/browser/sessions*`(見下方「MCP agent 與腳本操作」) |
-| session-manager | `docker/kasm-browser/session_manager.py` | 每 session:Xkasmvnc + openbox + chromium(respawn 迴圈、臨時 profile) |
-| CDP 轉接 | `docker/kasm-browser/cdp.py` | session-manager 收到的動作 → 容器內 loopback 上的 Chromium DevTools |
-| 前端面板 | `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` | 終端機頁的 Browser 主畫面(通道列表的 Browser 按鈕);握手、IME textarea、剪貼簿/IME/滑鼠設定 |
-| Vendored client | `src/frontend/src/vendor/kasm-novnc/` | kasmtech/noVNC v1.3.0;**內嵌需求見該 README(必讀)** |
+| REST start/stop/ping | `src/backend-api/src/api/remote_browser.rs` + `remote_browser/mod.rs` | Borrow the pooled device connection, open the in-process SOCKS (with retries), call the session-manager, in-memory session store (plus the small table for restart cleanup), reaper |
+| In-process SOCKS5 | `src/backend-api/src/ssh/socks.rs` | CONNECT only; each connection = a direct-tcpip on the device connection (a transport lease, takes no session slot) |
+| session-manager client | `src/backend-api/src/remote_browser/kasm.rs` | HTTP client for kasm-browser :7000 (create / stop / CDP) |
+| WS relay | `src/backend-api/src/ws/remote_browser.rs` | JWT + feature + permission, upstream connection (with automatic scheme/path fallback), two-way pump, presence, heartbeat |
+| Browsers opened by agents / scripts | `src/backend-api/src/ai/browser.rs`, `mcp/`, `api/browser.rs` | MCP `browser_*` tools and REST `/api/browser/sessions*` (see "MCP agents and scripting" below) |
+| session-manager | `docker/kasm-browser/session_manager.py` | Per session: Xkasmvnc + openbox + chromium (respawn loop, temporary profile) |
+| CDP adapter | `docker/kasm-browser/cdp.py` | Turns actions received by the session-manager into Chromium DevTools calls on the container's loopback |
+| Frontend panel | `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` | Main view of the Browser on the terminal page (the Browser button in the tunnel list); handshake, IME textarea, clipboard / IME / mouse settings |
+| Vendored client | `src/frontend/src/vendor/kasm-novnc/` | kasmtech/noVNC v1.3.0; **see that README for the embedding requirements (required reading)** |
 
-## KasmVNC 事實表(實測釘死,別重查)
+## KasmVNC fact table (measured and pinned, don't look them up again)
 
-| 項目 | 值 |
+| Item | Value |
 |---|---|
-| stock noVNC 相容? | **否**。必須用 kasmtech/noVNC fork(server 1.4.0 ↔ client 1.3.0) |
-| 傳輸 | 純 ws(`-sslOnly` 預設關);端點 **`/websockify`**;subprotocol `binary` |
-| `Sec-WebSocket-Origin` | **必帶**(Hixie 時代 legacy header,值不驗)。缺了回 404 "failed websocket checks"(不是 401!) |
-| Basic Auth | 預設開;`-disableBasicAuth` 在 1.4.0 無效 → 用 `kasmvncpasswd` 建使用者、連線帶 `Authorization: Basic` |
-| 密碼檔 | 固定路徑 `-KasmPasswordFile /etc/kasmvnc/kasmpasswd`(**勿靠 `$HOME`**:build 與 runtime 的 HOME 不同 → 一律 401) |
-| ws_port | `8443 + display`(`WS_BASE` 可調) |
+| Stock noVNC compatible? | **No.** You must use the kasmtech/noVNC fork (server 1.4.0 ↔ client 1.3.0) |
+| Transport | Plain ws (`-sslOnly` is off by default); endpoint **`/websockify`**; subprotocol `binary` |
+| `Sec-WebSocket-Origin` | **Required** (a legacy Hixie-era header; the value is not checked). Without it you get 404 "failed websocket checks" (not 401!) |
+| Basic Auth | On by default; `-disableBasicAuth` has no effect in 1.4.0 → create a user with `kasmvncpasswd` and send `Authorization: Basic` on connect |
+| Password file | Fixed path `-KasmPasswordFile /etc/kasmvnc/kasmpasswd` (**don't rely on `$HOME`**: HOME differs between build and runtime → 401 every time) |
+| ws_port | `8443 + display` (adjustable with `WS_BASE`) |
 
-## Session 生命週期
+## Session lifecycle
 
-- **建立:** `POST /api/reverse/server/{id}/remote-browser/start` `{username?}`:檢查功能權限 `remote_browser`、
-  通道 VIEW、step-up(敏感通道)、`username` 在 `permissions::allowed_usernames` 裡(沒帶 = 通道預設帳號,否則第一個
-  允許的)、`remote_browser_max_sessions` → 借連線池的裝置連線、開行程內 SOCKS → session-manager 起
-  Xkasmvnc/openbox/chromium → session 進記憶體(並寫一列 `telepy_remote_browser_session`)→ 回 `{session_id, ws_path}`。
-- **SOCKS 冷啟/重試:** 每次嘗試 = `ssh::pool` 借一個傳輸 lease(同一個 (通道, 帳號) 的終端機 / 檔案已經登入的話直接共用)
-  + `SocksProxy::start`,整段以 `remote_browser_ssh_timeout` 為上限,失敗重試到 `remote_browser_ssh_attempts` 次
-  (預設 30 秒 / 2 次;設定名稱沿用 `ssh -D` 時代)。gateway 上沒有這條通道的 forward(裝置離線)就秒失敗、不空等,
-  回 500 + `code: device_offline`(前端翻成 `browser.*`)。
-- **歷史(Django 版的 `ssh -D`):** `username@reverse` 是兩跳(ProxyCommand→telepy-ssh→反向通道到
-  裝置 sshd)。`_spawn_socks_proxy` 帶硬化選項(`BatchMode`/`ExitOnForwardFailure`/
-  `ConnectTimeout`/`ServerAlive`,不再無限卡在認證;不加 `-q` 以保留 stderr),
-  `start_remote_browser` 自動重試(預設 2 次,`remote_browser_ssh_attempts`)。
-  真正離線的裝置(reverse 埠不存在)會秒失敗、不會空等。失敗時 ssh stderr 會寫進 backend log。
-- **歷史:那條 -D 必須 `ControlMaster=no` + `ControlPath=none`(實測血淚;行程內 SOCKS 沒有這個問題):** ssh config 對
-  `Host reverse` 開了 `ControlMaster auto` + `ControlPersist`,冷啟時 ssh 會 fork 出**背景
-  master** 後讓前景 client 立刻退出 → `Popen.poll()` 誤判「ssh 死了」→ attempt 1 永遠假失敗
-  (log 一直出現 `attempt 1/2 did not bind ... no stderr` 但 0.2s 就放棄),而 master 稍後才把
-  -D 綁上,變成**沒人管的孤兒 listener**(實測活了 16 小時)。停用 mux 後這條 -D 的生命週期
-  = 該 Popen,poll()/terminate() 語義正確、session 互相隔離;ProxyCommand 的第一跳
-  (telepy-ssh)仍走它自己的 mux,冷啟只慢在第二跳 handshake(由 `remote_browser_ssh_timeout`
-  控制,慢通道可在站台設定調大)。
-- **Profile:** 每 session `mkdtemp` 專屬目錄、**停止即刪**(不保留歷史)。
-  絕不共用:Chromium SingletonLock 會讓第二個並發 session 的 chromium 委派給
-  第一個後退出(log:`Opening in existing browser session.`),兩敗俱傷。
-  瀏覽器行程的 `HOME` 也指到這個目錄(dotfile 等家目錄寫入隨 session 刪除)。
-- **Chromium 關閉/縮小/消失:** 最小化的視窗可從**工作列**點回來;關掉視窗(chromium 行程
-  仍在 background mode)可點面板的**「開啟瀏覽器」捷徑**(open-browser.sh)再開 —— 捷徑會先
-  聚焦/還原既有視窗,沒有視窗才全新啟動(收掉 background mode 殘留主行程,避免只印
-  「Opening in existing browser session」卻不開窗)。**chromium 行程完全消失**(崩潰/整個退出)
-  時,session-manager 的 **watchdog** 每 10s 檢查(以 `--user-data-dir` 掃 /proc)並自動用同一
-  支 open-browser.sh 重開(15s 建立寬限、30s 重啟冷卻;`REMOTE_BROWSER_RESPAWN=0` 可關)。
-  實測有使用者回到 session 只剩空桌面以為功能整個壞掉 —— session 的意義就是那顆瀏覽器。
-- **所有桌面啟動路徑都收斂到 open-browser.sh:** 右鍵桌面的 openbox 根選單已換成自訂
-  `openbox-menu.xml`(Debian 預設選單的「Web browser」= 裸 `x-www-browser` → root 無沙箱秒退,
-  使用者只覺得「點了沒反應」)。`BROWSER_CMD` 由 session-manager 以環境傳給 openbox/tint2/
-  watchdog,另外落一份 **per-display env 檔** `/tmp/telepy-browser-<display>.env`(session 停止
-  即刪):open-browser.sh 發現環境遺失時以 `$DISPLAY` source 它 —— 任何啟動路徑都開得起來
-  (實測血淚:舊版 openbox 沒帶 env,使用者從桌面選單開瀏覽器 → `BROWSER_CMD not set`)。
-- **下載:** Chromium 管理策略(`/etc/chromium/policies/managed/telepy.json`)
-  `DownloadRestrictions: 3` **全面封鎖**——容器裡下載的檔案使用者本來就拿不到
-  (沒有取檔通道),只會累積吃掉容器磁碟。要開放需同時設計配額與取檔機制。
-- **停止:** WS 斷線即收整個 session(SOCKS 代理 + 還 lease、kasm session、那一列記錄);
-  `POST /api/reverse/server/remote-browser/{sid}/stop`(面板關閉、分頁 `beforeunload`)同一條路;reaper 為後備。
-  kasm 那邊的行程用 `killpg(p.pid)` 整組收(`start_new_session` ⇒ pgid == pid;不可用
-  `getpgid`,group leader 先死會 raise 而漏殺孤兒)。
-- **續命與健康檢查:** WS 連著時中繼自己每 20s 續命一次(伺服器端計時,不受背景分頁節流影響),前端面板另每 15s
-  打 `POST …/remote-browser/{sid}/ping`。ping 先探測該 session 的 SOCKS 埠(`127.0.0.1:proxy_port`)——**埠沒在聽 =
-  代理已死** → 就地回收並回 404,前端收到即收畫面顯示「session 已結束」。reaper 每 10s:底下的裝置連線斷了
-  (`SocksProxy::alive`)或超過 `remote_browser_session_idle_timeout` + 30s 沒有續命 → 回收。
-- **重啟後的孤兒:** 單一程序,重啟時記憶體裡的 session 與代理都沒了;啟動時 `cleanup_orphans` 依那張小表把 kasm 側
-  留下的 session 全部停掉、刪記錄。
-- **歷史(gunicorn 多 worker + Redis):** ping 探測 SOCKS 埠靠「各 worker 共用 netns」;idle GC 另掃「Redis 有記錄、
-  不屬於本行程、埠沒在聽」的孤兒(擁有者 worker 已重啟,沒人持有 ssh handle)代為收掉 kasm session + Redis 記錄。
-- **誰在用、可以被結束:** WS 中繼加入 presence(kind `browser`,帶它用的裝置帳號),擁有者 / ADMIN 在通道列表的使用中按鈕與
-  即時 session 頁(`/tunnels/sessions`)看得到,可以結束(4009,reason = 誰);gateway 事件 `browser_open` / `browser_close`
-  (含時長)寫進該通道的 Logs;開始時對擁有者與 ADMIN(不含本人)發 `session.started` webhook。
-- **失去權限就結束**(`access_recheck.rs`,和終端機 / 檔案 / 桌面同一套):取消分享、允許清單變小、功能 `remote_browser`
-  被關、帳號停用等 → 4009,reason `Telepy (access changed)`,`browser_close` 附上為什麼,本人收到 `SESSION-ENDED`;中繼收尾
-  時照樣停掉 kasm session。測試 `remote_browser_ends_when_access_is_lost`。
-- **斷線偵測:** 中繼讀 socket 經 `ws::Heartbeat`(每 `WS_PING_INTERVAL_SECS` = 20s 送 WebSocket Ping,ping 後
-  `WS_PEER_TIMEOUT_SECS` = 40s 內什麼都沒收到就當人走了),所以筆電睡著、換網路、proxy 掉線不再讓 session 與 presence 永遠掛著。
-- **殭屍:** kasm-browser 以 `init: true`(tini)當 PID 1 回收 reparent 的孤兒。
-- **視窗:** openbox 以 `--config-file /app/openbox-rc.xml` 啟動(build 時由預設
-  rc.xml 併入 applications 規則):`<decor>no</decor>` 移除標題列 + `<maximized>true</maximized>`
-  填滿 display。chromium 自己的 `--start-maximized` 實測只給 1050×720、留邊且帶標題列。
-- **sandbox:** `--no-sandbox` 是容器內以 root 跑的必要之惡(Docker 預設
-  seccomp 擋 unprivileged userns);`--test-type` 壓掉黃色警告條。要開真
-  sandbox 需 compose 掛自訂 seccomp profile(未做,隔離邊界=容器)。實測 `--test-type`
-  對 JS 指紋(webdriver/chrome/languages/plugins/vendor)零影響、警告列網頁也看不到。
+![Starting a remote browser step by step](images/en/browser-start.gif)
 
-## 反爬蟲(anti-detection)
+- **Create:** `POST /api/reverse/server/{id}/remote-browser/start` `{username?}`: checks the `remote_browser` feature permission,
+  tunnel VIEW, step-up (sensitive tunnels), that `username` is in `permissions::allowed_usernames` (omitted = the tunnel's default account, otherwise the first
+  allowed one), and `remote_browser_max_sessions` → borrows the pooled device connection, opens the in-process SOCKS → the session-manager starts
+  Xkasmvnc/openbox/chromium → the session goes into memory (and one row into `telepy_remote_browser_session`) → returns `{session_id, ws_path}`.
+- **SOCKS cold start / retry:** each attempt = borrow a transport lease from `ssh::pool` (shared directly if the terminal / files of the same (tunnel, account) are already logged in)
+  + `SocksProxy::start`, the whole thing capped by `remote_browser_ssh_timeout`, retried up to `remote_browser_ssh_attempts` times
+  (defaults 30 seconds / 2 attempts; the setting names are kept from the `ssh -D` days). If the gateway has no forward for this tunnel (device offline) it fails at once instead of waiting,
+  returning 500 + `code: device_offline` (the frontend translates it to a `browser.*` message).
+- **History (the Django `ssh -D`):** `username@reverse` was two hops (ProxyCommand → telepy-ssh → reverse tunnel to
+  the device's sshd). `_spawn_socks_proxy` used hardened options (`BatchMode` / `ExitOnForwardFailure` /
+  `ConnectTimeout` / `ServerAlive`, so it no longer hung forever on authentication; no `-q`, to keep stderr),
+  and `start_remote_browser` retried automatically (default 2 times, `remote_browser_ssh_attempts`).
+  A truly offline device (reverse port absent) failed at once instead of waiting. On failure, ssh's stderr was written to the backend log.
+- **History: that -D needed `ControlMaster=no` + `ControlPath=none` (learned the hard way; the in-process SOCKS doesn't have this problem):** the ssh config
+  had `ControlMaster auto` + `ControlPersist` for `Host reverse`, so on a cold start ssh would fork a **background
+  master** and let the foreground client exit immediately → `Popen.poll()` wrongly decided "ssh died" → attempt 1 always failed falsely
+  (the log kept showing `attempt 1/2 did not bind ... no stderr` but gave up after 0.2s), while the master bound
+  -D a bit later, leaving an **unmanaged orphan listener** (observed alive for 16 hours). With mux disabled, the lifetime of that -D
+  = that Popen, poll()/terminate() mean the right thing and sessions are isolated from each other; the first hop of ProxyCommand
+  (telepy-ssh) still uses its own mux, and a cold start is only slow in the second hop's handshake (controlled by `remote_browser_ssh_timeout`,
+  which can be raised in the site settings for slow tunnels).
+- **Profile:** each session gets its own `mkdtemp` directory, **deleted on stop** (no history is kept).
+  Never shared: Chromium's SingletonLock makes the chromium of a second concurrent session hand over to the
+  first one and exit (log: `Opening in existing browser session.`), and both fail.
+  The browser process's `HOME` also points into this directory (dotfiles and other home-directory writes are deleted with the session).
+- **Chromium closed / minimised / gone:** a minimised window can be restored from the **taskbar**; if the window was closed (the chromium process
+  still lives in background mode), click the panel's **"Open browser" shortcut** (open-browser.sh) to open it again — the shortcut first
+  focuses/restores an existing window and only starts a fresh one if there is none (it also cleans up the leftover background-mode main process, to avoid just printing
+  "Opening in existing browser session" without opening a window). When the **chromium process is gone entirely** (crash / full exit),
+  the session-manager's **watchdog** checks every 10s (scanning /proc by `--user-data-dir`) and relaunches it with the same
+  open-browser.sh (15s grace after creation, 30s cooldown between restarts; `REMOTE_BROWSER_RESPAWN=0` turns it off).
+  A real user once came back to a session with an empty desktop and thought the whole feature was broken — the browser is the whole point of the session.
+- **Every way to launch on the desktop converges on open-browser.sh:** the openbox root menu (right-click on the desktop) was replaced with a custom
+  `openbox-menu.xml` (the Debian default menu's "Web browser" = a bare `x-www-browser` → no sandbox as root, exits at once,
+  and the user only sees "nothing happens when I click"). `BROWSER_CMD` is passed by the session-manager to openbox/tint2/
+  watchdog through the environment, and a **per-display env file** `/tmp/telepy-browser-<display>.env` is also written (deleted
+  when the session stops): when open-browser.sh finds the environment lost it sources that file by `$DISPLAY` — so any launch path works
+  (learned the hard way: an older openbox didn't pass the env, and a user opening the browser from the desktop menu got `BROWSER_CMD not set`).
+- **Downloads:** Chromium's managed policy (`/etc/chromium/policies/managed/telepy.json`)
+  `DownloadRestrictions: 3` **blocks them entirely** — files downloaded inside the container are unreachable for the user anyway
+  (there is no way to fetch them), they would only pile up and eat the container's disk. Allowing downloads would need both a quota and a way to fetch files.
+- **Stop:** a WS disconnect tears down the whole session (the SOCKS proxy + returning the lease, the kasm session, that record);
+  `POST /api/reverse/server/remote-browser/{sid}/stop` (panel closed, tab `beforeunload`) takes the same path; the reaper is the fallback.
+  On the kasm side, processes are killed as a group with `killpg(p.pid)` (`start_new_session` ⇒ pgid == pid; don't use
+  `getpgid`, it raises when the group leader dies first and would leave orphans behind).
+- **Keep-alive and health check:** while the WS is connected the relay renews the session itself every 20s (server-side timer, unaffected by background-tab throttling), and the frontend panel additionally calls
+  `POST …/remote-browser/{sid}/ping` every 15s. The ping first probes the session's SOCKS port (`127.0.0.1:proxy_port`) — **a port that isn't listening =
+  the proxy is dead** → it is reclaimed on the spot and 404 is returned, and the frontend closes the screen and shows "session ended". The reaper runs every 10s: if the underlying device connection dropped
+  (`SocksProxy::alive`) or there has been no renewal for more than `remote_browser_session_idle_timeout` + 30s → reclaim.
+- **Orphans after a restart:** it is a single process, so a restart loses the in-memory sessions and proxies; at startup `cleanup_orphans` stops every session
+  left on the kasm side according to that small table and deletes the records.
+- **History (gunicorn workers + Redis):** the ping probe of the SOCKS port relied on "all workers share one netns"; the idle GC also swept for orphans "recorded in Redis,
+  not owned by this process, port not listening" (the owning worker had restarted and nobody held the ssh handle) and reclaimed their kasm session + Redis record.
+- **Who is using it, and ending it:** the WS relay joins presence (kind `browser`, carrying the device account it uses); the owner / ADMIN can see it in the tunnel list's in-use button and on the
+  live sessions page (`/tunnels/sessions`) and can end it (4009, reason = who); the gateway events `browser_open` / `browser_close`
+  (with duration) are written to that tunnel's Logs; at start a `session.started` webhook is sent to the owner and ADMINs (not the person themselves).
+- **Losing access ends it** (`access_recheck.rs`, the same mechanism as terminal / files / desktop): unsharing, a smaller allow-list, the `remote_browser` feature
+  turned off, an account disabled, etc. → 4009, reason `Telepy (access changed)`, `browser_close` records why, and the person receives `SESSION-ENDED`; the relay
+  still stops the kasm session on teardown. Test `remote_browser_ends_when_access_is_lost`.
+- **Disconnect detection:** the relay reads the socket through `ws::Heartbeat` (a WebSocket Ping every `WS_PING_INTERVAL_SECS` = 20s; if nothing at all is received within
+  `WS_PEER_TIMEOUT_SECS` = 40s after a ping, the peer is considered gone), so a laptop going to sleep, a network switch or a dropped proxy no longer leaves the session and presence hanging forever.
+- **Zombies:** kasm-browser runs with `init: true` (tini) as PID 1 to reap reparented orphans.
+- **Window:** openbox starts with `--config-file /app/openbox-rc.xml` (at build time the applications rules are merged into the default
+  rc.xml): `<decor>no</decor>` removes the title bar and `<maximized>true</maximized>`
+  fills the display. Chromium's own `--start-maximized` measured only 1050×720, with margins and a title bar.
+- **Sandbox:** `--no-sandbox` is a necessary evil when running as root in a container (Docker's default
+  seccomp blocks unprivileged userns); `--test-type` suppresses the yellow warning bar. A real
+  sandbox would need a custom seccomp profile mounted by compose (not done; the isolation boundary = the container). Measured: `--test-type`
+  has zero effect on JS fingerprints (webdriver/chrome/languages/plugins/vendor) and the warning bar is not visible to web pages either.
 
-真人透過 VNC 操作 + 經目標機出口 IP,本身就是最強的反偵測條件。旗標是加分:
+## Anti-detection
 
-- `--disable-blink-features=AutomationControlled` → `navigator.webdriver = false`。
-- 語系:`--lang` + `--accept-lang` 給非空、一致的語系(空的 `navigator.languages`
-  是機器人特徵)。
-- **`--accept-lang` 必須傳乾淨語言標籤、不能帶 q-value**(`_accept_lang` 回 `zh-TW,zh,en`)。
-  chromium 用這個值同時決定 HTTP `Accept-Language` header **與** `navigator.languages`,
-  且會自己算 header 的 q-value。若我們先塞 q 進去(舊 bug):
-  - `Accept-Language` header 疊成 `zh-TW,zh;q=0.9,zh;q=0.9;q=0.8,en;q=0.8;q=0.7`(雙重 q)
-  - `navigator.languages` 變成 `['zh-TW','zh;q=0.9','en;q=0.8']`(q 洩漏)
+A real person driving over VNC and exiting through the target machine's IP is already the strongest anti-detection condition. The flags are a bonus:
 
-  兩者都是真瀏覽器絕不會有的鐵特徵 → 到處被 CAPTCHA。乾淨標籤 → header 正確為
-  `zh-TW,zh;q=0.9,en;q=0.8`、`navigator.languages` 為 `['zh-TW','zh','en']`。
-- **WebGL(`--enable-unsafe-swiftshader`,且**只**這一個)**:容器無 GPU,headed chromium 在無
-  GPU 的 X display 上 GPU 初始化失敗 → `canvas.getContext("webgl")` 回 **null**(實測)。「完全
-  沒有 WebGL」是強烈機器人特徵(YouTube 的「登入確認你不是機器人」會查)。`--enable-unsafe-swiftshader`
-  **只**允許 WebGL context 回退 SwiftShader,不動合成器 → WebGL 正常(`OK ANGLE (SwiftShader...)`)。
-  **踩過的雷**:曾加 `--use-gl=angle --use-angle=swiftshader` 想確保 WebGL,結果把整個 GL **合成器**
-  也強制走軟體 SwiftShader → **YouTube 影片播不動**。實測(真 VP9 解碼 640x480):forced-swiftshader
-  掉 4 幀、`--enable-unsafe-swiftshader` 單獨與 baseline 皆掉 0 幀,且單獨版 WebGL 一樣正常。720p/1080p
-  下 forced 版的掉幀會嚴重到播不動。**結論:只留 `--enable-unsafe-swiftshader`,絕不加 `--use-gl`。**
-  註:renderer 顯示 SwiftShader(非真 GPU),仍是弱訊號;要更像真機需在 client 端 spoof
-  `getParameter` 的 renderer 字串(未做)。
+- `--disable-blink-features=AutomationControlled` → `navigator.webdriver = false`.
+- Language: `--lang` + `--accept-lang` give a non-empty, consistent language (an empty `navigator.languages`
+  is a bot signature).
+- **`--accept-lang` must be a clean language tag with no q-values** (`_accept_lang` returns `zh-TW,zh,en`).
+  chromium uses this value to decide both the HTTP `Accept-Language` header **and** `navigator.languages`,
+  and computes the header's q-values itself. If we put q in first (the old bug):
+  - the `Accept-Language` header stacks up as `zh-TW,zh;q=0.9,zh;q=0.9;q=0.8,en;q=0.8;q=0.7` (double q)
+  - `navigator.languages` becomes `['zh-TW','zh;q=0.9','en;q=0.8']` (q leaks)
 
-### 極限(誠實說明)
+  Both are dead giveaways no real browser has → CAPTCHAs everywhere. With clean tags the header is correctly
+  `zh-TW,zh;q=0.9,en;q=0.8` and `navigator.languages` is `['zh-TW','zh','en']`.
+- **WebGL (`--enable-unsafe-swiftshader`, and **only** this one)**: the container has no GPU, and headed chromium on a GPU-less
+  X display fails GPU initialisation → `canvas.getContext("webgl")` returns **null** (measured). "No
+  WebGL at all" is a strong bot signal (YouTube's "sign in to confirm you're not a bot" checks it). `--enable-unsafe-swiftshader`
+  **only** lets the WebGL context fall back to SwiftShader without touching the compositor → WebGL works (`OK ANGLE (SwiftShader...)`).
+  **A mine we stepped on:** we once added `--use-gl=angle --use-angle=swiftshader` to make sure WebGL worked, which forced the whole GL **compositor**
+  onto software SwiftShader too → **YouTube video would not play smoothly**. Measured (real VP9 decode, 640x480): forced-swiftshader
+  dropped 4 frames, `--enable-unsafe-swiftshader` alone and the baseline both dropped 0, and WebGL was just as fine with the single flag. At 720p/1080p
+  the forced version drops so many frames it can't play. **Conclusion: keep only `--enable-unsafe-swiftshader`, never add `--use-gl`.**
+  Note: the renderer shows SwiftShader (not a real GPU), which is still a weak signal; looking more like a real machine would require spoofing the renderer string of
+  `getParameter` on the client side (not done).
 
-旗標只處理**瀏覽器指紋**。YouTube 這類的封鎖,主宰因素是另外兩個,本專案無法用旗標解決:
+### Limits (honestly)
 
-1. **出口 IP 信譽**:流量走目標機 IP(經裝置 sshd 的 SOCKS)。目標機若是資料中心/雲端/VPN IP,或該 IP
-   已被大量自動化存取汙染,YouTube/Cloudflare 會直接擋 —— **與瀏覽器指紋完全無關**。要繞開
-   只能換一台住宅 IP 的目標機。
-2. **無 cookie/登入信任**:設定檔每 session 全新(privacy 需求,不留歷史)。YouTube 對「有登入/
-   有瀏覽歷史」的 session 信任度高很多;全新 session 天生更容易被要求驗證。這與「不保留歷史」
-   直接衝突。
+The flags only deal with the **browser fingerprint**. For blocks like YouTube's, the deciding factors are two other things the flags can't solve:
 
-   > **已決策(2026-07-04):維持每 session 全新 profile,隱私優先。** 曾出現「YouTube 要求登入」
-   > 回歸,調查確認回歸點是 967ea75(profile 改為 ephemeral)——沒有 cookie 累積 → YouTube 把每次
-   > 都當可疑新訪客。可選的折衷是「只持久化 cookie/登入、仍不留瀏覽歷史」,但使用者選擇隱私優先、
-   > 接受偶爾被要求登入(反正主宰因素是出口 IP)。**若日後要降低攔截,優先換住宅 IP 目標機,而非
-   > 動 profile。** 不要在未取得使用者同意下重新加回 profile 持久化。
+1. **Exit IP reputation**: traffic leaves via the target machine's IP (through the SOCKS over the device's sshd). If the target is a datacenter / cloud / VPN IP, or the IP
+   has been polluted by lots of automated access, YouTube/Cloudflare will block it outright — **nothing to do with the browser fingerprint**. The only way around
+   it is a target machine with a residential IP.
+2. **No cookie / sign-in trust**: the profile is brand new every session (a privacy requirement, no history kept). YouTube trusts sessions that are
+   signed in or have browsing history far more; a fresh session is naturally more likely to be asked to verify. This conflicts
+   directly with "keep no history".
 
-## MCP agent 與腳本操作(CDP)
+   > **Decided (2026-07-04): keep a fresh profile per session, privacy first.** A "YouTube asks you to sign in"
+   > regression showed up; the investigation confirmed the regression point was 967ea75 (profile made ephemeral) — with no cookies accumulating YouTube treats every
+   > visit as a suspicious new visitor. A possible compromise is to "persist only cookies/sign-in and still keep no browsing history", but the user chose privacy first
+   > and accepts being asked to sign in now and then (the deciding factor is the exit IP anyway). **To cut down blocking later, switch to a residential-IP target machine first rather than
+   > touching the profile.** Do not add profile persistence back without the user's consent.
 
-MCP agent（scope `browser:use`）可以開一個瀏覽器自己操作，見 [`mcp.md`](mcp.md)；同一組動作也有 REST 版
-`/api/browser/sessions*`（`api/browser.rs`：開 `{tunnel_id, username?, url?}`、`navigate`、`text?selector=`、`screenshot`（image/png）、
-`click`、`type`、`DELETE`、列出），給個人 API token（scope `browser:use`）、`telepy browse` 指令（見 [`cli.md`](cli.md)）與網頁登入用。
-它們都是一般的 remote-browser session（同一個 SOCKS、同一個 kasm session、同樣算進 `remote_browser_max_sessions`），
-只是沒有人連 VNC：
+## MCP agents and scripting (CDP)
 
-- 一個瀏覽器屬於開它的那個憑證（OAuth app、API token 或網頁登入）；和 agent 的 SSH session 一起算進
-  `ai_max_sessions_per_user`，閒置 / 壽命 / 撤銷 / 失去權限 / 裝置離線由 `crate::ai` 的 reaper 收（規則含 OAuth grant，不走上面的 access recheck；同一批觸發點另叫 `ai::recheck` 立刻跑一次）。
-- presence kind `browser`、client = app 名稱，即時 session 頁看得到、可以結束（之後的動作回「被誰結束」）；
-  開關寫 `browser_open` / `browser_close` 事件，每個動作寫 AI 稽核（`browser_type` 的文字只記長度，除非 `sensitive: false`）。
-- step-up 的通道一律拒絕（403 `step_up_refused` / tool error）；功能 `remote_browser` 關掉時不能開、不能動作（列出與關閉照常）。
+MCP agents (scope `browser:use`) can open a browser and operate it themselves, see [`mcp.md`](mcp.md); the same actions also exist as REST
+`/api/browser/sessions*` (`api/browser.rs`: open `{tunnel_id, username?, url?}`, `navigate`, `text?selector=`, `screenshot` (image/png),
+`click`, `type`, `DELETE`, list), for personal API tokens (scope `browser:use`), the `telepy browse` command (see [`cli.md`](cli.md)) and web sign-ins.
+They are all ordinary remote-browser sessions (same SOCKS, same kasm session, counted in `remote_browser_max_sessions` too),
+just with nobody connected over VNC:
+
+- A browser belongs to the credential that opened it (an OAuth app, an API token or a web sign-in); it is counted together with the agent's SSH sessions in
+  `ai_max_sessions_per_user`, and idle / lifetime / revocation / lost access / device offline are handled by the `crate::ai` reaper (its rules include the OAuth grant and do not go through the access recheck above; the same triggers also call `ai::recheck` to run it at once).
+- presence kind `browser`, client = the app name; it shows on the live sessions page and can be ended there (later actions answer "ended by whom");
+  opening and closing write `browser_open` / `browser_close` events, and every action writes an AI audit entry (the text of `browser_type` is recorded as a length only, unless `sensitive: false`).
+- Tunnels with step-up always refuse (403 `step_up_refused` / tool error); with the `remote_browser` feature off, opening and actions are not allowed (listing and closing still work).
 
 ```
-MCP tool (browser_navigate / read / click / type / screenshot) 或 REST /api/browser/sessions/{id}/…
+MCP tool (browser_navigate / read / click / type / screenshot) or REST /api/browser/sessions/{id}/…
   → backend ai/browser.rs → remote_browser::RemoteBrowser::cdp
-  → session-manager POST /sessions/<id>/cdp(X-Internal-Token)
-  → cdp.py → ws://127.0.0.1:<CDP_BASE + display>(chromium --remote-debugging-port,只聽容器內 loopback)
+  → session-manager POST /sessions/<id>/cdp (X-Internal-Token)
+  → cdp.py → ws://127.0.0.1:<CDP_BASE + display> (chromium --remote-debugging-port, listening only on the container's loopback)
 ```
 
-- DevTools 埠只在容器內的 127.0.0.1，backend 從不直接連 CDP；每個動作上限 30 秒（`CDP_ACTION_TIMEOUT`）。
-- 動作：`navigate`（只收 http / https；後端也擋 `file:` 之類，免得讀到容器自己的檔案）、`screenshot`（CDP clip.scale 縮到
-  ≤ 1280 px 寬）、`read`（innerText + 連結，可用 selector）、`click`（selector 或看得到的文字；真的滑鼠事件
-  `Input.dispatchMouseEvent`）、`type`（focus + `Input.insertText`，可按 Enter）。
-- 操作的分頁 = `/json/list` 裡第一個一般網頁；全部關掉時開一個 `about:blank`。
-- `cdp.py` 只用標準函式庫（自帶最小的 WebSocket client），測試在 `tests/test_cdp.py`。
+- The DevTools port is only on 127.0.0.1 inside the container, and the backend never connects to CDP directly; each action is capped at 30 seconds (`CDP_ACTION_TIMEOUT`).
+- Actions: `navigate` (only http / https; the backend also blocks things like `file:` so the container's own files can't be read), `screenshot` (scaled with CDP clip.scale to
+  ≤ 1280 px wide), `read` (innerText + links, optionally with a selector), `click` (a selector or visible text; a real mouse event,
+  `Input.dispatchMouseEvent`), `type` (focus + `Input.insertText`, can press Enter).
+- The tab that is operated = the first ordinary web page in `/json/list`; if all are closed, an `about:blank` is opened.
+- `cdp.py` uses only the standard library (with its own minimal WebSocket client); tests are in `tests/test_cdp.py`.
 
-## WS 關閉碼(`/ws/remote-browser/<sid>/`)
+## WS close codes (`/ws/remote-browser/<sid>/`)
 
-| 代碼 | 意思 |
+| Code | Meaning |
 |---|---|
-| 4000 / 4001 | 首訊息認證失敗(格式 / token) |
-| 4007 | 站台要求兩步驟登入,這個帳號還沒設定 |
-| 4012 | 功能 `remote_browser` 對這個人關著(reason = 功能 id) |
-| 4404 | session 不存在(或還沒就緒) |
-| 4403 | 沒有這條通道的 VIEW |
-| 4011 | 連不上 kasm-browser 的 KasmVNC websocket |
-| 4013 | 上游(KasmVNC)關閉或送不出去 |
-| 4009 | 從即時 session 頁被結束,或失去權限(reason = 誰 / `Telepy (access changed)`) |
-| 4010 | 這個瀏覽器的網頁登入被登出(reason = user / admin / logout / reuse / disabled) |
+| 4000 / 4001 | First-message authentication failed (format / token) |
+| 4007 | The site requires two-step sign-in and this account hasn't set it up |
+| 4012 | The `remote_browser` feature is turned off for this person (reason = feature id) |
+| 4404 | The session doesn't exist (or isn't ready yet) |
+| 4403 | No VIEW on this tunnel |
+| 4011 | Cannot reach KasmVNC's websocket on kasm-browser |
+| 4013 | Upstream (KasmVNC) closed or could not be written to |
+| 4009 | Ended from the live sessions page, or lost access (reason = who / `Telepy (access changed)`) |
+| 4010 | This browser's web sign-in was signed out (reason = user / admin / logout / reuse / disabled) |
 
-前端 `RemoteBrowserPanel` 把 4403 / 4404 / 4011 / 4013 對到 `browser.*` 的翻譯。
+The frontend `RemoteBrowserPanel` maps 4403 / 4404 / 4011 / 4013 to `browser.*` translations.
 
-## 站台設定(Settings → Remote browser)
+## Site settings (Settings → Remote browser)
 
-| key | 預設 | 說明 |
+| key | Default | Description |
 |---|---|---|
-| `remote_browser_session_idle_timeout` | 60 | 沒有續命多久(再加 30s 寬限)就回收(秒) |
-| `remote_browser_max_sessions` | 10 | 整站同時上限(含 agent / 腳本開的),0 = 不限 |
-| `remote_browser_geometry` | `1280x720` | 每個瀏覽器桌面的解析度 |
-| `remote_browser_ssh_timeout` / `remote_browser_ssh_attempts` | 30 / 2 | 每次開 SOCKS 代理的逾時(秒)與嘗試次數(名稱沿用 `ssh -D` 時代) |
-| `remote_browser_kasm_create_timeout` | 30 | 等 session-manager 起好 Xkasmvnc + chromium 的逾時(秒) |
-| `remote_browser_homepage` / `remote_browser_language` | Google / `zh-TW` | 首頁 / 語系(下次開瀏覽器時生效;沒填退回 kasm-browser 的環境變數) |
+| `remote_browser_session_idle_timeout` | 60 | How long without a renewal (plus 30s grace) before the session is reclaimed (seconds) |
+| `remote_browser_max_sessions` | 10 | Site-wide concurrent limit (including those opened by agents / scripts), 0 = unlimited |
+| `remote_browser_geometry` | `1280x720` | Resolution of each browser desktop |
+| `remote_browser_ssh_timeout` / `remote_browser_ssh_attempts` | 30 / 2 | Timeout (seconds) and number of attempts for each SOCKS proxy start (names kept from the `ssh -D` days) |
+| `remote_browser_kasm_create_timeout` | 30 | Timeout (seconds) waiting for the session-manager to bring up Xkasmvnc + chromium |
+| `remote_browser_homepage` / `remote_browser_language` | Google / `zh-TW` | Homepage / language (takes effect the next time a browser is opened; if empty, falls back to the kasm-browser environment variables) |
 
-## 環境變數(都有預設,通常不用設)
+## Environment variables (all have defaults, usually no need to set)
 
-backend 這邊:`KASM_BROWSER_API`(預設 `http://kasm-browser:7000`,session-manager)、`KASM_BROWSER_HOST`(預設 `kasm-browser`,
-連 KasmVNC websocket 用)、`INTERNAL_API_TOKEN`(backend → session-manager 的 `X-Internal-Token`)。kasm-browser 容器與兩邊共用的:
+On the backend: `KASM_BROWSER_API` (default `http://kasm-browser:7000`, the session-manager), `KASM_BROWSER_HOST` (default `kasm-browser`,
+used to connect to the KasmVNC websocket), `INTERNAL_API_TOKEN` (the `X-Internal-Token` from backend → session-manager). The kasm-browser container and those shared by both sides:
 
-| 變數 | 預設 | 用途 |
+| Variable | Default | Purpose |
 |---|---|---|
-| `KASM_WS_USER` / `KASM_WS_PASSWORD` | `telepy` / `telepyvnc` | KasmVNC web 層 Basic Auth(backend 連線帶、kasm-browser build 時建;同一 .env 控制) |
-| `KASM_WS_SCHEME` / `KASM_WS_PATH` / `KASM_WS_SUBPROTOCOL` | `ws` / `/websockify` / `binary` | 上游 ws 優先嘗試值(後端中繼仍會自動退回其他組合) |
-| `KASM_PASSWORD_FILE` | `/etc/kasmvnc/kasmpasswd` | 密碼檔固定路徑 |
-| `REMOTE_BROWSER_HOMEPAGE` / `REMOTE_BROWSER_LANG` | Google / `zh-TW` | 首頁 / 語系(語系影響 navigator.languages,反爬蟲) |
-| `REMOTE_BROWSER_PROFILE_TMP` / `WS_BASE` | `/tmp` / `8443` | 臨時 profile 父目錄 / ws 埠基數 |
-| `CDP_BASE` / `CDP_ACTION_TIMEOUT` | `9300` / `30` | MCP agent 用的 DevTools 埠基數(埠 = `CDP_BASE + display`,只聽 127.0.0.1)/ 每個動作的秒數上限 |
+| `KASM_WS_USER` / `KASM_WS_PASSWORD` | `telepy` / `telepyvnc` | Basic Auth for the KasmVNC web layer (sent by the backend on connect, created when kasm-browser is built; controlled by the same .env) |
+| `KASM_WS_SCHEME` / `KASM_WS_PATH` / `KASM_WS_SUBPROTOCOL` | `ws` / `/websockify` / `binary` | Preferred upstream ws values (the backend relay still falls back to other combinations automatically) |
+| `KASM_PASSWORD_FILE` | `/etc/kasmvnc/kasmpasswd` | Fixed path of the password file |
+| `REMOTE_BROWSER_HOMEPAGE` / `REMOTE_BROWSER_LANG` | Google / `zh-TW` | Homepage / language (the language affects navigator.languages, i.e. anti-detection) |
+| `REMOTE_BROWSER_PROFILE_TMP` / `WS_BASE` | `/tmp` / `8443` | Parent directory of temporary profiles / ws port base |
+| `CDP_BASE` / `CDP_ACTION_TIMEOUT` | `9300` / `30` | DevTools port base for MCP agents (port = `CDP_BASE + display`, listening on 127.0.0.1 only) / per-action time limit in seconds |
 
-## 疑難排解
+## Troubleshooting
 
 ```bash
-# 後端測試(真 stack):
-(cd src/backend-api && cargo test)   # 含 tests/remote_browser_api.rs：SSH lab 上的真裝置(行程內 SOCKS)+ 假 session-manager + 假 KasmVNC ws 的端到端;tests/socks_e2e.rs 測 SOCKS 本身
-# session-manager 測試(純 stdlib):
+# Backend tests (real stack):
+(cd src/backend-api && cargo test)   # includes tests/remote_browser_api.rs: end to end with a real device on the SSH lab (in-process SOCKS) + a fake session-manager + a fake KasmVNC ws; tests/socks_e2e.rs tests the SOCKS itself
+# session-manager tests (pure stdlib):
 cd docker/kasm-browser && python3 -m unittest discover -s tests -p "test_*.py"
 
-# 上游 ws 連不上?起一顆 standalone Xkasmvnc + 探測腳本(不會被 session 回收):
+# Can't reach the upstream ws? Start a standalone Xkasmvnc + a probe script (it won't be reclaimed like a session):
 docker compose exec kasm-browser bash -lc \
   'Xkasmvnc :20 -geometry 1280x720 -depth 24 -SecurityTypes None \
    -KasmPasswordFile /etc/kasmvnc/kasmpasswd -websocketPort 8463 \
@@ -284,21 +288,20 @@ docker compose exec kasm-browser python3 /tmp/probe.py --port 8463 \
   --user telepy --password telepyvnc
 ```
 
-- **Chromium 一開就無聲消失(SIGTRAP/exit 133,watchdog 每 30s 重生又立刻死)** →
-  Debian chromium 150.0.7871.46 打包 bug([#1141488](https://bugs.debian.org/1141488),2026-07):
-  ungoogled 系 patch 刪了 `{google:searchSource}` token 的處理,但內建 prepopulated Google
-  搜尋模板仍含該 token → 展開即 `NOTREACHED()` 無聲 SIGTRAP(`--v=1` 也沒有 FATAL)。
-  在本容器的觸發面:**`--no-first-run` + 全新 profile 必炸**(每 session 都是全新 profile!)、
-  `--headless=new` 也炸、使用者把預設搜尋切回內建 Google 再搜尋也會炸。已套的修法(對後續
-  版本無害,修復版出來後可保留):(1) `DEFAULT_BROWSER_CMD` **移除 `--no-first-run`**(實測
-  Debian build 沒有 first-run 精靈,零效益純致命,勿加回);(2) chromium-policy.json 以
-  `DefaultSearchProvider*` 把預設搜尋釘成**乾淨模板的 Google**(只用 `{searchTerms}`,不經
-  prepopulated 模板;順帶把該 build 預設的 DuckDuckGo 拉回 Google,並鎖住不讓使用者切到會
-  閃退的內建 Google 項目 —— **勿移除這組 policy**)。緊急備案:pin 回
-  149.0.7827.196-1~deb12u1(snapshot.debian.org 20260703T000000Z),但會凍結安全更新,不建議。
-- `404 failed websocket checks` → 缺 `Sec-WebSocket-Origin`(probe 與後端中繼都已內建)。
-- `401` → 帳密或密碼檔問題:`ls -l /etc/kasmvnc/kasmpasswd; wc -c` 檢查非空。
-- 前端黑畫面但 ws 有通 → client 不是 Kasm fork,或 vendor README 的內嵌需求
-  (mouseButtonMapper、compositionend 歸零)沒做。
-- 查活行程時注意 `pgrep -f` 會匹配到你自己外層 shell 的 cmdline,用
-  `ps ax | grep "[c]hromium"` 括號技巧。
+- **Chromium vanishes silently right after starting (SIGTRAP/exit 133, the watchdog respawns it every 30s and it dies again at once)** →
+  a packaging bug in Debian chromium 150.0.7871.46 ([#1141488](https://bugs.debian.org/1141488), 2026-07):
+  the ungoogled-style patch removed the handling of the `{google:searchSource}` token, but the built-in prepopulated Google
+  search template still contains it → expanding it hits `NOTREACHED()` and a silent SIGTRAP (not even a FATAL with `--v=1`).
+  What triggers it in this container: **`--no-first-run` + a fresh profile always crashes** (every session has a fresh profile!),
+  `--headless=new` crashes too, and so does a user switching the default search back to the built-in Google and then searching. The fix applied (harmless for later
+  versions; keep it after a fixed version ships): (1) `DEFAULT_BROWSER_CMD` **drops `--no-first-run`** (measured: the
+  Debian build has no first-run wizard, so the flag had zero benefit and was fatal — don't add it back); (2) chromium-policy.json pins the default search to a **clean-template Google**
+  with `DefaultSearchProvider*` (using only `{searchTerms}`, bypassing the prepopulated template; it also moves that build's default DuckDuckGo back to Google, and locks
+  the user out of switching to the built-in Google entry that crashes — **do not remove this policy set**). Emergency fallback: pin back to
+  149.0.7827.196-1~deb12u1 (snapshot.debian.org 20260703T000000Z), but that freezes security updates and is not recommended.
+- `404 failed websocket checks` → the `Sec-WebSocket-Origin` header is missing (both the probe and the backend relay already send it).
+- `401` → a credentials or password-file problem: check with `ls -l /etc/kasmvnc/kasmpasswd; wc -c` that it is not empty.
+- Black screen in the frontend although the ws is up → the client isn't the Kasm fork, or the vendor README's embedding requirements
+  (mouseButtonMapper, compositionend reset) weren't done.
+- When looking for live processes note that `pgrep -f` matches the cmdline of your own outer shell; use the
+  `ps ax | grep "[c]hromium"` bracket trick.

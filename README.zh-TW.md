@@ -114,6 +114,8 @@ WebSocket 裡（一行指令與產生的腳本會把它裝成服務）。後端�
 （終端機、檔案、桌面、遠端瀏覽器、區網掃描）都是在這條連線裡開一個通道，用該通道專屬的服務金鑰登入裝置自己的 sshd。
 裝置不需要公網 IP，也不用開防火牆；Telepy 釘選每台裝置的主機金鑰，裝置也釘選 Telepy 的。
 
+更多內部運作的圖解——加入裝置、終端機、檔案、遠端桌面、分享、指令規則、金鑰、通知、CLI 與伺服器狀態——請看**[圖解 Telepy](./docs/visual-guide.zh-TW.md)**。
+
 Telepy 由五個容器組成：
 
 | 服務           | 角色                                                                                         |
@@ -162,7 +164,7 @@ SSH 主機**給 SSH 一個直接指到伺服器的名稱——或讓裝置走網
 ### 連接裝置
 
 - **Linux / macOS / OpenWrt**：**通道 → 建立通道 → 一行指令**，複製指令到裝置上執行。頁面會即時顯示每一步，Telepy
-  透過通道登入成功後就會變綠。詳見 [docs/device-join.md](./docs/device-join.md)。
+  透過通道登入成功後就會變綠。詳見 [docs/device-join.zh-TW.md](./docs/device-join.zh-TW.md)。
 - **其他系統（Windows、Docker、設備）**：**逐步設定**——貼上裝置的公鑰、選擇登入帳號、授權 Telepy 的金鑰、執行產生的
   腳本，再驗證登入。
 
@@ -219,14 +221,14 @@ telepy api activity --follow                   # 即時看你的 API token 做�
 telepy update                                  # 換成最新發行版
 ```
 
-CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.md](./docs/cli.md)。
+CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.zh-TW.md](./docs/cli.zh-TW.md)。
 
 **REST API**——在 **API** 頁建立個人 token；頁面列出 token 能呼叫的每個端點與 `curl` 範例。OpenAPI 文件在
 `/api/openapi.json`，Swagger UI 在 `/api/__hidden_swagger`（都需要登入；`telepy-server openapi` 也能輸出文件）。
 
 **MCP**——把 MCP 用戶端指向 `https://<你的主機>/mcp`，例如
 `claude mcp add --transport http telepy https://<你的主機>/mcp`。第一次使用會開核准頁，讓你選權限與通道；**MCP** 頁
-有各家用戶端的設定方式。詳見 [docs/mcp.md](./docs/mcp.md)。
+有各家用戶端的設定方式。詳見 [docs/mcp.zh-TW.md](./docs/mcp.zh-TW.md)。
 
 ## 維運
 
@@ -247,16 +249,18 @@ CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.m
 
 ## 文件
 
-- [`telepy` 命令列與 API token](./docs/cli.md)
-- [MCP：讓 AI agent 操作你的裝置](./docs/mcp.md)
-- [Webhook：事件、格式與簽章](./docs/webhooks.md)
-- [一行指令加入裝置（Linux、macOS、OpenWrt）](./docs/device-join.md)
-- [遠端桌面（RDP / VNC / RustDesk）](./docs/remote-desktop.md)
-- [遠端瀏覽器（KasmVNC）](./docs/remote-browser.md)
-- [後端怎麼連到裝置](./docs/device-connections.md)
-- [延遲量測深入解析](./docs/latency-deep-dive.md)
-- [Rust 後端遷移規劃](./docs/rust-migration-plan.md) 與 [效能比較：Django vs Rust](./docs/benchmarks.md)
-- [README 截圖怎麼做的](./docs/screenshots/README.md)
+- **[圖解 Telepy](./docs/visual-guide.zh-TW.md)**——介面裡的說明圖與幾段錄影，依功能排列
+- [所有文件](./docs/README.zh-TW.md)——下面每份文件都有英文、繁體中文與日文版
+- [`telepy` 命令列與 API token](./docs/cli.zh-TW.md)
+- [MCP：讓 AI agent 操作你的裝置](./docs/mcp.zh-TW.md)
+- [Webhook：事件、格式與簽章](./docs/webhooks.zh-TW.md)
+- [一行指令加入裝置（Linux、macOS、OpenWrt）](./docs/device-join.zh-TW.md)
+- [遠端桌面（RDP / VNC / RustDesk）](./docs/remote-desktop.zh-TW.md)
+- [遠端瀏覽器（KasmVNC）](./docs/remote-browser.zh-TW.md)
+- [後端怎麼連到裝置](./docs/device-connections.zh-TW.md)
+- [延遲量測深入解析](./docs/latency-deep-dive.zh-TW.md)
+- [Rust 後端遷移規劃](./docs/rust-migration-plan.md) 與 [效能比較：Django vs Rust](./docs/benchmarks.zh-TW.md)
+- [README 截圖怎麼做的](./docs/screenshots/README.zh-TW.md)
 - [文章](./docs/articles/)
 - 版本說明：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 

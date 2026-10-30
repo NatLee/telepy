@@ -129,6 +129,8 @@ Raspberry Pi、ファイアウォールの奥にあるオフィスの PC、OpenW
 デバイス自身の sshd にログインします。デバイスにパブリック IP もファイアウォールの開放も不要で、Telepy は各デバイスの
 ホスト鍵を、デバイスは Telepy のホスト鍵をピン留めします。
 
+内部で何が起きているかの図——デバイスの追加、ターミナル、ファイル、リモートデスクトップ、共有、コマンドルール、鍵、通知、CLI、サーバーの状態——は**[図で見る Telepy](./docs/visual-guide.ja.md)**にまとめています。
+
 Telepy は 5 つのコンテナで動きます：
 
 | サービス       | 役割                                                                                          |
@@ -180,7 +182,7 @@ Docker と Compose プラグインが必要です。
 
 - **Linux / macOS / OpenWrt**：**トンネル → トンネルを作成 → 1 行のコマンド**で、コマンドをコピーしてデバイスで
   実行します。各ステップが画面に表示され、Telepy がトンネル経由でログインできると緑になります。詳しくは
-  [docs/device-join.md](./docs/device-join.md)。
+  [docs/device-join.ja.md](./docs/device-join.ja.md)。
 - **それ以外（Windows、Docker、アプライアンス）**：**ステップごとに設定**——デバイスの公開鍵を貼り付け、ログイン
   アカウントを選び、Telepy の鍵を承認し、生成されたスクリプトを実行してログインを確認します。
 
@@ -238,7 +240,7 @@ telepy api activity --follow                   # API トークンの呼び出し
 telepy update                                  # 最新のリリースに置き換え
 ```
 
-CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定します。詳細は [docs/cli.md](./docs/cli.md)。
+CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定します。詳細は [docs/cli.ja.md](./docs/cli.ja.md)。
 
 **REST API**——**API** ページで個人用トークンを作成します。トークンで呼べるエンドポイントが `curl` の例付きで一覧
 されます。OpenAPI ドキュメントは `/api/openapi.json`、Swagger UI は `/api/__hidden_swagger`（どちらも要サインイン。
@@ -246,7 +248,7 @@ CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定しま�
 
 **MCP**——MCP クライアントを `https://<ホスト>/mcp` に向けます。例：
 `claude mcp add --transport http telepy https://<ホスト>/mcp`。初回は承認ページが開き、権限と対象トンネルを選べます。
-**MCP** ページにクライアントごとの設定方法があります。詳細は [docs/mcp.md](./docs/mcp.md)。
+**MCP** ページにクライアントごとの設定方法があります。詳細は [docs/mcp.ja.md](./docs/mcp.ja.md)。
 
 ## 運用
 
@@ -267,17 +269,19 @@ CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定しま�
 
 ## ドキュメント
 
-- [`telepy` コマンドラインと API トークン](./docs/cli.md)
-- [MCP：AI エージェントからデバイスを操作](./docs/mcp.md)
-- [Webhook：イベント、形式、署名](./docs/webhooks.md)
-- [1 行のコマンドでデバイスを追加（Linux、macOS、OpenWrt）](./docs/device-join.md)
-- [リモートデスクトップ（RDP / VNC / RustDesk）](./docs/remote-desktop.md)
-- [リモートブラウザ（KasmVNC）](./docs/remote-browser.md)
-- [バックエンドがデバイスに接続する仕組み](./docs/device-connections.md)
-- [レイテンシ計測の詳細](./docs/latency-deep-dive.md)
-- [Rust バックエンド移行計画](./docs/rust-migration-plan.md) と [ベンチマーク：Django vs Rust](./docs/benchmarks.md)
-- [README のスクリーンショットの作り方](./docs/screenshots/README.md)
-- [記事](./docs/articles/)
+- **[図で見る Telepy](./docs/visual-guide.ja.md)**——アプリの説明図といくつかの録画を機能ごとに
+- [ドキュメント一覧](./docs/README.ja.md)——下記のすべてのドキュメントに英語・繁體中文・日本語版があります
+- [`telepy` コマンドラインと API トークン](./docs/cli.ja.md)
+- [MCP：AI エージェントからデバイスを操作](./docs/mcp.ja.md)
+- [Webhook：イベント、形式、署名](./docs/webhooks.ja.md)
+- [1 行のコマンドでデバイスを追加（Linux、macOS、OpenWrt）](./docs/device-join.ja.md)
+- [リモートデスクトップ（RDP / VNC / RustDesk）](./docs/remote-desktop.ja.md)
+- [リモートブラウザ（KasmVNC）](./docs/remote-browser.ja.md)
+- [バックエンドがデバイスに接続する仕組み](./docs/device-connections.ja.md)
+- [レイテンシ計測の詳細](./docs/latency-deep-dive.ja.md)
+- [Rust バックエンド移行計画](./docs/rust-migration-plan.md)（繁體中文） と [ベンチマーク：Django vs Rust](./docs/benchmarks.ja.md)
+- [README のスクリーンショットの作り方](./docs/screenshots/README.ja.md)
+- [記事](./docs/articles/)（繁體中文）
 - リリースノート：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## コントリビューター
