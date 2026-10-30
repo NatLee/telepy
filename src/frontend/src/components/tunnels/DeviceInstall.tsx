@@ -10,7 +10,7 @@
  * Also the list's "older name" chip.
  */
 import React, { useState } from "react";
-import { ArrowRightLeft, Box, Copy, FileText, Info, KeyRound, Loader2, Package, RefreshCw, Server, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowRightLeft, Box, Copy, FileText, Info, KeyRound, Loader2, Package, RefreshCw, Route, Server, Trash2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -19,7 +19,7 @@ import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowPath, StateLine } from "@/components/flow/PathFlow";
 import { useDeviceInstall } from "@/hooks/useDeviceInstall";
 import { useNow } from "@/hooks/useNow";
-import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, TIDY_STEPS, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type RenameStep, type ReportedStep } from "@/lib/deviceInstall";
+import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, TIDY_STEPS, WAY_IN_KEY, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, offerAutomatic, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type RenameStep, type ReportedStep } from "@/lib/deviceInstall";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { compatNoServerAlive, factChips } from "@/lib/joinScript";
 import { useI18n } from "@/lib/i18n";
@@ -52,7 +52,7 @@ const KIND_KEY: Record<InstallPart["kind"], TranslationKey> = {
     file: "deviceInstall.kind.file",
 };
 
-function PartRow({ part }: { part: InstallPart }) {
+function PartRow({ part, tunnelId }: { part: InstallPart; tunnelId: number | null }) {
     const { t, locale } = useI18n();
     const now = useNow(60_000);
     const named = part.kind === "service" || part.kind === "container";
@@ -76,7 +76,10 @@ function PartRow({ part }: { part: InstallPart }) {
             </span>
             {part.retired && (
                 <span className="basis-full text-xs text-muted-foreground">
-                    {part.retired.tunnel_name
+                    {/* 換過連線方式：同一條隧道以前的安裝代號。/ After a switch: this tunnel's own earlier install id. */}
+                    {part.retired.tunnel_id !== null && part.retired.tunnel_id === tunnelId
+                        ? t("deviceInstall.retiredSelf", { id: part.retired.install_id, time: formatRelativeTime(part.retired.retired_at, locale, now) })
+                        : part.retired.tunnel_name
                         ? t("deviceInstall.retiredNamed", { name: part.retired.tunnel_name, id: part.retired.install_id, time: formatRelativeTime(part.retired.retired_at, locale, now) })
                         : t("deviceInstall.retiredOther", { id: part.retired.install_id, time: formatRelativeTime(part.retired.retired_at, locale, now) })}
                 </span>
@@ -148,12 +151,12 @@ export function DeviceMap({ view, deviceName }: { view: Pick<DeviceInstallView, 
 }
 
 /** 改名的圖：Telepy ─ 隧道 ─ 裝置（裡面兩個服務：舊的 / 新的，各自的狀態）。/ The rename diagram. */
-function RenameFlow({ view, steps, running, report }: { view: DeviceInstallView; steps: ReportedStep[]; running: boolean; report?: RenameReport | null }) {
+function RenameFlow({ view, steps, running, report, oldNames, newLabel }: { view: DeviceInstallView; steps: ReportedStep[]; running: boolean; report?: RenameReport | null; oldNames?: string[]; newLabel?: string }) {
     const { t } = useI18n();
     const l = lanes(steps, running);
     // 改完之後 view 已經沒有舊名稱了：用回報裡的。/ After the rename the view has no older names left: use the report's.
-    const oldName = report?.old.join(", ") || view.rename.old.join(", ") || [...view.older, ...view.earlier].join(", ") || "—";
-    const newName = report?.new_name ?? view.rename.new_name ?? view.names.systemd;
+    const oldName = report?.old.join(", ") || oldNames?.join(", ") || view.rename.old.join(", ") || [...view.older, ...view.earlier].join(", ") || "—";
+    const newName = report?.new_name ?? newLabel ?? view.rename.new_name ?? view.names.systemd;
     const oldText = l.carrying === "old" ? t("deviceInstall.lane.carrying") : l.old === "waiting" ? t("deviceInstall.lane.removed") : l.old === "failed" ? t("deviceInstall.lane.leftover") : t("deviceInstall.lane.removing");
     const newText = l.new === "failed" ? t("deviceInstall.lane.undone") : l.carrying === "new" ? t("deviceInstall.lane.carrying") : steps.some((s) => s.id === "standby" && s.state === "done") ? t("deviceInstall.lane.standby") : running ? t("deviceInstall.lane.starting") : t("deviceInstall.lane.notYet");
     return (
@@ -278,6 +281,59 @@ function RenameDialog({ isOpen, onClose, view, steps, running, report, onStart, 
                 <StepList steps={steps} running={running} />
                 {!started && <Callout tone="info">{t("deviceInstall.renameNote")}</Callout>}
                 {report && <ReportResult report={report} />}
+            </div>
+        </Modal>
+    );
+}
+
+/**
+ * 換連線方式的對話框（目前只提議改成自動）：現在 → 之後、需要什麼、同一張先接上再拆舊的圖與七步、結果。新服務用新的安裝代號，
+ * 所以在跑之前只說「新的名稱」。
+ * The switch dialog (offered for automatic): now → after, what it needs, the rename's make-before-break diagram and
+ * seven steps, the result. The new service gets a fresh install id, so before it runs it is just "a new name".
+ */
+function SwitchDialog({ isOpen, onClose, view, steps, running, report, onStart, deviceName }: { isOpen: boolean; onClose: () => void; view: DeviceInstallView; steps: ReportedStep[]; running: boolean; report: RenameReport | null; onStart: () => void; deviceName: string }) {
+    const { t } = useI18n();
+    const started = running || report !== null;
+    const now = view.switch?.way_in;
+    return (
+        <Modal
+            isOpen={isOpen}
+            onClose={running ? () => {} : onClose}
+            title={t("deviceInstall.switch.title", { name: deviceName })}
+            description={t("deviceInstall.switch.description")}
+            icon={<Route />}
+            size="4xl"
+            footer={
+                <>
+                    <Button type="button" variant="outline" onClick={onClose} disabled={running}>
+                        {report ? t("common.close") : t("common.cancel")}
+                    </Button>
+                    {!report && (
+                        <Button type="button" onClick={onStart} disabled={running || !view.switch?.possible}>
+                            {running ? <Loader2 size={15} className="animate-spin" /> : <Route size={15} />}
+                            {running ? t("deviceInstall.switch.running") : t("deviceInstall.switch.start")}
+                        </Button>
+                    )}
+                </>
+            }
+        >
+            <div className="space-y-5">
+                <PropertyList>
+                    <Property label={t("deviceInstall.switch.now")}>{now ? t(WAY_IN_KEY[now]) : t("deviceInstall.switch.wayUnknown")}</Property>
+                    <Property label={t("deviceInstall.switch.after")}>{t("deviceInstall.switch.wayAutoLong")}</Property>
+                </PropertyList>
+                {!started && <Callout tone="info" title={t("deviceInstall.switch.needsTitle")}>{t("deviceInstall.switch.needs")}</Callout>}
+                <RenameFlow view={view} steps={steps} running={running} report={report} oldNames={view.switch?.old} newLabel={t("deviceInstall.switch.newName")} />
+                <StepList steps={steps} running={running} hintPrefix="deviceInstall.switchStep" />
+                {report &&
+                    (report.ok ? (
+                        <Callout tone="tip" title={t("deviceInstall.switch.done")}>
+                            {t("deviceInstall.switch.doneBody", { name: report.new_name ?? "", old: report.old.join(", ") })}
+                        </Callout>
+                    ) : (
+                        <ReportResult report={report} />
+                    ))}
             </div>
         </Modal>
     );
@@ -466,6 +522,7 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
     const d = useDeviceInstall(tunnelId, isOpen, true, onChanged);
     const [renameOpen, setRenameOpen] = useState(false);
     const [tidyOpen, setTidyOpen] = useState(false);
+    const [switchOpen, setSwitchOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     const v = d.view;
     if (!v) {
@@ -547,6 +604,19 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                         <CopyButton value={v.install_id} />
                     </span>
                 </Property>
+                {/* 怎麼連 Telepy；還不是自動、而且做得到時提議換成自動。/ How it connects; offers automatic when possible. */}
+                {v.switch && (
+                    <Property label={t("deviceInstall.switch.label")}>
+                        <span className="flex flex-wrap items-center gap-2">
+                            <span>{v.switch.way_in ? t(WAY_IN_KEY[v.switch.way_in]) : t("deviceInstall.switch.wayUnknown")}</span>
+                            {offerAutomatic(v) && (
+                                <Button type="button" size="sm" variant="outline" onClick={() => setSwitchOpen(true)} disabled={!v.online || d.renaming} title={v.online ? undefined : t("deviceInstall.offline")}>
+                                    <Route size={14} /> {t("deviceInstall.switch.button")}
+                                </Button>
+                            )}
+                        </span>
+                    </Property>
+                )}
                 {v.renamed_at && v.renamed_from.length > 0 && (
                     <Property label={t("deviceInstall.renamedLabel")}>
                         {t("deviceInstall.renamedValue", { old: v.renamed_from.join(", "), time: formatRelativeTime(v.renamed_at, locale, now) })}
@@ -580,7 +650,7 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                             </p>
                             <ul className="divide-y divide-border">
                                 {g.parts.map((p, i) => (
-                                    <PartRow key={`${p.kind}-${p.name}-${p.account}-${i}`} part={p} />
+                                    <PartRow key={`${p.kind}-${p.name}-${p.account}-${i}`} part={p} tunnelId={tunnelId} />
                                 ))}
                             </ul>
                         </div>
@@ -623,6 +693,19 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                 running={d.renaming}
                 report={d.report}
                 onStart={() => void d.tidy()}
+                deviceName={deviceName}
+            />
+            <SwitchDialog
+                isOpen={switchOpen}
+                onClose={() => {
+                    setSwitchOpen(false);
+                    d.resetRename();
+                }}
+                view={v}
+                steps={d.steps}
+                running={d.renaming}
+                report={d.report}
+                onStart={() => void d.switchTransport("auto")}
                 deviceName={deviceName}
             />
             <InfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} view={v} />

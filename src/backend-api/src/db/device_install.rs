@@ -131,6 +131,36 @@ pub async fn retire(db: &Db, tunnel_id: i64, tunnel_name: &str, user_id: i64) ->
 }
 
 /// 帳本裡的這些代號。/ Ledger rows for these ids.
+/// 換連線方式用的新代號：沒有人用、也不在紀錄裡。/ A fresh install id for a switch: unused and never retired.
+pub async fn fresh_id(db: &Db) -> sqlx::Result<String> {
+    loop {
+        let id = crate::device_install::names::new_id();
+        if !is_retired(db, &id).await? && tunnel_by_install_id(db, &id).await?.is_none() {
+            return Ok(id);
+        }
+    }
+}
+
+/// 換連線方式成功：隧道改用新代號，舊代號進紀錄（同一條隧道，所以留下的東西認得出是它以前的安裝）。
+/// After a switch: the tunnel uses the new id, the old one goes to the ledger under the same tunnel.
+pub async fn adopt(db: &Db, tunnel_id: i64, new_id: &str, tunnel_name: &str, user_id: i64) -> sqlx::Result<()> {
+    let mut tx = db.write.begin().await?;
+    sqlx::query(
+        "INSERT INTO telepy_device_install_retired (install_id, tunnel_id, tunnel_name, user_id, retired_at)
+         SELECT install_id, tunnel_id, ?, ?, ? FROM telepy_device_install WHERE tunnel_id = ? AND install_id <> ?
+         ON CONFLICT (install_id) DO NOTHING",
+    )
+    .bind(tunnel_name)
+    .bind(user_id)
+    .bind(now_db())
+    .bind(tunnel_id)
+    .bind(new_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE telepy_device_install SET install_id = ? WHERE tunnel_id = ?").bind(new_id).bind(tunnel_id).execute(&mut *tx).await?;
+    tx.commit().await
+}
+
 pub async fn retired(db: &Db, ids: &[String]) -> sqlx::Result<HashMap<String, Retired>> {
     let mut out = HashMap::new();
     for id in ids {
