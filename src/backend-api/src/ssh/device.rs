@@ -201,7 +201,7 @@ pub async fn start_sftp_watched(channel: Channel<client::Msg>) -> anyhow::Result
 /// 要子系統；失敗就把 channel 關掉 —— 光是 drop 一條 `Channel` 不會送 close，裝置會一直算著這個 session（MaxSessions）。
 /// Ask for the subsystem; on failure close the channel, since dropping a bare `Channel` sends no close and the
 /// device would keep counting the session against MaxSessions.
-async fn open_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<Channel<client::Msg>> {
+pub(crate) async fn open_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<Channel<client::Msg>> {
     match ask_for_sftp(&mut channel).await {
         Ok(()) => Ok(channel),
         Err(e) => {

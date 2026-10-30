@@ -21,6 +21,7 @@ import { useDeviceInstall } from "@/hooks/useDeviceInstall";
 import { useNow } from "@/hooks/useNow";
 import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, failureKey, groupParts, lanes, mapRows, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type ReportedStep } from "@/lib/deviceInstall";
 import { formatRelativeTime } from "@/lib/relativeTime";
+import { compatNoServerAlive, factChips } from "@/lib/joinScript";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
@@ -413,7 +414,21 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                         {t("deviceInstall.renamedValue", { old: v.renamed_from.join(", "), time: formatRelativeTime(v.renamed_at, locale, now) })}
                     </Property>
                 )}
+                {/* 一鍵加入腳本回報的環境：shell、SSH client → server、服務管理器、keepalive。/ What the join script found. */}
+                {v.join && (
+                    <Property label={t("deviceInstall.joinLabel")}>
+                        <span className="flex flex-wrap items-center gap-1">
+                            {factChips(v.join.facts).map((c) => (
+                                <Chip key={c.key} title={t(c.label)}>{c.value}</Chip>
+                            ))}
+                            {v.join.at && <span className="text-xs text-muted-foreground">{t("deviceInstall.joinAt", { time: formatRelativeTime(v.join.at, locale, now) })}</span>}
+                        </span>
+                    </Property>
+                )}
             </PropertyList>
+
+            {v.join && compatNoServerAlive(v.join.facts) && <Callout tone="warning" title={t("join.compatTitle")}>{t("join.compatBody")}</Callout>}
+            {v.join?.facts.server?.startsWith("Dropbear") && <Callout tone="info">{t("deviceInstall.dropbear")}</Callout>}
 
             {windows && <Callout tone="info">{t("deviceInstall.windows")}</Callout>}
 

@@ -63,6 +63,9 @@ pub struct FileSnapshot {
     pub at: chrono::DateTime<chrono::Utc>,
     /// 讀取失敗的原因。/ Why the read failed.
     pub error: Option<String>,
+    /// 實際讀 / 寫的檔案路徑（exec 模式下 root 在 OpenWrt 的 Dropbear 是 `/etc/dropbear/authorized_keys`）。
+    /// The file actually read / written (root on OpenWrt's Dropbear: `/etc/dropbear/authorized_keys`).
+    pub path: Option<String>,
 }
 
 impl DeviceKeys {
@@ -86,12 +89,17 @@ impl DeviceKeys {
 
     /// `remote` 每次讀 / 寫成功都記一筆。/ Recorded by `remote` after every successful read or write.
     pub fn record_snapshot(&self, reverse_port: i64, account: &str, content: Option<String>) {
-        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content, at: chrono::Utc::now(), error: None });
+        self.record_snapshot_at(reverse_port, account, content, None);
+    }
+
+    /// 同上，連實際的檔案路徑一起記。/ Same, with the file's actual path.
+    pub fn record_snapshot_at(&self, reverse_port: i64, account: &str, content: Option<String>, path: Option<String>) {
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content, at: chrono::Utc::now(), error: None, path });
     }
 
     /// 讀不到（例如服務金鑰不在這個帳號）。/ The read failed (e.g. the service key is not in that account).
     pub fn record_failure(&self, reverse_port: i64, account: &str, error: String) {
-        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content: None, at: chrono::Utc::now(), error: Some(error) });
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content: None, at: chrono::Utc::now(), error: Some(error), path: None });
     }
 
     pub fn snapshot(&self, reverse_port: i64, account: &str) -> Option<FileSnapshot> {

@@ -153,7 +153,15 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
     };
     let accounts: Vec<Value> = survey.iter().map(|a| json!({ "account": a.account, "platform": a.platform, "os": a.os, "error": a.error })).collect();
     let renamed_from: Vec<String> = row.as_ref().and_then(|r| r.renamed_from.as_deref()).and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+    // 一鍵加入腳本回報的環境（shell、client → server、init、keepalive 模式）。/ What the join script found.
+    let join_facts: Value = row.as_ref().and_then(|r| r.join_facts.as_deref()).and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
+    let join = if join_facts.is_null() {
+        Value::Null
+    } else {
+        json!({ "facts": join_facts, "summary": crate::join::facts_summary(&join_facts), "at": row.as_ref().and_then(|r| r.join_facts_at.as_deref()).map(db_to_iso_utc_z) })
+    };
     Ok(json!({
+        "join": join,
         "install_id": id,
         "names": {
             "systemd": names.unit(),

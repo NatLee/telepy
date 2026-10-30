@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::oauth::{hash_token, random_token};
 
@@ -64,6 +65,9 @@ pub struct Ticket {
     pub os: Option<String>,
     /// 這台機器已經是擁有者的另一條隧道（同一組 SSH host key）。/ The owner's other tunnel on this very machine.
     pub same_machine_as: Option<SameMachine>,
+    /// 腳本偵測到的環境（shell、SSH client / server、服務管理器、keepalive 模式…；[`parse_facts`]）。
+    /// What the install script found on the device (shell, SSH client / server, init, keepalive mode…).
+    pub facts: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     #[serde(skip)]
@@ -90,6 +94,7 @@ pub struct Registration {
     pub hostname: String,
     pub os: String,
     pub same_machine_as: Option<SameMachine>,
+    pub facts: Option<Value>,
 }
 
 /// 同一台機器上、同一個擁有者的另一條隧道。/ The same owner's other tunnel on the same machine.
@@ -144,6 +149,7 @@ impl JoinTickets {
             hostname: None,
             os: None,
             same_machine_as: None,
+            facts: None,
             created_at: now,
             expires_at: now + chrono::Duration::from_std(TICKET_TTL).unwrap(),
             deadline: Instant::now() + TICKET_TTL,
@@ -188,6 +194,7 @@ impl JoinTickets {
         t.hostname = Some(r.hostname);
         t.os = Some(r.os);
         t.same_machine_as = r.same_machine_as;
+        t.facts = r.facts;
         t.deadline = Instant::now() + STATUS_TTL;
         t.expires_at = Utc::now() + chrono::Duration::from_std(STATUS_TTL).unwrap();
         Some(t.clone())
@@ -265,6 +272,85 @@ pub fn clean_hostname(raw: &str) -> String {
     raw.trim().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(64).collect()
 }
 
+/// 腳本送來的環境資料裡接受的欄位（其他一律丟掉）。/ The fields accepted from the script; anything else is dropped.
+pub const FACT_KEYS: &[&str] = &["shell", "os", "arch", "http", "client", "server", "init", "keepalive", "key_format", "authorized_keys", "ssh_host", "compat"];
+const FACT_MAX_LEN: usize = 120;
+
+/// 腳本偵測到的環境：只留白名單欄位、可印 ASCII、每值 ≤ 120 字；`compat` 是字串陣列（≤ 8）。空的回 None。
+/// Validate what the script found: allow-listed keys, printable ASCII, ≤ 120 chars each; `compat` = up to 8 strings.
+pub fn parse_facts(v: Option<&Value>) -> Option<Value> {
+    let obj = v?.as_object()?;
+    let clean = |s: &str| -> Option<String> {
+        let s: String = s.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(FACT_MAX_LEN).collect::<String>().trim().to_string();
+        (!s.is_empty()).then_some(s)
+    };
+    let mut out = serde_json::Map::new();
+    for k in FACT_KEYS {
+        let Some(val) = obj.get(*k) else { continue };
+        if *k == "compat" {
+            let list: Vec<Value> = val.as_array().map(|a| a.iter().filter_map(Value::as_str).filter_map(clean).take(8).map(Value::String).collect()).unwrap_or_default();
+            if !list.is_empty() {
+                out.insert(k.to_string(), Value::Array(list));
+            }
+        } else if let Some(s) = val.as_str().and_then(clean) {
+            out.insert(k.to_string(), Value::String(s));
+        }
+    }
+    (!out.is_empty()).then(|| Value::Object(out))
+}
+
+/// 事件與日誌用的一句話（例如 `ash, dbclient 2022.82 → Dropbear 2022.82, procd, keepalive tcp (compat: no_server_alive)`）。
+/// One line for events and logs.
+pub fn facts_summary(f: &Value) -> String {
+    let s = |k: &str| f.get(k).and_then(Value::as_str);
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(v) = s("shell") {
+        parts.push(v.to_string());
+    }
+    match (s("client"), s("server")) {
+        (Some(c), Some(sv)) => parts.push(format!("{c} → {sv}")),
+        (Some(c), None) => parts.push(c.to_string()),
+        (None, Some(sv)) => parts.push(format!("server {sv}")),
+        (None, None) => {}
+    }
+    if let Some(v) = s("init") {
+        parts.push(v.to_string());
+    }
+    if let Some(v) = s("keepalive") {
+        parts.push(format!("keepalive {v}"));
+    }
+    if let Some(c) = f.get("compat").and_then(Value::as_array).filter(|a| !a.is_empty()) {
+        let names: Vec<&str> = c.iter().filter_map(Value::as_str).collect();
+        parts.push(format!("compat: {}", names.join(", ")));
+    }
+    parts.join(", ")
+}
+
+/// 給裝置的回應：`soft` 時一律 200，第一行 `STATUS=<原本的狀態碼>`（uclient-fetch / BusyBox wget 看不到狀態碼，
+/// 錯誤時連 body 都不存）。/ Device answers: with `soft` always 200 and a first line `STATUS=<code>`, because
+/// uclient-fetch / BusyBox wget neither show the status code nor keep an error body.
+pub fn soft_body(status: u16, body: &str) -> String {
+    format!("STATUS={status}\n{body}")
+}
+
+/// `?soft=1`（或 `soft=yes` / `soft=true`）。
+pub fn wants_soft(query: &std::collections::HashMap<String, String>) -> bool {
+    matches!(query.get("soft").map(|s| s.trim()), Some("1" | "yes" | "true"))
+}
+
+/// 腳本最後一行的校驗碼：`# telepy-sha256: <hex>`，算的是它前面的全部內容。腳本從檔案執行時自己核對
+/// （貼上或下載時少了幾個字元就會被抓到，而不是在 ash 裡報一個莫名的語法錯誤）。
+/// Append the checksum trailer the script verifies when run from a file (a damaged paste / download is caught
+/// as such, not as a baffling ash syntax error).
+pub const CHECKSUM_PREFIX: &str = "# telepy-sha256: ";
+
+pub fn with_checksum(script: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let body = if script.ends_with('\n') { script.to_string() } else { format!("{script}\n") };
+    let hex = Sha256::digest(body.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>();
+    format!("{body}{CHECKSUM_PREFIX}{hex}\n")
+}
+
 /// 給腳本讀的 `KEY=value` 行（值不能換行）。/ `KEY=value` lines for the script (values are single-line).
 pub fn kv_lines(pairs: &[(&str, String)]) -> String {
     let mut out = String::new();
@@ -293,6 +379,7 @@ pub fn explain_login_error(err: &str, username: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn names_from_hostnames() {
@@ -310,6 +397,38 @@ mod tests {
     #[test]
     fn kv_output_is_line_safe() {
         assert_eq!(kv_lines(&[("A", "1".into()), ("B", "x\ny".into())]), "A=1\nB=xy\n");
+        assert_eq!(soft_body(409, "ERROR=used\n"), "STATUS=409\nERROR=used\n");
+        let q: std::collections::HashMap<String, String> = [("soft".to_string(), "1".to_string())].into_iter().collect();
+        assert!(wants_soft(&q));
+        assert!(!wants_soft(&std::collections::HashMap::new()));
+    }
+
+    #[test]
+    fn checksum_trailer_matches_sha256sum_of_the_body() {
+        // `printf 'hello\n' | sha256sum` — the script does the same with `sed '$d' "$0" | sha256sum`.
+        let out = with_checksum("hello\n");
+        assert_eq!(out, "hello\n# telepy-sha256: 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03\n");
+        assert_eq!(with_checksum("hello"), out, "a missing final newline is added before hashing");
+    }
+
+    #[test]
+    fn facts_are_allow_listed_and_trimmed() {
+        assert!(parse_facts(None).is_none());
+        assert!(parse_facts(Some(&json!("x"))).is_none());
+        assert!(parse_facts(Some(&json!({"bogus": "1"}))).is_none(), "unknown keys only = nothing");
+        let f = parse_facts(Some(&json!({
+            "shell": "ash (BusyBox 1.36.1)", "client": "dbclient 2022.82", "server": "Dropbear 2022.82", "init": "procd",
+            "keepalive": "tcp", "compat": ["no_server_alive", 5, "x\ny"], "token": "tpj_secret", "os": "中文\u{7}OpenWrt 23.05"
+        })))
+        .unwrap();
+        assert_eq!(f["client"], "dbclient 2022.82");
+        assert!(f.get("token").is_none(), "unknown keys are dropped");
+        assert_eq!(f["compat"], json!(["no_server_alive", "xy"]), "non-strings dropped, control chars stripped");
+        assert_eq!(f["os"], "OpenWrt 23.05", "non-ASCII and control characters are stripped");
+        assert_eq!(facts_summary(&f), "ash (BusyBox 1.36.1), dbclient 2022.82 → Dropbear 2022.82, procd, keepalive tcp, compat: no_server_alive, xy");
+        let long = "a".repeat(500);
+        assert_eq!(parse_facts(Some(&json!({"client": long}))).unwrap()["client"].as_str().unwrap().len(), FACT_MAX_LEN);
+        assert_eq!(facts_summary(&json!({"server": "OpenSSH_9.6"})), "server OpenSSH_9.6");
     }
 
     #[test]
@@ -324,7 +443,7 @@ mod tests {
         assert_eq!(s.claim(&token).unwrap_err(), TakeError::Used, "one registration per ticket");
         s.release(&claimed.token_hash);
         assert!(s.claim(&token).is_ok(), "a failed registration can be retried");
-        s.registered(&claimed.token_hash, Registration { same_machine_as: None, tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), ssh_port: 22, hostname: "pi".into(), os: "Linux".into() });
+        s.registered(&claimed.token_hash, Registration { same_machine_as: None, facts: None, tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), ssh_port: 22, hostname: "pi".into(), os: "Linux".into() });
         assert_eq!(s.by_token(&token).unwrap().tunnel_id, Some(7));
         assert!(s.begin_verify(&claimed.token_hash));
         assert!(!s.begin_verify(&claimed.token_hash), "one check at a time");

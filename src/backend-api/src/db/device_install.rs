@@ -20,9 +20,12 @@ pub struct Row {
     pub renamed_at: Option<String>,
     /// 改名前的服務名稱（JSON 字串陣列）。/ The service names before the rename (JSON array).
     pub renamed_from: Option<String>,
+    /// 一鍵加入腳本偵測到的環境（`join::parse_facts` 的 JSON）。/ What the join script found (JSON from `join::parse_facts`).
+    pub join_facts: Option<String>,
+    pub join_facts_at: Option<String>,
 }
 
-const COLS: &str = "tunnel_id, install_id, created_at, survey, surveyed_at, survey_error, renamed_at, renamed_from";
+const COLS: &str = "tunnel_id, install_id, created_at, survey, surveyed_at, survey_error, renamed_at, renamed_from, join_facts, join_facts_at";
 
 pub async fn get(db: &Db, tunnel_id: i64) -> sqlx::Result<Option<Row>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM telepy_device_install WHERE tunnel_id = ?")).bind(tunnel_id).fetch_optional(&db.read).await
@@ -72,6 +75,13 @@ pub async fn record_survey(db: &Db, tunnel_id: i64, survey: Option<&str>, error:
             sqlx::query("UPDATE telepy_device_install SET surveyed_at = ?, survey_error = ? WHERE tunnel_id = ?").bind(now_db()).bind(error).bind(tunnel_id).execute(&db.write).await?;
         }
     }
+    Ok(())
+}
+
+/// 記下一鍵加入腳本回報的環境（每次加入 / 重新加入都覆蓋）。/ Store what the join script found (overwritten on every join).
+pub async fn record_join_facts(db: &Db, tunnel_id: i64, facts_json: &str) -> sqlx::Result<()> {
+    ensure(db, tunnel_id).await?;
+    sqlx::query("UPDATE telepy_device_install SET join_facts = ?, join_facts_at = ? WHERE tunnel_id = ?").bind(facts_json).bind(now_db()).bind(tunnel_id).execute(&db.write).await?;
     Ok(())
 }
 

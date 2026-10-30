@@ -11,8 +11,9 @@ import { apiFetch, readJson } from "@/lib/api";
 import { useNotificationHandlers, useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificationActions";
 import { useI18n } from "@/lib/i18n";
+import type { JoinFacts, JoinPhase } from "@/lib/joinScript";
 
-export type JoinPhase = "waiting" | "registered" | "connected" | "verified" | "failed";
+export type { JoinPhase } from "@/lib/joinScript";
 
 export interface JoinTicket {
     id: string;
@@ -31,6 +32,8 @@ export interface JoinTicket {
     os: string | null;
     /** 這台機器已經是我的另一條隧道（同一組 SSH host key）。/ My other tunnel on this very machine (same host key). */
     same_machine_as: { id: number; name: string } | null;
+    /** 腳本偵測到的環境（shell、SSH client / server、服務管理器、keepalive）。/ What the script found on the device. */
+    facts: JoinFacts | null;
     created_at: string;
     expires_at: string;
 }

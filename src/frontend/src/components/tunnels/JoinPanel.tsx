@@ -10,10 +10,13 @@ import Link from "next/link";
 import { CheckCircle2, Circle, Clock, ExternalLink, KeyRound, Lightbulb, Loader2, Lock, MonitorSmartphone, RotateCcw, ScrollText, ShieldCheck, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { Chip } from "@/components/ui/section";
 import { Input } from "@/components/ui/input";
 import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
+import { JoinScriptFlow } from "@/components/tunnels/JoinScriptFlow";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { compatNoServerAlive, factChips, joinCommands } from "@/lib/joinScript";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import type { DeviceJoin, JoinPhase } from "@/hooks/useDeviceJoin";
 import type { TranslationKey } from "@/locales/en";
@@ -56,6 +59,8 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
     const { t } = useI18n();
     const { form, ticket, expired, msLeft, actions } = join;
     const [sudo, setSudo] = useState<"sudo" | "user">("sudo");
+    // 貼進 shell（一般）或先下載、檢查語法再執行（路由器 / 序列埠主控台貼上會掉字）。/ Pipe, or download + check + run.
+    const [how, setHow] = useState<"pipe" | "download">("pipe");
 
     if (!ticket) {
         return (
@@ -126,9 +131,12 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
         if (i === phaseIndex) return expired && ticket.phase === "waiting" ? "todo" : "active";
         return "todo";
     };
-    const command = sudo === "sudo" ? ticket.command : ticket.command_no_sudo;
+    const commands = joinCommands(ticket.install_url, ticket.token, { sudo: sudo === "sudo", viaWeb: ticket.transport === "websocket" });
+    const command = how === "pipe" ? (sudo === "sudo" ? ticket.command : ticket.command_no_sudo) : commands.download;
     const device = ticket.tunnel_name ?? ticket.name ?? t("join.thisDevice");
     const hostInfo = [ticket.hostname, ticket.os].filter(Boolean).join(" · ");
+    const chips = factChips(ticket.facts);
+    const compat = compatNoServerAlive(ticket.facts);
     // 雷達：等裝置撥進來時掃描，連上（或驗證完）變綠。/ Radar: sweeps while waiting, turns green once connected.
     const radarState: RadarState = failed ? "failed" : ticket.phase === "connected" || ticket.phase === "verified" ? "connected" : expired ? "idle" : "waiting";
 
@@ -138,16 +146,34 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
 
             {ticket.phase === "waiting" && !expired && (
                 <div className="space-y-3">
-                    <Segmented
-                        value={sudo}
-                        onChange={setSudo}
-                        ariaLabel={t("join.sudoLabel")}
-                        options={[
-                            { value: "sudo", label: t("join.withSudo") },
-                            { value: "user", label: t("join.withoutSudo") },
-                        ]}
-                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Segmented
+                            value={sudo}
+                            onChange={setSudo}
+                            ariaLabel={t("join.sudoLabel")}
+                            options={[
+                                { value: "sudo", label: t("join.withSudo") },
+                                { value: "user", label: t("join.withoutSudo") },
+                            ]}
+                        />
+                        <Segmented
+                            value={how}
+                            onChange={setHow}
+                            ariaLabel={t("join.howLabel")}
+                            options={[
+                                { value: "pipe", label: t("join.howPipe") },
+                                { value: "download", label: t("join.howDownload") },
+                            ]}
+                        />
+                    </div>
                     <CopyLine value={command} />
+                    {how === "download" && (
+                        <>
+                            <p className="text-xs leading-relaxed text-muted-foreground">{t("join.howDownloadHint")}</p>
+                            <p className="text-xs text-muted-foreground">{t("join.wgetLabel")}</p>
+                            <CopyLine value={commands.wget} />
+                        </>
+                    )}
                     <p className="text-xs leading-relaxed text-muted-foreground">{sudo === "sudo" ? t("join.withSudoHint") : t("join.withoutSudoHint")}</p>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
                         <span className="inline-flex items-center gap-1.5"><Clock size={13} aria-hidden /> {t("join.expiresIn", { time: formatLeft(msLeft) })}</span>
@@ -155,25 +181,48 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                             <ScrollText size={13} aria-hidden /> {t("join.viewScript")} <ExternalLink size={11} aria-hidden />
                         </a>
                     </div>
-                    <Disclosure title={t("join.whatItDoes")} icon={<ShieldCheck size={15} />}>
-                        <ol className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-muted-foreground">
-                            {(["join.does1", "join.does2", "join.does3", "join.does4", ...(ticket.transport === "websocket" ? ["join.doesWeb" as TranslationKey] : []), "join.does5", "join.does6"] as TranslationKey[]).map((k) => <li key={k}>{t(k)}</li>)}
-                        </ol>
+                    <Disclosure title={t("join.checkTitle")} icon={<ShieldCheck size={15} />}>
+                        <div className="space-y-2">
+                            <p className="text-xs leading-relaxed text-muted-foreground">{t("join.checkBody")}</p>
+                            <CopyLine value={commands.check} />
+                            <CopyLine value={commands.checkWget} />
+                        </div>
                     </Disclosure>
                 </div>
             )}
 
             {expired && ticket.phase === "waiting" && <Callout tone="warning">{t("join.expired")}</Callout>}
 
+            {/* 指令在裝置上做什麼：七步流程圖，照階段亮起。/ What the command does on the device: seven steps, lit by the phase. */}
+            <Disclosure title={t("join.whatItDoes")} icon={<ShieldCheck size={15} />} defaultOpen>
+                <JoinScriptFlow phase={ticket.phase} hasTunnel={!!ticket.tunnel_id} expired={expired} account={ticket.username} deviceName={ticket.tunnel_name ?? ticket.name} />
+                {ticket.transport === "websocket" && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("join.doesWeb")}</p>}
+            </Disclosure>
+
             <div className="flex flex-col items-center gap-5 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center">
             <DialInRadar state={radarState} />
             <ol className="w-full min-w-0 flex-1 space-y-4" aria-live="polite">
                 <ProgressRow state={rowState(0)} title={t("join.step.waiting")} detail={phaseIndex === 0 && !expired ? t("join.step.waitingDetail") : undefined} />
-                <ProgressRow state={rowState(1)} title={t("join.step.registered", { name: device })} detail={hostInfo || undefined} />
+                <ProgressRow
+                    state={rowState(1)}
+                    title={t("join.step.registered", { name: device })}
+                    detail={
+                        hostInfo || chips.length > 0 ? (
+                            <span className="flex flex-wrap items-center gap-1">
+                                {hostInfo && <span>{hostInfo}</span>}
+                                {chips.map((c) => (
+                                    <Chip key={c.key} title={t(c.label)}>{c.value}</Chip>
+                                ))}
+                            </span>
+                        ) : undefined
+                    }
+                />
                 <ProgressRow state={rowState(2)} title={t("join.step.connected")} detail={ticket.reverse_port ? t("join.step.connectedDetail", { port: ticket.reverse_port }) : undefined} />
                 <ProgressRow state={rowState(3)} title={t("join.step.verified", { user: ticket.username ?? "…" })} detail={failed ? ticket.detail ?? undefined : undefined} />
             </ol>
             </div>
+
+            {compat && <Callout tone="warning" title={t("join.compatTitle")}>{t("join.compatBody")}</Callout>}
 
             {ticket.phase === "verified" && ticket.tunnel_id && ticket.reverse_port && (
                 <Callout tone="tip">{t("join.done", { name: device, user: ticket.username ?? "" })}</Callout>
