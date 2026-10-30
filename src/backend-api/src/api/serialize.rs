@@ -79,7 +79,7 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: 
 /// 不知道 = null），`last` = 現在連著的、否則最後一次實際用的方式，`live` = 現在連著，`tls` = 那次 websocket 外面有沒有
 /// TLS（wss；SSH port 或不知道 = null）。兩個不一樣 = 實際走的跟設定的不同（例如之後切換過）。
 /// How the device reaches Telepy (no address, so for everyone who sees the tunnel): `setup` = the way it was set up
-/// (`ssh` / `websocket`, null = unknown), `last` = the way it is connected now, else the way it last connected, `live`
+/// (`ssh` / `websocket` / `auto` = the SSH port first, the web port when blocked; null = unknown), `last` = the way it is connected now, else the way it last connected, `live`
 /// = connected now, `tls` = whether that WebSocket had TLS (wss; null for the SSH port or unknown). When the two
 /// differ, the device came in another way than it was set up for.
 pub fn way_in_json(setup: Option<&str>, live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Value {
@@ -94,7 +94,7 @@ pub fn way_in_json(setup: Option<&str>, live: Option<&Endpoint>, last: Option<&L
         _ => None,
     });
     json!({
-        "setup": setup.filter(|s| matches!(*s, "ssh" | "websocket")),
+        "setup": setup.filter(|s| matches!(*s, "ssh" | "websocket" | "auto")),
         "last": way,
         "live": live.is_some(),
         "tls": if way == Some("websocket") { json!(tls) } else { Value::Null },

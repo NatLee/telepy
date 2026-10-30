@@ -101,12 +101,18 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     let domain = server_domain(headers, state);
     let host = ssh_host(headers, state);
     let gateway_keys = state.gateway.host_public_keys();
-    // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
-    // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
-    let via_web = super::join::parse_transport(transport)? == "websocket";
+    // SSH over WebSocket（筆電只能出網頁 port）或自動（先 SSH 的 port、不通再走網頁）：伺服器區塊多一行 ProxyCommand，
+    // 筆電要先存 telepy-ws.py。/ SSH over WebSocket, or automatic (the SSH port first, the web port when it fails): the
+    // server stanza gets a ProxyCommand and the laptop saves telepy-ws.py first.
+    let transport = super::join::parse_transport(transport)?;
     let base = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
     let ws_url = super::join::ws_url(&base);
-    let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
+    let tcp = format!("{host}:{}", gateway_port(state));
+    let ws_proxy = match transport {
+        "websocket" => Some(scripts::laptop_proxy_command(None, &ws_url)),
+        "auto" => Some(scripts::laptop_proxy_command(Some(&tcp), &ws_url)),
+        _ => None,
+    };
     let mut text = String::from(SERVER_STEM);
     text.push_str(&scripts::render_server_config(&domain, &host, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
     let alias = scripts::server_alias(&domain, &state.config.reverse_server_ssh_port);
@@ -118,7 +124,7 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     let Value::Object(fields) = json!({
         "server": server,
         "known_hosts": known_hosts, "known_hosts_path": scripts::LAPTOP_KNOWN_HOSTS,
-        "transport": if via_web { "websocket" } else { "ssh" },
+        "transport": transport,
         "ws_url": ws_url,
         "ws_client_url": format!("{base}/api/join/telepy-ws.py"),
         "ws_client_path": scripts::WS_CLIENT_PATH,
@@ -277,13 +283,23 @@ async fn config_many(
     Ok(Json(Value::Object(fields)))
 }
 
-/// `transport=websocket` 時腳本要的兩個位址 (ws url, 小程式 url)。/ The carrier's URLs when the WebSocket transport is asked for.
-fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> Result<Option<(String, String)>, ApiError> {
-    if super::join::parse_transport(transport)? != "websocket" {
+/// gateway 對外的 port（沒設 = 22）。/ The gateway's public port (22 when unset).
+fn gateway_port(state: &AppState) -> String {
+    Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string()
+}
+
+/// 腳本用的載具：`websocket` / `auto` 時 (ws url, 小程式 url, auto 時 SSH 的 `host:port`)。
+/// The carrier for the scripts: (ws url, carrier url, and the SSH `host:port` for `auto`).
+type Carrier = (String, String, Option<String>);
+
+fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> Result<Option<Carrier>, ApiError> {
+    let transport = super::join::parse_transport(transport)?;
+    if transport == "ssh" {
         return Ok(None);
     }
     let base = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
-    Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"))))
+    let tcp = (transport == "auto").then(|| format!("{}:{}", ssh_host(headers, state), gateway_port(state)));
+    Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"), tcp)))
 }
 
 /// 六種腳本的共用渲染：autossh-service 需要目標使用者名稱（username_id 可指定）。
@@ -297,7 +313,7 @@ async fn render_for(
     username_id: Option<i64>,
     domain: &str,
     ssh_host: &str,
-    ws: Option<(String, String)>,
+    ws: Option<Carrier>,
 ) -> Result<(String, &'static str), ApiError> {
     let username = if kind == "autossh-service" {
         let allowed = permissions::allowed_usernames(&state.db, user_id, t).await?;
@@ -324,7 +340,7 @@ async fn render_for(
         key_path,
         telepy_public_key: service_key.as_deref(),
         gateway_host_keys: &gateway_keys,
-        ws: ws.as_ref().map(|(url, client_url)| scripts::WsCarrier { url, client_url }),
+        ws: ws.as_ref().map(|(url, client_url, tcp)| scripts::WsCarrier { url, client_url, tcp: tcp.as_deref() }),
         install_id: &install_id,
     };
     scripts::render_script(kind, &ctx).map_err(ApiError::bad_request)
@@ -450,7 +466,11 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
         Ok(ws) => ws,
         Err(e) => return plain(StatusCode::BAD_REQUEST, format!("{:?}", e.body)),
     };
-    let way = if ws.is_some() { "websocket" } else { "ssh" };
+    let way = match &ws {
+        Some((_, _, Some(_))) => "auto",
+        Some(_) => "websocket",
+        None => "ssh",
+    };
     match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain, &ssh_host(&headers, &state), ws).await {
         Ok((script, _)) => {
             // 裝置拿走了腳本：它就是這樣加進來的（重新安裝就覆蓋）。/ The device took the script: this is how it is added.

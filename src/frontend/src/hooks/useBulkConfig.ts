@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { LaptopTransport } from "@/lib/transportInfo";
 import { apiFetch } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
@@ -30,7 +31,7 @@ export function useBulkConfig() {
     const { t } = useI18n();
     const { showError, showSuccess } = useToast();
     const [accounts, setAccountsState] = useState<BulkAccounts>(readAccounts);
-    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
+    const [transport, setTransport] = useState<LaptopTransport>("ssh");
     // 哪個 (帳號模式, 傳輸) 的結果；跟目前的不同 = 載入中。/ Which (accounts, transport) a result is for.
     const [result, setResult] = useState<{ key: string; data: BulkConfigData } | null>(null);
     const [failedKey, setFailedKey] = useState<string | null>(null);
@@ -64,7 +65,7 @@ export function useBulkConfig() {
     useEffect(() => {
         let stale = false;
         const params = new URLSearchParams({ accounts });
-        if (transport === "websocket") params.set("transport", "websocket");
+        if (transport !== "ssh") params.set("transport", transport);
         if (pick) params.set("pick", pick);
         apiFetch(`/tunnels/server/config?${params}`)
             .then(async (res) => {

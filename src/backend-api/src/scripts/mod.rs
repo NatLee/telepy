@@ -71,15 +71,46 @@ pub struct WsCarrier<'a> {
     pub url: &'a str,
     /// `https://host/api/join/telepy-ws.py`
     pub client_url: &'a str,
+    /// 自動：先連這個 SSH 的 `host:port`，連不上才走 WebSocket（`telepy-ws.py --tcp`）。None = 只走 WebSocket。
+    /// Automatic: the SSH `host:port` first, the WebSocket only when that fails. None = the WebSocket only.
+    pub tcp: Option<&'a str>,
+}
+
+impl WsCarrier<'_> {
+    /// 小程式的參數：`[--tcp host:port] <ws url>`。/ The carrier's arguments.
+    pub fn args(&self) -> String {
+        match self.tcp {
+            Some(t) => format!("--tcp {t} {}", self.url),
+            None => self.url.to_string(),
+        }
+    }
 }
 
 /// 筆電 / 使用者層級腳本存放小程式的路徑。/ Where the carrier lives for user-level scripts and laptops.
 pub const WS_CLIENT_PATH: &str = "~/.ssh/telepy-ws.py";
 
-/// 使用者層級的 bash 腳本：下載小程式、組 ProxyCommand。回 (setup 區塊, ssh 選項)。
-/// User-level bash scripts: fetch the carrier, build the ProxyCommand. Returns (setup, option).
+/// 使用者層級的 bash 腳本：下載小程式、組 ProxyCommand。回 (setup 區塊, ssh 選項)。自動：沒有 python3（或下載
+/// 失敗）就只走 SSH 的 port，跟以前一樣。
+/// User-level bash scripts: fetch the carrier, build the ProxyCommand. Returns (setup, option). Automatic: without
+/// python3 (or the download) the tunnel uses the SSH port only, as before.
 fn bash_ws(ws: Option<WsCarrier>, dir: &str, file: &str, python: &str) -> (String, String) {
     let Some(ws) = ws else { return (String::new(), String::new()) };
+    if ws.tcp.is_some() {
+        let setup = format!(
+            "\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n\
+             PROXY_ARGS=()\n\
+             WS_CLIENT=\"{dir}/{file}\"\n\
+             if command -v {python} >/dev/null 2>&1 && curl -fsSL '{}' -o \"$WS_CLIENT\"; then\n\
+             \x20   chmod 700 \"$WS_CLIENT\"\n\
+             \x20   PROXY_ARGS=(-o \"ProxyCommand={python} $WS_CLIENT {}\")\n\
+             else\n\
+             \x20   echo 'No {python} (or the carrier could not be downloaded): the tunnel uses the SSH port only.'\n\
+             fi\n",
+            ws.client_url,
+            ws.args()
+        );
+        return (setup, "\"${PROXY_ARGS[@]}\" \\\n".to_string());
+    }
     let setup = format!(
         "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
          command -v {python} >/dev/null 2>&1 || {{ echo '{python} is required to carry the tunnel over the web port.'; exit 1; }}\n\
@@ -184,8 +215,31 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
         }
         "autossh-service" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i {k} ")).unwrap_or_default());
+            m.insert("unit_fixup", String::new());
             // 系統服務：小程式放 /etc/ssh（服務跑在別的帳號下）。/ System service: the carrier goes to /etc/ssh.
             match ctx.ws {
+                // 自動：有 python3 才帶 ProxyCommand；沒有就在寫好 unit 後拿掉它（unit 是引號 heredoc，不能用變數）。
+                // Automatic: the ProxyCommand only with python3; otherwise it is taken out of the written unit (a
+                // quoted heredoc cannot use variables).
+                Some(ws) if ws.tcp.is_some() => {
+                    m.insert(
+                        "ws_client_setup",
+                        format!(
+                            "\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n\
+                             CARRIER=\n\
+                             if command -v python3 >/dev/null 2>&1 && curl -fsSL '{}' | $SUDO tee /etc/ssh/{py} > /dev/null; then\n\
+                             \x20   $SUDO chmod 755 /etc/ssh/{py}\n\
+                             \x20   CARRIER=1\n\
+                             else\n\
+                             \x20   echo 'No python3 (or the carrier could not be downloaded): the tunnel uses the SSH port only.'\n\
+                             fi\n",
+                            ws.client_url,
+                            py = names.ws_py()
+                        ),
+                    );
+                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/{} {}\" ", names.ws_py(), ws.args()));
+                    m.insert("unit_fixup", "[ -n \"$CARRIER\" ] || $SUDO sed -i 's| -o \"ProxyCommand=[^\"]*\"||' \"$SERVICE_PATH\"\n".into());
+                }
                 Some(ws) => {
                     m.insert(
                         "ws_client_setup",
@@ -227,8 +281,10 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             }
             Ok((safe_substitute(AUTOSSH_SERVICE, &m), "bash"))
         }
-        "powershell" if ctx.ws.is_some() => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
-        "docker-run" | "docker-compose" if ctx.ws.is_some() => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
+        // 只走網頁 port 這兩種做不到；自動 = 只走 SSH 的 port（跟以前一樣）。
+        // These cannot use the web port only; automatic = the SSH port only, as before.
+        "powershell" if ctx.ws.is_some_and(|w| w.tcp.is_none()) => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
+        "docker-run" | "docker-compose" if ctx.ws.is_some_and(|w| w.tcp.is_none()) => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
         "powershell" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i '{k}' ")).unwrap_or_default());
             // 模板裡已經有 $knownHosts / $hostKeyOptions 的預設（不驗證）；有金鑰就寫檔並改成釘住。
@@ -421,10 +477,14 @@ pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
 
-/// 筆電側的 ProxyCommand（SSH over WebSocket）。Windows 的寫法（`python`、`%d`）由前端在安裝時換。
-/// The laptop's ProxyCommand line; the frontend rewrites it for PowerShell (`python`, `%d`) at install time.
-pub fn laptop_proxy_command(ws_url: &str) -> String {
-    format!("ProxyCommand python3 {WS_CLIENT_PATH} {ws_url}")
+/// 筆電側的 ProxyCommand（SSH over WebSocket；有 `tcp` = 自動，先試 SSH 的 port）。Windows 的寫法（`python`、`%d`）
+/// 由前端在安裝時換。/ The laptop's ProxyCommand line (`tcp` = automatic: the SSH port first); the frontend rewrites
+/// it for PowerShell (`python`, `%d`) at install time.
+pub fn laptop_proxy_command(tcp: Option<&str>, ws_url: &str) -> String {
+    match tcp {
+        Some(t) => format!("ProxyCommand python3 {WS_CLIENT_PATH} --tcp {t} {ws_url}"),
+        None => format!("ProxyCommand python3 {WS_CLIENT_PATH} {ws_url}"),
+    }
 }
 
 /// `SshServerTemplate`：`Host telepy-<網域>-<port>` 區塊（[`server_alias`]）。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
@@ -676,6 +736,46 @@ mod tests {
         let server = render_server_config("telepy.test", "ssh.telepy.test", "24242", &keys, None);
         assert!(server.starts_with("Host telepy-telepy.test-24242\n"), "the alias stays the server's identity: {server}");
         assert!(server.contains("HostName ssh.telepy.test\n") && server.contains("HostKeyAlias telepy-telepy.test-24242\n"), "{server}");
+    }
+
+    /// 自動：小程式帶 `--tcp <SSH 主機>:<port>`；沒有 python3 就只走 SSH 的 port；PowerShell / Docker 只走 SSH 的 port。
+    /// Automatic: the carrier gets `--tcp <ssh host>:<port>`; no python3 = the SSH port only; PowerShell / Docker use the SSH port.
+    #[test]
+    fn automatic_scripts_try_the_ssh_port_first() {
+        let ws = WsCarrier { url: "wss://t.test/ws/gateway/", client_url: "https://t.test/api/join/telepy-ws.py", tcp: Some("ssh.t.test:24242") };
+        let ctx = ScriptContext {
+            host_friendly_name: "box",
+            server_domain: "t.test",
+            ssh_host: "ssh.t.test",
+            reverse_port: 1,
+            ssh_port: 22,
+            reverse_server_ssh_port: "24242",
+            username: "ubuntu",
+            key_path: None,
+            telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
+            gateway_host_keys: &[],
+            ws: Some(ws),
+            install_id: "k7m2q9xd",
+        };
+        for kind in ["ssh", "autossh"] {
+            let (s, _) = render_script(kind, &ctx).unwrap();
+            assert!(s.contains("PROXY_ARGS=(-o \"ProxyCommand=python3 $WS_CLIENT --tcp ssh.t.test:24242 wss://t.test/ws/gateway/\")"), "{kind}: {s}");
+            assert!(s.contains("\"${PROXY_ARGS[@]}\" \\\n") && s.contains("-p 24242"), "{kind}: {s}");
+            assert!(s.contains("the tunnel uses the SSH port only") && !s.contains("exit 1; }\nWS_CLIENT"), "{kind}: no python3 is not fatal: {s}");
+        }
+        let (s, _) = render_script("autossh-service", &ctx).unwrap();
+        assert!(s.contains("-o \"ProxyCommand=python3 /etc/ssh/telepy-k7m2q9xd-ws.py --tcp ssh.t.test:24242 wss://t.test/ws/gateway/\" "), "{s}");
+        assert!(s.contains("[ -n \"$CARRIER\" ] || $SUDO sed -i"), "{s}");
+        assert!(!s.contains("${"), "every placeholder substituted: {s}");
+        for kind in ["powershell", "docker-run", "docker-compose"] {
+            let (s, _) = render_script(kind, &ctx).unwrap();
+            assert!(!s.contains("ProxyCommand") && !s.contains("telepy-ws"), "{kind}: {s}");
+        }
+        // 只走網頁 port：PowerShell / Docker 照舊拒絕。/ Web port only: still refused there.
+        let web_only = ScriptContext { ws: Some(WsCarrier { tcp: None, ..ws }), ..ctx.clone() };
+        assert!(render_script("powershell", &web_only).is_err() && render_script("docker-run", &web_only).is_err());
+        assert_eq!(laptop_proxy_command(Some("ssh.t.test:24242"), "wss://t.test/ws/gateway/"), "ProxyCommand python3 ~/.ssh/telepy-ws.py --tcp ssh.t.test:24242 wss://t.test/ws/gateway/");
+        assert_eq!(laptop_proxy_command(None, "wss://t.test/ws/gateway/"), "ProxyCommand python3 ~/.ssh/telepy-ws.py wss://t.test/ws/gateway/");
     }
 
     #[test]

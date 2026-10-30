@@ -273,7 +273,7 @@ pub fn clean_hostname(raw: &str) -> String {
 }
 
 /// 腳本送來的環境資料裡接受的欄位（其他一律丟掉）。/ The fields accepted from the script; anything else is dropped.
-pub const FACT_KEYS: &[&str] = &["shell", "os", "arch", "http", "client", "server", "init", "keepalive", "key_format", "authorized_keys", "ssh_host", "compat"];
+pub const FACT_KEYS: &[&str] = &["shell", "os", "arch", "http", "client", "server", "init", "keepalive", "key_format", "authorized_keys", "ssh_host", "transport", "compat"];
 const FACT_MAX_LEN: usize = 120;
 
 /// 腳本偵測到的環境：只留白名單欄位、可印 ASCII、每值 ≤ 120 字；`compat` 是字串陣列（≤ 8）。空的回 None。

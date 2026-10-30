@@ -24,7 +24,7 @@ export interface TunnelConfigData {
     known_hosts: string;
     known_hosts_path: string;
     /** ssh（預設）或 websocket（伺服器區塊帶 ProxyCommand，筆電要先存小程式）。/ ssh or websocket (server stanza has a ProxyCommand). */
-    transport: "ssh" | "websocket";
+    transport: "ssh" | "auto" | "websocket";
     ws_url: string;
     ws_client_url: string;
     ws_client_path: string;

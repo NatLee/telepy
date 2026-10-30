@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import type { LaptopTransport } from "@/lib/transportInfo";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { TargetUser } from "@/types/tunnel";
@@ -23,18 +24,18 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
     const [targetUsers, setTargetUsers] = useState<TargetUser[]>([]);
     const [selectedIds, setSelectedIds] = useState<number[]>([]);
     // 筆電怎麼連 Telepy：SSH port，或只開網頁 port 時包進 WebSocket。/ How the laptop reaches Telepy.
-    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
+    const [transport, setTransport] = useState<LaptopTransport>("ssh");
     const { showError } = useToast();
     const deviceKeys = useDeviceKeys(isOpen ? tunnelId : null);
 
     /** `ids` = null：第一次，拿帳號清單並決定先勾哪個。/ `ids` = null: the first load, which picks the first account. */
-    const fetchConfig = useCallback(async (ids: number[] | null, via: "ssh" | "websocket") => {
+    const fetchConfig = useCallback(async (ids: number[] | null, via: LaptopTransport) => {
         if (!tunnelId) return;
         setLoading(true);
         try {
             const params = new URLSearchParams();
             if (ids) params.set("username_ids", ids.join(","));
-            if (via === "websocket") params.set("transport", "websocket");
+            if (via !== "ssh") params.set("transport", via);
             const res = await apiFetch(`/tunnels/server/config/${tunnelId}${params.size ? `?${params.toString()}` : ""}`);
             if (!res.ok) {
                 showError(t("config.loadFailed"));
@@ -87,7 +88,7 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
         return err;
     };
 
-    const handleTransportChange = (value: "ssh" | "websocket") => {
+    const handleTransportChange = (value: LaptopTransport) => {
         setTransport(value);
         fetchConfig(selectedIds.length ? selectedIds : null, value);
     };

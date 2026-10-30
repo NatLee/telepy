@@ -50,7 +50,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
         actions: { toggleUser, selectAllUsers, handleTransportChange, savePrefix }
     } = useConfigModal(isOpen, tunnelId);
     // SSH over WebSocket：筆電先存小程式，伺服器區塊的 ProxyCommand 用它。/ The carrier the server stanza's ProxyCommand runs.
-    const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
+    const wsClient = data && data.transport !== "ssh" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
     const [active, setActive] = useState<ConfigPart | null>(null);
     const [transportInfo, setTransportInfo] = useState(false);
     // Telepy 的主機金鑰（伺服器區塊釘住它）。/ Telepy's host key, pinned by the server stanza.
@@ -158,6 +158,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                             onChange={handleTransportChange}
                             options={[
                                 { value: "ssh", label: t("config.transportSsh") },
+                                { value: "auto", label: t("config.transportAuto") },
                                 { value: "websocket", label: t("config.transportWeb") },
                             ]}
                         />

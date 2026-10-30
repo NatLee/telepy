@@ -54,7 +54,7 @@ StartLimitBurst=3
 WantedBy=multi-user.target
 EOF
 
-echo "[+] Service file created at $SERVICE_PATH"
+${unit_fixup}echo "[+] Service file created at $SERVICE_PATH"
 
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable ${install_base}.service

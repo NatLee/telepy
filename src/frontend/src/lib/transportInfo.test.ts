@@ -30,6 +30,7 @@ test("the laptop's address follows the choice", () => {
     const server = { host: "telepy.example", port: "24242" };
     assert.equal(laptopAddress("ssh", server, "wss://telepy.example/ws/gateway/"), "telepy.example:24242");
     assert.equal(laptopAddress("websocket", server, "wss://telepy.example/ws/gateway/"), "wss://telepy.example/ws/gateway/");
+    assert.equal(laptopAddress("auto", server, "wss://telepy.example/ws/gateway/"), "telepy.example:24242 | wss://telepy.example/ws/gateway/", "the SSH port first, else the web port");
     assert.equal(laptopAddress("ssh", { host: "h", port: "" }, null), "h");
     assert.equal(laptopAddress("ssh", null, null), "…");
 });

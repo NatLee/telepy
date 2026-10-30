@@ -37,7 +37,7 @@ export interface BulkConfigData {
     skipped: { id: number; name: string; reason: "no_accounts" }[];
     known_hosts: string;
     known_hosts_path: string;
-    transport: "ssh" | "websocket";
+    transport: "ssh" | "auto" | "websocket";
     ws_url: string;
     ws_client_url: string;
     ws_client_path: string;
