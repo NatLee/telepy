@@ -1,219 +1,224 @@
-# AI 工具存取（MCP）
+# AI tool access (MCP)
 
-> 讓 Claude Code、Claude Desktop / claude.ai、Cursor 等支援 MCP 的 AI 工具，用使用者自己的權限操作 Telepy：
-> 看通道狀態、開一個**會自己關掉**的 SSH session、跑指令、用互動 shell 操作 TUI、讀寫檔案、經裝置開遠端瀏覽器。
-> 追蹤 issue：#93、#107。
-> 後端程式：`oauth/`、`api/oauth.rs`、`db/oauth.rs`、`auth/mcp.rs`（OAuth 2.1 與個人 API token）；`mcp/`（MCP server）；
-> `ai/`（SSH session 與 reaper；`ai/shell.rs` 互動 shell、`ai/browser.rs` agent 的瀏覽器）；`api/ai.rs`、`api/browser.rs`、
-> `db/ai_audit.rs`（session 列表、REST 版與稽核）。
+<p align="center"><b>English</b> | <a href="./mcp.zh-TW.md">繁體中文</a> | <a href="./mcp.ja.md">日本語</a></p>
 
-## 連線方式
+> Lets AI tools that speak MCP (Claude Code, Claude Desktop / claude.ai, Cursor and others) work in Telepy with the user's own permissions:
+> check tunnel status, open an SSH session that **closes itself**, run commands, drive a TUI through an interactive shell, read and write files, and open a remote browser through a device.
+> Tracking issues: #93, #107.
+> Backend code: `oauth/`, `api/oauth.rs`, `db/oauth.rs`, `auth/mcp.rs` (OAuth 2.1 and personal API tokens); `mcp/` (the MCP server);
+> `ai/` (SSH sessions and the reaper; `ai/shell.rs` for interactive shells, `ai/browser.rs` for the agent's browser); `api/ai.rs`, `api/browser.rs`,
+> `db/ai_audit.rs` (session list, REST version and audit).
 
-MCP 端點是 `https://<你的主機>/mcp`（Streamable HTTP）。正式環境請在 `.env` 設定 `PUBLIC_URL`
-（例如 `https://telepy.example.com`），OAuth 的 issuer 與 MCP resource 都由它決定；沒設時依請求的
-`X-Forwarded-Proto` / `X-Forwarded-Host` / `Host` 推導。
+## Connecting
 
-| 客戶端 | 設定 |
+![What an MCP app can reach, by scope](images/en/agent-reach.png)
+
+The MCP endpoint is `https://<your host>/mcp` (Streamable HTTP). In production set `PUBLIC_URL` in `.env`
+(for example `https://telepy.example.com`); the OAuth issuer and the MCP resource both come from it. When it is not set, Telepy derives them from the request's
+`X-Forwarded-Proto` / `X-Forwarded-Host` / `Host`.
+
+| Client | Setup |
 | --- | --- |
-| Claude Code | `claude mcp add --transport http telepy https://telepy.example.com/mcp`，之後在對話裡 `/mcp` 完成授權 |
-| Claude Desktop / claude.ai | Settings → Connectors → Add custom connector，URL 填 `https://telepy.example.com/mcp` |
-| Cursor 等 | `mcp.json`：`{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp"}}}` |
+| Claude Code | `claude mcp add --transport http telepy https://telepy.example.com/mcp`, then run `/mcp` in the conversation to finish authorization |
+| Claude Desktop / claude.ai | Settings → Connectors → Add custom connector, and enter `https://telepy.example.com/mcp` as the URL |
+| Cursor and others | `mcp.json`: `{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp"}}}` |
 
-不需要手動產生 token：第一次呼叫時客戶端拿到 401，自動走完下面的 OAuth 流程。
+You don't create a token by hand: on the first call the client gets a 401 and runs the OAuth flow below by itself.
 
-沒有瀏覽器的 agent / CI 可以改用**個人 API token**（`tpt_…`，在網頁左側 **API** 頁建立）當 Bearer：
-`{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp", "headers": {"Authorization": "Bearer tpt_…"}}}}`。
-token 在 `/mcp` 上的工具、scope、通道限制跟 OAuth app 一樣（這個人的「API token」與「MCP app」兩個功能都要開著）；
-它的 session 與 shell、瀏覽器都只屬於這把 token，稽核的 app 名稱是 `API token "<名稱>"`。它的每個 tool call 除了 AI 稽核，
-也記在 API 頁的「活動」（`MCP <tool>`，200 / tool 回錯誤時 400）。撤銷 token 時它開著的 session 立刻關閉。同一組動作也有
-REST 版：`/api/ai/sessions*`（指令）與 `/api/browser/sessions*`（遠端瀏覽器，見下），`telepy exec` / `telepy browse` 就是用它們
-（見 [cli.md](cli.md)）。
+Agents and CI jobs without a browser can use a **personal API token** (`tpt_…`, created on the **API** page in the left sidebar) as a Bearer token:
+`{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp", "headers": {"Authorization": "Bearer tpt_…"}}}}`.
+On `/mcp` a token gets the same tools, scopes and tunnel limits as an OAuth app (the person needs both the "API tokens" and the "MCP apps" feature turned on).
+Its sessions, shells and browsers belong to that one token, and the app name in the audit is `API token "<name>"`. Besides the AI audit, each of its tool calls
+is also recorded under Activity on the API page (`MCP <tool>`; 200, or 400 when the tool returned an error). Revoking the token closes its open sessions at once. The same actions also exist as
+a REST version: `/api/ai/sessions*` (commands) and `/api/browser/sessions*` (remote browser, see below), which is what `telepy exec` / `telepy browse` use
+(see [cli.md](cli.md)).
 
-網頁左側 **AI → MCP**（`/tunnels/mcp`）顯示實際要填的端點網址（取自 discovery 的 `resource`，所以會反映
-`PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的 MCP 應用程式。
-右上的「app 碰得到哪裡？」打開一張圖：MCP app ─ Telepy ─ 裝置 ─ 區網 / 網際網路，依選到的已連接 app 的權限亮起對應的
-分支（`lib/aiAccess.ts` `reachFor`）。
+**AI → MCP** in the left sidebar (`/tunnels/mcp`) shows the endpoint URL you actually need to enter (taken from the `resource` in discovery, so it reflects
+`PUBLIC_URL`), copy-ready settings for the three clients above, the tools each permission unlocks, when sessions close, and the connected MCP apps.
+The "What an MCP app can reach" button at the top right opens a diagram: MCP app ─ Telepy ─ device ─ LAN / internet, with the branches lit according to the permissions of the connected app you pick
+(`lib/aiAccess.ts` `reachFor`).
 
-## 授權流程（OAuth 2.1）
+## Authorization flow (OAuth 2.1)
 
 ```
 MCP client ── POST /mcp ──────────────────────────────▶ 401 + WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"
-           ── GET /.well-known/oauth-protected-resource/mcp   （RFC 9728：authorization_servers）
-           ── GET /.well-known/oauth-authorization-server     （RFC 8414：endpoints、S256）
-           ── POST /api/oauth/register                        （RFC 7591 動態註冊，公開）
-           ── 開瀏覽器 → /oauth/authorize（前端同意頁；沒登入先到 /oauth/login，畫面與一般登入頁不同，
-                 登入前就用公開的 GET /api/oauth/authorize/preview 顯示 app、導回位址與權限，可直接取消）
-                 使用者用網頁登入狀態核可：確認 app 名稱與導回位址、目前帳號（不是你？換帳號）、勾選權限、限制可用通道；
-                 同一個 app 先前的連線可勾「取代」，客戶端換到新 token 時舊的就撤銷
-                 前端 POST /api/oauth/authorize → {redirect_to: <redirect_uri>?code=…&state=…&iss=…}
-           ── POST /api/oauth/token  (authorization_code + PKCE S256) → access token（1 小時）+ refresh token（30 天、每次換發都輪替）
+           ── GET /.well-known/oauth-protected-resource/mcp   (RFC 9728: authorization_servers)
+           ── GET /.well-known/oauth-authorization-server     (RFC 8414: endpoints, S256)
+           ── POST /api/oauth/register                        (RFC 7591 dynamic registration, public)
+           ── open the browser → /oauth/authorize (the frontend consent page; if not signed in, /oauth/login first, which looks different from the normal sign-in page,
+                 and before sign-in it shows the app, the return address and the permissions through the public GET /api/oauth/authorize/preview, with a way to cancel)
+                 the user approves with their web sign-in: check the app name and return address, the current account (not you? switch account), tick the permissions, limit which tunnels it may use;
+                 an earlier connection of the same app can be ticked "replace", and it is revoked once the client has exchanged for the new token
+                 the frontend POSTs /api/oauth/authorize → {redirect_to: <redirect_uri>?code=…&state=…&iss=…}
+           ── POST /api/oauth/token  (authorization_code + PKCE S256) → access token (1 hour) + refresh token (30 days, rotated on every exchange)
            ── POST /mcp  Authorization: Bearer <access token>
 ```
 
-- 同意頁的權限（scope）：
+- The permissions (scopes) on the consent page:
 
-  | scope | 允許 |
+  | scope | Allows |
   | --- | --- |
-  | `tunnels:read` | `list_tunnels`、`tunnel_status`、`lan_hosts` |
-  | `ssh:exec` | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
-  | `ssh:files` | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
-  | `network:scan` | `lan_scan`（掃描裝置背後的區網；只限擁有者或 ADMIN 的通道） |
-  | `browser:use` | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close`（經裝置上網的真瀏覽器；同意頁標「會改東西」） |
+  | `tunnels:read` | `list_tunnels`, `tunnel_status`, `lan_hosts` |
+  | `ssh:exec` | `ssh_session_open`, `ssh_exec`, `shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
+  | `ssh:files` | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write` |
+  | `network:scan` | `lan_scan` (scans the LAN behind a device; only on tunnels you own or are ADMIN on) |
+  | `browser:use` | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` (a real browser that goes online through the device; the consent page marks it "can change things") |
 
-  使用者可以取消勾選任何一項，也可以把 app 限制在部分通道。
-- access token 是 `token_type: "mcp_access"` 的 JWT，網頁的 token 不能打 `/mcp`。REST API 只在 token 白名單
-  （`auth::api_tokens::ROUTES`，見 [cli.md](cli.md)）內接受它，`telepy` 命令列的瀏覽器登入就是這樣用的。
-- 每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁**、**偏好設定 → MCP 應用程式**、或 AI 活動頁的
-  「你的 MCP 應用程式」撤銷後立即失效，該 app 開著的 SSH session、shell 與瀏覽器也會馬上關閉（管理員可以在「管理使用者」對話框
-  撤銷任何人的）。
-- 帳號被停用時，grant 與個人 API token **暫停而不撤銷**：`/mcp` 立刻拒絕、開著的 session 關閉，重新啟用後照常可用。
-  管理員替這個人關掉「MCP app」功能時，app 全部拿到 401（像被撤銷）、開著的 agent session 也會結束；功能打開就恢復。
-- **`telepy login` 不算 MCP 應用程式。** 命令列的瀏覽器登入也走這套 OAuth（同意頁會說是 CLI 在要求），每次登入註冊成
-  `telepy CLI (<電腦名稱>)`。這些 grant 列在 API 頁的「CLI 登入」分頁（`/tunnels/api?tab=cli`），MCP 頁、偏好設定與
-  AI 活動頁的 MCP 應用程式清單都不列。同一台電腦再登入一次會提議取代先前那個；每人最多保留 10 個 CLI 登入，第 11 個會
-  登出最久沒用的。CLI 登入一樣跟著「MCP app」功能開關（見 [cli.md](cli.md)）。名稱是客戶端自己報的，只用來分類顯示。
+  The user can untick any of them, and can limit the app to some of their tunnels.
+- The access token is a JWT with `token_type: "mcp_access"`; a web token can't call `/mcp`. The REST API accepts it only for the routes on the token allow-list
+  (`auth::api_tokens::ROUTES`, see [cli.md](cli.md)), which is how the `telepy` command line's browser sign-in uses it.
+- Every `/mcp` request re-checks the grant and the user, so revoking on the **MCP page**, under **Preferences → MCP apps**, or under "Your MCP apps" on the AI activity page
+  takes effect at once, and the SSH sessions, shells and browsers that app has open close immediately (an administrator can revoke anyone's from the Manage User dialog).
+- When an account is disabled, its grants and personal API tokens are **suspended, not revoked**: `/mcp` refuses them at once and open sessions close, and everything works again after the account is re-enabled.
+  When an administrator turns off the "MCP apps" feature for a person, all their apps get a 401 (as if revoked) and their open agent sessions end; turning the feature back on restores them.
+- **`telepy login` doesn't count as an MCP app.** The command line's browser sign-in goes through the same OAuth (the consent page says it is the CLI asking), and each sign-in registers as
+  `telepy CLI (<computer name>)`. These grants are listed under the "CLI sign-ins" tab of the API page (`/tunnels/api?tab=cli`); the MCP page, Preferences and
+  the AI activity page leave them out of their MCP app lists. Signing in again from the same computer offers to replace the earlier one; each person keeps at most 10 CLI sign-ins, and the 11th
+  signs out the least recently used one. CLI sign-ins also follow the "MCP apps" feature switch (see [cli.md](cli.md)). The name is reported by the client itself and is used only to sort what is shown.
 
-## 工具
+## Tools
 
-| 工具 | 說明 |
+| Tool | Description |
 | --- | --- |
-| `list_tunnels` | 看得到的通道：id、名稱、是否在線、延遲、我的權限、可用的目標 username、這個 app 開著的 session |
-| `tunnel_status(tunnel_id)` | 在線 / 健康狀態（online / degraded = 通道在但裝置 sshd 沒回應 / offline）/ 延遲 / 24 小時在線率 / 裝置的基本狀況 `facts`（OS、kernel、開機秒數、CPU、記憶體 / 根磁碟 KB、負載、ssh 版本、要不要重開機；只給能登入裝置的人）與 `warnings` / 最近 10 筆 gateway 事件 |
-| `ssh_session_open(tunnel_id, username?, idle_timeout_s?, max_lifetime_s?)` | 開 session，回 `session_id`；username 省略時用通道的預設（只有一個時自動選） |
-| `ssh_exec(session_id, command, timeout_s?, max_output_bytes?)` | 跑指令（無 TTY）：`exit_code`、`stdout`、`stderr`、`timed_out`、`truncated` |
-| `ssh_session_list` | 這個 app 開著的 session 與剩餘時間 |
-| `ssh_session_close(session_id)` | 關 session |
-| `sftp_list(session_id, path?)` | 列目錄（`~` = 家目錄） |
-| `sftp_read(session_id, path, offset?, max_bytes?)` | 讀檔；文字回 UTF-8，其餘回 base64；可分頁 |
-| `sftp_write(session_id, path, content, encoding?, append?)` | 寫檔或附加（`encoding`: `utf-8` / `base64`） |
-| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號 |
-| `lan_scan(tunnel_id, username?, subnets?, ports?)` | 經裝置的 sshd 掃描區網（私有網段、最多 1024 個位址、約一分鐘）並存進主機清單；需要 `network:scan` 與擁有者 / ADMIN 權限 |
-| `shell_open(session_id, cols?, rows?)` | 在 session 上開互動 shell（PTY，`xterm-256color`，預設 120×40），回 `shell_id`；每個 session 最多 2 個 |
-| `shell_send(shell_id, input, press_enter?)` | 打字：原樣送出（可含控制字元，`\u0003` = Ctrl+C、`\u001b` = Esc）；`press_enter` 加一個 Enter。每次 64 KiB 以內 |
-| `shell_read(shell_id, timeout_ms?, max_bytes?, screen?)` | 讀：`output` = 上次之後的原始輸出、`screen` = 現在的畫面（vt100 模型，一列一行的純文字）、`cursor`、`size`、`more`、`exited`；沒有新輸出時最多等 `timeout_ms`（預設 1.5 秒、上限 10 秒）。沒讀走的輸出最多留 256 KiB（超過丟最舊的，回 `dropped_bytes`） |
-| `shell_resize(shell_id, cols, rows)` / `shell_close(shell_id)` | 改大小 / 關掉 |
-| `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | 經裝置開一個遠端瀏覽器（Chromium，流量從裝置出去：看得到它的區網、localhost、公網 IP），回 `browser_id`；可順便開 `url` |
-| `browser_navigate(browser_id, url)` | 前往網址（只收 http / https，沒寫就補 `https://`），等頁面載入，回最後的網址與標題 |
-| `browser_read(browser_id, selector?)` | 頁面文字：標題、網址、看得到的文字（最多 10 萬字）、連結；`selector` 只讀一部分 |
-| `browser_screenshot(browser_id)` | PNG 截圖（縮到最寬 1280 px），以 MCP image content block 回傳 |
-| `browser_click(browser_id, selector? \| text?)` | 用 CSS selector 或看得到的文字（連結、按鈕、label）點一下（真的滑鼠事件） |
-| `browser_type(browser_id, selector, text, press_enter?, sensitive?)` | 在欄位打字，可按 Enter 送出；`sensitive` 預設 true = 稽核只記長度 |
-| `browser_close(browser_id)` | 關瀏覽器 |
+| `list_tunnels` | The tunnels you can see: id, name, whether it is online, latency, my permission, the target usernames available, and the sessions this app has open |
+| `tunnel_status(tunnel_id)` | Online / health state (online / degraded = the tunnel is up but the device's sshd doesn't answer / offline), latency, 24-hour uptime, the device's basic facts `facts` (OS, kernel, uptime in seconds, CPU, memory / root disk in KB, load, ssh version, whether a reboot is needed; only for people who can log in to the device) and `warnings`, and the last 10 gateway events |
+| `ssh_session_open(tunnel_id, username?, idle_timeout_s?, max_lifetime_s?)` | Open a session and return `session_id`; if username is omitted, the tunnel's default is used (picked automatically when there is only one) |
+| `ssh_exec(session_id, command, timeout_s?, max_output_bytes?)` | Run a command (no TTY): `exit_code`, `stdout`, `stderr`, `timed_out`, `truncated` |
+| `ssh_session_list` | The sessions this app has open and the time left on each |
+| `ssh_session_close(session_id)` | Close a session |
+| `sftp_list(session_id, path?)` | List a directory (`~` = home directory) |
+| `sftp_read(session_id, path, offset?, max_bytes?)` | Read a file; text comes back as UTF-8, anything else as base64; can be paged |
+| `sftp_write(session_id, path, content, encoding?, append?)` | Write or append to a file (`encoding`: `utf-8` / `base64`) |
+| `lan_hosts(tunnel_id)` | The LAN hosts behind a device (found by a scan or added by hand): address, name, open ports, SSH banner, labels, login account |
+| `lan_scan(tunnel_id, username?, subnets?, ports?)` | Scan the LAN through the device's sshd (private ranges, up to 1024 addresses, about a minute) and save the result to the host list; needs `network:scan` and owner / ADMIN permission |
+| `shell_open(session_id, cols?, rows?)` | Open an interactive shell on a session (PTY, `xterm-256color`, 120×40 by default) and return `shell_id`; at most 2 per session |
+| `shell_send(shell_id, input, press_enter?)` | Type: sends the input as is (control characters allowed, `\u0003` = Ctrl+C, `\u001b` = Esc); `press_enter` adds an Enter. Up to 64 KiB each time |
+| `shell_read(shell_id, timeout_ms?, max_bytes?, screen?)` | Read: `output` = raw output since the last read, `screen` = the current screen (a vt100 model, plain text one line per row), `cursor`, `size`, `more`, `exited`; when there is no new output it waits up to `timeout_ms` (default 1.5 seconds, at most 10 seconds). Output nobody has read is kept up to 256 KiB (beyond that the oldest is dropped and `dropped_bytes` is returned) |
+| `shell_resize(shell_id, cols, rows)` / `shell_close(shell_id)` | Resize / close |
+| `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | Open a remote browser through a device (Chromium; traffic leaves from the device, so it sees the device's LAN, localhost and public IP) and return `browser_id`; can open `url` at the same time |
+| `browser_navigate(browser_id, url)` | Go to a URL (only http / https is accepted, `https://` is added if missing), wait for the page to load, and return the final URL and title |
+| `browser_read(browser_id, selector?)` | Page text: title, URL, visible text (up to 100,000 characters), links; `selector` reads only part of the page |
+| `browser_screenshot(browser_id)` | A PNG screenshot (scaled down to 1280 px wide at most), returned as an MCP image content block |
+| `browser_click(browser_id, selector? \| text?)` | Click by CSS selector or by visible text (link, button, label), with real mouse events |
+| `browser_type(browser_id, selector, text, press_enter?, sensitive?)` | Type into a field, optionally pressing Enter to submit; `sensitive` defaults to true = the audit records only the length |
+| `browser_close(browser_id)` | Close the browser |
 
-權限完全照網頁規則：要有該通道的 VIEW 權限，而且目標 username 必須在允許清單內（被分享的通道只能用分享時允許的
-username，與 web terminal 相同）。另外：
+Permissions follow the web rules exactly: you need VIEW permission on the tunnel, and the target username must be on the allow-list (a shared tunnel can use only the
+usernames allowed when it was shared, the same as the web terminal). In addition:
 
-- **功能權限**（管理 → 使用者與權限 → 功能權限，`/tunnels/admin/access`）一樣適用：管理員替這個人關掉的功能，對應的工具回錯誤（`isError`）說明——
-  `ssh:exec` 的工具要「網頁終端機」、`ssh:files` 要「檔案管理」、`lan_hosts` 與 `lan_scan` 要「區網探索」、`browser:use`
-  要「遠端瀏覽器」。scope 本身沒給時，錯誤會告訴 agent 請使用者重新連接並核准那個 scope。
-- **需要 step-up 的通道**（每次 session 前都要使用者用第二道驗證確認）拒絕 agent 開 SSH session、瀏覽器與 `lan_scan`；
-  `list_tunnels` 的 `requires_step_up` 先告訴 agent。
+- **Feature permissions** (Admin → Users & access → Feature permissions, `/tunnels/admin/access`) apply too: when an administrator turns off a feature for a person, the matching tools return an error (`isError`) saying so.
+  Tools under `ssh:exec` need "Web terminal", `ssh:files` needs "File manager", `lan_hosts` and `lan_scan` need "LAN discovery", and `browser:use`
+  needs "Remote browser". When the scope itself wasn't granted, the error tells the agent to ask the user to reconnect and approve that scope.
+- **Tunnels that require step-up** (the user must confirm with a second factor before every session) refuse agents opening SSH sessions, browsers and `lan_scan`;
+  `requires_step_up` in `list_tunnels` tells the agent beforehand.
 
-### 指令規則（`ssh_exec`）
+### Command rules (`ssh_exec`)
 
-網頁「指令規則」頁（`/tunnels/commands`）上的規則也管 agent 的指令。規則有兩種：
+![How a command is decided: split, site-wide rules, personal rules, verdict](images/en/command-decision.png)
 
-- **個人規則**：每個人自己寫。對象選「所有人」或「只限被分享的人」時，只在作者**目前**是 owner 或 ADMIN 的通道上生效；
-  選「只有我」就只管作者自己的指令，在他用的任何通道上都算——例如替自己在別人通道上跑的 MCP agent 加一道防護。
-  「只有我」的規則別人看不到。
-- **全站規則**：管理員寫（管理區「規則與通知 → 指令規則」）。預設可以覆寫：通道的 owner / ADMIN 可以在自己管的通道上關掉它；
-  管理員關掉「允許使用者覆寫」就是強制，誰都關不掉。
+The rules on the web "Command rules" page (`/tunnels/commands`) govern an agent's commands too. There are two kinds of rule:
 
-規則可以只管 MCP agent（`via: agents`）。一條指令符合好幾條規則時，擋下 > 需要核准 > 提醒。各動作對 agent 的效果：
+- **Personal rules**: everyone writes their own. When the audience is "Everyone" or "Only people it's shared with", the rule applies only on tunnels where the author is **currently** the owner or an ADMIN;
+  "Only me" governs only the author's own commands, on any tunnel they use, for example a guard on their own MCP agent running on someone else's tunnel.
+  Nobody else can see an "Only me" rule.
+- **Site-wide rules**: written by administrators (admin area, "Rules & alerts → Command rules"). They can be overridden by default: a tunnel's owner / ADMIN can turn one off on the tunnels they manage;
+  when an administrator turns off "Let people override", the rule is enforced and nobody can turn it off.
 
-- **擋下**：不執行，tool 回錯誤（`isError`），內容寫出是哪條規則與規則的說明。
-- **需要核准**：Telepy 送出核准申請（核准人——規則指定的人；沒指定就是通道擁有者與 ADMIN；「只有我」的規則是作者自己——
-  會在網頁右下角看到，也可在指令規則頁處理），這次 tool call
-  最多等 45 秒；核准就照常執行並回結果，拒絕或逾時回錯誤。還沒有人決定時回錯誤「還在等」——請 agent 告訴使用者，
-  核准後**用一模一樣的指令**再呼叫一次；核准在 10 分鐘內可用一次（同一個 app、通道、帳號與指令）。
-- **提醒**：照常執行，`ssh_exec` 的結果多一個 `reminder`（規則的說明，沒寫說明就是比對式），請 agent 轉告使用者；
-  REST 版 `POST /api/ai/sessions/{id}/exec` 也一樣。不等人，也不進指令規則頁的「紀錄」。不是強制的提醒，每個人可以替自己靜音。
-- **允許（例外）**：讓符合的指令不受**同一個作者**的擋下 / 需要核准規則管（全站的例外豁免全站規則，個人的例外豁免同一個人的規則；
-  另外，通道 owner / ADMIN 的例外在他管的通道上也豁免可覆寫的全站規則，強制的不行）。別人的例外蓋不掉你的規則。
-- agent 用通道擁有者的身分跑時，一樣要擁有者按核准（human in the loop）。
-- 被擋下 / 等待 / 拒絕都會在 AI 稽核裡記成失敗的 `ssh_exec`，申請與結果也列在指令規則頁的「紀錄」。
-- **互動 shell 也一樣**：`shell_send` 裡每個在 shell 提示字元按下的 Enter，用跟網頁終端機同一套讀畫面的方式（`TerminalGuard`）
-  讀出那一行再比對。擋下 → 改送 Ctrl+C、tool 回錯誤；要核准 → 跟 `ssh_exec` 一樣最多等 45 秒，核准就送 Enter；還在等時那一行
-  留在提示字元上，核准後 agent 送 `input: ""`、`press_enter: true` 就會跑（同樣 10 分鐘內用一次）。Enter 之後沒送出的輸入會被丟掉
-  （tool 會說幾個 bytes）。符合提醒規則的行照送，`shell_send` 的結果帶 `reminders`（每條一句）。全螢幕程式（vim、less）裡的 Enter 不檢查。
+A rule can apply to MCP agents only (`via: agents`). When a command matches several rules, block beats needs approval, which beats remind. What each action does for an agent:
 
-## 互動 shell
+- **Block**: the command is not run and the tool returns an error (`isError`) naming the rule and its note.
+- **Needs approval**: Telepy files an approval request (the approvers are the people the rule names, or the tunnel owner and ADMINs if none are named, or the author for an "Only me" rule;
+  they see it at the bottom right of the web app and can also handle it on the Command rules page), and this tool call
+  waits up to 45 seconds. If it is approved the command runs as usual and the result comes back; a denial or a timeout returns an error. If nobody has decided yet the error says "still waiting". Ask the agent to tell the user,
+  and after approval to call **the exact same command** again; an approval can be used once within 10 minutes (same app, tunnel, account and command).
+- **Remind**: the command runs as usual and the `ssh_exec` result carries an extra `reminder` (the rule's note, or the pattern if it has none), which the agent should pass on to the user;
+  the REST `POST /api/ai/sessions/{id}/exec` does the same. It doesn't wait for anyone and doesn't appear under History on the Command rules page. It isn't enforced, and each person can mute it for themselves.
+- **Allow (exception)**: lets matching commands skip the block / needs-approval rules of **the same author** (a site-wide exception exempts site-wide rules, a personal one exempts the same person's rules;
+  in addition, a tunnel owner's / ADMIN's exception also exempts overridable site-wide rules on the tunnels they manage, but not enforced ones). Someone else's exception can't override your rules.
+- When an agent runs as the tunnel owner, the owner still has to click approve (human in the loop).
+- Blocked, waiting and denied commands are all recorded in the AI audit as failed `ssh_exec` calls, and the requests and their outcomes also appear under History on the Command rules page.
+- **Interactive shells too**: for every Enter pressed at the shell prompt in `shell_send`, Telepy reads that line out the same way the web terminal does (`TerminalGuard`) and checks it.
+  Block → Ctrl+C is sent instead and the tool returns an error; needs approval → like `ssh_exec` it waits up to 45 seconds, and on approval the Enter is sent; while it is still waiting the line
+  stays at the prompt, and after approval the agent sends `input: ""`, `press_enter: true` to run it (again once within 10 minutes). Input typed after an Enter that wasn't sent is discarded
+  (the tool says how many bytes). Lines that match a remind rule are sent as usual and the `shell_send` result carries `reminders` (one sentence per rule). Enter inside a full-screen program (vim, less) is not checked.
 
-- 一個 shell = AI session 那條連線上的一條 PTY channel，跟 `ssh_exec` 共用每個 session 的 4 條 channel 配額，最多 2 個。
-- 背景一直讀輸出（餵畫面模型、錄影），agent 沒在讀也不會卡住裝置。
-- 關閉：`shell_close`、session 關掉（每一種原因）、或超過 session 的 `idle_timeout` 沒有 send / read（reaper 每 30 秒）。
-  用 shell 也算 session 有在用，不會讓 session 閒置逾時。
-- **錄影**：通道開了「錄下網頁終端機」時，agent 的 shell 一樣錄成 asciicast（`kind: agent`，在錄影頁標「MCP agent」）。
-- 即時 session 頁的 agent session 那一列顯示開著幾個 shell（`/api/sessions` 的 `shells`、`/api/ai/sessions` 的 `shells`）。
+## Interactive shells
 
-## 遠端瀏覽器（`browser:use`）
+- A shell is one PTY channel on the connection an AI session already has. It shares the session's quota of 4 channels with `ssh_exec`, and at most 2 are allowed.
+- Output is read in the background all the time (feeding the screen model and the recording), so an agent that isn't reading won't block the device.
+- It closes on `shell_close`, when the session closes (for any reason), or when there has been no send / read for longer than the session's `idle_timeout` (the reaper runs every 30 seconds).
+  Using a shell counts as the session being in use, so it won't let the session time out as idle.
+- **Recording**: when the tunnel has "Record web terminal sessions" on, an agent's shell is recorded as asciicast too (`kind: agent`, labelled "MCP agent" on the Recordings page).
+- On the Live sessions page, an agent session's row shows how many shells are open (`shells` in `/api/sessions` and in `/api/ai/sessions`).
 
-- 就是一般的 remote-browser session（`remote_browser/`：經裝置的 SOCKS、kasm-browser 裡的 Chromium，算進
-  `remote_browser_max_sessions`），只是由 agent 經 session-manager 的 CDP 端點操作（見 [remote-browser.md](remote-browser.md)「MCP agent 與腳本操作」）。
-  backend 從不直接連 Chromium 的 DevTools。
-- 跟 SSH session 共用每人上限 `ai_max_sessions_per_user`、同一組 idle / 壽命限制與 reaper（裝置離線、grant 撤銷、權限或 username
-  被拿掉、remote-browser session 不見了都會關）；step-up 通道拒絕。
-- 出現在「誰在用」與即時 session 頁（kind `browser`、client = app 名稱），可以從那裡結束：之後的 tool 回「ended by <誰>」。
-- 開 / 關寫 `browser_open` / `browser_close` gateway 事件（通道的 Logs），通知沿用 `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
-  （多 `kind: "browser"`，webhook `mcp.session_*` 的 data 也有 `kind`）。
-- 稽核：網址、selector；`browser_type` 的文字預設只記長度（`sensitive: false` 才記內容）；截圖本身不存。
-- **REST 版**（`api/browser.rs`，給腳本與 `telepy browse`）：`POST /api/browser/sessions {tunnel_id, username?, url?}` → `{id, …}`、
-  `POST …/{id}/navigate {url}`、`GET …/{id}/text?selector=`、`GET …/{id}/screenshot`（image/png）、`POST …/{id}/click {selector | text}`、
-  `POST …/{id}/type {selector, text, press_enter?, sensitive?}`、`DELETE …/{id}`、`GET /api/browser/sessions`。共用 `ai::browser`
-  （`open_at` / `lookup` / `run_action`），所以上限、presence、即時 session、reaper、稽核跟 MCP 一樣；個人 API token / OAuth app 的
-  token 要 `browser:use`，網頁登入也能打（client 名稱「Telepy web sign-in」）；一個瀏覽器只屬於開它的那把憑證；step-up 通道回 403
-  `step_up_refused`。
+## Remote browser (`browser:use`)
 
-## Session 生命週期
+- It is an ordinary remote-browser session (`remote_browser/`: SOCKS through the device, Chromium in kasm-browser, counted against
+  `remote_browser_max_sessions`), only operated by the agent through the session-manager's CDP endpoint (see "Driving it from an MCP agent or a script" in [remote-browser.md](remote-browser.md)).
+  The backend never connects to Chromium's DevTools directly.
+- It shares the per-person cap `ai_max_sessions_per_user` with SSH sessions, and the same idle / lifetime limits and reaper (it closes when the device goes offline, the grant is revoked, the permission or username
+  is taken away, or the remote-browser session disappears); tunnels with step-up refuse it.
+- It shows up in "who is using it" and on the Live sessions page (kind `browser`, client = app name) and can be ended from there: later tool calls then return "ended by <who>".
+- Opening and closing write `browser_open` / `browser_close` gateway events (the tunnel's Logs), and notifications reuse `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
+  (with an extra `kind: "browser"`; the data of the `mcp.session_*` webhooks carries `kind` too).
+- Audit: the URL and selector; the text of `browser_type` records only the length by default (the content only with `sensitive: false`); the screenshot itself isn't stored.
+- **REST version** (`api/browser.rs`, for scripts and `telepy browse`): `POST /api/browser/sessions {tunnel_id, username?, url?}` → `{id, …}`,
+  `POST …/{id}/navigate {url}`, `GET …/{id}/text?selector=`, `GET …/{id}/screenshot` (image/png), `POST …/{id}/click {selector | text}`,
+  `POST …/{id}/type {selector, text, press_enter?, sensitive?}`, `DELETE …/{id}`, `GET /api/browser/sessions`. It shares `ai::browser`
+  (`open_at` / `lookup` / `run_action`), so limits, presence, live sessions, the reaper and the audit match MCP; a personal API token or an OAuth app's
+  token needs `browser:use`, a web sign-in can call it too (client name "Telepy web sign-in"); a browser belongs only to the credential that opened it; a step-up tunnel returns 403
+  `step_up_refused`.
 
-一個 session = 一條到裝置的 russh 連線，所有指令共用（不會每個指令重新握手）。指令各自開一個 exec channel，
-同一個 session 最多同時 4 個。
+## Session lifecycle
 
-| 何時關閉 | 原因（通知與稽核裡的 `reason`） |
+A session is one russh connection to the device, shared by all its commands (no new handshake per command). Each command opens its own exec channel,
+and one session can have at most 4 at a time.
+
+| Closes when | Reason (`reason` in notifications and the audit) |
 | --- | --- |
-| agent 呼叫 `ssh_session_close` | `closed_by_agent` |
-| 使用者 / 通道擁有者 / 管理員在網頁關掉（AI 活動頁或即時 session 頁，`DELETE /api/ai/sessions/{id}`）；管理員替這個人關掉「MCP app」功能 | `closed_by_user` |
-| 閒置超過 `ai_session_idle_timeout`（預設 600 秒；執行中的指令不算閒置） | `idle` |
-| 存活超過 `ai_session_max_lifetime`（預設 7200 秒；一律關閉） | `max_lifetime` |
-| 裝置離線、連線中斷 | `device_offline` / `disconnected` |
-| grant 或個人 API token 撤銷 / 過期、帳號停用 | `revoked` |
-| 通道被刪 | `tunnel_deleted` |
-| 權限被拿掉、username 被移除（取消分享、分享到期、允許清單縮小…） | `permission_removed` |
+| the agent calls `ssh_session_close` | `closed_by_agent` |
+| the user, the tunnel owner or an administrator closes it on the web (the AI activity page or the Live sessions page, `DELETE /api/ai/sessions/{id}`); an administrator turns off the "MCP apps" feature for that person | `closed_by_user` |
+| idle longer than `ai_session_idle_timeout` (600 seconds by default; a running command doesn't count as idle) | `idle` |
+| alive longer than `ai_session_max_lifetime` (7200 seconds by default; always closed) | `max_lifetime` |
+| the device goes offline, the connection drops | `device_offline` / `disconnected` |
+| the grant or personal API token is revoked / expires, the account is disabled | `revoked` |
+| the tunnel is deleted | `tunnel_deleted` |
+| the permission or username is taken away (unshared, share expired, allow-list shrunk…) | `permission_removed` |
 
-- reaper 每 30 秒檢查一次；撤銷 grant / token 時立即關閉，取消分享、改權限這類變更也會立刻重新檢查一次（`ai::recheck`）。
-- agent 可以要求更短的 `idle_timeout_s` / `max_lifetime_s`，但不能超過站台設定（最短 10 秒）。
-- 每位使用者同時最多 `ai_max_sessions_per_user` 個（預設 3，所有 app 合計，SSH session 與 agent 的瀏覽器一起算；0 = 不允許 AI 開 session）。
-- 指令逾時預設 60 秒、最多 600 秒，逾時送 `KILL` 並關 channel；每個輸出串流預設保留 64 KiB、最多 1 MiB，
-  超過時保留開頭 1/4 與結尾 3/4。
-- MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是憑證（哪個 OAuth grant 或哪把個人 API token），
-  不是 MCP 連線；不同 app / token 互相看不到彼此的 session。
+- The reaper checks every 30 seconds; revoking a grant / token closes at once, and changes such as unsharing or changing a permission also trigger an immediate re-check (`ai::recheck`).
+- An agent can ask for a shorter `idle_timeout_s` / `max_lifetime_s`, but not beyond the site settings (10 seconds at the shortest).
+- Each user can have at most `ai_max_sessions_per_user` open at once (3 by default, all apps together, SSH sessions and agent browsers counted together; 0 = AI may not open sessions).
+- A command's timeout is 60 seconds by default and at most 600 seconds; on timeout `KILL` is sent and the channel closes. Each output stream keeps 64 KiB by default and at most 1 MiB,
+  and beyond that it keeps the first 1/4 and the last 3/4.
+- MCP version 2026-07-28 has no transport sessions, so an SSH session is tied to the credential (which OAuth grant or which personal API token),
+  not to the MCP connection; different apps / tokens can't see each other's sessions.
 
-三個上限都在管理員的 **網站設定 → AI 存取（MCP）** 分頁（`/tunnels/settings?tab=ai`，同頁也顯示 MCP 端點網址），變更後對新開的 session 生效。
+All three limits are on the administrator's **Site settings → AI access (MCP)** tab (`/tunnels/settings?tab=ai`, which also shows the MCP endpoint URL), and a change applies to newly opened sessions.
 
-## 通知與稽核
+## Notifications and audit
 
-- 開 / 關 session 時，`/ws/notifications` 會送 `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
-  （`details`、`tunnel_id`、`session_id`、`by`、`client`，關閉時另有 `reason`）給 session 的使用者與通道擁有者 ——
-  被分享的使用者用 AI 連上別人的通道時，擁有者會知道。
-- 每一次 tool call 寫一列 `telepy_ai_audit_event`（最多保留 10 萬列，90 天後刪掉，hash chain 防竄改）：誰、哪個 app、
-  哪個通道與 username、指令或路徑（最多 2000 字元）、exit code、耗時、輸出 bytes、錯誤、來源 IP。**指令原文會被記錄**，
-  請勿讓 agent 在指令列帶密碼。
-- `GET /api/ai/activity` 與 `GET /api/ai/sessions` 預設 `?scope=mine`（管理員也一樣）：自己的，加上自己擁有的通道上的；
-  `scope=all` = 全部，只有管理員（其他人 403 `admin_only`）。`activity` 另外可用 `tunnel_id`、`user_id`、`grant_id` 篩選。
-- 網頁：**AI 活動**（`/tunnels/activity`）是自己的（含開著的 session、你的 MCP 應用程式）；管理員的全站版在管理區的
-  **全站 AI 活動**（`/tunnels/admin/activity`）。
+- When a session opens or closes, `/ws/notifications` sends `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
+  (`details`, `tunnel_id`, `session_id`, `by`, `client`, plus `reason` on close) to the session's user and the tunnel owner —
+  so when a user who was given a tunnel connects to someone else's tunnel with AI, the owner knows.
+- Every tool call writes one `telepy_ai_audit_event` row (up to 100,000 rows are kept, deleted after 90 days, hash-chained against tampering): who, which app,
+  which tunnel and username, the command or path (up to 2000 characters), exit code, duration, output bytes, error, source IP. **The command text is recorded**,
+  so don't let an agent put passwords on a command line.
+- `GET /api/ai/activity` and `GET /api/ai/sessions` default to `?scope=mine` (administrators too): your own, plus those on tunnels you own;
+  `scope=all` = everything, administrators only (anyone else gets 403 `admin_only`). `activity` can also be filtered by `tunnel_id`, `user_id` and `grant_id`.
+- On the web: **AI activity** (`/tunnels/activity`) is your own (including open sessions and your MCP apps); the administrators' site-wide version is **All AI activity**
+  (`/tunnels/admin/activity`) in the admin area.
 
-## 手動驗證
+## Manual verification
 
 ```bash
-# 401 + discovery 指向 metadata
+# 401, and discovery points at the metadata
 curl -si -X POST https://telepy.example.com/mcp -H 'content-type: application/json' -d '{}' | grep -i www-authenticate
 curl -s https://telepy.example.com/.well-known/oauth-protected-resource/mcp
 curl -s https://telepy.example.com/.well-known/oauth-authorization-server
 ```
 
-自動化測試：`tests/oauth_api.rs`（OAuth 流程）、`tests/mcp_api.rs`（以假的裝置 sshd 端到端測 exec / SFTP /
-逾時 / 截斷 / scope / 上限 / 撤銷 / reaper / 分享通知、互動 shell（PTY echo shell：畫面、控制字元、錄影、指令規則），
-以及以假的 session-manager 測 agent 瀏覽器）；`tests/api_tokens.rs`（個人 API token 打 `/mcp` 與 REST）、`tests/api_token_calls.rs`
-（呼叫紀錄）；`tests/features.rs`（功能權限擋工具）；`docker/kasm-browser/tests/test_cdp.py`（CDP 動作、WebSocket
-frame、/cdp 路由）。
+Automated tests: `tests/oauth_api.rs` (the OAuth flow); `tests/mcp_api.rs` (end to end against a fake device sshd: exec / SFTP /
+timeout / truncation / scope / limits / revocation / reaper / share notifications, interactive shells (a PTY echo shell: screen, control characters, recording, command rules),
+and the agent browser against a fake session-manager); `tests/api_tokens.rs` (personal API tokens calling `/mcp` and REST), `tests/api_token_calls.rs`
+(the call log); `tests/features.rs` (feature permissions blocking tools); `docker/kasm-browser/tests/test_cdp.py` (CDP actions, WebSocket
+frames, the /cdp route).

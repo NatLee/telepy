@@ -126,6 +126,8 @@ browser, LAN scans — opens a channel inside that one connection and logs in to
 tunnel's service key. The device needs no public IP and no inbound firewall rule; Telepy pins each device's host key,
 and the device pins Telepy's.
 
+More diagrams of what happens inside — joining a device, the terminal, files, remote desktop, sharing, command rules, keys, notifications, the CLI and server health — are in **[Telepy in pictures](./docs/visual-guide.md)**.
+
 Telepy runs as five containers:
 
 | Service        | Role                                                                                                  |
@@ -266,6 +268,8 @@ Upgrading is `git pull && docker compose up -d --build`; the database schema is 
 
 ## Documentation
 
+- **[Telepy in pictures](./docs/visual-guide.md)** — the app's diagrams and a few recordings, feature by feature
+- [All documentation](./docs/README.md) — every document below, in English, 繁體中文 and 日本語
 - [The `telepy` command line and API tokens](./docs/cli.md)
 - [MCP: AI agents on your devices](./docs/mcp.md)
 - [Webhooks: events, formats and signatures](./docs/webhooks.md)
@@ -274,9 +278,9 @@ Upgrading is `git pull && docker compose up -d --build`; the database schema is 
 - [Remote browser (KasmVNC)](./docs/remote-browser.md)
 - [How the backend reaches devices](./docs/device-connections.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
-- [Rust backend migration plan](./docs/rust-migration-plan.md) and [benchmark: Django vs Rust](./docs/benchmarks.md)
+- [Rust backend migration plan](./docs/rust-migration-plan.md) (Traditional Chinese) and [benchmark: Django vs Rust](./docs/benchmarks.md)
 - [How the README screenshots are made](./docs/screenshots/README.md)
-- [Articles](./docs/articles/)
+- [Articles](./docs/articles/) (Traditional Chinese)
 - Release notes: [GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## Contributors

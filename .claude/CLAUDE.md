@@ -58,7 +58,10 @@ src/
 docker/kasm-browser/  # KasmVNC + Chromium image and its session-manager
 ssh/                  # backend_ssh_key (service key + ssh config), ssh_host_keys (gateway host keys; generated, git-ignored)
 dev-scripts/          # Helper scripts behind telepy.sh / telepy.ps1
-docs/                 # remote-browser.md, remote-desktop.md, device-connections.md, latency-deep-dive.md, cli.md, mcp.md, webhooks.md, rust-migration-plan.md, articles/,
+docs/                 # user docs in three languages: <name>.md (English) + <name>.zh-TW.md + <name>.ja.md, same headings in the same order — change all three
+                      # together (README.md = the index, visual-guide.md, device-join, remote-desktop, remote-browser, cli, mcp, webhooks, device-connections,
+                      # latency-deep-dive, benchmarks); images/<lang>/ = the app's info-dialog diagrams + GIFs those docs embed (same file names per language);
+                      # engineering notes stay Traditional Chinese only (rust-migration-plan.md, rustdesk-spike.md, rustdesk-id-server.md, articles/);
                       # screenshots/<lang>/ (the README images, one set per language; retake all three when a shown screen changes — how in screenshots/README.md)
 ```
 
