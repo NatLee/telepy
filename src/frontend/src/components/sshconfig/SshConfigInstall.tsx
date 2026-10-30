@@ -9,15 +9,18 @@
  * the manual mode shows the stanzas with a note on every line. The OS choice is kept in localStorage
  * (telepy.sshConfigShell) and guessed from the browser at first.
  */
-import React, { useState } from "react";
-import { Check, ChevronDown, ClipboardPaste, Copy, SquareTerminal } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import Link from "next/link";
+import { ArrowRight, Check, ChevronDown, ClipboardPaste, Copy, Info, Layers, Rows3, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Segmented } from "@/components/ui/segmented";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { adaptForShell, guessShell, installCommand, markedBlocks, openEditorCommand, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza, type WsClient } from "@/lib/sshConfig";
+import { adaptForShell, compactMarked, guessShell, installCommand, markedBlocks, openEditorCommand, parseStanzas, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza, type WsClient } from "@/lib/sshConfig";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { TidyInfoDialog } from "./TidyInfoDialog";
 import { ConfigStanzaCard } from "./ConfigStanzaCard";
 import { AliasPrefix, type AliasPrefixControl } from "./AliasPrefix";
 import type { ConfigPart } from "./ConfigRouteMap";
@@ -82,6 +85,9 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
     const [removeOpen, setRemoveOpen] = useState(false);
     const [commandOpen, setCommandOpen] = useState(false);
     const [copied, setCopied] = useState(false);
+    // 多台時可以寫簡化版（共用的行寫一次）；選擇記在 localStorage。/ Several devices: the compact form, remembered.
+    const [layout, setLayout] = useStoredChoice("telepy.sshConfigLayout", ["compact", "full"] as const, "compact");
+    const [howOpen, setHowOpen] = useState(false);
 
     const setShell = (s: ConfigShell) => {
         setShellState(s);
@@ -92,12 +98,25 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
 
     const all = [...(serverStanza ? [serverStanza] : []), ...deviceStanzas];
     const legacy = legacyAlias && serverStanza && legacyAlias !== serverStanza.alias ? { alias: legacyAlias, me: serverStanza.alias } : null;
-    const command = installCommand(shell, all, knownHosts, wsClient, legacy);
+    const server = serverStanza?.alias ?? null;
+    // 簡化版跟一般版的區塊（只在多台時算）。/ The compact and the plain blocks (bulk only).
+    const plainText = markedBlocks(adaptForShell(all, shell));
+    // 簡化要逐一驗證，幾百台時不便宜：只在區塊文字變了才重算。/ Verified per name, not free for hundreds: only when the text changes.
+    const compactText = useMemo(() => (bulk ? compactMarked(plainText) : plainText), [bulk, plainText]);
+    const lineCount = (text: string) => text.replace(/\n$/, "").split("\n").length;
+    const shorter = bulk && compactText !== plainText;
+    const compact = bulk && layout === "compact" && shorter;
+    const command = installCommand(shell, all, knownHosts, wsClient, legacy, { compact, server, blocks: compact ? compactText : undefined });
     // 卡片照目前選的作業系統顯示（Windows 的 ProxyCommand 寫法不同）。/ Cards follow the chosen OS (Windows ProxyCommand differs).
     const shownServer = serverStanza ? adaptForShell([serverStanza], shell)[0] : null;
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
-    const user = (s: ConfigStanza) => s.options.find((o) => o.key.toLowerCase() === "user")?.value ?? "";
+    // 帳號看原本的區塊：簡化版裡它可能在共用區塊。/ The account from the original block (compact may share it).
+    const user = (s: ConfigStanza) => (deviceStanzas.find((d) => d.alias === s.alias) ?? s).options.find((o) => o.key.toLowerCase() === "user")?.value ?? "";
 
+    // 簡化版的預覽：裝置區塊照舊列前幾個，再加上共用區塊。/ Compact preview: the first device blocks plus the shared ones.
+    const compactStanzas = compact ? parseStanzas(compactText) : null;
+    const shownDevices = compactStanzas ? compactStanzas.filter((s) => deviceStanzas.some((d) => d.alias === s.alias)) : deviceStanzas;
+    const sharedStanzas = compactStanzas ? compactStanzas.filter((s) => s.alias !== server && !deviceStanzas.some((d) => d.alias === s.alias)) : [];
     const cards = (
         <div className="space-y-3">
             {shownServer && (
@@ -111,7 +130,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     onActive={onActive}
                 />
             )}
-            {(bulk ? deviceStanzas.slice(0, BULK_PREVIEW) : deviceStanzas).map((s) => (
+            {(bulk ? shownDevices.slice(0, BULK_PREVIEW) : shownDevices).map((s) => (
                 <ConfigStanzaCard
                     key={s.alias}
                     n={2}
@@ -126,11 +145,59 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
             {bulk && deviceStanzas.length > BULK_PREVIEW && (
                 <p className="text-sm text-muted-foreground">{t("config.bulk.previewMore", { count: deviceStanzas.length - BULK_PREVIEW })}</p>
             )}
+            {sharedStanzas.map((s) => (
+                <ConfigStanzaCard
+                    key={s.alias}
+                    n={2}
+                    part="device"
+                    shared
+                    title={t("config.block.shared")}
+                    hint={t("config.block.sharedHint", { count: s.alias.split(" ").length })}
+                    stanza={s}
+                    active={active}
+                    onActive={onActive}
+                />
+            ))}
+        </div>
+    );
+
+    const layoutRow = bulk && (
+        <div className="space-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-border/70">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <div className="flex items-center gap-1.5 text-sm text-foreground">
+                    {t("tidy.layout")}
+                    <button type="button" onClick={() => setHowOpen(true)} className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("tidy.compactHow")} title={t("tidy.compactHow")}>
+                        <Info size={15} />
+                    </button>
+                </div>
+                <div className="w-full sm:w-auto">
+                    <Segmented
+                        size="sm"
+                        fullWidth
+                        aria-label={t("tidy.layout")}
+                        value={compact ? "compact" : "full"}
+                        onChange={setLayout}
+                        options={[
+                            { value: "compact", label: t("tidy.layoutCompact"), icon: <Layers size={14} />, title: t("tidy.layoutCompactHint"), disabled: !shorter },
+                            { value: "full", label: t("tidy.layoutFull"), icon: <Rows3 size={14} />, title: t("tidy.layoutFullHint") },
+                        ]}
+                    />
+                </div>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+                {!shorter
+                    ? t("tidy.compactNone")
+                    : compact
+                        ? t("tidy.compactSummary", { after: lineCount(compactText), before: lineCount(plainText) })
+                        : t("tidy.fullSummary", { after: lineCount(compactText), before: lineCount(plainText) })}
+            </p>
+            <TidyInfoDialog isOpen={howOpen} onClose={() => setHowOpen(false)} before={plainText} after={compactText} names={deviceStanzas.map((d) => d.alias)} />
         </div>
     );
 
     return (
         <div className="space-y-3">
+            {layoutRow}
             {/* 手機上兩個切換各佔一行（放大顯示時並排會撐出對話框）。/ Phones: one toggle per row, full width. */}
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                 <div className="w-full sm:w-auto">
@@ -168,7 +235,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     {bulk ? (
                         // 多台時指令有上百行：先給複製鈕與摘要，整段收在下面。/ Hundreds of lines: copy + summary first.
                         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-border/70">
-                            <span className="min-w-0 text-foreground">{t("config.bulk.cmdSummary", { blocks: all.length, lines: command.split("\n").length - 1 })}</span>
+                            <span className="min-w-0 text-foreground">{t("config.bulk.cmdSummary", { blocks: compact ? (compactText.match(/^Host /gm)?.length ?? all.length) : all.length, lines: command.split("\n").length - 1 })}</span>
                             <Button
                                 size="sm"
                                 onClick={() =>
@@ -212,7 +279,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     {deviceStanzas.length > 0 && (
                         <Disclosure title={t("config.remove.title")} open={removeOpen} onToggle={() => setRemoveOpen((v) => !v)}>
                             <p className="text-muted-foreground">{t("config.remove.body")}</p>
-                            <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={removeCommand(shell, deviceStanzas.map((s) => s.alias))} />
+                            <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={removeCommand(shell, deviceStanzas.map((s) => s.alias), server)} />
                         </Disclosure>
                     )}
                 </>
@@ -226,7 +293,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                         </li>
                         <li><span className="text-foreground">2.</span> {t(bulk ? "config.bulk.manualPaste" : "config.manual.paste")}</li>
                     </ol>
-                    {bulk ? <CodeBlock language="text" value={markedBlocks(adaptForShell(all, shell))} /> : cards}
+                    {bulk ? <CodeBlock language="text" value={compact ? compactText : plainText} /> : cards}
                     {knownHosts?.trim() && (
                         <div className="space-y-1.5 text-muted-foreground">
                             <p><span className="text-foreground">3.</span> {tn("config.manual.knownHosts", { path: code(KNOWN_HOSTS_PATH) })}</p>
@@ -242,6 +309,12 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                 </>
             )}
             {aliasPrefix && <AliasPrefix key={aliasPrefix.value} control={aliasPrefix} />}
+            {bulk && (
+                <Link href="/tunnels/ssh-config" prefetch={false} className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline">
+                    {t("tidy.openTool")}
+                    <ArrowRight size={14} aria-hidden />
+                </Link>
+            )}
         </div>
     );
 }

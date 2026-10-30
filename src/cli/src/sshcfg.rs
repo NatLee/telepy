@@ -195,8 +195,65 @@ pub fn install_checked(existing: &str, stanzas: &[Stanza], me: &str, legacy: &st
     let aliases: Vec<String> = stanzas.iter().map(|s| s.alias.clone()).collect();
     let kept = foreign_aliases(existing, &aliases, me, legacy);
     let write: Vec<Stanza> = stanzas.iter().filter(|s| !kept.contains(&s.alias)).cloned().collect();
-    let shadowed = shadowed_aliases(existing, &write.iter().map(|s| s.alias.clone()).collect::<Vec<_>>());
-    Installed { text: prune_legacy(&install(existing, &write), legacy, me), kept, shadowed }
+    let written: Vec<String> = write.iter().map(|s| s.alias.clone()).collect();
+    let shadowed = shadowed_aliases(existing, &written);
+    let released = release_shared(existing, &written, me);
+    Installed { text: prune_legacy(&install(&released, &write), legacy, me), kept, shadowed }
+}
+
+/// 網頁簡化版的共用區塊（`# >>> telepy shared <伺服器別名> >>>`，同一台的裝置共用的行）：這些別名從它的 Host 行拿掉，
+/// 沒有名字了整段拿掉；沒有結尾標記的原樣保留。網頁的指令（sh / PowerShell）照同一條規則，重寫一台時共用區塊就不會
+/// 蓋過它新寫的值。
+/// The web's compact form keeps lines a server's devices share in `# >>> telepy shared <server alias> >>>`: these
+/// aliases leave its Host line, and the block goes once no name is left; an unterminated one stays as it is. The
+/// web's commands (sh / PowerShell) follow the same rule, so a device written again is never overridden by it.
+pub fn release_shared(existing: &str, aliases: &[String], server: &str) -> String {
+    let open = format!("# >>> telepy shared {server} >>>");
+    let close = format!("# <<< telepy shared {server} <<<");
+    let mut out = String::new();
+    // (原文, 改過的, 有 Host 行, 留下了名字) / (raw, edited, saw a Host line, a name is left)
+    let mut block: Option<(String, String, bool, bool)> = None;
+    for line in existing.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if let Some((raw, edited, host, kept)) = block.as_mut() {
+            if bare == close {
+                if !*host || *kept {
+                    out.push_str(edited);
+                    out.push_str(line);
+                }
+                block = None;
+                continue;
+            }
+            if bare.starts_with("# >>> telepy ") {
+                out.push_str(raw);
+                block = None;
+            } else {
+                raw.push_str(line);
+                let mut w = bare.split_whitespace();
+                match w.next() {
+                    Some(k) if k.eq_ignore_ascii_case("Host") => {
+                        *host = true;
+                        let left: Vec<&str> = w.filter(|h| !aliases.iter().any(|a| a == h)).collect();
+                        if !left.is_empty() {
+                            *kept = true;
+                            edited.push_str(&format!("{k} {}\n", left.join(" ")));
+                        }
+                    }
+                    _ => edited.push_str(line),
+                }
+                continue;
+            }
+        }
+        if bare == open {
+            block = Some((line.to_string(), line.to_string(), false, false));
+        } else {
+            out.push_str(line);
+        }
+    }
+    if let Some((raw, ..)) = block {
+        out.push_str(&raw);
+    }
+    out
 }
 
 /// 安裝進 `~/.ssh/config`：舊的同名區塊拿掉、新的接在後面。/ Install into `~/.ssh/config`.
@@ -378,6 +435,25 @@ mod tests {
         // 手寫的同名 Host → 提醒（不擋）/ A hand-written Host of the same name → a warning only
         let out = install_checked("Host nas nas.local\n    User me\n", &[server, dev("nas", me)], me, "telepy-ssh-server");
         assert_eq!((out.kept.len(), out.shadowed.as_slice()), (0, ["nas".to_string()].as_slice()));
+    }
+
+    #[test]
+    fn installing_releases_names_from_the_shared_block() {
+        let me = "telepy-a-1";
+        let dev = |alias: &str| Stanza { alias: alias.into(), options: vec![("HostName".into(), alias.into()), ("ProxyCommand".into(), format!("ssh -W %h:%p {me}"))] };
+        let shared = |hosts: &str| format!("# >>> telepy shared {me} >>>\nHost {hosts}\n    Port 22\n    Compression yes\n# <<< telepy shared {me} <<<\n");
+        let other = "# >>> telepy shared telepy-b-2 >>>\nHost pi\n    Port 22\n# <<< telepy shared telepy-b-2 <<<\n";
+        let start = format!("{}{}{other}", marked_blocks(&[dev("pi"), dev("cam")]), shared("pi cam"));
+        let out = install_checked(&start, &[dev("cam")], me, "telepy-ssh-server");
+        assert!(out.text.contains(&shared("pi")), "{}", out.text);
+        assert!(out.text.contains(other), "another server's shared block is not ours: {}", out.text);
+        assert!(out.shadowed.is_empty(), "a shared Host line is not hand-written");
+        // 最後一個名字走了 → 整段不見。/ The last name leaves → the block goes.
+        let out = install_checked(&out.text, &[dev("pi")], me, "telepy-ssh-server");
+        assert!(!out.text.contains(&format!("telepy shared {me}")), "{}", out.text);
+        // 沒有結尾標記 → 原樣。/ Unterminated → untouched.
+        let open = format!("# >>> telepy shared {me} >>>\nHost pi\n");
+        assert_eq!(release_shared(&open, &["pi".into()], me), open);
     }
 
     #[test]

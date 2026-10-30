@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, ShieldAlert, Webhook, TerminalSquare, ScrollText, Braces, Terminal, HeartPulse, UsersRound } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, ShieldAlert, Webhook, TerminalSquare, ScrollText, Braces, Terminal, HeartPulse, UsersRound, FileCode2 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { ADMIN_AREAS, type AdminAreaId } from "@/lib/adminAreas";
@@ -48,6 +48,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             { key: "nav.tunnels", href: "/tunnels", icon: <Network size={18} /> },
             { key: "nav.terminal", href: "/tunnels/terminal", icon: <TerminalSquare size={18} />, feature: "terminal" },
             { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
+            { key: "nav.sshTidy", href: "/tunnels/ssh-config", icon: <FileCode2 size={18} /> },
             { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} />, feature: "network" },
             { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} />, feature: "remote_desktop" },
             { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
