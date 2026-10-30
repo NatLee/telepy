@@ -20,6 +20,7 @@ import { useI18n } from "@/lib/i18n";
 import { groupServerKeys, isLocked, type ServerGroupId } from "@/lib/settingSource";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
+import { ClientIpHeaderControl, ProxySourcesControl } from "./AddressOptions";
 import { SettingRow } from "./SettingRow";
 import { SettingSourceDialog } from "./SettingSourceDialog";
 
@@ -31,7 +32,7 @@ const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKe
 };
 
 /** 自訂編輯器的 key（整列寬）。/ Keys with a custom, full-width editor. */
-const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare"];
+const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from"];
 
 /** 代理層數：自動，或固定 0–10 層。/ Trusted proxies: automatic, or a fixed 0–10. */
 function HopsControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
@@ -139,12 +140,18 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
     const groups = groupServerKeys(Object.keys(settingsObj));
     const lockedCount = Object.keys(env).filter((k) => isLocked(env, k)).length;
 
-    const custom = (key: string) =>
-        key === "client_ip_hops"
-            ? (shown: unknown, locked: boolean) => <HopsControl key={`${String(shown)}-${locked}`} shown={shown} locked={locked} onSave={(v) => handleUpdate(key, v)} />
-            : key === "client_ip_cloudflare"
-              ? (shown: unknown, locked: boolean) => <CloudflareControl shown={shown} locked={locked} onSave={(v) => handleUpdate(key, v)} />
-              : undefined;
+    // 自訂編輯器；訪客位址標頭與 PROXY protocol 來源附上看到的與常見的選項（AddressOptions）。
+    // Custom editors; the visitor header and PROXY protocol sources come with what was seen and the common choices.
+    const EDITORS: Record<string, React.ComponentType<{ shown: unknown; locked: boolean; onSave: (value: string) => void }>> = {
+        client_ip_hops: HopsControl,
+        client_ip_cloudflare: CloudflareControl,
+        client_ip_header: ClientIpHeaderControl,
+        server_gateway_proxy_protocol_from: ProxySourcesControl,
+    };
+    const custom = (key: string) => {
+        const Editor = EDITORS[key];
+        return Editor ? (shown: unknown, locked: boolean) => <Editor key={`${String(shown)}-${locked}`} shown={shown} locked={locked} onSave={(v) => handleUpdate(key, v)} /> : undefined;
+    };
 
     return (
         <div className="space-y-6">

@@ -71,7 +71,20 @@ pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, he
 
 /// 標頭第一個逗號前的位址。/ The address before a header's first comma.
 fn first_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
-    headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip)
+    headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(|part| part_ip(name, part))
+}
+
+/// 標頭值裡一段的位址。CloudFront-Viewer-Address 是 `位址:port`，IPv6 不加括號（`2001:db8::1:46532`），
+/// 一般的解析會把 port 當成位址的一段，所以這個標頭一律去掉最後一個 `:port`。
+/// One part of a header value. CloudFront-Viewer-Address is `address:port` with an unbracketed IPv6
+/// (`2001:db8::1:46532`), which a plain parse would read as part of the address, so its last `:port` is always cut.
+fn part_ip(name: &str, part: &str) -> Option<IpAddr> {
+    if name.eq_ignore_ascii_case("cloudfront-viewer-address") {
+        let (addr, port) = part.trim().rsplit_once(':')?;
+        port.parse::<u16>().ok()?;
+        return parse_ip(addr.trim_start_matches('[').trim_end_matches(']'));
+    }
+    parse_ip(part)
 }
 
 /// [`resolve`] 加上 Cloudflare：指定的標頭優先；`always` = 有 `CF-Connecting-IP` 就用；`auto` = 鏈上被選中的那段是
@@ -126,9 +139,23 @@ fn chosen_index(chain: &[IpAddr], trusted_hops: Hops) -> Option<usize> {
     })
 }
 
-/// 常見「代理把客戶端位址放在這裡」的標頭（診斷時列出來，看哪個能拿來當 `CLIENT_IP_HEADER`）。
-/// Headers proxies and CDNs commonly put the client address in; listed by the diagnostic.
-pub const CANDIDATE_HEADERS: &[&str] = &["x-real-ip", "forwarded", "cf-connecting-ip", "true-client-ip", "x-client-ip", "fastly-client-ip", "x-cluster-client-ip"];
+/// 常見「代理把客戶端位址放在這裡」的標頭（診斷時列出來，看哪個能拿來當 `CLIENT_IP_HEADER`）。前端的
+/// `lib/clientIpHeaders.ts` 說明每個是誰送的，它的測試會讀這份清單。
+/// Headers proxies and CDNs commonly put the client address in; listed by the diagnostic. The frontend's
+/// `lib/clientIpHeaders.ts` says who sends each, and its test reads this list.
+pub const CANDIDATE_HEADERS: &[&str] = &[
+    "x-real-ip",
+    "forwarded",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-client-ip",
+    "fastly-client-ip",
+    "x-cluster-client-ip",
+    "cloudfront-viewer-address",
+    "x-azure-clientip",
+    "fly-client-ip",
+    "do-connecting-ip",
+];
 
 /// 標頭值裡的位址：`Forwarded` 讀每個 `for=`（RFC 7239），其他依逗號分。
 /// Addresses in a header value: each `for=` of `Forwarded` (RFC 7239), comma-separated otherwise.
@@ -142,7 +169,7 @@ pub fn header_addresses(name: &str, value: &str) -> Vec<IpAddr> {
             })
             .collect();
     }
-    value.split(',').filter_map(parse_ip).collect()
+    value.split(',').filter_map(|part| part_ip(name, part)).collect()
 }
 
 /// 診斷用：鏈上的一段。/ One entry of the chain, for the diagnostic.
@@ -517,6 +544,20 @@ mod tests {
         assert_eq!(Hops::parse(Some("two")), Hops::Auto);
         assert_eq!((Hops::Auto.setting(), Hops::Fixed(2).setting()), ("auto".to_string(), "2".to_string()));
         assert_eq!((Hops::Auto.fixed(), Hops::Fixed(3).fixed()), (None, Some(3)));
+    }
+
+    #[test]
+    fn cloudfront_viewer_address_drops_the_port_even_for_bare_ipv6() {
+        let name = "cloudfront-viewer-address";
+        assert_eq!(header_addresses(name, "198.51.100.10:46532"), vec!["198.51.100.10".parse::<IpAddr>().unwrap()]);
+        assert_eq!(header_addresses(name, "2001:db8::1:443"), vec!["2001:db8::1".parse::<IpAddr>().unwrap()], "the last group is the port, not the address");
+        assert_eq!(header_addresses(name, "[2001:db8::2]:8080"), vec!["2001:db8::2".parse::<IpAddr>().unwrap()]);
+        assert!(header_addresses(name, "198.51.100.10").is_empty(), "without a port it is not CloudFront's format");
+        let mut h = HeaderMap::new();
+        h.insert("cloudfront-viewer-address", "2001:db8:abcd::7:60776".parse().unwrap());
+        assert_eq!(resolve(&h, Some("10.0.0.2".parse().unwrap()), Hops::Fixed(1), Some("CloudFront-Viewer-Address")), Some("2001:db8:abcd::7".parse().unwrap()));
+        // 其他標頭照舊。/ Other headers are unchanged.
+        assert_eq!(header_addresses("x-real-ip", "2001:db8::1:443"), vec!["2001:db8::1:443".parse::<IpAddr>().unwrap()]);
     }
 
     #[test]

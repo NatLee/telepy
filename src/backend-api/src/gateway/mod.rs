@@ -15,6 +15,7 @@
 //! In-process SSH gateway terminating the devices' reverse tunnels (pubkey + tcpip-forward only).
 
 pub mod greeting;
+pub mod peers;
 pub mod proxy_protocol;
 
 use std::collections::{HashMap, HashSet};
@@ -143,6 +144,10 @@ pub struct Gateway {
     event_counter: AtomicU64,
     server_config: Arc<ServerConfig>,
     pub host_keys_loaded: usize,
+    /// 連進來的位址與 PROXY header（啟動以來，記憶體）；「PROXY protocol 來源」的選項從這裡來。
+    /// Connecting addresses and PROXY headers seen (since start, memory); the options for "PROXY protocol sources".
+    peers: peers::PeerStats,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 const HOST_KEY_FILES: [&str; 3] = ["ssh_host_ed25519_key", "ssh_host_rsa_key", "ssh_host_ecdsa_key"];
@@ -230,7 +235,14 @@ impl Gateway {
             log: Mutex::new(None),
             event_counter: AtomicU64::new(0),
             host_keys_loaded,
+            peers: peers::PeerStats::default(),
+            started_at: chrono::Utc::now(),
         }
+    }
+
+    /// gateway 看到的來源位址（送過 PROXY header 的在前）與從何時開始記。/ The addresses seen (header senders first) and since when.
+    pub fn peer_stats(&self) -> (Vec<(std::net::IpAddr, peers::PeerSeen)>, chrono::DateTime<chrono::Utc>) {
+        (self.peers.snapshot(), self.started_at)
     }
 
     /// 結構化事件：寫進 `telepy_gateway_event`（Logs 頁 / API 的來源），同時以 sshd 風格附加到
@@ -1151,33 +1163,64 @@ async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: Socket
     // Listed sources: peek at the first byte (not consumed); read a header only if one starts there.
     // 會先送 PROXY header 的 L4 代理（GATEWAY_PROXY_PROTOCOL_FROM / 網站設定），每條連線讀一次，存檔不必重啟。
     // The proxies that send a PROXY header (env / site setting), read per connection so a save needs no restart.
-    let peer = if gw.config.proxy_protocol_from().contains(peer.ip()) {
-        let mut first = [0u8; 1];
-        match tokio::time::timeout(PROXY_HEADER_TIMEOUT, stream.peek(&mut first)).await {
-            Ok(Ok(0)) | Ok(Err(_)) => {
-                tracing::debug!(%peer, "gateway: connection closed before sending anything (health check)");
+    if !gw.config.proxy_protocol_from().contains(peer.ip()) {
+        // 沒列出的來源：header 從不讀、不採信（誰都能自稱別的 IP）；只看第一段資料認出它，提醒管理員。
+        // russh 不接受 banner 前的東西，所以這條連線會在握手失敗。
+        // Unlisted: a header is never read or trusted (anyone could claim any address); the first chunk is only
+        // looked at to point the admin to it. russh accepts nothing before the banner, so the handshake fails.
+        let watcher = gw.clone();
+        let stream = peers::FirstRead::new(
+            stream,
+            Box::new(move |first: &[u8]| {
+                let header = peers::looks_like_proxy_header(first);
+                if watcher.peers.record(peer.ip(), header, false) {
+                    let message = format!(
+                        "Connection from {} port {} began with a PROXY protocol header, but {} is not a PROXY protocol source: the header was not read and the connection failed",
+                        peer.ip(),
+                        peer.port(),
+                        peer.ip()
+                    );
+                    tokio::spawn(async move { watcher.event("proxy_unlisted", Some(peer), None, None, message).await });
+                }
+            }),
+        );
+        serve(gw, stream, peer, Transport::Tcp).await;
+        return;
+    }
+    let mut first = [0u8; 1];
+    let peer = match tokio::time::timeout(PROXY_HEADER_TIMEOUT, stream.peek(&mut first)).await {
+        Ok(Ok(0)) | Ok(Err(_)) => {
+            tracing::debug!(%peer, "gateway: connection closed before sending anything (health check)");
+            return;
+        }
+        // 直連（SSH 以 `SSH-` 開頭），或 5 秒都沒送東西的客戶端（等我們先送 banner）。/ Direct, or a client waiting for our banner.
+        Ok(Ok(_)) if !proxy_protocol::starts_header(first[0]) => {
+            gw.peers.record(peer.ip(), false, true);
+            peer
+        }
+        Err(_) => {
+            gw.peers.record(peer.ip(), false, true);
+            peer
+        }
+        Ok(Ok(_)) => match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
+            Ok(Ok(header)) => {
+                gw.peers.record(peer.ip(), true, true);
+                match header {
+                    proxy_protocol::Header::Proxied(source) => source,
+                    proxy_protocol::Header::Local => peer,
+                }
+            }
+            Ok(Err(e)) => {
+                let message = format!("Refused connection from {} port {}: bad PROXY protocol header: {e}", peer.ip(), peer.port());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
                 return;
             }
-            // 直連（SSH 以 `SSH-` 開頭），或 5 秒都沒送東西的客戶端（等我們先送 banner）。/ Direct, or a client waiting for our banner.
-            Ok(Ok(_)) if !proxy_protocol::starts_header(first[0]) => peer,
-            Err(_) => peer,
-            Ok(Ok(_)) => match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
-                Ok(Ok(proxy_protocol::Header::Proxied(source))) => source,
-                Ok(Ok(proxy_protocol::Header::Local)) => peer,
-                Ok(Err(e)) => {
-                    let message = format!("Refused connection from {} port {}: bad PROXY protocol header: {e}", peer.ip(), peer.port());
-                    gw.event("refused_proxy", Some(peer), None, None, message).await;
-                    return;
-                }
-                Err(_) => {
-                    let message = format!("Refused connection from {} port {}: incomplete PROXY protocol header after {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
-                    gw.event("refused_proxy", Some(peer), None, None, message).await;
-                    return;
-                }
-            },
-        }
-    } else {
-        peer
+            Err(_) => {
+                let message = format!("Refused connection from {} port {}: incomplete PROXY protocol header after {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
+                return;
+            }
+        },
     };
     serve(gw, stream, peer, Transport::Tcp).await;
 }
