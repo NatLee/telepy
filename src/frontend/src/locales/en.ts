@@ -5663,6 +5663,7 @@ export const en = {
     "deviceInstall.block.needs_root": "It is a system service. Add root as a login account, or allow sudo without a password, and check again.",
     "deviceInstall.block.unknown_owner": "The account that runs the tunnel is not one of this tunnel's login accounts. Add it, then check again.",
     "deviceInstall.block.odd_command": "The command uses a relative key path or unusual characters; rename it by hand or reinstall with a script from Telepy.",
+    "deviceInstall.block.unsupported": "Telepy does not replace this kind of service by itself (an OpenWrt init script). Rename it by hand, or run the one-command join again, which installs it under the private name.",
     "deviceInstall.fail.survey_failed": "Telepy could not look at the device.",
     "deviceInstall.fail.login_failed": "Telepy could not log in as the account that installs the new service.",
     "deviceInstall.fail.install_failed": "Writing or starting the new service failed. It was removed again.",

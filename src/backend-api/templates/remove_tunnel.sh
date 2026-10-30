@@ -121,12 +121,19 @@ file_home() {
     case "$1" in /etc/systemd/*|/lib/systemd/*|/usr/lib/systemd/*|/Library/LaunchDaemons/*) [ -n "$fh_user" ] || fh_user=root ;; esac
     if [ -n "$fh_user" ]; then home_of "$fh_user"; else printf '%s' "$HOME"; fi
 }
+# A file's text as a command line: a launchd plist puts every argument in its own <string>, so join them with spaces.
+text_of() {
+    case "$1" in
+        *.plist) rd "$1" | tr '\n' ' ' | sed -e 's:</string>[[:space:]]*<string>: :g' -e 's:<[^>]*>: :g' ;;
+        *) rd "$1" ;;
+    esac
+}
 # A file of this tunnel: it carries its number (older scripts) or refers to its key, and dials this server.
 has_port() {
     exists "$1" || return 1
     kept_new "$1" && return 1
-    hp_text=$(rd "$1")
-    if printf '%s\n' "$hp_text" | grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" || uses_key "$hp_text" || default_key_of "$hp_text" "$(file_home "$1" "$hp_text")"; then
+    hp_text=$(text_of "$1")
+    if printf '%s\n' "$hp_text" | grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" || uses_key "$hp_text" || default_key_of "$hp_text" "$(file_home "$1" "$(rd "$1")")"; then
         if foreign "$hp_text"; then
             out kept other-server "$1 (port $(dial_ports "$hp_text" | head -n 1))"
             uses_key "$hp_text" && KEY_ELSEWHERE="$KEY_ELSEWHERE $1"
@@ -223,7 +230,7 @@ if command -v systemctl >/dev/null 2>&1; then
         out found systemd "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
-        note_kh "$(rd "$f")"
+        note_kh "$(text_of "$f")"
         [ "$SURVEY" = 1 ] && continue
         if [ "$ROOT" = 1 ]; then
             logdir=$(sed -n 's/^LogsDirectory=//p' "$f" 2>/dev/null | head -n 1)
@@ -252,7 +259,7 @@ if command -v systemctl >/dev/null 2>&1; then
         out found systemd-user "$f"
         [ "$name" = "telepy-tunnel-$T_ID.service" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$name" = "telepy-$T_INSTALL.service" ] && FOUND_JOIN=1
-        note_kh "$(rd "$f")"
+        note_kh "$(text_of "$f")"
         [ "$SURVEY" = 1 ] && continue
         systemctl --user disable "$name" >/dev/null 2>&1
         rmf "$f" unit
@@ -271,7 +278,7 @@ if command -v launchctl >/dev/null 2>&1; then
         out found launchd "$f"
         [ "$label" = "com.telepy.tunnel.$T_ID" ] && FOUND_JOIN=1
         [ -n "$T_INSTALL" ] && [ "$label" = "com.telepy.tunnel.$T_INSTALL" ] && FOUND_JOIN=1
-        note_kh "$(rd "$f")"
+        note_kh "$(text_of "$f")"
         case "$f" in
             /Library/*)
                 if [ "$ROOT" = 0 ] && [ "$SURVEY" = 0 ]; then
@@ -402,6 +409,36 @@ if command -v crontab >/dev/null 2>&1; then
     crontab_clean "" "$ME"
     [ -n "$SUDO" ] && crontab_clean "$SUDO" root
 fi
+# OpenWrt (procd) init scripts and /etc/rc.local: what a router's tunnel is usually started from.
+if [ -f /etc/rc.common ]; then
+    for f in /etc/init.d/*; do
+        has_port "$f" || continue
+        name=$(basename "$f")
+        out found initd "$f"
+        note_kh "$(text_of "$f")"
+        [ "$SURVEY" = 1 ] && continue
+        if [ "$ROOT" = 1 ]; then
+            $SUDO "$f" disable >/dev/null 2>&1
+            later "$SUDO $(q "$f") stop >/dev/null 2>&1; $SUDO rm -f $(q "$f")" stop "init.d $name"
+            GOING="$GOING$f "
+        else
+            out needs_root initd "sudo $f disable; sudo $f stop; sudo rm -f $f"
+        fi
+    done
+fi
+if [ -f /etc/rc.local ]; then
+    RL=$(rd /etc/rc.local)
+    RL_KEEP=$(printf '%s\n' "$RL" | while IFS= read -r l; do line_is_mine "$l" || printf '%s\n' "$l"; done)
+    for r in $RUNNERS; do RL_KEEP=$(printf '%s\n' "$RL_KEEP" | grep -vF -- "$r"); done
+    if [ "$RL_KEEP" != "$RL" ]; then
+        printf '%s\n' "$RL" | grep -v -x -F -- "$RL_KEEP" | while IFS= read -r l; do [ -n "$l" ] && out found rc.local "$l"; done
+        if [ "$SURVEY" = 0 ]; then
+            if [ "$ROOT" = 1 ] && printf '%s\n' "$RL_KEEP" | $SUDO tee /etc/rc.local >/dev/null; then out removed rc.local /etc/rc.local
+            else out needs_root rc.local "remove the Telepy line from /etc/rc.local"; fi
+        fi
+    fi
+fi
+
 for r in $RUNNERS; do
     out found loop "$r"
     note_kh "$(rd "$r")"

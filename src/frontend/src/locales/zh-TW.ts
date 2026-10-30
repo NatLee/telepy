@@ -5645,6 +5645,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "deviceInstall.block.needs_root": "這是系統服務。把 root 加成登入帳號，或允許免密碼 sudo，再重新檢查。",
     "deviceInstall.block.unknown_owner": "跑這條通道的帳號不是它的登入帳號之一。加進去之後再重新檢查。",
     "deviceInstall.block.odd_command": "指令用了相對的金鑰路徑或特殊字元；請手動改名，或用 Telepy 的腳本重新安裝。",
+    "deviceInstall.block.unsupported": "這種服務（OpenWrt 的 init 腳本）Telepy 不會自動換。請手動改名，或重新跑一次一行指令加入，它會用私人名稱安裝。",
     "deviceInstall.fail.survey_failed": "Telepy 無法查看裝置。",
     "deviceInstall.fail.login_failed": "Telepy 無法以安裝新服務的帳號登入。",
     "deviceInstall.fail.install_failed": "寫入或啟動新服務失敗，已經拆掉。",

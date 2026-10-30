@@ -87,12 +87,12 @@ pub fn parts(accounts: &[AccountResult], names: &Names) -> Vec<Part> {
     for a in accounts {
         for i in a.items.iter().filter(|i| i.kind == "found") {
             let (kind, name) = match i.what.as_str() {
-                "systemd" | "systemd-user" | "loop" => ("service", base_name(&i.detail).to_string()),
+                "systemd" | "systemd-user" | "loop" | "initd" => ("service", base_name(&i.detail).to_string()),
                 "launchd" => ("service", base_name(&i.detail).trim_end_matches(".plist").to_string()),
                 "task" | "service" | "run-key" | "startup" => ("service", i.detail.clone()),
                 "docker" => ("container", i.detail.clone()),
                 "process" => ("process", i.detail.split_once(' ').map(|(_, a)| a.to_string()).unwrap_or_default()),
-                "cron" => ("cron", i.detail.clone()),
+                "cron" | "rc.local" => ("cron", i.detail.clone()),
                 "script" => ("script", i.detail.clone()),
                 "owner" => continue,
                 _ => ("file", i.detail.clone()),
@@ -292,6 +292,8 @@ pub enum Blocker {
     UnknownOwner,
     /// 路徑或參數有空白 / 特殊字元。/ A path or argument with spaces or special characters.
     OddCommand,
+    /// 只有 Telepy 不會自動換的種類（OpenWrt 的 init.d 腳本）。/ Only kinds Telepy does not replace (OpenWrt init scripts).
+    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -343,7 +345,9 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
         }
     }
     if services.is_empty() {
-        return Err(Blocker::NothingToRename);
+        // 有舊名稱、但只在 Telepy 不會自動換的地方（init.d）。/ Older names only where Telepy does not replace them.
+        let older = accounts.iter().flat_map(|a| a.items.iter()).any(|i| i.kind == "found" && i.what == "initd" && !names.owns(&i.detail) && !earlier_name(base_name(&i.detail)));
+        return Err(if older { Blocker::Unsupported } else { Blocker::NothingToRename });
     }
     let mut old: Vec<String> = services
         .iter()
@@ -762,6 +766,22 @@ mod tests {
         assert!(o[1].process && o[1].name.starts_with("/usr/bin/ssh -N") && o[1].port == Some(57575), "{o:?}");
         assert_eq!((o[2].name.as_str(), o[2].port), ("old.sh", None));
         assert_eq!(shared_key(&s).as_deref(), Some("/home/pi/.ssh/telepy_tunnel_ed25519"));
+    }
+
+    #[test]
+    fn launchd_plists_and_openwrt_init_scripts_are_read() {
+        let names = Names::new("k7m2q9xd");
+        let s = vec![account(
+            "root",
+            true,
+            vec![item("found", "initd", "/etc/init.d/telepy-natlee"), item("found", "rc.local", "ssh -N -p 56767 -R *:0:localhost:22 telepy@h &")],
+        )];
+        let p = parts(&s, &names);
+        assert_eq!(p.iter().map(|p| (p.kind, p.name.as_str())).collect::<Vec<_>>(), vec![("service", "telepy-natlee"), ("cron", "ssh -N -p 56767 -R *:0:localhost:22 telepy@h &")]);
+        assert_eq!(older_services(&p), vec!["telepy-natlee".to_string()]);
+        assert_eq!(plan(&s, &names), Err(Blocker::Unsupported), "an init script is listed but not replaced automatically");
+        let ours = vec![account("root", true, vec![item("found", "initd", "/etc/init.d/telepy-k7m2q9xd")])];
+        assert_eq!(plan(&ours, &names), Err(Blocker::NothingToRename));
     }
 
     #[test]
