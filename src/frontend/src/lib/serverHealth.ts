@@ -79,12 +79,25 @@ const ID_BY_NAME: Record<string, HealthCheckId> = {
     "audit log": "audit_log",
 };
 
+/** 管理員對一個 ⚠ / ✗ 的「已確認」。/ An admin's acknowledgement of a warning or failure. */
+export interface HealthAck {
+    by: string;
+    at: string;
+    note: string;
+}
+
 export interface HealthCheck {
     /** 認得的 id；更新的後端多出來、這版不認得的是 null（照原文顯示在「設定」組）。/ null = unknown to this build. */
     id: HealthCheckId | null;
     name: string;
     status: HealthStatus;
     detail: string;
+    /** 這個結果的指紋：問題一變（新的列、新的表、更多不符）就變。/ Changes whenever the problem changes. "" from older backends. */
+    fingerprint: string;
+    /** 對「現在這個」結果的確認；有它就不再算警報。/ An acknowledgement of this exact result: no longer an alert. */
+    ack: HealthAck | null;
+    /** 之前確認過、但結果已經變了（又變紅）。/ Acknowledged earlier, but the result has changed since (red again). */
+    staleAck: HealthAck | null;
 }
 
 export interface ServerHealth {
@@ -99,6 +112,23 @@ export interface ServerHealth {
 const STATUSES: HealthStatus[] = ["ok", "info", "warn", "fail"];
 const count = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0);
 
+function parseAck(v: unknown): HealthAck | null {
+    if (!v || typeof v !== "object") return null;
+    const o = v as Record<string, unknown>;
+    if (typeof o.by !== "string" || typeof o.at !== "string") return null;
+    return { by: o.by, at: o.at, note: typeof o.note === "string" ? o.note : "" };
+}
+
+/** 確認過的 ⚠ / ✗ 不再是警報（只有 warn / fail 能確認）。/ An acknowledged warning / failure is no longer an alert. */
+export function isAcked(c: HealthCheck): boolean {
+    return !!c.ack && (c.status === "warn" || c.status === "fail");
+}
+
+/** 還要人看的：沒確認過的 ⚠ / ✗。/ Still needs someone: unacknowledged warnings and failures. */
+function alarming(c: HealthCheck): boolean {
+    return (c.status === "warn" || c.status === "fail") && !isAcked(c);
+}
+
 /** 後端 JSON → 型別；形狀不對回 null。/ Backend JSON → typed; null when the shape is wrong. */
 export function parseServerHealth(raw: unknown): ServerHealth | null {
     if (!raw || typeof raw !== "object") return null;
@@ -109,7 +139,7 @@ export function parseServerHealth(raw: unknown): ServerHealth | null {
         if (typeof o.name !== "string" || !o.name) return [];
         const status: HealthStatus = STATUSES.includes(o.status as HealthStatus) ? (o.status as HealthStatus) : "info";
         const id = CHECK_IDS.includes(o.id as HealthCheckId) ? (o.id as HealthCheckId) : (ID_BY_NAME[o.name] ?? null);
-        return [{ id, name: o.name, status, detail: typeof o.detail === "string" ? o.detail : "" }];
+        return [{ id, name: o.name, status, detail: typeof o.detail === "string" ? o.detail : "", fingerprint: typeof o.fingerprint === "string" ? o.fingerprint : "", ack: parseAck(o.ack), staleAck: parseAck(o.stale_ack) }];
     });
     return {
         checks,
@@ -123,8 +153,8 @@ export function parseServerHealth(raw: unknown): ServerHealth | null {
 
 /** 整體最嚴重的一級：有 ✗ 就是 fail，再來 warn，否則 ok（info 不算問題）。/ The worst level; notes don't count. */
 export function worstStatus(checks: HealthCheck[]): "ok" | "warn" | "fail" {
-    if (checks.some((c) => c.status === "fail")) return "fail";
-    if (checks.some((c) => c.status === "warn")) return "warn";
+    if (checks.some((c) => c.status === "fail" && alarming(c))) return "fail";
+    if (checks.some((c) => c.status === "warn" && alarming(c))) return "warn";
     return "ok";
 }
 
@@ -160,14 +190,20 @@ export function parseHealthTab(raw: string | null | undefined): HealthTab {
 export interface StatusCounts {
     ok: number;
     info: number;
+    /** 沒確認的。/ Unacknowledged ones. */
     warn: number;
     fail: number;
+    /** 確認過的 ⚠ / ✗。/ Acknowledged warnings and failures. */
+    acked: number;
 }
 
 /** 一串檢查各級幾項。/ How many checks sit at each level. */
 export function countStatuses(checks: HealthCheck[]): StatusCounts {
-    const out: StatusCounts = { ok: 0, info: 0, warn: 0, fail: 0 };
-    for (const c of checks) out[c.status] += 1;
+    const out: StatusCounts = { ok: 0, info: 0, warn: 0, fail: 0, acked: 0 };
+    for (const c of checks) {
+        if (isAcked(c)) out.acked += 1;
+        else out[c.status] += 1;
+    }
     return out;
 }
 
@@ -180,7 +216,7 @@ export function groupCounts(checks: HealthCheck[]): Record<HealthGroup, StatusCo
 
 /** 要處理的（✗ 與 !），✗ 在前；總覽最上面列出來。/ What needs action (failures, then warnings) for the overview's top list. */
 export function problems(checks: HealthCheck[]): HealthCheck[] {
-    return sortChecks(checks.filter((c) => c.status === "fail" || c.status === "warn"));
+    return sortChecks(checks.filter(alarming));
 }
 
 /**

@@ -9,13 +9,19 @@
  * the summary, what needs action and one tile per group; each group = one card per check (translated title, what it
  * checks, how to fix it, plus the backend's own text). The addresses tab ends with "How Telepy sees your address".
  * Every refresh reruns the checks (the audit chain included), so the page never polls.
+ * 已確認：⚠ / ✗ 卡可以「確認…」（附備註，結果一樣就不再算警報，一變又亮起），確認過的卡變中性、細節收起來；
+ * 之前確認過但結果變了的卡，最上面說明一次。純邏輯在 lib/healthAck。
+ * Acknowledgements: a warning / failure card can be acknowledged with a note (no longer an alert while the result
+ * stays the same, red again once it changes); an acknowledged card turns neutral with its details folded away; a
+ * card whose earlier acknowledgement no longer matches says so on top. Pure logic in lib/healthAck.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, Puzzle, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, Puzzle, SlidersHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
+import { HealthAckDialog } from "@/components/health/HealthAckDialog";
 import { ServerHealthInfoDialog } from "@/components/health/ServerHealthInfoDialog";
 import { ServerStats } from "@/components/health/ServerStats";
 import { Button } from "@/components/ui/button";
@@ -23,13 +29,17 @@ import { Callout } from "@/components/ui/callout";
 import { NavTabs, type NavTab } from "@/components/ui/nav-tabs";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Chip, SectionHeading } from "@/components/ui/section";
+import { useToast } from "@/components/ui/Toast";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { useServerHealth } from "@/hooks/useServerHealth";
+import { useReauth } from "@/hooks/useReauth";
+import { useServerHealth, type AckOutcome } from "@/hooks/useServerHealth";
+import { ackedSummary, canAcknowledge, cardLook, tileTone } from "@/lib/healthAck";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
     HEALTH_GROUPS,
     checksIn,
+    countStatuses,
     groupCounts,
     groupOf,
     groupStatuses,
@@ -101,22 +111,26 @@ function useCountsLine() {
         if (c.fail) parts.push(t(c.fail === 1 ? "health.n.failOne" : "health.n.fail", { n: String(c.fail) }));
         if (c.warn) parts.push(t(c.warn === 1 ? "health.n.warnOne" : "health.n.warn", { n: String(c.warn) }));
         if (c.info) parts.push(t(c.info === 1 ? "health.n.infoOne" : "health.n.info", { n: String(c.info) }));
+        if (c.acked) parts.push(t(c.acked === 1 ? "health.n.ackedOne" : "health.n.acked", { n: String(c.acked) }));
         if (parts.length === 0) return c.ok ? t("health.n.allOk") : t("health.n.none");
         return parts.join(" · ");
     };
 }
 
-/** 側欄分頁的標籤：名稱 + 狀態點 + 要處理的數量。/ A tab label: name + status dot + how many need action. */
-function TabLabel({ label, status, issues }: { label: string; status: "ok" | "warn" | "fail" | null; issues: number }) {
+/**
+ * 側欄分頁的標籤：名稱 + 狀態點（灰 = 只有備註或確認過的）+ 要處理的數量。
+ * A tab label: name + status dot (grey = only notes or acknowledged ones) + how many need action.
+ */
+function TabLabel({ label, status, issues }: { label: string; status: HealthStatus | null; issues: number }) {
     const { t } = useI18n();
     return (
         <span className="inline-flex items-center gap-1.5">
             {label}
             {status && (
                 <span
-                    className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[status])}
+                    className={cn("size-1.5 shrink-0 rounded-full", status === "info" ? "bg-muted-foreground/50" : STATUS_DOT[status])}
                     role="img"
-                    aria-label={t(status === "ok" ? "health.status.ok" : status === "warn" ? "health.status.warn" : "health.status.fail")}
+                    aria-label={t(STATUS_KEY[status])}
                 />
             )}
             {issues > 0 && (
@@ -133,7 +147,16 @@ export function ServerHealthView() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
-    const { health, failed, busy, reload } = useServerHealth();
+    const { health, failed, busy, reload, acknowledge, unacknowledge } = useServerHealth();
+    const { request: requestReauth, dialog: reauthDialog } = useReauth();
+    const { showSuccess, showError } = useToast();
+    // 正在確認的那張卡。/ The card being acknowledged.
+    const [acking, setAcking] = useState<HealthCheck | null>(null);
+    const undo = async (c: HealthCheck) => {
+        if (await unacknowledge(c)) showSuccess(t("health.ack.undone"));
+        else showError(t("health.ack.undoFailed"));
+    };
+    const cardActions: CardActions = { onAck: setAcking, onUndo: (c) => void undo(c) };
     const bodyRef = useRef<HTMLDivElement>(null);
     const [info, setInfo] = useState(false);
     // 每按一次重新整理就加一，讓即時數據也重抓。/ Bumped on every Refresh so the live stats reload too.
@@ -167,14 +190,14 @@ export function ServerHealthView() {
     const statuses = health ? groupStatuses(health.checks) : null;
     const counts = health ? groupCounts(health.checks) : null;
     const issues = (g: HealthGroup) => (counts ? counts[g].fail + counts[g].warn : 0);
-    const overviewStatus = health ? worstStatus(health.checks) : null;
-    const overviewIssues = health ? health.checks.filter((c) => c.status === "fail" || c.status === "warn").length : 0;
+    const overviewStatus = health ? tileTone(worstStatus(health.checks), countStatuses(health.checks)) : null;
+    const overviewIssues = health ? problems(health.checks).length : 0;
 
     const tabs: NavTab<HealthTab>[] = [
         { value: "overview", icon: <LayoutGrid />, label: <TabLabel label={t("health.tab.overview")} status={overviewStatus} issues={overviewIssues} />, hint: wide ? t("health.tab.overview.hint") : undefined },
         ...HEALTH_GROUPS.map((g) => {
             const Icon = GROUP_ICON[g];
-            return { value: g, icon: <Icon />, label: <TabLabel label={t(GROUP_LABEL[g])} status={statuses?.[g] ?? null} issues={issues(g)} />, hint: wide ? t(GROUP_HINT[g]) : undefined };
+            return { value: g, icon: <Icon />, label: <TabLabel label={t(GROUP_LABEL[g])} status={statuses && counts ? tileTone(statuses[g], counts[g]) : null} issues={issues(g)} />, hint: wide ? t(GROUP_HINT[g]) : undefined };
         }),
     ];
 
@@ -215,7 +238,7 @@ export function ServerHealthView() {
                     ) : tab === "overview" ? (
                         <Overview health={health} onPick={setTab} reloadKey={reloadKey} />
                     ) : (
-                        <GroupPanel health={health} group={tab} />
+                        <GroupPanel health={health} group={tab} actions={cardActions} />
                     )}
                     {tab === "addresses" && <ClientIpCheckPanel />}
                     {health && tab === "overview" && <p className="text-xs text-muted-foreground">{tn("health.cliNote", { cli: <code>./telepy.sh doctor</code> })}</p>}
@@ -223,15 +246,25 @@ export function ServerHealthView() {
             </div>
 
             <ServerHealthInfoDialog open={info} onClose={() => setInfo(false)} health={health} onPick={pick} />
+            <HealthAckDialog
+                check={acking}
+                title={acking ? checkTitle(t, acking) : ""}
+                onClose={() => setAcking(null)}
+                onSubmit={(note): Promise<AckOutcome> => (acking ? acknowledge(acking, note, requestReauth) : Promise.resolve({ kind: "cancelled" }))}
+            />
+            {reauthDialog}
         </div>
     );
 }
 
 /** 總結一行：最嚴重的一級、各級數量、什麼時候跑的。/ The summary: worst level, counts, when it ran. */
-function Summary({ health }: { health: ServerHealth }) {
+function Summary({ health, onPick }: { health: ServerHealth; onPick: (tab: HealthTab) => void }) {
     const { t, locale } = useI18n();
     const worst = worstStatus(health.checks);
     const Icon = STATUS_ICON[worst];
+    // 數字由頁面自己算，確認過的另外算（後端的數字不分）。/ Counted here so acknowledged ones are separate.
+    const counts = countStatuses(health.checks);
+    const acked = ackedSummary(health.checks);
     return (
         <section
             className={cn(
@@ -241,10 +274,22 @@ function Summary({ health }: { health: ServerHealth }) {
         >
             <Icon size={20} className={cn("mt-0.5 shrink-0", STATUS_TEXT[worst])} aria-hidden />
             <div className="min-w-0 flex-1">
-                <p className="text-base text-foreground">{t(worst === "fail" ? "health.summary.fail" : worst === "warn" ? "health.summary.warn" : "health.summary.ok")}</p>
-                <p className="mt-0.5 text-sm text-foreground/85">
-                    {t("health.counts", { ok: String(health.ok), info: String(health.info), warnings: String(health.warnings), failures: String(health.failures) })}
+                <p className="text-base text-foreground">
+                    {t(worst === "fail" ? "health.summary.fail" : worst === "warn" ? "health.summary.warn" : acked ? "health.summary.okAcked" : "health.summary.ok")}
                 </p>
+                <p className="mt-0.5 text-sm text-foreground/85">
+                    {t("health.counts", { ok: String(counts.ok), info: String(counts.info), warnings: String(counts.warn), failures: String(counts.fail) })}
+                    {counts.acked > 0 && <> · {t(counts.acked === 1 ? "health.n.ackedOne" : "health.n.acked", { n: String(counts.acked) })}</>}
+                </p>
+                {acked && (
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
+                        <CheckCheck size={14} className="shrink-0" aria-hidden />
+                        {t(acked.count === 1 ? "health.ack.overviewOne" : "health.ack.overview", { n: String(acked.count) })}
+                        <button type="button" onClick={() => onPick(acked.group)} className="inline-flex items-center gap-1 rounded-sm text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            {t("health.todo.open", { group: t(GROUP_LABEL[acked.group]) })} <ArrowRight size={13} aria-hidden />
+                        </button>
+                    </p>
+                )}
                 {health.ranAt && <p className="mt-1 text-xs text-muted-foreground">{t("health.ranAt", { time: new Date(health.ranAt).toLocaleString(locale) })}</p>}
             </div>
         </section>
@@ -264,7 +309,7 @@ function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick:
 
     return (
         <>
-            <Summary health={health} />
+            <Summary health={health} onPick={onPick} />
 
             <ServerStats reloadKey={reloadKey} />
 
@@ -297,8 +342,8 @@ function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick:
                     const Icon = GROUP_ICON[g];
                     const s = statuses[g];
                     const c = counts[g];
-                    // 全是備註（或沒有檢查）= 灰點，不算「正常」。/ Only notes (or nothing) = a grey dot, not "OK".
-                    const tone: HealthStatus = s === "ok" ? (c.ok === 0 ? "info" : "ok") : s;
+                    // 全是備註、只剩確認過的（或沒有檢查）= 灰點，不算「正常」。/ Only notes, acknowledged ones or nothing = a grey dot.
+                    const tone: HealthStatus = tileTone(s, c);
                     return (
                         <button
                             key={g}
@@ -321,7 +366,12 @@ function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick:
     );
 }
 
-function GroupPanel({ health, group }: { health: ServerHealth; group: HealthGroup }) {
+interface CardActions {
+    onAck: (check: HealthCheck) => void;
+    onUndo: (check: HealthCheck) => void;
+}
+
+function GroupPanel({ health, group, actions }: { health: ServerHealth; group: HealthGroup; actions: CardActions }) {
     const { t } = useI18n();
     const checks = checksIn(health.checks, group);
     const Icon = GROUP_ICON[group];
@@ -333,7 +383,7 @@ function GroupPanel({ health, group }: { health: ServerHealth; group: HealthGrou
             ) : (
                 <ol className="space-y-3" data-refresh-list>
                     {checks.map((c, i) => (
-                        <CheckCard key={`${c.name}-${i}`} check={c} />
+                        <CheckCard key={`${c.name}-${i}`} check={c} actions={actions} />
                     ))}
                 </ol>
             )}
@@ -341,19 +391,24 @@ function GroupPanel({ health, group }: { health: ServerHealth; group: HealthGrou
     );
 }
 
-/** 一項檢查：翻譯過的名稱與說明、怎麼修（有問題時），加上後端原文。/ One check: translated title and purpose, how to fix it, the backend's own text. */
-function CheckCard({ check }: { check: HealthCheck }) {
-    const { t } = useI18n();
+/**
+ * 一項檢查：翻譯過的名稱與說明、怎麼修（有問題時），加上後端原文。⚠ / ✗ 可以「確認…」；確認過的卡是中性的、
+ * 細節收在「顯示細節」後面；之前確認過但結果變了的卡，最上面多一段警告。
+ * One check: translated title and purpose, how to fix it, the backend's own text. Warnings / failures can be
+ * acknowledged; an acknowledged card is neutral with its details folded away; a card whose earlier acknowledgement
+ * no longer matches gets a warning on top.
+ */
+function CheckCard({ check, actions }: { check: HealthCheck; actions: CardActions }) {
+    const { t, locale } = useI18n();
+    const look = cardLook(check);
+    const [open, setOpen] = useState(false);
     const fix = check.id && check.status !== "ok" ? <FixText id={check.id} /> : null;
-    return (
-        <li className="space-y-3 rounded-xl border border-border/80 bg-card p-4 text-card-foreground shadow-card sm:px-5">
-            <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5">
-                <StatusChip status={check.status} />
-                <div className="min-w-0 flex-1">
-                    <p className="text-base text-foreground [overflow-wrap:anywhere]">{check.id ? t(tKey(check.id, "title")) : check.name}</p>
-                    {check.id && <p className="mt-0.5 text-sm text-muted-foreground">{t(tKey(check.id, "what"))}</p>}
-                </div>
-            </div>
+    const when = (at: string) => {
+        const d = new Date(at);
+        return Number.isNaN(d.getTime()) ? at : d.toLocaleString(locale);
+    };
+    const details = (
+        <>
             {fix && (
                 <Callout tone={check.status === "fail" ? "danger" : check.status === "warn" ? "warning" : "info"} title={t(check.status === "info" ? "health.optional" : "health.fix")}>
                     {fix}
@@ -366,6 +421,58 @@ function CheckCard({ check }: { check: HealthCheck }) {
                 </p>
                 <p className="mt-0.5 font-mono text-xs whitespace-pre-wrap text-foreground/85 [overflow-wrap:anywhere]">{check.detail || "—"}</p>
             </div>
+        </>
+    );
+    return (
+        <li className="space-y-3 rounded-xl border border-border/80 bg-card p-4 text-card-foreground shadow-card sm:px-5">
+            {look === "stale" && check.staleAck && (
+                <Callout tone="warning">
+                    {t("health.ack.stale", { by: check.staleAck.by, time: when(check.staleAck.at), note: check.staleAck.note })}
+                </Callout>
+            )}
+            <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5">
+                {look === "acked" ? (
+                    <Chip className="shrink-0">
+                        <CheckCheck aria-hidden /> {t("health.ack.chip", { status: t(STATUS_KEY[check.status]) })}
+                    </Chip>
+                ) : (
+                    <StatusChip status={check.status} />
+                )}
+                <div className="min-w-0 flex-1">
+                    <p className={cn("text-base [overflow-wrap:anywhere]", look === "acked" ? "text-foreground/80" : "text-foreground")}>{checkTitle(t, check)}</p>
+                    {check.id && <p className="mt-0.5 text-sm text-muted-foreground">{t(tKey(check.id, "what"))}</p>}
+                </div>
+                {canAcknowledge(check) && (
+                    <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => actions.onAck(check)}>
+                        {t("health.ack.button")}
+                    </Button>
+                )}
+            </div>
+            {look === "acked" && check.ack ? (
+                <>
+                    <div className="flex flex-wrap items-start gap-x-3 gap-y-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
+                        <p className="min-w-0 flex-1 text-foreground/85 [overflow-wrap:anywhere]">
+                            <span className="text-muted-foreground">{t("health.ack.byLine", { by: check.ack.by, time: when(check.ack.at) })}</span>
+                            {check.ack.note && <> — <span className="whitespace-pre-wrap">{check.ack.note}</span></>}
+                        </p>
+                        <Button type="button" variant="link" size="xs" className="h-auto px-0 text-foreground underline decoration-foreground/30" onClick={() => actions.onUndo(check)}>
+                            {t("health.ack.undo")}
+                        </Button>
+                    </div>
+                    <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => setOpen((v) => !v)}
+                        className="inline-flex items-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                        <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} aria-hidden />
+                        {t(open ? "health.ack.hideDetails" : "health.ack.showDetails")}
+                    </button>
+                    {open && details}
+                </>
+            ) : (
+                details
+            )}
         </li>
     );
 }
@@ -391,7 +498,7 @@ function FixText({ id }: { id: HealthCheckId }) {
         geoip: { cmd: c("./telepy.sh geoip") },
         oui: { cmd: c("./telepy.sh oui") },
         client_addresses: {},
-        audit_log: { file: c("audit-anchors.log") },
+        audit_log: { file: c("audit-anchors.log"), mismatch: c("checkpoint_mismatch"), missing: c("checkpoint_missing") },
     };
     return <p>{tn(tKey(id, "fix"), vars[id])}</p>;
 }

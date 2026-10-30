@@ -83,6 +83,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     user_group: { key: "logs.event.user_group", tone: "outline", category: "change" },
     feature_grant: { key: "logs.event.feature_grant", tone: "outline", category: "change" },
     notify_default: { key: "logs.event.notify_default", tone: "outline", category: "change" },
+    health_ack: { key: "logs.event.health_ack", tone: "outline", category: "change" },
     api_token: { key: "logs.event.api_token", tone: "outline", category: "change" },
     user_key_import: { key: "logs.event.user_key_import", tone: "outline", category: "change" },
     token_call: { key: "logs.event.token_call", tone: "outline", category: "change" },

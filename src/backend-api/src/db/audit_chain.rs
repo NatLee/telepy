@@ -136,6 +136,8 @@ struct Head {
 pub struct AuditChains {
     heads: [Mutex<Option<Head>>; 3],
     anchors_file: RwLock<Option<PathBuf>>,
+    /// 這個資料庫的鏈 id（第一次用時讀或建）。/ This database's chain id, read or created on first use.
+    chain_id: RwLock<Option<String>>,
 }
 
 impl AuditChains {
@@ -234,24 +236,73 @@ async fn insert_anchor(conn: &mut SqliteConnection, table: Table, kind: &str, ro
     Ok(())
 }
 
-/// 外部錨點檔的一行。/ One line of the anchors file.
+/// 外部錨點檔的一行。`db` = 寫這行的資料庫的鏈 id；沒有的是這個欄位出現前寫的（照樣比對）。
+/// One line of the anchors file. `db` = the chain id of the database that wrote it; lines without one predate
+/// the field and are still compared.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointLine {
     pub at: String,
     pub table: String,
     pub row_id: i64,
     pub row_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<String>,
+}
+
+/// 讀這個資料庫的鏈 id（唯讀；還沒有 = None）。/ This database's chain id, read only (None = not created yet).
+pub async fn chain_id(db: &Db) -> sqlx::Result<Option<String>> {
+    if let Some(id) = db.audit.chain_id.read().ok().and_then(|g| g.clone()) {
+        return Ok(Some(id));
+    }
+    let id: Option<Option<String>> =
+        sqlx::query_scalar("SELECT row_hash FROM telepy_audit_anchor WHERE kind = 'chain' ORDER BY id LIMIT 1").fetch_optional(&db.read).await?;
+    let id = id.flatten();
+    if let (Some(v), Ok(mut g)) = (&id, db.audit.chain_id.write()) {
+        *g = Some(v.clone());
+    }
+    Ok(id)
+}
+
+/// 鏈 id：沒有就產生一個隨機的存起來（`telepy_audit_anchor` 的 `chain` 列；兩邊同時建時取最早那列，所以冪等）。
+/// 換掉或還原資料庫後，錨點檔裡舊資料庫寫的行就認得出來、不再拿來比。
+/// The chain id, created once (a `chain` row in `telepy_audit_anchor`; concurrent creators both read the
+/// earliest row back, so it is idempotent). Lets verification tell lines written by a previous database apart.
+pub async fn ensure_chain_id(db: &Db) -> sqlx::Result<String> {
+    if let Some(id) = chain_id(db).await? {
+        return Ok(id);
+    }
+    let new: String = {
+        use rand::RngCore;
+        let mut b = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut b);
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    };
+    sqlx::query("INSERT INTO telepy_audit_anchor (at, table_name, kind, row_id, row_hash) VALUES (?, '', 'chain', 0, ?)")
+        .bind(now_db())
+        .bind(&new)
+        .execute(&db.write)
+        .await?;
+    let id: Option<String> =
+        sqlx::query_scalar("SELECT row_hash FROM telepy_audit_anchor WHERE kind = 'chain' ORDER BY id LIMIT 1").fetch_one(&db.write).await?;
+    let id = id.unwrap_or(new);
+    if let Ok(mut g) = db.audit.chain_id.write() {
+        *g = Some(id.clone());
+    }
+    Ok(id)
 }
 
 /// 把這張表目前的鏈頭附加到外部錨點檔並記一筆 checkpoint 錨點。表是空的或鏈頭沒有 hash（舊列）就略過。
 /// Append the table's current head to the anchors file and record a checkpoint anchor. Skipped when the
 /// table is empty or its head predates the chain.
 pub async fn checkpoint(db: &Db, table: Table) -> anyhow::Result<Option<CheckpointLine>> {
+    // 先拿鏈 id（寫入池只有一條連線，不能在下面拿著連線時再要一條）。
+    // Chain id first: the write pool has one connection, held below.
+    let chain = ensure_chain_id(db).await?;
     let _guard = db.audit.heads[table.idx()].lock().await;
     let mut conn = db.write.acquire().await?;
     let head: Option<(i64, Option<String>)> = sqlx::query_as(&format!("SELECT id, hash FROM {} ORDER BY id DESC LIMIT 1", table.name())).fetch_optional(&mut *conn).await?;
     let Some((row_id, Some(row_hash))) = head else { return Ok(None) };
-    let line = CheckpointLine { at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), table: table.name().to_string(), row_id, row_hash };
+    let line = CheckpointLine { at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), table: table.name().to_string(), row_id, row_hash, db: Some(chain) };
     if let Some(path) = db.audit.anchors_file() {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -307,6 +358,47 @@ pub struct TableReport {
     pub reason: Option<String>,
     pub checkpoints_checked: u64,
     pub checkpoints_mismatched: u64,
+    /// 鏈本身最早的問題（列 id + hash_mismatch / link_mismatch / missing_hash）。/ The chain's own first issue.
+    pub chain_broken_at: Option<i64>,
+    pub chain_reason: Option<String>,
+    /// 鏈本身有問題的列數。/ How many rows break the chain.
+    pub chain_issues: u64,
+    /// 與外部錨點最早的不符（checkpoint_mismatch / checkpoint_missing）。/ The first mismatch with the anchors file.
+    pub checkpoint_broken_at: Option<i64>,
+    pub checkpoint_reason: Option<String>,
+    /// 錨點檔裡別的資料庫寫的行（沒比對）。/ Anchors-file lines written by another database (not compared).
+    pub checkpoints_foreign: u64,
+}
+
+impl TableReport {
+    /// 決定「是不是同一個問題」的欄位（不含會隨時間長大的計數，如 checked）。
+    /// The parts that say whether it is the same problem (not counts that grow on their own, like `checked`).
+    pub fn issue_key(&self) -> String {
+        let o = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            self.table,
+            o(self.chain_broken_at),
+            self.chain_reason.as_deref().unwrap_or(""),
+            self.chain_issues,
+            o(self.checkpoint_broken_at),
+            self.checkpoint_reason.as_deref().unwrap_or(""),
+            self.checkpoints_mismatched
+        )
+    }
+}
+
+/// 驗證結果的指紋：每張有問題的表的問題組成；之後同一張表再有列被改、更多 checkpoint 對不上或尾端被刪都會變。
+/// 16 個 hex 字元。/ Fingerprint of a verification result over every failing table's issues: a later edit in
+/// the same table, more mismatching checkpoints or a truncated tail all change it. 16 hex characters.
+pub fn fingerprint(report: &Report) -> String {
+    let parts: Vec<String> = report.tables.iter().filter(|t| !t.ok).map(TableReport::issue_key).collect();
+    let mut h = Sha256::new();
+    h.update(b"telepy-audit-issues-v1");
+    for p in &parts {
+        put(&mut h, Some(p));
+    }
+    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,10 +410,15 @@ pub struct Report {
 /// 驗證三張表（外部錨點檔讀自 `db.audit`）。/ Verify all three tables against the chain and the anchors file.
 pub async fn verify(db: &Db) -> anyhow::Result<Report> {
     let lines = read_checkpoints(db).await?;
+    let ours = chain_id(db).await?;
     let mut tables = Vec::new();
     for t in TABLES {
-        let cps: Vec<&CheckpointLine> = lines.iter().filter(|l| l.table == t.name()).collect();
-        tables.push(verify_table(db, t, &cps).await?);
+        // 別的資料庫寫的行略過；沒有 `db` 的舊行照樣比。/ Skip another database's lines; legacy lines are compared.
+        let (cps, foreign): (Vec<&CheckpointLine>, Vec<&CheckpointLine>) =
+            lines.iter().filter(|l| l.table == t.name()).partition(|l| l.db.is_none() || l.db == ours);
+        let mut r = verify_table(db, t, &cps).await?;
+        r.checkpoints_foreign = foreign.len() as u64;
+        tables.push(r);
     }
     Ok(Report { ok: tables.iter().all(|t| t.ok), tables })
 }
@@ -354,6 +451,12 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
         reason: None,
         checkpoints_checked: 0,
         checkpoints_mismatched: 0,
+        chain_broken_at: None,
+        chain_reason: None,
+        chain_issues: 0,
+        checkpoint_broken_at: None,
+        checkpoint_reason: None,
+        checkpoints_foreign: 0,
     };
     let mut chain_issue: Option<(i64, &'static str)> = None;
     let mut cp_issue: Option<(i64, &'static str)> = None;
@@ -373,6 +476,7 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
             cursor = id;
             let Some(hash) = hash else {
                 if started {
+                    r.chain_issues += 1;
                     chain_issue.get_or_insert((id, "missing_hash"));
                 } else {
                     r.unhashed_before += 1;
@@ -384,7 +488,8 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
             r.checked += 1;
             r.first_id.get_or_insert(id);
             r.last_id = Some(id);
-            if prev != expected_prev {
+            let link_bad = prev != expected_prev;
+            if link_bad {
                 chain_issue.get_or_insert((id, "link_mismatch"));
             }
             let mut texts: Vec<Option<String>> = Vec::with_capacity(n_fields);
@@ -392,8 +497,12 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
                 texts.push(row.try_get(3 + i)?);
             }
             let refs: Vec<Option<&str>> = texts.iter().map(|s| s.as_deref()).collect();
-            if row_hash(prev.as_deref(), id, &refs) != hash {
+            let hash_bad = row_hash(prev.as_deref(), id, &refs) != hash;
+            if hash_bad {
                 chain_issue.get_or_insert((id, "hash_mismatch"));
+            }
+            if link_bad || hash_bad {
+                r.chain_issues += 1;
             }
             if let Some(hs) = wanted.remove(&id) {
                 for h in hs {
@@ -418,6 +527,10 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
             cp_issue = Some((id, "checkpoint_missing"));
         }
     }
+    r.chain_broken_at = chain_issue.map(|c| c.0);
+    r.chain_reason = chain_issue.map(|c| c.1.to_string());
+    r.checkpoint_broken_at = cp_issue.map(|c| c.0);
+    r.checkpoint_reason = cp_issue.map(|c| c.1.to_string());
     let first = match (chain_issue, cp_issue) {
         (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
         (a, b) => a.or(b),
@@ -558,6 +671,67 @@ mod tests {
         let r = report(&db, Table::Gateway).await;
         assert_eq!((r.ok, r.broken_at, r.reason.as_deref()), (false, Some(10), Some("checkpoint_mismatch")), "{r:?}");
         assert_eq!((r.checkpoints_checked, r.checkpoints_mismatched), (1, 1));
+    }
+
+    async fn append_line(db: &Db, line: &CheckpointLine) {
+        let path = db.audit.anchors_file().unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        let mut f = tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
+        f.write_all(format!("{}\n", serde_json::to_string(line).unwrap()).as_bytes()).await.unwrap();
+    }
+
+    fn line(row_id: i64, row_hash: &str, db: Option<&str>) -> CheckpointLine {
+        CheckpointLine { at: "2026-10-30T00:00:00Z".into(), table: Table::Gateway.name().into(), row_id, row_hash: row_hash.into(), db: db.map(str::to_string) }
+    }
+
+    /// 另一個資料庫寫的行略過、計數；沒有 `db` 的舊行照樣比對。/ Another database's lines are skipped and counted; legacy ones are compared.
+    #[tokio::test]
+    async fn foreign_checkpoints_are_skipped_and_legacy_ones_compared() {
+        let (_d, db) = db().await;
+        for i in 0..10 {
+            gw(&db, &format!("m{i}")).await;
+        }
+        let cp = checkpoint(&db, Table::Gateway).await.unwrap().unwrap();
+        assert_eq!(cp.db.as_deref(), Some(ensure_chain_id(&db).await.unwrap().as_str()));
+        append_line(&db, &line(5, &"0".repeat(64), Some("someotherdatabase"))).await;
+        let r = report(&db, Table::Gateway).await;
+        assert!(r.ok, "{r:?}");
+        assert_eq!((r.checkpoints_checked, r.checkpoints_foreign), (1, 1));
+        append_line(&db, &line(6, &"0".repeat(64), None)).await;
+        let r = report(&db, Table::Gateway).await;
+        assert_eq!((r.ok, r.broken_at, r.reason.as_deref(), r.checkpoints_foreign), (false, Some(6), Some("checkpoint_mismatch"), 1), "{r:?}");
+        assert_eq!((r.checkpoint_broken_at, r.chain_broken_at, r.chain_issues), (Some(6), None, 0));
+        // 鏈 id 只建一次。/ The chain id is created once.
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_audit_anchor WHERE kind = 'chain'").fetch_one(&db.read).await.unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// 已知的 checkpoint 不符（舊資料庫的行）被確認後，同一張表後面再有列被改，指紋要變。
+    /// After a known checkpoint mismatch, editing a later row of the same table changes the fingerprint.
+    #[tokio::test]
+    async fn fingerprint_changes_when_a_later_row_is_edited() {
+        let (_d, db) = db().await;
+        for i in 0..10 {
+            gw(&db, &format!("m{i}")).await;
+        }
+        append_line(&db, &line(3, &"0".repeat(64), None)).await;
+        let rep1 = verify(&db).await.unwrap();
+        assert!(!rep1.ok);
+        let fp1 = fingerprint(&rep1);
+        assert_eq!(fp1.len(), 16);
+        // 沒變就一樣（新的列、新的 checkpoint 都不算）。/ Stable while nothing changes (new rows and matching checkpoints don't count).
+        gw(&db, "later").await;
+        checkpoint(&db, Table::Gateway).await.unwrap();
+        assert_eq!(fingerprint(&verify(&db).await.unwrap()), fp1);
+        exec(&db, "UPDATE telepy_gateway_event SET message = 'forged' WHERE id = 8").await;
+        let rep2 = verify(&db).await.unwrap();
+        let g = &rep2.tables[0];
+        assert_eq!((g.broken_at, g.chain_broken_at, g.chain_reason.as_deref()), (Some(3), Some(8), Some("hash_mismatch")), "{g:?}");
+        assert_ne!(fingerprint(&rep2), fp1);
+        // 尾端被刪也會變。/ So does a truncated tail.
+        let fp2 = fingerprint(&rep2);
+        exec(&db, "DELETE FROM telepy_gateway_event WHERE id >= 11").await;
+        assert_ne!(fingerprint(&verify(&db).await.unwrap()), fp2);
     }
 
     #[tokio::test]

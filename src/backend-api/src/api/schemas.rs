@@ -538,16 +538,50 @@ pub struct HealthCheck {
     #[schema(example = "ok")]
     pub status: String,
     pub detail: String,
+    /// 結果的指紋（16 hex）：問題一變就變。/ The result's fingerprint (16 hex): changes whenever the problem does.
+    #[schema(example = "3f9a0c1e5b7d2a64")]
+    pub fingerprint: String,
+    /// 對現在這個結果（同一指紋、仍是 warn / fail）的確認。/ An acknowledgement of this exact result.
+    pub ack: Option<HealthAck>,
+    /// 之前的確認，但結果已經變了。/ An earlier acknowledgement of a result that has changed since.
+    pub stale_ack: Option<HealthAck>,
+}
+
+/// 管理員對一項檢查的確認。/ An admin's acknowledgement of a check.
+#[derive(ToSchema)]
+pub struct HealthAck {
+    /// 確認的管理員。/ The admin who acknowledged it.
+    #[schema(example = "admin")]
+    pub by: String,
+    #[schema(example = "2026-10-30T01:02:03Z")]
+    pub at: String,
+    pub note: String,
+}
+
+/// `POST /api/site/health/ack`：確認一個 ⚠ / ✗。/ Acknowledge a warning or failure.
+#[derive(ToSchema)]
+pub struct HealthAckBody {
+    #[schema(example = "audit_log")]
+    pub check_id: String,
+    /// 頁面載入時看到的指紋；結果變了 = 409 `changed`。/ The fingerprint the page showed; a changed result = 409 `changed`.
+    pub fingerprint: String,
+    /// 1–500 字元（去頭尾空白）。/ 1–500 characters, trimmed.
+    pub note: String,
+    /// 帳號有第二因素時必填的再驗證證明。/ Re-authentication proof, required once the account has a second factor.
+    pub reauth: Option<serde_json::Value>,
 }
 
 /// `GET /api/site/health`：伺服器狀態（管理員）。/ The server's health (superusers).
 #[derive(ToSchema)]
 pub struct ServerHealth {
     pub checks: Vec<HealthCheck>,
+    /// 各級的原始筆數（確認過的也算在 warnings / failures 裡）。/ Raw counts per level (acknowledged ones included).
     pub ok: i64,
     pub info: i64,
     pub warnings: i64,
     pub failures: i64,
+    /// 已確認的 warn / fail 數。/ Acknowledged warnings and failures.
+    pub acknowledged: i64,
     #[schema(example = "2026-10-30T01:02:03Z")]
     pub ran_at: String,
 }
@@ -1392,6 +1426,16 @@ pub struct AuditTableReport {
     /// Lines of audit-anchors.log for rows that are still present (or should be)
     pub checkpoints_checked: i64,
     pub checkpoints_mismatched: i64,
+    /// The chain's own first issue (hash_mismatch | link_mismatch | missing_hash)
+    pub chain_broken_at: Option<i64>,
+    pub chain_reason: Option<String>,
+    /// Rows that break the chain
+    pub chain_issues: i64,
+    /// First mismatch with audit-anchors.log (checkpoint_mismatch | checkpoint_missing)
+    pub checkpoint_broken_at: Option<i64>,
+    pub checkpoint_reason: Option<String>,
+    /// Lines of audit-anchors.log written by another database (restored / replaced), not compared
+    pub checkpoints_foreign: i64,
 }
 
 #[derive(ToSchema)]

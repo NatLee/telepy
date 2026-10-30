@@ -156,6 +156,7 @@ export function ServerHealthInfoDialog({ open, onClose, health, onPick }: { open
                     <ul className="list-disc space-y-1 pl-4">
                         <li>{t("health.flow.notes.noChange")}</li>
                         <li>{t("health.flow.notes.refresh")}</li>
+                        <li>{t("health.flow.notes.ack")}</li>
                         <li>{tn("health.flow.notes.doctor", { cli: <code>./telepy.sh doctor</code> })}</li>
                     </ul>
                 </Callout>

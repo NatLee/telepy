@@ -25,7 +25,7 @@ test("the backend answer is read safely", () => {
     assert.equal(parseServerHealth(null), null);
     assert.equal(parseServerHealth({ ok: 3 }), null, "no checks = not this endpoint");
     const odd = parseServerHealth({ checks: [{ name: "" }, { name: "x", status: "great" }, { status: "ok" }], ok: -1 })!;
-    assert.deepEqual(odd.checks, [{ id: null, name: "x", status: "info", detail: "" }]);
+    assert.deepEqual(odd.checks, [{ id: null, name: "x", status: "info", detail: "", fingerprint: "", ack: null, staleAck: null }]);
     assert.equal(odd.ok, 0);
     assert.equal(odd.ranAt, null);
 });
@@ -66,11 +66,11 @@ test("every id has a group, tabs parse", () => {
 
 test("counts per level and per group, and the problems list", () => {
     const h = parseServerHealth(answer)!;
-    assert.deepEqual(countStatuses(h.checks), { ok: 2, info: 1, warn: 1, fail: 1 });
+    assert.deepEqual(countStatuses(h.checks), { ok: 2, info: 1, warn: 1, fail: 1, acked: 0 });
     const g = groupCounts(h.checks);
-    assert.deepEqual(g.services, { ok: 0, info: 1, warn: 0, fail: 1 });
-    assert.deepEqual(g.addresses, { ok: 0, info: 0, warn: 1, fail: 0 });
-    assert.deepEqual(g.keys, { ok: 0, info: 0, warn: 0, fail: 0 });
+    assert.deepEqual(g.services, { ok: 0, info: 1, warn: 0, fail: 1, acked: 0 });
+    assert.deepEqual(g.addresses, { ok: 0, info: 0, warn: 1, fail: 0, acked: 0 });
+    assert.deepEqual(g.keys, { ok: 0, info: 0, warn: 0, fail: 0, acked: 0 });
     assert.deepEqual(problems(h.checks).map((c) => c.id), ["guacd", "client_addresses"]);
     assert.deepEqual(problems([]), []);
 });
@@ -80,4 +80,22 @@ test("old #client-ip links open the addresses tab", () => {
     assert.equal(initialHealthTab("keys", "#client-ip"), "keys", "an explicit tab wins");
     assert.equal(initialHealthTab(null, ""), "overview");
     assert.equal(initialHealthTab("storage", null), "storage");
+});
+
+test("an acknowledged problem is no longer an alert; a stale one still is", () => {
+    const ack = { by: "admin", at: "2026-10-30T02:00:00Z", note: "restored database" };
+    const h = parseServerHealth({
+        checks: [
+            { id: "audit_log", name: "audit log", status: "fail", detail: "x", fingerprint: "f1", ack },
+            { id: "guacd", name: "g", status: "warn", detail: "y", fingerprint: "f2", stale_ack: ack },
+            { id: "database", name: "d", status: "ok", detail: "z", fingerprint: "f3" },
+        ],
+    })!;
+    assert.deepEqual(h.checks[0].ack, ack);
+    assert.equal(h.checks[1].ack, null);
+    assert.deepEqual(h.checks[1].staleAck, ack);
+    assert.equal(worstStatus(h.checks), "warn");
+    assert.deepEqual(problems(h.checks).map((c) => c.id), ["guacd"]);
+    assert.deepEqual(countStatuses(h.checks), { ok: 1, info: 0, warn: 1, fail: 0, acked: 1 });
+    assert.equal(groupStatuses(h.checks).storage, "ok");
 });

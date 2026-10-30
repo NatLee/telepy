@@ -9,7 +9,7 @@
  * Main path: visitor's browser ─ proxy / Traefik (client_addresses) ─ backend (configuration) ─ data on disk.
  * Branches from the backend: SSH gateway (keys) ─ devices, guacd, kasm-browser, local GeoIP + OUI files.
  */
-import { type HealthCheck, type HealthCheckId, type HealthStatus, type HealthTab, type ServerHealth } from "./serverHealth.ts";
+import { isAcked, type HealthCheck, type HealthCheckId, type HealthStatus, type HealthTab, type ServerHealth } from "./serverHealth.ts";
 
 /**
  * 一站的狀態：PathFlow 的 waiting / ok / failed，再加 warn（能用但要看一下）。info（附註）算 ok。
@@ -53,14 +53,24 @@ export interface SpotInfo {
     state: HealthSpotState;
     /** 這站最嚴重的一級（含 info）；null = 沒資料 / 不檢查。/ The worst level incl. notes; null = no data / not checked. */
     status: HealthStatus | null;
-    /** 這站的檢查，最嚴重的在前。/ The spot's checks, worst first. */
+    /** 這站的檢查，最嚴重的在前（確認過的算在備註那級）。/ The spot's checks, worst first (acknowledged ones rank as notes). */
     checks: HealthCheck[];
+    /** 確認過的 ⚠ / ✗：不讓這站變紅 / 黃，狀態文字說「已確認」。/ Acknowledged problems: they don't colour the spot. */
+    acked: HealthCheck[];
     tab: HealthTab;
     /** 這站本來就不檢查（訪客、裝置）。/ Nothing is checked at this spot. */
     unchecked: boolean;
 }
 
 const RANK: Record<HealthStatus, number> = { fail: 0, warn: 1, info: 2, ok: 3 };
+
+/**
+ * 一項檢查在圖上算哪一級：確認過的 ⚠ / ✗ 算備註（不亮紅 / 黃，等結果一變才又亮）。
+ * The level a check counts as on the picture: an acknowledged warning / failure counts as a note.
+ */
+export function effectiveStatus(c: HealthCheck): HealthStatus {
+    return isAcked(c) ? "info" : c.status;
+}
 
 export function stateOf(status: HealthStatus | null): HealthSpotState {
     if (status === "fail") return "failed";
@@ -83,11 +93,11 @@ export function healthSpots(health: ServerHealth | null): Record<HealthSpot, Spo
     for (const s of HEALTH_SPOTS) {
         const unchecked = SPOT_CHECKS[s] === null;
         const checks = health ? health.checks.filter((c) => !unchecked && spotOf(c) === s) : [];
-        checks.sort((a, b) => RANK[a.status] - RANK[b.status]);
-        let status: HealthStatus | null = checks.length ? checks[0].status : null;
+        checks.sort((a, b) => RANK[effectiveStatus(a)] - RANK[effectiveStatus(b)]);
+        let status: HealthStatus | null = checks.length ? effectiveStatus(checks[0]) : null;
         // 訪客：頁面能載入就代表瀏覽器到得了。/ The visitor: the page loaded, so the browser got through.
         if (s === "visitor" && health) status = "ok";
-        out[s] = { state: stateOf(status), status, checks, tab: SPOT_TAB[s], unchecked };
+        out[s] = { state: stateOf(status), status, checks, acked: checks.filter(isAcked), tab: SPOT_TAB[s], unchecked };
     }
     return out;
 }
