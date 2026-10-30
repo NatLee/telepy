@@ -48,6 +48,8 @@ const STRICT: Record<ConfigPart, Partial<Record<string, TranslationKey>>> = {
 interface Props {
     n: number;
     part: ConfigPart;
+    /** 簡化版裡幾台裝置共用的區塊。/ A block several devices share in the compact form. */
+    shared?: boolean;
     title: React.ReactNode;
     hint?: React.ReactNode;
     stanza: ConfigStanza;
@@ -55,7 +57,7 @@ interface Props {
     onActive: (part: ConfigPart | null) => void;
 }
 
-export function ConfigStanzaCard({ n, part, title, hint, stanza, active, onActive }: Props) {
+export function ConfigStanzaCard({ n, part, shared = false, title, hint, stanza, active, onActive }: Props) {
     const { t } = useI18n();
     const [copied, setCopied] = useState(false);
     const copy = () =>
@@ -74,7 +76,9 @@ export function ConfigStanzaCard({ n, part, title, hint, stanza, active, onActiv
     const note = (key: string, value: string) => {
         // 釘住主機金鑰時（伺服器或裝置），StrictHostKeyChecking 的意思不一樣。/ With pinning, the line means something else.
         const strict = key.toLowerCase() === "stricthostkeychecking" ? STRICT[part][value.toLowerCase()] : undefined;
-        const k = strict ?? NOTES[part][key.toLowerCase()];
+        // 共用區塊：Host 行是一串名字，HostName %h = 打進去的名字。/ Shared block: a list of names; %h = the typed name.
+        const sharedKey: TranslationKey | undefined = !shared ? undefined : key.toLowerCase() === "host" ? "tidy.line.sharedHost" : key.toLowerCase() === "hostname" && value.includes("%h") ? "tidy.line.hostnameH" : undefined;
+        const k = sharedKey ?? strict ?? NOTES[part][key.toLowerCase()];
         return k ? t(k, { alias: stanza.alias }) : null;
     };
 

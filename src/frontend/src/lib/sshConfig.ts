@@ -10,6 +10,8 @@
  * stays as it is instead of swallowing the rest of the file.
  */
 
+import { tidyConfig } from "./sshConfigTidy.ts";
+
 export interface ConfigOption {
     key: string;
     value: string;
@@ -49,6 +51,9 @@ export function stanzaText(s: ConfigStanza): string {
 
 const openMarker = (alias: string) => `# >>> telepy ${alias} >>>`;
 const closeMarker = (alias: string) => `# <<< telepy ${alias} <<<`;
+// 簡化寫法裡同一台 Telepy 的裝置共用的區塊（`lib/sshConfigTidy.ts`）叫 `telepy shared <伺服器別名>`：兩個字的名字，
+// 舊版的指令只認一個字，所以碰不到它。/ The block a server's devices share in the compact form is named `telepy shared
+// <server alias>`: two words, which older commands (one word) never touch.
 
 /** 加上標記的區塊（指令寫進檔案的內容）。/ The marked blocks the command writes. */
 export function markedBlocks(stanzas: ConfigStanza[]): string {
@@ -71,11 +76,23 @@ function aliasGroup(aliases: string[]): string {
  * The aliases go in once through `-v` and become a set in BEGIN — with hundreds of devices, macOS awk took seconds
  * on one huge `(a|b|…)` regex.
  */
-function stripAwk(aliases: string[], exclude = false): string {
+function stripAwk(aliases: string[], exclude = false, server?: string | null): string {
     // exclude：`$telepy_skip` 裡的別名（別台 Telepy 的同名區塊）不拿掉。/ exclude: aliases in `$telepy_skip` stay.
     const skip = exclude ? ` -v x="$telepy_skip"` : "";
     const drop = exclude ? `;m=split(x,X," ");for(i=1;i<=m;i++)delete K[X[i]]` : "";
-    return `-v t='${aliases.join(" ")}'${skip} 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1${drop}} /^# >>> telepy [^ ]+ >>>$/&&($4 in K){if(s)printf "%s",b;s=1;c=$4;b=""} s{b=b $0 "\\n";if($0=="# <<< telepy " c " <<<"){s=0;b=""};next} 1;END{if(s)printf "%s",b}'`;
+    // 這台的共用區塊（`telepy shared <server>`）：Host 行拿掉這些別名，沒有名字了整段拿掉；沒有結尾標記的原樣印回去。
+    // This server's shared blocks: drop these aliases from the Host line, the whole block once no name is left; an
+    // unterminated one is printed back as it was.
+    const shared = server
+        ? [
+            ` -v M='${server}'`,
+            `;SO="# >>> telepy shared " M " >>>";SC="# <<< telepy shared " M " <<<"`,
+            `h{if($0==SC){if(!hl||k)printf "%s%s\\n",hb,$0;h=0;next} if($0~/^# >>> telepy /){printf "%s",hr;h=0} else {hr=hr $0 "\\n";if(tolower($1)=="host"){hl=1;o=$1;for(i=2;i<=NF;i++)if(!($i in K)){o=o " " $i;k=1};hb=hb o "\\n"}else hb=hb $0 "\\n";next}} `,
+            ` !s&&$0==SO{h=1;k=0;hl=0;hb=$0 "\\n";hr=hb;next}`,
+            `if(h)printf "%s",hr;`,
+        ]
+        : ["", "", "", "", ""];
+    return `-v t='${aliases.join(" ")}'${skip}${shared[0]} 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1${drop}${shared[1]}} ${shared[2]}/^# >>> telepy [^ ]+ >>>$/&&($4 in K){if(s)printf "%s",b;s=1;c=$4;b=""} s{b=b $0 "\\n";if($0=="# <<< telepy " c " <<<"){s=0;b=""};next}${shared[3]} 1;END{if(s)printf "%s",b;${shared[4]}}'`;
 }
 
 /**
@@ -132,11 +149,15 @@ function knownHostAliases(lines: string): string[] {
  * the first finds the shared block's HostKeyAlias. The CLI's `sshcfg::foreign_aliases` / `shadowed_aliases` match.
  */
 function detectAwk(aliases: string[], me: string, legacy: string): string {
-    return `-v t='${aliases.join(" ")}' -v M='${me}' -v L='${legacy}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1;LO="# >>> telepy " L " >>>";LC="# <<< telepy " L " <<<"} NR==FNR{if($0==LO){l=1;c="";next} if(l&&$0==LC){l=0;if(lh=="")lh=c;next} if(l&&c==""&&tolower($1)=="hostkeyalias")c=$2;next} /^# >>> telepy [^ ]+ >>>$/{a=$4;ins=1;b=(a in K)&&a!=M&&a!=L;j="";next} ins&&$0=="# <<< telepy " a " <<<"{ins=0;if(b&&j!=""&&j!=M&&!(j==L&&(lh==""||lh==M))&&!(a in S)){S[a]=1;o=o a " "};b=0;next} ins{if(b&&j==""&&tolower($1)=="proxycommand")j=$NF;if(b&&j==""&&tolower($1)=="proxyjump")j=$2;next} tolower($1)=="host"{for(i=2;i<=NF;i++)if($i in K)H[$i]=1} END{for(h in H)if(!(h in S))printf "Telepy: ~/.ssh/config also has its own Host %s outside the Telepy blocks; ssh uses whichever comes first.\\n",h > "/dev/stderr";printf "%s",o}'`;
+    return `-v t='${aliases.join(" ")}' -v M='${me}' -v L='${legacy}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1;LO="# >>> telepy " L " >>>";LC="# <<< telepy " L " <<<"} NR==FNR{if($0==LO){l=1;c="";next} if(l&&$0==LC){l=0;if(lh=="")lh=c;next} if(l&&c==""&&tolower($1)=="hostkeyalias")c=$2;next} /^# >>> telepy shared [^ ]+ >>>$/{sh=1;next} sh{if($0~/^# <<< telepy shared /)sh=0;next} /^# >>> telepy [^ ]+ >>>$/{a=$4;ins=1;b=(a in K)&&a!=M&&a!=L;j="";next} ins&&$0=="# <<< telepy " a " <<<"{ins=0;if(b&&j!=""&&j!=M&&!(j==L&&(lh==""||lh==M))&&!(a in S)){S[a]=1;o=o a " "};b=0;next} ins{if(b&&j==""&&tolower($1)=="proxycommand")j=$NF;if(b&&j==""&&tolower($1)=="proxyjump")j=$2;next} tolower($1)=="host"{for(i=2;i<=NF;i++)if($i in K)H[$i]=1} END{for(h in H)if(!(h in S))printf "Telepy: ~/.ssh/config also has its own Host %s outside the Telepy blocks; ssh uses whichever comes first.\\n",h > "/dev/stderr";printf "%s",o}'`;
 }
 
-/** 從要加的區塊裡拿掉 `$telepy_skip` 裡的別名。/ Drops the blocks named in `$telepy_skip` from what gets appended. */
-const FILTER_AWK = `'BEGIN{n=split(x,A," ");for(i=1;i<=n;i++)X[A[i]]=1} /^# >>> telepy [^ ]+ >>>$/{s=($4 in X)} !s{print} /^# <<< telepy [^ ]+ <<<$/{s=0}'`;
+/**
+ * 從要加的區塊裡拿掉 `$telepy_skip` 裡的別名：它們的區塊，以及共用區塊 Host 行上的名字（沒有名字了整段不加）。
+ * Drops the aliases in `$telepy_skip` from what gets appended: their blocks, and their names on shared blocks' Host
+ * lines (a shared block left with no name is not appended).
+ */
+const FILTER_AWK = `'BEGIN{n=split(x,A," ");for(i=1;i<=n;i++)X[A[i]]=1} /^# >>> telepy shared [^ ]+ >>>$/{h=1;k=0;hb=$0 "\\n";next} h{if($0~/^# <<< telepy shared /){h=0;if(k)printf "%s%s\\n",hb,$0;next} if(tolower($1)=="host"){o=$1;for(i=2;i<=NF;i++)if(!($i in X)){o=o " " $i;k=1};hb=hb o "\\n"}else hb=hb $0 "\\n";next} /^# >>> telepy [^ ]+ >>>$/{s=($4 in X)} !s{print} /^# <<< telepy [^ ]+ <<<$/{s=0}'`;
 
 /** 同一套同名偵測的 PowerShell 版（對讀進來的 `$text`；結果在 `$skip` 與 `$keep`）。/ The same detection in PowerShell. */
 function detectPowershell(aliases: string[], me: string, legacy: string): string[] {
@@ -146,7 +167,7 @@ function detectPowershell(aliases: string[], me: string, legacy: string): string
         `$lh = ''; foreach ($b in $blocks) { if ($b.Groups[1].Value -eq $L -and $b.Groups[2].Value -match '(?m)^\\s*HostKeyAlias\\s+(\\S+)') { $lh = $Matches[1]; break } }`,
         `$skip = @(); foreach ($b in $blocks) { $a = $b.Groups[1].Value; if ($names -notcontains $a -or $a -eq $me -or $a -eq $L -or $skip -contains $a) { continue }; if ($b.Groups[2].Value -match '(?m)^\\s*(?:ProxyCommand\\s.*\\s(\\S+)|ProxyJump\\s+(\\S+))\\s*$') { $j = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }; if ($j -ne $me -and -not ($j -eq $L -and ($lh -eq '' -or $lh -eq $me))) { $skip += $a } } }`,
         `$keep = @($names | Where-Object { $skip -notcontains $_ })`,
-        `$outside = [regex]::Replace($text, '(?ms)^# >>> telepy (\\S+) >>>.*?^# <<< telepy \\1 <<<', '')`,
+        `$outside = [regex]::Replace($text, '(?ms)^# >>> telepy (\\S+(?: \\S+)?) >>>.*?^# <<< telepy \\1 <<<', '')`,
         `foreach ($m in [regex]::Matches($outside, '(?m)^\\s*Host\\s+(.+?)\\s*$')) { foreach ($h in ($m.Groups[1].Value -split '\\s+')) { if ($keep -contains $h) { Write-Warning "Telepy: ~/.ssh/config also has its own Host $h outside the Telepy blocks; ssh uses whichever comes first." } } }`,
     ];
 }
@@ -193,9 +214,11 @@ export interface LegacyServer {
  * server stanza pins Telepy's host key with them. With `legacy`, the old shared server block is cleaned up last by
  * the rule in [`pruneLegacyAwk`].
  */
-export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null, wsClient?: WsClient | null, legacy?: LegacyServer | null): string {
+export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null, wsClient?: WsClient | null, legacy?: LegacyServer | null, opts: InstallOptions = {}): string {
     const aliases = stanzas.map((s) => s.alias);
-    const blocks = markedBlocks(adaptForShell(stanzas, shell));
+    const blocks = opts.blocks ?? (opts.compact ? compactBlocks(adaptForShell(stanzas, shell)) : markedBlocks(adaptForShell(stanzas, shell)));
+    // 這台的共用區塊：要寫的別名從它的 Host 行拿掉（不管這次寫不寫簡化版）。/ This server's shared blocks lose these names.
+    const server = opts.server ?? legacy?.me ?? null;
     const hostKeys = knownHosts?.trim() ? knownHosts.trim() + "\n" : "";
     const keyAliases = knownHostAliases(hostKeys);
     const prune = legacy && legacy.alias && legacy.alias !== legacy.me && aliases.includes(legacy.me) ? legacy : null;
@@ -215,7 +238,7 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
             "mkdir -p ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config \\",
             "  && cp ~/.ssh/config ~/.ssh/config.bak \\",
             ...(detect ? [`  && telepy_skip=$(awk ${detectAwk(aliases, detect.me, detect.alias)} ~/.ssh/config.bak ~/.ssh/config.bak) \\`] : []),
-            `  && awk ${stripAwk(aliases, !!detect)} ~/.ssh/config.bak > ~/.ssh/config \\`,
+            `  && awk ${stripAwk(aliases, !!detect, server)} ~/.ssh/config.bak > ~/.ssh/config \\`,
             detect ? `  && awk -v x="$telepy_skip" ${FILTER_AWK} >> ~/.ssh/config <<'${HEREDOC}'` : `  && cat >> ~/.ssh/config <<'${HEREDOC}'`,
             blocks + HEREDOC,
             ...(detect ? [`[ -z "$telepy_skip" ] || echo "Telepy: did not overwrite $telepy_skip- ${KEPT_NOTE}" >&2`] : []),
@@ -242,10 +265,12 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
                 `if ($keep.Count) { $g = '(' + (($keep | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')'; $text = [regex]::Replace($text, "(?ms)^# >>> telepy $g >>>[^\\S\\n]*\\n(?:(?!^# >>> telepy ).)*?^# <<< telepy \\1 <<<[^\\S\\n]*(\\n|\\z)", '') }`,
             ]
             : [`$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`]),
+        ...(server ? releaseSharedPowershell("$text", server, detect ? "$keep" : `@(${aliases.map((a) => `'${a}'`).join(", ")})`) : []),
         "if ($text -and -not $text.EndsWith(\"`n\")) { $text += \"`n\" }",
         "$new = @'",
         blocks + "'@ + \"`n\"",
         ...(detect ? [`foreach ($a in $skip) { $e = [regex]::Escape($a); $new = [regex]::Replace($new, "(?ms)^# >>> telepy $e >>>\\r?\\n.*?^# <<< telepy $e <<<\\r?\\n?", '') }`] : []),
+        ...(detect && server && opts.compact ? releaseSharedPowershell("$new", server, "$skip") : []),
         "$text += $new",
         ...(prune ? pruneLegacyPowershell(prune.alias, prune.me) : []),
         "[IO.File]::WriteAllText($cfg, $text)",
@@ -254,16 +279,57 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
 }
 
 /**
- * 只拿掉這些別名的區塊（伺服器區塊留著，其他裝置還要用）。/ Remove just these aliases' blocks (the server block stays).
+ * 只拿掉這些別名的區塊（伺服器區塊留著，其他裝置還要用）；`server` 有給時，這台共用區塊的 Host 行也拿掉這些名字。
+ * Remove just these aliases' blocks (the server block stays); with `server`, their names also leave this server's
+ * shared blocks.
  */
-export function removeCommand(shell: ConfigShell, aliases: string[]): string {
+export function removeCommand(shell: ConfigShell, aliases: string[], server?: string | null): string {
     if (shell === "posix") {
-        return `cp ~/.ssh/config ~/.ssh/config.bak && awk ${stripAwk(aliases)} ~/.ssh/config.bak > ~/.ssh/config\n`;
+        return `cp ~/.ssh/config ~/.ssh/config.bak && awk ${stripAwk(aliases, false, server)} ~/.ssh/config.bak > ~/.ssh/config\n`;
     }
     return [
         `$cfg = "$HOME\\.ssh\\config"; Copy-Item $cfg "$cfg.bak" -Force`,
-        `[IO.File]::WriteAllText($cfg, [regex]::Replace([IO.File]::ReadAllText($cfg), '${stripRegex(aliases)}', ''))`,
+        `$text = [regex]::Replace([IO.File]::ReadAllText($cfg), '${stripRegex(aliases)}', '')`,
+        ...(server ? releaseSharedPowershell("$text", server, `@(${aliases.map((a) => `'${a}'`).join(", ")})`) : []),
+        "[IO.File]::WriteAllText($cfg, $text)",
     ].join("\n") + "\n";
+}
+
+/**
+ * PowerShell 版：`variable` 裡這台的共用區塊，Host 行拿掉 `names`（一個陣列運算式），沒有名字了整段拿掉。
+ * The PowerShell form: in `variable`, this server's shared blocks lose `names` (an array expression) from their Host
+ * line, and go entirely once no name is left.
+ */
+function releaseSharedPowershell(variable: string, server: string, names: string): string[] {
+    return [
+        `$drop = ${names}; $S = [regex]::Escape('${server}')`,
+        `${variable} = [regex]::Replace(${variable}, "(?ms)^# >>> telepy shared $S >>>[^\\S\\n]*\\n(?:(?!^# >>> telepy ).)*?^# <<< telepy shared $S <<<[^\\S\\n]*(\\n|\\z)", { param($m) $hl = $false; $k = $false; $out = foreach ($l in ($m.Value -split "\`n")) { if ($l -match '^\\s*Host\\s+(.*?)\\s*$') { $hl = $true; $names = @($Matches[1] -split '\\s+' | Where-Object { $drop -notcontains $_ }); if ($names.Count) { $k = $true; 'Host ' + ($names -join ' ') } } else { $l } }; if ($hl -and -not $k) { '' } else { $out -join "\`n" } })`,
+    ];
+}
+
+/** 安裝指令的選項。/ Install command options. */
+export interface InstallOptions {
+    /** 寫簡化版：同一台伺服器的裝置共用的行放進一個共用區塊（`lib/sshConfigTidy.ts`）。/ Write the compact form. */
+    compact?: boolean;
+    /** 這台的伺服器別名（共用區塊的名字）；沒給就用 `legacy.me`。/ This server's alias (names its shared blocks). */
+    server?: string | null;
+    /** 已經算好的區塊文字（照 `shell` 調整過；畫面已經算過簡化版時不用再算一次）。/ Blocks already rendered for `shell`. */
+    blocks?: string;
+}
+
+/**
+ * 簡化版的區塊：每台裝置還是自己的標記區塊（重跑、移除照舊），共用的行搬進 `telepy shared <伺服器>`；驗證不過就用原本的。
+ * The compact blocks: every device keeps its own marked block (re-running and removing work as before) and the
+ * shared lines move into `telepy shared <server>`; if the check fails, the plain blocks are used.
+ */
+export function compactBlocks(stanzas: ConfigStanza[]): string {
+    return compactMarked(markedBlocks(stanzas));
+}
+
+/** 同上，但從 [`markedBlocks`] 的文字開始。/ The same, starting from [`markedBlocks`] text. */
+export function compactMarked(plain: string): string {
+    const r = tidyConfig(plain);
+    return r.failed.length ? plain : r.text;
 }
 
 /** 手動貼上時開檔的指令。/ The command that opens the file for pasting by hand. */
