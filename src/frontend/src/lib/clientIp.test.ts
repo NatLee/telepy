@@ -1,13 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, parseClientIpCheck, probeOutcome, viaCdn, type ClientIpCheck } from "./clientIp.ts";
+import { PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, hopsSetting, parseClientIpCheck, probeOutcome, viaCdn, type ClientIpCheck } from "./clientIp.ts";
 
 const production = {
     ip: "172.19.0.1",
     scope: "private",
     from: "chain",
     geo: { scope: "private" },
+    hops_mode: "fixed",
     trusted_proxy_hops: 2,
+    skipped_hops: 2,
     client_ip_header: null,
     chain: [
         { ip: "172.19.0.1", scope: "private", source: "forwarded_for", role: "client" },
@@ -24,7 +26,10 @@ const production = {
 test("the backend answer is read safely", () => {
     const c = parseClientIpCheck(production)!;
     assert.equal(c.ip, "172.19.0.1");
+    assert.equal(c.hopsMode, "fixed");
     assert.equal(c.trustedProxyHops, 2);
+    assert.equal(c.skippedHops, 2);
+    assert.equal(hopsSetting(c), "2");
     assert.equal(c.clientIpHeader, null);
     assert.equal(c.chain.length, 3);
     assert.equal(c.chain[2].source, "peer");
@@ -37,8 +42,15 @@ test("the backend answer is read safely", () => {
     const odd = parseClientIpCheck({ chain: [{ ip: "" }, { ip: "1.2.3.4", role: "boss" }], verdict: "great", trusted_proxy_hops: -3, suggest: { trusted_proxy_hops: 2.5 } })!;
     assert.deepEqual(odd.chain, [{ ip: "1.2.3.4", scope: "reserved", source: "forwarded_for", role: "proxy" }]);
     assert.equal(odd.verdict, "unknown");
-    assert.equal(odd.trustedProxyHops, 0);
+    assert.equal(odd.trustedProxyHops, null);
+    assert.equal(odd.hopsMode, "auto", "no mode and no count = auto");
     assert.equal(odd.suggestHops, null);
+    const auto = parseClientIpCheck({ ...production, hops_mode: "auto", trusted_proxy_hops: null, skipped_hops: 2 })!;
+    assert.equal(auto.hopsMode, "auto");
+    assert.equal(auto.trustedProxyHops, null);
+    assert.equal(hopsSetting(auto), "auto");
+    const older = parseClientIpCheck({ ...production, hops_mode: undefined, trusted_proxy_hops: 1 })!;
+    assert.equal(older.hopsMode, "fixed", "an older backend only sends the count");
 });
 
 test("only the chosen hop is coloured", () => {
@@ -54,6 +66,8 @@ test("the made-up address test says which header leaked through", () => {
     assert.equal(probeOutcome(at(PROBE_REAL_IP)), "real_ip");
     assert.equal(probeOutcome(at(PROBE_FORWARDED_FOR)), "forwarded_for");
     assert.equal(probeOutcome(at("172.19.0.1")), "safe");
+    // 自動模式下被採用的假 X-Forwarded-For：你自己在內網，不是層數算錯。/ In auto mode it means you are internal.
+    assert.equal(probeOutcome({ ...at(PROBE_FORWARDED_FOR), hopsMode: "auto", trustedProxyHops: null }), "auto_internal");
 });
 
 test("a CDN counts only when its own header arrived", () => {

@@ -150,14 +150,19 @@ async fn client_ip_check_explains_the_chain() {
     let r = ip_check(&app, &bob, "198.51.100.7", &[]).await;
     assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")));
 
-    // 預設 TRUSTED_PROXY_HOPS = 1（只有 Traefik）。/ Default hops = 1 (Traefik only).
-    let r = ip_check(&app, &admin, "6.6.6.6, 198.51.100.7", &[]).await;
+    // 預設 TRUSTED_PROXY_HOPS = auto：只有 Traefik 時跳過它；左邊訪客自己塞的內部位址不算。
+    // Default auto: Traefik alone is skipped; an internal entry the visitor put on the left is ignored.
+    let r = ip_check(&app, &admin, "10.9.9.9, 198.51.100.7", &[]).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!((r.json["ip"].as_str(), r.json["verdict"].as_str(), r.json["from"].as_str()), (Some("198.51.100.7"), Some("ok"), Some("chain")));
-    assert_eq!(r.json["trusted_proxy_hops"], 1);
+    assert_eq!((r.json["hops_mode"].as_str(), r.json["trusted_proxy_hops"].is_null(), r.json["skipped_hops"].as_i64()), (Some("auto"), true, Some(1)), "{}", r.text);
     let roles: Vec<&str> = r.json["chain"].as_array().unwrap().iter().map(|h| h["role"].as_str().unwrap()).collect();
     assert_eq!(roles, ["ignored", "client", "proxy"]);
     assert_eq!(r.json["chain"][2]["source"], "peer");
+
+    // 前面再一層內網的 Nginx Proxy Manager：自動模式一樣跳過，不用設層數。/ An upstream internal proxy is skipped too.
+    let r = ip_check(&app, &admin, "198.51.100.7, 10.0.0.2", &[]).await;
+    assert_eq!((r.json["ip"].as_str(), r.json["verdict"].as_str(), r.json["skipped_hops"].as_i64()), (Some("198.51.100.7"), Some("ok"), Some(2)), "{}", r.text);
 
     // 上游代理把每個人都換成 Docker 的位址：每一段都是內部位址。/ The upstream proxy hands everyone a Docker address.
     let r = ip_check(&app, &admin, "172.19.0.1", &[("x-real-ip", "172.19.0.1")]).await;
@@ -165,7 +170,46 @@ async fn client_ip_check_explains_the_chain() {
     assert_eq!(r.json["headers"][0]["name"], "x-real-ip");
     assert_eq!(r.json["headers"][0]["addresses"][0]["scope"], "private");
 
-    // 多一層代理沒算到：建議把 TRUSTED_PROXY_HOPS 調成 2。/ An uncounted proxy: suggest hops = 2.
+    // 前面是一台公網 IP 的代理（VPS）：自動模式會把它當成訪客，建議改成固定 2 層。
+    // A proxy with a public address (a VPS) is taken for the visitor in auto mode: suggest a fixed 2.
+    let r = ip_check(&app, &admin, "198.51.100.7, 203.0.113.9", &[]).await;
+    assert_eq!((r.json["ip"].as_str(), r.json["verdict"].as_str(), r.json["suggest"]["trusted_proxy_hops"].as_i64()), (Some("203.0.113.9"), Some("hops_too_low"), Some(2)), "{}", r.text);
+
+    // 固定層數 1（只有 Traefik）：多一層代理沒算到就建議 2。/ Fixed 1: an uncounted proxy suggests 2.
+    let app = common::spawn_with(|c| c.trusted_proxy_hops = telepy_server::client_ip::Hops::Fixed(1)).await;
+    let admin = app.login("admin", "pw").await;
     let r = ip_check(&app, &admin, "198.51.100.7, 10.0.0.2", &[]).await;
+    assert_eq!((r.json["hops_mode"].as_str(), r.json["trusted_proxy_hops"].as_i64()), (Some("fixed"), Some(1)), "{}", r.text);
     assert_eq!((r.json["verdict"].as_str(), r.json["suggest"]["trusted_proxy_hops"].as_i64()), (Some("hops_too_low"), Some(2)), "{}", r.text);
+}
+
+/// 管理區的「伺服器狀態」= doctor 的檢查，從網頁跑；一般使用者 403。
+/// The admin "Server health" page runs the doctor checks from the web; others get 403.
+#[tokio::test]
+async fn server_health_runs_the_doctor_checks_for_admins() {
+    let app = common::spawn().await;
+    let admin = app.login("admin", "pw").await;
+    app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;
+    let bob = app.login("bob", "pw").await;
+
+    let r = app.get("/api/site/health", Some(&bob)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")));
+
+    // 一次經 Traefik 的登入，讓「client addresses」有公網位址可看。/ One sign-in through Traefik gives it a public address.
+    let r = post_via_traefik(&app, "/api/auth/token", "198.51.100.7", json!({"username": "admin", "password": "pw"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app.get("/api/site/health", Some(&admin)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
+    let checks = r.json["checks"].as_array().unwrap();
+    let find = |name: &str| checks.iter().find(|c| c["name"] == name).unwrap_or_else(|| panic!("no check {name}: {}", r.text));
+    assert_eq!(find("database")["status"], "ok", "{}", r.text);
+    assert!(find("database")["detail"].as_str().unwrap().contains("users"), "{}", r.text);
+    assert_eq!(find("audit log")["status"], "ok", "{}", r.text);
+    // 剛才兩次登入都經 Traefik 記成公網位址。/ Both sign-ins above were recorded with public addresses.
+    assert_eq!(find("client addresses")["status"], "ok", "{}", r.text);
+    assert!(find("client addresses")["detail"].as_str().unwrap().contains("TRUSTED_PROXY_HOPS=auto"), "{}", r.text);
+    let total = r.json["ok"].as_u64().unwrap() + r.json["info"].as_u64().unwrap() + r.json["warnings"].as_u64().unwrap() + r.json["failures"].as_u64().unwrap();
+    assert_eq!(total as usize, checks.len());
+    assert!(r.json["ran_at"].as_str().unwrap().ends_with('Z'));
 }

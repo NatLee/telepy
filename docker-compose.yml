@@ -61,9 +61,11 @@ services:
       - SERVER_DOMAIN=${SERVER_DOMAIN}
       # 對外 base URL（MCP 連接器的 OAuth issuer）；留空依 X-Forwarded-* 推導。/ OAuth issuer; empty = from the request.
       - PUBLIC_URL=${PUBLIC_URL:-}
-      # 使用者來源 IP（登入紀錄 / 誰在用通道）：後端前面有幾層可信代理（含 Traefik）。前面再有 TLS 代理 / LB 就設 2。
-      # Client IP: trusted proxies in front of the backend, Traefik included (2 with an upstream TLS proxy / LB).
-      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
+      # 使用者來源 IP（登入紀錄 / 誰在用通道）：auto = X-Forwarded-For 右邊的內部位址都算代理（Traefik、前面的
+      # Nginx Proxy Manager），不必數層數；數字 = 固定跳過幾層（含 Traefik）。
+      # Client IP: auto = every internal address at the right of X-Forwarded-For is a proxy (Traefik, an upstream
+      # Nginx Proxy Manager), nothing to count; a number = skip exactly that many, Traefik included.
+      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-auto}
       - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       - KASM_BROWSER_API=http://kasm-browser:7000

@@ -55,6 +55,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::sign_ins::router())
         .merge(api::web_sessions::router())
         .merge(api::whoami::router())
+        .merge(api::health::router())
         .merge(api::lan::router())
         .merge(api::join::router())
         .merge(api::terminal_profile::router())

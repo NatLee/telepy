@@ -137,8 +137,9 @@ Telepy 由五個容器組成：
 > [!NOTE]
 > **第一個帳號**會成為管理員——不論是用 Google 登入，或用 `./telepy.sh create-superuser` 建立。
 
-正式環境請在 Traefik 前面放一層 HTTPS 代理，設定 `PUBLIC_URL` 與 `TRUSTED_PROXY_HOPS=2`，並讓裝置連得到 gateway 埠
-（`REVERSE_SERVER_SSH_PORT`）。
+正式環境請在 Traefik 前面放一層 HTTPS 代理，設定 `PUBLIC_URL`，並讓裝置連得到 gateway 埠（`REVERSE_SERVER_SSH_PORT`）。
+訪客的位址（登入紀錄、即時連線）來自 X-Forwarded-For；預設會自動跳過後端前面每一層內網的代理，**管理 → 伺服器狀態**
+會攤開你自己這個請求的位址是怎麼算出來的。
 
 ### 連接裝置
 
@@ -164,7 +165,7 @@ Telepy 由五個容器組成：
 | `SECRET_KEY`                  | —           | 簽署登入並加密保存的機密；正式使用前請設一長串亂數                       |
 | `INTERNAL_API_TOKEN`          | —           | 後端與 kasm-browser 容器之間的密鑰                                        |
 | `SOCIAL_GOOGLE_CLIENT_ID`     | —           | Google 登入（建置前端 image 時寫入）                                      |
-| `TRUSTED_PROXY_HOPS`          | `1`         | 後端前面可信任的代理層數，含 Traefik（判斷使用者 IP）                     |
+| `TRUSTED_PROXY_HOPS`          | `auto`      | 後端前面的代理：`auto` = 內部位址都算，或填固定層數（判斷使用者 IP）      |
 | `CLIENT_IP_HEADER`            | —           | 改從這個標頭取使用者 IP（例如 `CF-Connecting-IP`）                        |
 | `GATEWAY_PROXY_PROTOCOL_FROM` | —           | gateway 前方送 PROXY protocol 的 L4 代理 IP / CIDR                        |
 | `DEVICE_PROBE`                | `true`      | 每天以唯讀方式登入裝置一次，讀位址與裝置資訊                             |

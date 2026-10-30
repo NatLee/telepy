@@ -1,11 +1,15 @@
 //! 使用者的來源 IP 與 User-Agent。後端前面一定有反向代理（Traefik，正式環境再加一層 TLS 代理），
 //! 所以 socket 的對端只是代理；真實來源在 `X-Forwarded-For`。那串值「最左邊」是客戶端自己能塞的，
-//! 只能從右邊數回來：鏈 = XFF 各段 + socket 對端，跳過 `TRUSTED_PROXY_HOPS` 個可信代理（含 Traefik）。
-//! `CLIENT_IP_HEADER`（例 Cloudflare 的 `CF-Connecting-IP`）設定時優先用那個標頭。
+//! 只能從右邊數回來：鏈 = XFF 各段 + socket 對端。`TRUSTED_PROXY_HOPS=auto`（預設）把每一段內部位址都當成
+//! 代理跳過，取從右邊數來第一個公網位址——Traefik、前面的 Nginx Proxy Manager / Caddy 都在內網，不必數
+//! 幾層；設數字就跳過固定那麼多段（含 Traefik）。`CLIENT_IP_HEADER`（例 Cloudflare 的 `CF-Connecting-IP`）
+//! 設定時優先用那個標頭。
 //! Client IP and User-Agent. The socket peer is a proxy (Traefik, plus the upstream TLS proxy in
 //! production), so the address comes from X-Forwarded-For — read from the right, because the leftmost
-//! entries are whatever the client sent: chain = XFF entries + socket peer, skip TRUSTED_PROXY_HOPS
-//! trusted proxies (Traefik included). CLIENT_IP_HEADER, when set, wins.
+//! entries are whatever the client sent: chain = XFF entries + socket peer. `TRUSTED_PROXY_HOPS=auto` (the
+//! default) skips every internal address as a proxy and takes the first public one from the right — Traefik and
+//! an upstream Nginx Proxy Manager / Caddy all sit on internal addresses, so nobody has to count them; a number
+//! skips exactly that many entries (Traefik included). CLIENT_IP_HEADER, when set, wins.
 
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -18,10 +22,48 @@ use crate::state::AppState;
 
 const USER_AGENT_MAX: usize = 512;
 
+/// `TRUSTED_PROXY_HOPS`：`auto`（內部位址都是代理）或固定層數。/ The hop rule: automatic or a fixed count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hops {
+    /// 從右邊跳過每一段內部位址，取第一個公網位址；一個都沒有就取最左邊。
+    /// Skip every internal address from the right and take the first public one; none public = the leftmost.
+    #[default]
+    Auto,
+    /// 從右邊跳過固定這麼多段（含 Traefik）。/ Skip exactly this many entries from the right (Traefik included).
+    Fixed(usize),
+}
+
+impl Hops {
+    /// 環境變數的值：沒設、空白或 `auto` = 自動；非負整數 = 固定；其他 = 自動（而不是悄悄變成某個數字）。
+    /// The env value: unset, blank or `auto` = automatic; a non-negative integer = fixed; anything else = automatic.
+    pub fn parse(value: Option<&str>) -> Hops {
+        match value.map(str::trim).filter(|v| !v.is_empty()) {
+            None => Hops::Auto,
+            Some(v) if v.eq_ignore_ascii_case("auto") => Hops::Auto,
+            Some(v) => v.parse().map(Hops::Fixed).unwrap_or(Hops::Auto),
+        }
+    }
+
+    /// 設定值的寫法（`auto` / `2`）。/ The setting as written (`auto` / `2`).
+    pub fn setting(self) -> String {
+        match self {
+            Hops::Auto => "auto".to_string(),
+            Hops::Fixed(n) => n.to_string(),
+        }
+    }
+
+    pub fn fixed(self) -> Option<usize> {
+        match self {
+            Hops::Auto => None,
+            Hops::Fixed(n) => Some(n),
+        }
+    }
+}
+
 /// 純函式：解析來源 IP。`peer` = socket 對端（測試或沒有 ConnectInfo 時是 None）。
-/// 鏈比可信層數還短時取最左邊（只經過可信代理，或根本沒有代理）。
-/// Resolve the client address; with fewer entries than trusted hops the leftmost one is used.
-pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, header_override: Option<&str>) -> Option<IpAddr> {
+/// 固定層數時，鏈比層數還短就取最左邊（只經過可信代理，或根本沒有代理）。
+/// Resolve the client address; with a fixed count and fewer entries than that, the leftmost one is used.
+pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>) -> Option<IpAddr> {
     if let Some(name) = header_override {
         let ip = headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip);
         if ip.is_some() {
@@ -36,7 +78,7 @@ pub fn resolve(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, h
         .filter_map(parse_ip)
         .collect();
     chain.extend(peer.map(|p| p.to_canonical()));
-    chain.get(chosen_index(chain.len(), trusted_hops)?).copied()
+    chain.get(chosen_index(&chain, trusted_hops)?).copied()
 }
 
 /// `1.2.3.4`、`1.2.3.4:80`、`[::1]:80`、`"::1"`；IPv4-mapped 轉回 IPv4。/ Accepts bare IPs and ip:port forms.
@@ -47,8 +89,12 @@ fn parse_ip(s: &str) -> Option<IpAddr> {
 
 /// 鏈上被選中那一段的位置（從左數）；鏈是空的回 None。和 [`resolve`] 同一個規則。
 /// Index of the chain entry [`resolve`] picks (from the left), or None for an empty chain.
-fn chosen_index(len: usize, trusted_hops: usize) -> Option<usize> {
-    Some(len.checked_sub(1)?.saturating_sub(trusted_hops))
+fn chosen_index(chain: &[IpAddr], trusted_hops: Hops) -> Option<usize> {
+    let last = chain.len().checked_sub(1)?;
+    Some(match trusted_hops {
+        Hops::Fixed(n) => last.saturating_sub(n),
+        Hops::Auto => chain.iter().rposition(|ip| is_public(*ip)).unwrap_or(0),
+    })
 }
 
 /// 常見「代理把客戶端位址放在這裡」的標頭（診斷時列出來，看哪個能拿來當 `CLIENT_IP_HEADER`）。
@@ -103,10 +149,13 @@ pub struct Diagnosis {
     pub verdict: &'static str,
     pub suggest_hops: Option<usize>,
     pub suggest_header: Option<String>,
-    /// 這個請求經過的代理比 `TRUSTED_PROXY_HOPS` 少（取了最左邊那段）。/ Fewer proxies than configured.
+    /// 這個請求經過的代理比 `TRUSTED_PROXY_HOPS` 少（取了最左邊那段）；自動模式永遠 false。
+    /// Fewer proxies than configured (never in auto mode).
     pub short_chain: bool,
     /// 設了 `CLIENT_IP_HEADER` 但這個請求沒有它（或讀不出位址）。/ The configured header was missing.
     pub header_absent: bool,
+    /// 這個請求實際被當成代理跳過的段數（自動模式下才有意思）。/ Entries skipped as proxies on this request.
+    pub skipped_hops: usize,
 }
 
 fn is_public(ip: IpAddr) -> bool {
@@ -115,7 +164,7 @@ fn is_public(ip: IpAddr) -> bool {
 
 /// 純函式：把 [`resolve`] 的每一步攤開，並判斷問題出在哪、該怎麼設。
 /// Spell out every step of [`resolve`] and say what is wrong and what to set.
-pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, header_override: Option<&str>) -> Diagnosis {
+pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: Hops, header_override: Option<&str>) -> Diagnosis {
     let scope_of = |ip: IpAddr| crate::geoip::scope(ip).as_str();
     let mut raw: Vec<(IpAddr, &'static str)> = headers
         .get_all("x-forwarded-for")
@@ -126,7 +175,8 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, 
         .map(|ip| (ip, "forwarded_for"))
         .collect();
     raw.extend(peer.map(|p| (p.to_canonical(), "peer")));
-    let idx = chosen_index(raw.len(), trusted_hops);
+    let ips: Vec<IpAddr> = raw.iter().map(|(ip, _)| *ip).collect();
+    let idx = chosen_index(&ips, trusted_hops);
     let chain: Vec<ChainEntry> = raw
         .iter()
         .enumerate()
@@ -157,7 +207,11 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, 
     // resolve 的同一個規則：設定的標頭有讀得出的位址就用它。/ Same rule as `resolve`.
     let from_header = header_override.is_some_and(|h| headers.get(h).and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(parse_ip).is_some());
     let header_absent = header_override.is_some() && !from_header;
-    let short_chain = !raw.is_empty() && raw.len() <= trusted_hops;
+    let short_chain = trusted_hops.fixed().is_some_and(|n| !raw.is_empty() && raw.len() <= n);
+    let skipped_hops = match idx {
+        Some(c) => raw.len() - 1 - c,
+        None => 0,
+    };
     let from = match (resolved, from_header) {
         (None, _) => None,
         (Some(_), true) => Some("header"),
@@ -166,6 +220,16 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, 
 
     let (mut verdict, mut suggest_hops, mut suggest_header) = ("unknown", None, None);
     match resolved {
+        // 自動模式取的是最右邊的公網位址；它左邊還有公網位址 = 前面有一層公網 IP 的代理（例如 VPS 上的 Nginx），
+        // 被當成訪客了。自己的瀏覽器不會塞 X-Forwarded-For，所以這裡不是偽造。固定層數時左邊的公網位址才是訪客能塞的。
+        // Auto takes the rightmost public address; another public one left of it = a proxy with a public IP (a VPS
+        // nginx, say) taken for the visitor. The admin's own browser sends no X-Forwarded-For, so this is not a spoof.
+        Some(ip) if is_public(ip) && !from_header && trusted_hops == Hops::Auto && idx.is_some_and(|c| (0..c).any(|i| is_public(raw[i].0))) => {
+            let c = idx.unwrap_or(0);
+            let i = (0..c).rev().find(|&i| is_public(raw[i].0)).unwrap_or(0);
+            verdict = "hops_too_low";
+            suggest_hops = Some(raw.len() - 1 - i);
+        }
         Some(ip) if is_public(ip) => verdict = "ok",
         // 指定的標頭本身就是內部位址：那個標頭不對（或上游沒設好）。/ The configured header itself is internal.
         Some(_) if from_header => verdict = "header_private",
@@ -200,6 +264,7 @@ pub fn diagnose(headers: &HeaderMap, peer: Option<IpAddr>, trusted_hops: usize, 
         suggest_header,
         short_chain,
         header_absent,
+        skipped_hops,
     }
 }
 
@@ -256,43 +321,43 @@ mod tests {
     fn walks_the_chain_from_the_right() {
         let traefik = ip(TRAEFIK);
         // Traefik only (hops = 1): Traefik appended the client it saw.
-        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, 1, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, Hops::Fixed(1), None), ip("198.51.100.7"));
         // the client can only add entries on the left
-        assert_eq!(resolve(&h(&["6.6.6.6, 198.51.100.7"]), traefik, 1, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["6.6.6.6, 198.51.100.7"]), traefik, Hops::Fixed(1), None), ip("198.51.100.7"));
         // upstream TLS proxy + Traefik (hops = 2)
-        assert_eq!(resolve(&h(&["6.6.6.6, 198.51.100.7, 10.0.0.2"]), traefik, 2, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["6.6.6.6, 198.51.100.7, 10.0.0.2"]), traefik, Hops::Fixed(2), None), ip("198.51.100.7"));
         // several XFF headers count as one list
-        assert_eq!(resolve(&h(&["6.6.6.6", "198.51.100.7"]), traefik, 1, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["6.6.6.6", "198.51.100.7"]), traefik, Hops::Fixed(1), None), ip("198.51.100.7"));
         // no proxy at all: the socket peer
-        assert_eq!(resolve(&h(&[]), ip("203.0.113.1"), 1, None), ip("203.0.113.1"));
+        assert_eq!(resolve(&h(&[]), ip("203.0.113.1"), Hops::Fixed(1), None), ip("203.0.113.1"));
         // more hops configured than the chain has: leftmost
-        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, 5, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, Hops::Fixed(5), None), ip("198.51.100.7"));
         // hops = 0: the socket peer itself
-        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, 0, None), traefik);
+        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, Hops::Fixed(0), None), traefik);
         // nothing known
-        assert_eq!(resolve(&h(&[]), None, 1, None), None);
+        assert_eq!(resolve(&h(&[]), None, Hops::Fixed(1), None), None);
     }
 
     #[test]
     fn parses_ports_brackets_and_mapped_addresses() {
-        assert_eq!(resolve(&h(&["198.51.100.7:4711"]), None, 0, None), ip("198.51.100.7"));
-        assert_eq!(resolve(&h(&["[2001:db8::1]:443"]), None, 0, None), ip("2001:db8::1"));
-        assert_eq!(resolve(&h(&["\"2001:db8::2\""]), None, 0, None), ip("2001:db8::2"));
-        assert_eq!(resolve(&h(&[]), ip("::ffff:192.0.2.9"), 0, None), ip("192.0.2.9"));
+        assert_eq!(resolve(&h(&["198.51.100.7:4711"]), None, Hops::Fixed(0), None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["[2001:db8::1]:443"]), None, Hops::Fixed(0), None), ip("2001:db8::1"));
+        assert_eq!(resolve(&h(&["\"2001:db8::2\""]), None, Hops::Fixed(0), None), ip("2001:db8::2"));
+        assert_eq!(resolve(&h(&[]), ip("::ffff:192.0.2.9"), Hops::Fixed(0), None), ip("192.0.2.9"));
         // garbage entries are skipped
-        assert_eq!(resolve(&h(&["unknown, 198.51.100.7"]), ip(TRAEFIK), 1, None), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["unknown, 198.51.100.7"]), ip(TRAEFIK), Hops::Fixed(1), None), ip("198.51.100.7"));
     }
 
     #[test]
     fn header_override_wins_when_present() {
         let mut m = h(&["6.6.6.6"]);
         m.insert("cf-connecting-ip", "203.0.113.50".parse().unwrap());
-        assert_eq!(resolve(&m, ip(TRAEFIK), 1, Some("CF-Connecting-IP")), ip("203.0.113.50"));
+        assert_eq!(resolve(&m, ip(TRAEFIK), Hops::Fixed(1), Some("CF-Connecting-IP")), ip("203.0.113.50"));
         // missing / unparseable → falls back to XFF
-        assert_eq!(resolve(&h(&["198.51.100.7"]), ip(TRAEFIK), 1, Some("CF-Connecting-IP")), ip("198.51.100.7"));
+        assert_eq!(resolve(&h(&["198.51.100.7"]), ip(TRAEFIK), Hops::Fixed(1), Some("CF-Connecting-IP")), ip("198.51.100.7"));
     }
 
-    fn d(xff: &[&str], extra: &[(&str, &str)], hops: usize, over: Option<&str>) -> Diagnosis {
+    fn d(xff: &[&str], extra: &[(&str, &str)], hops: Hops, over: Option<&str>) -> Diagnosis {
         let mut m = h(xff);
         for (k, v) in extra {
             m.append(axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(), v.parse().unwrap());
@@ -302,7 +367,7 @@ mod tests {
 
     #[test]
     fn diagnosis_marks_each_hop_and_agrees_with_resolve() {
-        let r = d(&["6.6.6.6, 198.51.100.7, 10.0.0.2"], &[], 2, None);
+        let r = d(&["6.6.6.6, 198.51.100.7, 10.0.0.2"], &[], Hops::Fixed(2), None);
         assert_eq!(r.ip.as_deref(), Some("198.51.100.7"));
         assert_eq!((r.verdict, r.from, r.scope), ("ok", Some("chain"), Some("public")));
         let roles: Vec<_> = r.chain.iter().map(|e| (e.ip.as_str(), e.source, e.role)).collect();
@@ -322,7 +387,7 @@ mod tests {
     fn every_hop_private_means_the_proxy_lost_the_address() {
         // 正式環境的樣子：上游代理的 Docker 把每個人都換成 172.19.0.1，OrbStack 再換一次。
         // What production sees: the upstream proxy's Docker hands everyone 172.19.0.1, OrbStack rewrites once more.
-        let r = d(&["172.19.0.1, 192.168.167.1"], &[("x-real-ip", "172.19.0.1")], 2, None);
+        let r = d(&["172.19.0.1, 192.168.167.1"], &[("x-real-ip", "172.19.0.1")], Hops::Fixed(2), None);
         assert_eq!(r.ip.as_deref(), Some("172.19.0.1"));
         assert_eq!(r.verdict, "all_private");
         assert_eq!((r.suggest_hops, r.suggest_header.as_deref()), (None, None));
@@ -333,27 +398,27 @@ mod tests {
     #[test]
     fn suggests_hops_and_headers() {
         // 少算一層：公網位址在被選中那段的左邊。/ One hop too few: the public address is left of the chosen one.
-        let r = d(&["198.51.100.7, 10.0.0.2"], &[], 1, None);
+        let r = d(&["198.51.100.7, 10.0.0.2"], &[], Hops::Fixed(1), None);
         assert_eq!((r.verdict, r.suggest_hops), ("hops_too_low", Some(2)));
         // 多算一層：選到客戶端那側的內部位址，公網的在右邊被當成代理跳過。
-        let r = d(&["10.9.9.9, 198.51.100.7, 10.0.0.2"], &[], 3, None);
+        let r = d(&["10.9.9.9, 198.51.100.7, 10.0.0.2"], &[], Hops::Fixed(3), None);
         assert_eq!((r.verdict, r.suggest_hops), ("hops_too_high", Some(2)));
         // 鏈上都是內部位址，但 CDN 標頭有公網位址。/ Only a CDN header has the public address.
-        let r = d(&["172.19.0.1"], &[("cf-connecting-ip", "203.0.113.50")], 1, None);
+        let r = d(&["172.19.0.1"], &[("cf-connecting-ip", "203.0.113.50")], Hops::Fixed(1), None);
         assert_eq!((r.verdict, r.suggest_header.as_deref()), ("use_header", Some("cf-connecting-ip")));
         // 經過的代理比設定少。/ Fewer proxies than configured.
-        let r = d(&[], &[], 2, None);
+        let r = d(&[], &[], Hops::Fixed(2), None);
         assert!(r.short_chain);
         assert_eq!(r.chain[0].role, "client");
     }
 
     #[test]
     fn diagnosis_reports_the_configured_header() {
-        let r = d(&["172.19.0.1"], &[("cf-connecting-ip", "203.0.113.50")], 1, Some("CF-Connecting-IP"));
+        let r = d(&["172.19.0.1"], &[("cf-connecting-ip", "203.0.113.50")], Hops::Fixed(1), Some("CF-Connecting-IP"));
         assert_eq!((r.ip.as_deref(), r.from, r.verdict, r.header_absent), (Some("203.0.113.50"), Some("header"), "ok", false));
-        let r = d(&["198.51.100.7"], &[], 1, Some("CF-Connecting-IP"));
+        let r = d(&["198.51.100.7"], &[], Hops::Fixed(1), Some("CF-Connecting-IP"));
         assert_eq!((r.from, r.header_absent, r.verdict), (Some("chain"), true, "ok"));
-        let r = d(&["198.51.100.7"], &[("x-client", "10.1.1.1")], 1, Some("X-Client"));
+        let r = d(&["198.51.100.7"], &[("x-client", "10.1.1.1")], Hops::Fixed(1), Some("X-Client"));
         assert_eq!((r.verdict, r.from), ("header_private", Some("header")));
         assert!(r.headers.iter().any(|h| h.name == "x-client"), "the configured header is listed too");
     }
@@ -363,5 +428,49 @@ mod tests {
         let v = "for=192.0.2.60;proto=http;by=203.0.113.43, for=\"[2001:db8:cafe::17]:4711\"";
         assert_eq!(header_addresses("Forwarded", v), vec!["192.0.2.60".parse::<IpAddr>().unwrap(), "2001:db8:cafe::17".parse().unwrap()]);
         assert_eq!(header_addresses("x-real-ip", " 198.51.100.7 "), vec!["198.51.100.7".parse::<IpAddr>().unwrap()]);
+    }
+
+    #[test]
+    fn auto_skips_every_internal_address_from_the_right() {
+        let traefik = ip(TRAEFIK);
+        // Traefik only: the entry Traefik appended is the visitor.
+        assert_eq!(resolve(&h(&["198.51.100.7"]), traefik, Hops::Auto, None), ip("198.51.100.7"));
+        // Nginx Proxy Manager (internal) in front of Traefik: skipped without counting.
+        assert_eq!(resolve(&h(&["198.51.100.7, 10.0.0.2"]), traefik, Hops::Auto, None), ip("198.51.100.7"));
+        // the visitor's own entries are left of their real address
+        assert_eq!(resolve(&h(&["6.6.6.6, 198.51.100.7, 10.0.0.2"]), traefik, Hops::Auto, None), ip("198.51.100.7"));
+        // no public address anywhere (the proxy lost it): the leftmost, like a fixed count that is too high
+        assert_eq!(resolve(&h(&["172.19.0.1, 10.0.0.2"]), traefik, Hops::Auto, None), ip("172.19.0.1"));
+        // no proxy at all: a public socket peer is the visitor
+        assert_eq!(resolve(&h(&[]), ip("203.0.113.1"), Hops::Auto, None), ip("203.0.113.1"));
+        assert_eq!(resolve(&h(&[]), None, Hops::Auto, None), None);
+    }
+
+    #[test]
+    fn hops_setting_parses_auto_numbers_and_junk() {
+        assert_eq!(Hops::parse(None), Hops::Auto);
+        assert_eq!(Hops::parse(Some("")), Hops::Auto);
+        assert_eq!(Hops::parse(Some(" AUTO ")), Hops::Auto);
+        assert_eq!(Hops::parse(Some("2")), Hops::Fixed(2));
+        assert_eq!(Hops::parse(Some("0")), Hops::Fixed(0));
+        assert_eq!(Hops::parse(Some("two")), Hops::Auto);
+        assert_eq!((Hops::Auto.setting(), Hops::Fixed(2).setting()), ("auto".to_string(), "2".to_string()));
+        assert_eq!((Hops::Auto.fixed(), Hops::Fixed(3).fixed()), (None, Some(3)));
+    }
+
+    #[test]
+    fn auto_diagnosis_counts_skipped_hops_and_spots_a_public_proxy() {
+        let r = d(&["198.51.100.7, 10.0.0.2"], &[], Hops::Auto, None);
+        assert_eq!((r.ip.as_deref(), r.verdict, r.skipped_hops, r.short_chain), (Some("198.51.100.7"), "ok", 2, false));
+        assert_eq!(r.chain.iter().map(|e| e.role).collect::<Vec<_>>(), ["client", "proxy", "proxy"]);
+        // a proxy with a public address in front: taken for the visitor → say so and suggest the fixed count
+        let r = d(&["198.51.100.7, 203.0.113.9"], &[], Hops::Auto, None);
+        assert_eq!((r.ip.as_deref(), r.verdict, r.suggest_hops), (Some("203.0.113.9"), "hops_too_low", Some(2)));
+        // every hop internal: the same verdict as with a fixed count
+        let r = d(&["172.19.0.1, 192.168.167.1"], &[], Hops::Auto, None);
+        assert_eq!((r.ip.as_deref(), r.verdict, r.skipped_hops), (Some("172.19.0.1"), "all_private", 2));
+        // a fixed count never calls a public address left of the chosen one a proxy (that side is the visitor's)
+        let r = d(&["6.6.6.6, 198.51.100.7"], &[], Hops::Fixed(1), None);
+        assert_eq!((r.verdict, r.skipped_hops), ("ok", 1));
     }
 }

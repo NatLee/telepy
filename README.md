@@ -147,8 +147,10 @@ Requires Docker with the Compose plugin.
 > The **first account** becomes the administrator — whether it signs in with Google or is created with
 > `./telepy.sh create-superuser`.
 
-For production, put an HTTPS proxy in front of Traefik, set `PUBLIC_URL` and `TRUSTED_PROXY_HOPS=2`, and make the
-gateway port (`REVERSE_SERVER_SSH_PORT`) reachable for your devices.
+For production, put an HTTPS proxy in front of Traefik, set `PUBLIC_URL`, and make the gateway port
+(`REVERSE_SERVER_SSH_PORT`) reachable for your devices. Visitors' addresses (sign-in history, live sessions) come
+through X-Forwarded-For; by default every internal proxy in front of the backend is skipped automatically, and
+**Admin → Server health** shows how the address of your own request was worked out.
 
 ### Connect a device
 
@@ -174,7 +176,7 @@ Environment variables in `.env` (see [`.env.example`](./.env.example) for the fu
 | `SECRET_KEY`                  | —           | Signs sign-ins and seals stored secrets; set a long random value before real use |
 | `INTERNAL_API_TOKEN`          | —           | Secret between the backend and the kasm-browser container                  |
 | `SOCIAL_GOOGLE_CLIENT_ID`     | —           | Google sign-in (baked into the frontend image at build time)               |
-| `TRUSTED_PROXY_HOPS`          | `1`         | Trusted proxies in front of the backend, Traefik included (client IPs)      |
+| `TRUSTED_PROXY_HOPS`          | `auto`      | Proxies in front of the backend: `auto` = every internal address, or a count |
 | `CLIENT_IP_HEADER`            | —           | Take the client IP from this header instead (e.g. `CF-Connecting-IP`)       |
 | `GATEWAY_PROXY_PROTOCOL_FROM` | —           | IPs / CIDRs of an L4 proxy in front of the gateway that sends PROXY protocol |
 | `DEVICE_PROBE`                | `true`      | Daily read-only login for each device's addresses and facts                 |

@@ -201,7 +201,7 @@ sharee）。
   `ProxyCommand python3 telepy-ws.py wss://<host>/ws/gateway/`，小程式（只用 Python 標準函式庫，`GET /api/join/telepy-ws.py`）
   把位元組包成二進位 frame 送到網頁 port。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，
   沒有多信任什麼，也沒有 auth 第一則訊息（認證在裡面的 SSH 做）。在精靈的連線步驟或一鍵加入時選（`transport: websocket`）。
-  - 來源 IP 取自轉送 header（`X-Forwarded-For`，信任的層數見 `TRUSTED_PROXY_HOPS`），port 記成 0；連線資訊、`accepted` 事件與
+  - 來源 IP 取自轉送 header（`X-Forwarded-For`，哪幾段是代理見 `TRUSTED_PROXY_HOPS`：預設 `auto` 把右邊的內部位址都當代理），port 記成 0；連線資訊、`accepted` 事件與
     清單的 `endpoint.transport` 記 `websocket`。連線上限（`GATEWAY_MAX_CONNECTIONS`）兩個入口一起算。
   - 筆電也能這樣連：SSH config 對話框的「連到 Telepy 的方式」選「只有網頁 port」，伺服器區塊就多一行 ProxyCommand
     （先把 `telepy-ws.py` 存到 `~/.ssh/telepy-ws.py`）。

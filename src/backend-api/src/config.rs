@@ -85,11 +85,14 @@ pub struct Config {
     /// server that still logs in with it (an old one running in parallel) keeps working after tunnels move to their own keys.
     pub keep_shared_service_key: bool,
     // --- client IP (sign-in history, presence) ---
-    /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
-    /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
-    /// Trusted reverse proxies in front of the backend, Traefik included (1 = Traefik only, 2 = plus an
-    /// upstream TLS proxy). Too high lets clients spoof their address.
-    pub trusted_proxy_hops: usize,
+    /// 後端前面的可信反向代理：`auto`（預設）= X-Forwarded-For 右邊的每一段內部位址都是代理，取第一個公網位址
+    /// （Traefik、前面的 Nginx Proxy Manager 都在內網，不必數）；數字 = 從右邊跳過固定這麼多段（含 Traefik；
+    /// 只有 Traefik = 1，前面再一層 TLS 代理 = 2）。數字設太大會讓客戶端能偽造 IP。
+    /// Trusted reverse proxies in front of the backend: `auto` (default) = every internal address at the right of
+    /// X-Forwarded-For is a proxy, the first public one is the visitor (Traefik and an upstream Nginx Proxy
+    /// Manager sit on internal addresses, so nothing to count); a number = skip exactly that many entries
+    /// (Traefik included: 1 = Traefik only, 2 = plus an upstream TLS proxy). Too high lets clients spoof it.
+    pub trusted_proxy_hops: crate::client_ip::Hops,
     /// 直接採用這個標頭當來源 IP（例 `CF-Connecting-IP`）；只在上游一定會覆寫它時設定。/ Trusted client-IP header.
     pub client_ip_header: Option<String>,
     /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
@@ -194,7 +197,7 @@ impl Config {
             gateway_proxy_protocol_from: env("GATEWAY_PROXY_PROTOCOL_FROM").unwrap_or_default(),
             device_probe: env_bool("DEVICE_PROBE", true),
             keep_shared_service_key: env_bool("KEEP_SHARED_SERVICE_KEY", false),
-            trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
+            trusted_proxy_hops: crate::client_ip::Hops::parse(env("TRUSTED_PROXY_HOPS").as_deref()),
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,
             oui_dir,
