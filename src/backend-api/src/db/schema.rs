@@ -1017,6 +1017,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 裝置的基本狀況（`device_facts`，JSON）與時間。/ Device facts (JSON) and when they were read.
     ("telepy_tunnel_endpoint", "facts", "text NULL"),
     ("telepy_tunnel_endpoint", "facts_at", "datetime NULL"),
+    // 最後一次怎麼連上 gateway（tcp / websocket）。/ How the device last reached the gateway.
+    ("telepy_tunnel_endpoint", "transport", "varchar(16) NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     // 稽核雜湊鏈（升級前的列為 NULL）。/ Audit hash chain (NULL on rows written before the upgrade).
     ("telepy_gateway_event", "prev_hash", "varchar(64) NULL"),

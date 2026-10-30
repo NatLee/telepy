@@ -33,6 +33,9 @@ pub struct LastEndpoint {
     /// 裝置的基本狀況（`device_facts::Facts` 的 JSON）與讀到的時間。/ Device facts (JSON) and when they were read.
     pub facts: Option<String>,
     pub facts_at: Option<String>,
+    /// 最後一次怎麼連上 gateway：tcp（SSH port）或 websocket（網頁 port）；升級前的列為 NULL。
+    /// How the device last reached the gateway: tcp (SSH port) or websocket (web port); NULL on older rows.
+    pub transport: Option<String>,
 }
 
 /// 裝置的公網 IP 跟上次不同。/ The device's public address differs from last time.
@@ -46,20 +49,22 @@ pub struct IpChange {
 
 const E: &str = "telepy_tunnel_endpoint";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
-const COLUMNS: &str = "tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at, public_ip, public_source, lan, hostname, probed_at, probe_error, facts, facts_at";
+const COLUMNS: &str = "tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at, public_ip, public_source, lan, hostname, probed_at, probe_error, facts, facts_at, transport";
 
 /// forward 註冊好時：這個 port 的隧道現在從 `ip`（gateway 看到的 TCP 來源）連進來，`at` = 連上的時間。
 /// 公網 IP 與換 IP 的判斷在 [`update_public_ip`]（gateway 看到的可能是代理 / Docker 的內部位址）。
 /// Record the connection (the gateway's TCP peer). Public-IP tracking and change detection live in
 /// [`update_public_ip`], since the peer may be a proxy's or Docker's internal address.
-pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::Result<()> {
+pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str, transport: &str) -> sqlx::Result<()> {
     sqlx::query(&format!(
-        "INSERT INTO {E} (tunnel_id, ip, connected_at, last_seen_at) SELECT id, ?, ?, ? FROM {T} WHERE reverse_port = ? \
-         ON CONFLICT(tunnel_id) DO UPDATE SET ip = excluded.ip, connected_at = excluded.connected_at, last_seen_at = excluded.last_seen_at"
+        "INSERT INTO {E} (tunnel_id, ip, connected_at, last_seen_at, transport) SELECT id, ?, ?, ?, ? FROM {T} WHERE reverse_port = ? \
+         ON CONFLICT(tunnel_id) DO UPDATE SET ip = excluded.ip, connected_at = excluded.connected_at, last_seen_at = excluded.last_seen_at, \
+         transport = excluded.transport"
     ))
     .bind(ip)
     .bind(at)
     .bind(at)
+    .bind(transport)
     .bind(port as i64)
     .execute(&db.write)
     .await?;

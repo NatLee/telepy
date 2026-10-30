@@ -133,6 +133,21 @@ test("warn: device warnings", () => {
     assert.deepEqual(parseQuery("warn:cpu").invalid, ["warn:cpu"]);
 });
 
+test("os: and via: (device platform and way in)", () => {
+    const ep = (facts: object | null, transport: "tcp" | "websocket" | null, live = true) => ({ ip: "1.2.3.4", live, transport, connected_at: "2026-10-23T10:00:00Z", last_seen_at: null, facts });
+    const pi = tunnel({ endpoint: ep({ os: "Debian GNU/Linux 12 (bookworm)", kernel: "Linux 6.6.51", cpu_model: "Raspberry Pi 5 Model B Rev 1.0" }, "tcp") });
+    const mac = tunnel({ endpoint: ep({ os: "macOS 15.1", kernel: "Darwin 24.1.0" }, "websocket", false) });
+    assert.ok(match("os:raspberrypi", pi));
+    assert.ok(match("os:linux", pi), "a Pi is Linux too");
+    assert.ok(!match("os:linux", mac));
+    assert.ok(match("os:macos,windows", mac));
+    assert.ok(match("via:ssh", pi));
+    assert.ok(match("via:http", mac), "offline keeps the last way in");
+    assert.ok(match("-via:http", pi));
+    assert.ok(!match("via:ssh", tunnel({ endpoint: null })), "unknown = no match");
+    assert.deepEqual(parseQuery("os:amiga via:pigeon").invalid, ["os:amiga", "via:pigeon"]);
+});
+
 test("make me a sandwich (xkcd 149)", () => {
     assert.equal(parseQuery("make me a sandwich").reply, "makeItYourself");
     assert.equal(parseQuery("  sudo make me a sandwich!").reply, "okay");

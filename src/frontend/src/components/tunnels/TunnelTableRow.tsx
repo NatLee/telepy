@@ -16,6 +16,7 @@ import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEn
 import { HostKeyAlert } from "@/components/tunnels/HostKeyAlert";
 import { DeviceWarningChip } from "@/components/tunnels/DeviceFacts";
 import { DeviceNameChip } from "@/components/tunnels/DeviceInstall";
+import { DeviceOsChip, TransportBadge } from "@/components/tunnels/DevicePlatform";
 import { SshNameChip } from "@/components/tunnels/TunnelNameHelp";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
@@ -68,7 +69,11 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex flex-col items-start gap-1">
-                    <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                    <span className="inline-flex items-center gap-1">
+                        <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                        <TransportBadge endpoint={tunnel.endpoint} />
+                    </span>
+                    <DeviceOsChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                     <TunnelEndpointChip endpoint={tunnel.endpoint} />
                     <TunnelLanChip endpoint={tunnel.endpoint} />
                     <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
