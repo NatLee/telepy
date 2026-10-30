@@ -10,6 +10,7 @@
 
 pub mod activity;
 pub mod api;
+pub mod carrier;
 pub mod cast;
 pub mod creds;
 pub mod tapi;
@@ -17,6 +18,7 @@ pub mod tapi;
 #[path = "../../backend-api/src/mascot.rs"]
 pub mod mascot;
 pub mod oauth;
+pub mod prefs;
 pub mod signed_in;
 pub mod snippets;
 pub mod sshcfg;
@@ -109,6 +111,25 @@ pub enum Cmd {
     Update(UpdateArgs),
     #[command(hide = true)]
     Dig,
+    /// The ProxyCommand `telepy ssh` writes for the hop to Telepy (SSH inside a WebSocket on the web port)
+    #[command(name = "_carrier")]
+    #[command(hide = true)]
+    Carrier(CarrierArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CarrierArgs {
+    /// wss://…/ws/gateway/
+    #[arg(long)]
+    pub url: String,
+    /// The SSH port (host:port) to fall back to
+    #[arg(long)]
+    pub tcp: Option<String>,
+    #[arg(long, value_parser = ["ask", "always", "never"], default_value = "ask")]
+    pub fallback: String,
+    /// The Telepy server (where an "always" answer is saved)
+    #[arg(long)]
+    pub server: String,
 }
 
 #[derive(Args, Debug)]
@@ -175,6 +196,12 @@ pub struct SshOpts {
     /// Extra option for ssh, e.g. --ssh-opt "-L 8080:localhost:80" (repeatable)
     #[arg(long = "ssh-opt", allow_hyphen_values = true)]
     pub ssh_opt: Vec<String>,
+    /// How to reach Telepy: web = its web port, so Telepy sees your real address (default); ssh = its SSH port
+    #[arg(long, value_parser = ["web", "ssh"], default_value = "web", env = "TELEPY_SSH_VIA")]
+    pub via: String,
+    /// When the web port can't be reached: ask, always or never fall back to the SSH port (overrides `telepy config fallback`)
+    #[arg(long, value_parser = ["ask", "always", "never"], env = "TELEPY_SSH_FALLBACK")]
+    pub fallback: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -234,6 +261,12 @@ pub enum ConfigAction {
         /// Write to this file instead of ~/.ssh/config
         #[arg(long)]
         file: Option<PathBuf>,
+    },
+    /// When `telepy ssh / scp / sftp` can't reach Telepy's web port: ask (default), always or never use the SSH port instead
+    Fallback {
+        /// ask | always | never; omit to show the current setting
+        #[arg(value_parser = ["ask", "always", "never"])]
+        value: Option<String>,
     },
     /// Simplify ~/.ssh/config: shared lines once, repeats ssh never reads dropped; every name checked to read the same
     Tidy {
@@ -516,7 +549,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         // Windows 刪不掉正在跑的舊檔，上次更新的備份留到現在才清。/ Windows leaves the previous update's backup for now.
         update::clean_leftovers(&exe);
     }
-    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig) { None } else { update::start() };
+    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig | Cmd::Carrier(_)) { None } else { update::start() };
     let result = run_command(cli);
     if matches!(result, Ok(0)) {
         update::finish(check);
@@ -533,6 +566,8 @@ fn run_command(cli: Cli) -> Result<i32> {
         Cmd::Doctor => doctor(server, token),
         Cmd::Update(a) => update_cmd(a),
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
+        // ssh 執行的 ProxyCommand：不用登入（網址與退回的設定都在參數裡）。/ Run by ssh; everything it needs is in its arguments.
+        Cmd::Carrier(a) => carrier::run(&a.url, a.tcp.as_deref(), prefs::Fallback::parse(&a.fallback).unwrap_or_default(), &a.server),
         // 只讀寫本機的檔，不用登入。/ Only touches a local file: no sign-in needed.
         Cmd::Config(ConfigArgs { action: ConfigAction::Tidy { file, wildcards, check, yes } }) => config_tidy(file, wildcards, check, yes),
         cmd => {
@@ -554,7 +589,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
-                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig => unreachable!(),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) => unreachable!(),
             }
         }
     }
@@ -876,7 +911,9 @@ fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)
     std::fs::write(&kh, s(&cfg, "known_hosts"))?;
     let file = dir.join(format!("{}.conf", alias));
     let identity = opts.identity.as_ref().map(|p| sshcfg::config_path(p));
-    let text = sshcfg::standalone(&stanzas, &sshcfg::config_path(&file), &sshcfg::config_path(&kh), identity.as_deref());
+    let proxy = if opts.via == "web" { carrier_command(api, &cfg, opts)? } else { None };
+    let server_alias = sshcfg::server_alias(&cfg).to_string();
+    let text = sshcfg::standalone(&stanzas, &sshcfg::config_path(&file), &sshcfg::config_path(&kh), identity.as_deref(), proxy.as_deref().map(|c| (server_alias.as_str(), c)));
     std::fs::write(&file, text)?;
     #[cfg(unix)]
     {
@@ -885,6 +922,28 @@ fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)
         let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     }
     Ok((file, alias))
+}
+
+/// 經網頁 port 那一跳的 ProxyCommand：`telepy _carrier --url <ws> --tcp <SSH 主機:port> --fallback … --server …`。
+/// 伺服器太舊、沒給 `ws_url` 就回 None（照舊走 SSH 的 port）。`TELEPY_WS_URL` 可以換掉網址（鏡像 / 測試）。
+/// The ProxyCommand of the hop through the web port; None when the server sends no `ws_url` (too old: the SSH port as
+/// before). `TELEPY_WS_URL` replaces the URL (mirrors / tests).
+fn carrier_command(api: &Api, cfg: &Value, opts: &SshOpts) -> Result<Option<String>> {
+    let Some(url) = std::env::var("TELEPY_WS_URL").ok().filter(|u| !u.is_empty()).or_else(|| cfg["ws_url"].as_str().filter(|u| !u.is_empty()).map(str::to_string)) else {
+        return Ok(None);
+    };
+    let fallback = opts.fallback.as_deref().and_then(prefs::Fallback::parse).unwrap_or_else(|| prefs::fallback(&api.server));
+    let exe = std::env::current_exe().context("where is telepy?")?;
+    // ssh_config 的 ProxyCommand 會展開 `%`：網址裡的 `%` 寫成 `%%`。/ ssh_config expands `%` in ProxyCommand.
+    let pct = |s: &str| s.replace('%', "%%");
+    let mut cmd = format!("{} _carrier --url {}", sshcfg::config_path(&exe), pct(&url));
+    let host = cfg["server"]["host"].as_str().unwrap_or("");
+    let port = cfg["server"]["port"].as_str().map(str::to_string).or_else(|| cfg["server"]["port"].as_i64().map(|p| p.to_string())).unwrap_or_default();
+    if !host.is_empty() && !port.is_empty() {
+        cmd.push_str(&format!(" --tcp {host}:{port}"));
+    }
+    cmd.push_str(&format!(" --fallback {} --server {}", fallback.as_str(), pct(&api.server)));
+    Ok(Some(cmd))
 }
 
 fn extra_opts(opts: &SshOpts) -> Vec<String> {
@@ -938,6 +997,27 @@ fn scp(api: &Api, a: &ScpArgs) -> Result<i32> {
         };
     }
     hand_over(cmd)
+}
+
+/// `telepy config fallback [ask|always|never]`：這台伺服器的網頁 port 連不到時要不要改走 SSH 的 port。
+/// Whether `telepy ssh / scp / sftp` may use the SSH port when this server's web port can't be reached.
+fn config_fallback(api: &Api, value: Option<&str>) -> Result<()> {
+    let explain = |f: prefs::Fallback| match f {
+        prefs::Fallback::Ask => "ask in the terminal each time (no terminal = don't)",
+        prefs::Fallback::Always => "use the SSH port without asking (Telepy then can't see your real address)",
+        prefs::Fallback::Never => "never use the SSH port; fail instead",
+    };
+    match value.and_then(prefs::Fallback::parse) {
+        Some(f) => {
+            prefs::set_fallback(&api.server, f)?;
+            println!("{}: when the web port can't be reached, {}", api.server, explain(f));
+        }
+        None => {
+            let f = prefs::fallback(&api.server);
+            println!("{}: {} — when the web port can't be reached, {}", api.server, f.as_str(), explain(f));
+        }
+    }
+    Ok(())
 }
 
 /// `telepy config tidy`：在這台電腦上簡化 ~/.ssh/config（規則跟網頁的 SSH config 編輯器一樣，見 `tidy.rs`）——列出改了什麼、
@@ -1048,6 +1128,9 @@ fn sftp(api: &Api, a: &SftpArgs) -> Result<i32> {
 }
 
 fn config(api: &Api, a: ConfigArgs) -> Result<()> {
+    if let ConfigAction::Fallback { value } = &a.action {
+        return config_fallback(api, value.as_deref());
+    }
     let ConfigAction::Install { tunnels, all, print, file } = a.action else { unreachable!("config tidy runs before signing in") };
     let d = dashboard(api)?;
     let picked: Vec<Value> = if all {
@@ -1562,6 +1645,11 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     let dir = ssh_dir();
     let writable = std::fs::create_dir_all(&dir).is_ok();
     check(writable, "ssh config dir", dir.display().to_string());
+    if let Some(url) = &server_url {
+        // `telepy ssh` 經網頁 port 連 Telepy；連不到時怎麼辦。/ `telepy ssh` rides the web port; what happens when it can't.
+        let via = std::env::var("TELEPY_SSH_VIA").ok().filter(|v| v == "ssh").map(|_| "the SSH port (TELEPY_SSH_VIA)").unwrap_or("the web port");
+        check(true, "ssh way in", format!("{via}; if the web port can't be reached: {} (telepy config fallback)", prefs::fallback(url).as_str()));
+    }
     if bad == 0 {
         // 全部通過、而且是終端機：Tapi 開心一下。/ All good in a terminal: a happy Tapi.
         if let Some(paint) = tapi::paint_for(&std::io::stdout()) {
