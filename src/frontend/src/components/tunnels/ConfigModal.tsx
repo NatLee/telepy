@@ -30,6 +30,7 @@ import { keyPlan, planIsEmpty, reachInList, untouchedAccounts } from "@/lib/bulk
 import { TunnelModalProps, type Tunnel } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
+import { liveTransport } from "@/lib/devicePlatforms";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
@@ -331,7 +332,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                 onChoose={handleTransportChange}
                 server={data?.server ? { host: data.server.host, port: String(data.server.port) } : null}
                 wsUrl={data?.ws_url ?? null}
-                devices={[{ online: online ?? tunnel?.endpoint?.live ?? null, transport: tunnel?.endpoint?.live ? tunnel.endpoint.transport : null }]}
+                devices={[{ online: online ?? tunnel?.way_in?.live ?? tunnel?.endpoint?.live ?? null, transport: liveTransport(tunnel) }]}
                 deviceName={deviceName}
             />
         </Modal>

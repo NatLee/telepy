@@ -88,14 +88,23 @@ pub struct Forward {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Tcp,
-    WebSocket,
+    /// `tls` = 裝置那頭是 wss（代理轉來的 `X-Forwarded-Proto` 是 https / wss）。/ The device used wss (per the forwarded proto).
+    WebSocket { tls: bool },
 }
 
 impl Transport {
     pub fn as_str(self) -> &'static str {
         match self {
             Transport::Tcp => "tcp",
-            Transport::WebSocket => "websocket",
+            Transport::WebSocket { .. } => "websocket",
+        }
+    }
+
+    /// websocket 有沒有 TLS；SSH port 沒有這個問題 = None。/ Whether the WebSocket had TLS; None for the SSH port.
+    pub fn tls(self) -> Option<bool> {
+        match self {
+            Transport::Tcp => None,
+            Transport::WebSocket { tls } => Some(tls),
         }
     }
 }
@@ -111,7 +120,7 @@ struct ConnInfo {
 impl ConnInfo {
     fn endpoint(&self) -> Endpoint {
         // 雙堆疊 listener 上的 IPv4 會是 ::ffff:a.b.c.d，轉回一般寫法。/ Unmap IPv4-mapped addresses.
-        Endpoint { ip: self.peer.ip().to_canonical().to_string(), since: self.since.clone(), transport: self.transport.as_str() }
+        Endpoint { ip: self.peer.ip().to_canonical().to_string(), since: self.since.clone(), transport: self.transport.as_str(), tls: self.transport.tls() }
     }
 }
 
@@ -469,8 +478,13 @@ impl Gateway {
     /// Record where the tunnel connected from; a public peer is also the device's public IP (alerting on change).
     async fn remember_endpoint(&self, conn_id: u64, port: u16) {
         let Some((ep, peer)) = self.conns.get(&conn_id).map(|c| (c.endpoint(), c.peer)) else { return };
-        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since, ep.transport).await {
+        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since, ep.transport, ep.tls).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+        }
+        // 還不知道這條隧道怎麼加進來的（手動貼的腳本）：第一次連上的方式就是。/ Unknown so far: the first connection's way is it.
+        let way = if ep.transport == "websocket" { "websocket" } else { "ssh" };
+        if let Err(e) = db::tunnels::fill_way_in(&self.db, port, way).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record how the tunnel was added");
         }
         // 連線歷史每次都記（不管 IP 有沒有換）。/ The connection history records every connect.
         if let Err(e) = db::tunnel_sessions::open(&self.db, port, &ep.ip, &ep.since).await {
@@ -903,7 +917,7 @@ impl Handler for GatewayHandler {
                     self.peer.ip(),
                     self.peer.port(),
                     self.key_desc,
-                    if self.transport == Transport::WebSocket { " (over websocket)" } else { "" }
+                    if matches!(self.transport, Transport::WebSocket { .. }) { " (over websocket)" } else { "" }
                 ),
             )
             .await;

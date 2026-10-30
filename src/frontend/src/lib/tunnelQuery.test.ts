@@ -143,8 +143,14 @@ test("os: and via: (device platform and way in)", () => {
     assert.ok(match("os:macos,windows", mac));
     assert.ok(match("via:ssh", pi));
     assert.ok(match("via:http", mac), "offline keeps the last way in");
-    assert.ok(match("-via:http", pi));
+    assert.ok(match("via:wss", mac));
+    assert.ok(match("-via:wss", pi));
     assert.ok(!match("via:ssh", tunnel({ endpoint: null })), "unknown = no match");
+    // way_in 給每個看得到的人：看不到 endpoint 的 sharee 也能搜。/ way_in reaches every viewer, endpoint or not.
+    const shared = tunnel({ endpoint: null, way_in: { setup: "websocket", last: "websocket", live: true, tls: true } });
+    assert.ok(match("via:wss", shared) && !match("via:ssh", shared));
+    const fresh = tunnel({ endpoint: null, way_in: { setup: "ssh", last: null, live: false, tls: null } });
+    assert.ok(match("via:ssh", fresh), "never connected: how it was set up");
     assert.deepEqual(parseQuery("os:amiga via:pigeon").invalid, ["os:amiga", "via:pigeon"]);
 });
 

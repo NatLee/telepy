@@ -61,7 +61,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80" title={t("tunnels.portTitle")}>
                             :{tunnel.reverse_port}
                         </span>
-                        <TransportBadge endpoint={tunnel.endpoint} />
+                        <TransportBadge tunnel={tunnel} />
                         <DeviceOsChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelLanChip endpoint={tunnel.endpoint} />

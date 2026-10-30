@@ -49,9 +49,11 @@ pub fn router() -> Router<AppState> {
         .route("/ws/gateway/", get(gateway_upgrade))
 }
 
-/// SSH over WebSocket：沒有 auth 訊息（SSH 自己認證），來源 IP 取自轉送標頭。/ SSH over WebSocket; SSH authenticates inside.
-async fn gateway_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
-    prepare(ws).on_upgrade(move |socket| gateway::handle(state, socket, meta))
+/// SSH over WebSocket：沒有 auth 訊息（SSH 自己認證），來源 IP 取自轉送標頭；`X-Forwarded-Proto` 說裝置那頭是不是 wss。
+/// SSH over WebSocket; SSH authenticates inside. `X-Forwarded-Proto` says whether the device used wss.
+async fn gateway_upgrade(State(state): State<AppState>, meta: ClientMeta, headers: axum::http::HeaderMap, ws: WebSocketUpgrade) -> Response {
+    let tls = gateway::forwarded_tls(&headers);
+    prepare(ws).on_upgrade(move |socket| gateway::handle(state, socket, meta, tls))
 }
 
 async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {

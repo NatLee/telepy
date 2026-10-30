@@ -75,6 +75,32 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: 
     v
 }
 
+/// 裝置怎麼連 Telepy（沒有位址，所以給所有看得到隧道的人）：`setup` = 加進來時設定的方式（`ssh` / `websocket`，
+/// 不知道 = null），`last` = 現在連著的、否則最後一次實際用的方式，`live` = 現在連著，`tls` = 那次 websocket 外面有沒有
+/// TLS（wss；SSH port 或不知道 = null）。兩個不一樣 = 實際走的跟設定的不同（例如之後切換過）。
+/// How the device reaches Telepy (no address, so for everyone who sees the tunnel): `setup` = the way it was set up
+/// (`ssh` / `websocket`, null = unknown), `last` = the way it is connected now, else the way it last connected, `live`
+/// = connected now, `tls` = whether that WebSocket had TLS (wss; null for the SSH port or unknown). When the two
+/// differ, the device came in another way than it was set up for.
+pub fn way_in_json(setup: Option<&str>, live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Value {
+    let (transport, tls) = match (live, last) {
+        (Some(e), _) => (Some(e.transport), e.tls),
+        (None, Some(l)) => (l.transport.as_deref(), l.transport_tls),
+        (None, None) => (None, None),
+    };
+    let way = transport.and_then(|t| match t {
+        "tcp" => Some("ssh"),
+        "websocket" => Some("websocket"),
+        _ => None,
+    });
+    json!({
+        "setup": setup.filter(|s| matches!(*s, "ssh" | "websocket")),
+        "last": way,
+        "live": live.is_some(),
+        "tls": if way == Some("websocket") { json!(tls) } else { Value::Null },
+    })
+}
+
 /// 誰在用：人數給所有看得到隧道的人；`sessions`（誰、哪種連線、IP、多久）只在 `details` 時帶，否則 null。
 /// Presence: the count for everyone, the sessions only with `details`.
 pub fn presence_json(entries: &[Entry], details: bool, geo: &GeoIp) -> Value {

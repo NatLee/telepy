@@ -224,6 +224,10 @@ pub struct Tunnel {
     /// 列表（`/keys`、`/dashboard`）與單筆 retrieve 帶：裝置的位址與基本狀況。看不到（只看狀態的 sharee）或從沒連過時是 null。
     /// List, dashboard and single retrieve: the device's addresses and facts; null when hidden (status-only sharee) or never connected.
     pub endpoint: Option<TunnelEndpoint>,
+    /// 列表與單筆都帶：裝置怎麼連 Telepy（SSH port 或網頁 port 的 WebSocket）。沒有位址，所有看得到隧道的人都有。
+    /// List and single retrieve: how the device reaches Telepy (SSH port or the web port's WebSocket); holds no address,
+    /// so every viewer gets it.
+    pub way_in: Option<TunnelWayIn>,
     /// 只有列表帶：誰正在用。/ List / dashboard only: who is using the tunnel right now.
     pub presence: Option<TunnelPresence>,
     /// 只有列表帶：`online`（經由隧道讀得到裝置 sshd）/ `degraded`（forward 在但 sshd 連續沒回應）/ `offline` / `never`（從沒連上過）。
@@ -350,6 +354,27 @@ pub struct DetachedShell {
     pub since: String,
     #[schema(example = "2026-10-27T01:07:03.123456Z")]
     pub ends_at: String,
+}
+
+/// 裝置怎麼連 Telepy。`setup` 和 `last` 不一樣 = 實際走的方式跟設定的不同。
+/// How the device reaches Telepy. `setup` differing from `last` = it came in another way than it was set up for.
+#[derive(ToSchema)]
+pub struct TunnelWayIn {
+    /// 加進來時設定的方式（一鍵加入 / 裝置下載的一次性腳本；手動貼腳本的看第一次連線）：`ssh` = SSH port，
+    /// `websocket` = 網頁 port（SSH over WebSocket）；不知道是 null。
+    /// The way it was set up (one-command join / the one-time script the device downloaded; a pasted script = its first
+    /// connection): `ssh` = SSH port, `websocket` = web port (SSH over WebSocket); null when unknown.
+    #[schema(example = "ssh")]
+    pub setup: Option<String>,
+    /// 現在連著的方式，離線時是最後一次的（`ssh` / `websocket`）；從沒連過或升級前連的是 null。
+    /// The way it is connected now, else the way it last connected (`ssh` / `websocket`); null if never (or before the upgrade).
+    #[schema(example = "websocket")]
+    pub last: Option<String>,
+    /// 現在連著。/ Connected now.
+    pub live: bool,
+    /// `last` 是 websocket 時：外面有沒有 TLS（wss）；其他情況或不知道是 null。
+    /// When `last` is websocket: whether it had TLS (wss); otherwise or unknown, null.
+    pub tls: Option<bool>,
 }
 
 /// 裝置連上 gateway 的來源位址（gateway 看到的 TCP 來源；中間若有 L4 proxy 會是 proxy 的 IP）。

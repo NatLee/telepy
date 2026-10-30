@@ -23,6 +23,9 @@ pub struct Tunnel {
     /// 網頁終端機斷線時：`user` = 照使用者的選擇保留 shell、`never` = 一律立刻結束（見 `crate::terminal_detach`）。
     /// When a web terminal's socket drops: `user` = keep the shell per the user's choice, `never` = always end it at once.
     pub terminal_detach_policy: String,
+    /// 裝置設定成怎麼連 Telepy：`ssh` / `websocket`；還不知道 = None（見 [`set_way_in`]、[`fill_way_in`]）。
+    /// How the device is set up to reach Telepy: `ssh` / `websocket`; None = not known yet.
+    pub way_in: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -47,10 +50,25 @@ pub struct UsernameWithCreator {
     pub created_by: String,
 }
 
-const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up, record_sessions, terminal_detach_policy";
+const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up, record_sessions, terminal_detach_policy, way_in";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
 const U_COLS: &str = "id, user_id, reverse_server_id, username, created_at, updated_at";
 const U: &str = "authorized_keys_reverseserverusernames";
+
+/// 加入時記下裝置設定成怎麼連（一鍵加入、裝置下載的一次性腳本；重新加入就覆蓋）。值是 `ssh` / `websocket`。
+/// Record how the device is set up to reach Telepy (one-command join, the one-time script it downloaded; a rejoin
+/// overwrites it). Values: `ssh` / `websocket`.
+pub async fn set_way_in(db: &Db, id: i64, way: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET way_in = ? WHERE id = ?")).bind(way).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
+/// 還不知道怎麼加進來的（手動貼腳本、舊的隧道）：第一次連上時用那次的方式補上。
+/// Not known yet (a script pasted by hand, an older tunnel): the first connection fills it in.
+pub async fn fill_way_in(db: &Db, port: u16, way: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET way_in = ? WHERE reverse_port = ? AND way_in IS NULL")).bind(way).bind(port as i64).execute(&db.write).await?;
+    Ok(())
+}
 
 pub async fn by_id(db: &Db, id: i64) -> sqlx::Result<Option<Tunnel>> {
     sqlx::query_as(&format!("SELECT {T_COLS} FROM {T} WHERE id = ?")).bind(id).fetch_optional(&db.read).await
