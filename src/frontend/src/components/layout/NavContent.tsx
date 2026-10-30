@@ -3,9 +3,10 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal, BellRing, HeartPulse } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, ShieldAlert, Webhook, TerminalSquare, ScrollText, Braces, Terminal, HeartPulse, UsersRound } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
+import { ADMIN_AREAS, type AdminAreaId } from "@/lib/adminAreas";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,15 @@ interface NavLink {
     /** 子頁：在這區裡時展開在下面（側欄收合時不顯示，頁面上有分頁）。/ Sub-pages, shown below while inside the area (not when collapsed; the page has tabs). */
     children?: { key: TranslationKey; href: string }[];
 }
+
+/** 管理區每一區的圖示。/ The icon of each admin area. */
+const ADMIN_AREA_ICONS: Record<AdminAreaId, React.ReactNode> = {
+    people: <UsersRound size={18} />,
+    settings: <Settings size={18} />,
+    rules: <ShieldAlert size={18} />,
+    activity: <ScrollText size={18} />,
+    health: <HeartPulse size={18} />,
+};
 
 // 導覽連結以翻譯 key 定義,依區段分組;Header 用攤平後的 navLinks 反查目前頁面標題。
 // Nav links carry translation keys and are grouped by section; the Header resolves the current
@@ -78,25 +88,18 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         ],
     },
     {
-        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、即時連線、錄影、AI 活動、全站 webhook、API 活動）在這裡，
-        // 加上網站設定。API 文件（Swagger）改從 API 頁連過去。
-        // The admin section: the pages above only hold "mine"; everyone's (logs, live sessions, recordings, AI
-        // activity, site webhooks, site command rules, API activity) live here, next to the site settings. The API docs (Swagger) are
-        // linked from the API page now.
+        // 管理區：上面的頁面只放「我的」，全站的在這裡。以前是十條平的連結，現在依 lib/adminAreas 分成五區（使用者與
+        // 權限、網站設定、規則與通知、全站活動、伺服器狀態）；有好幾頁的區進去才展開子頁。
+        // The admin section: the pages above only hold "mine"; everyone's live here. It used to be ten flat links;
+        // now it is the five areas of lib/adminAreas, and an area with several pages expands only while you're in it.
         key: "nav.admin",
         admin: true,
-        links: [
-            { key: "nav.settings", href: "/tunnels/settings", icon: <Settings size={18} /> },
-            { key: "nav.adminHealth", href: "/tunnels/admin/health", icon: <HeartPulse size={18} /> },
-            { key: "nav.adminLogs", href: "/tunnels/admin/logs", icon: <ScrollText size={18} /> },
-            { key: "nav.adminSessions", href: "/tunnels/admin/sessions", icon: <RadioReceiver size={18} /> },
-            { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },
-            { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
-            { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
-            { key: "nav.adminNotifications", href: "/tunnels/admin/notifications", icon: <BellRing size={18} /> },
-            { key: "nav.adminCommands", href: "/tunnels/admin/commands", icon: <ShieldCheck size={18} /> },
-            { key: "nav.adminApiActivity", href: "/tunnels/admin/api-activity", icon: <ListChecks size={18} /> },
-        ],
+        links: ADMIN_AREAS.map((area) => ({
+            key: area.key,
+            href: area.pages[0].href,
+            icon: ADMIN_AREA_ICONS[area.id],
+            children: area.pages.length > 1 ? area.pages.map((p) => ({ key: p.key, href: p.href })) : undefined,
+        })),
     },
 ];
 
@@ -105,6 +108,14 @@ export const navLinks: NavLink[] = navSections.flatMap((section) => section.link
 /** /tunnels 只比對自己,其他連結比對前綴。/ /tunnels matches exactly; the others match by prefix. */
 export function isNavActive(pathname: string, href: string) {
     return pathname === href || (href !== "/tunnels" && pathname.startsWith(href));
+}
+
+/**
+ * 這一行是不是目前的區：它自己，或它的任何一個子頁（管理區的子頁不在父項網址底下）。
+ * Whether this row is the current area: itself or any of its sub-pages (admin sub-pages don't share the parent's URL).
+ */
+export function isLinkActive(link: NavLink, pathname: string) {
+    return isNavActive(pathname, link.href) || !!link.children?.some((c) => isNavActive(pathname, c.href));
 }
 
 /** 目前的子頁：和父頁同網址的那個只比對自己。/ The current sub-page; the one sharing the parent's URL matches exactly. */
@@ -171,7 +182,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                     <React.Fragment key={section.key}>
                         <SectionLabel collapsed={collapsed}>{t(section.key)}</SectionLabel>
                         {section.links.filter((link) => !link.feature || [link.feature].flat().some((f) => hasFeature(user, f))).map((link) => {
-                            const active = isNavActive(pathname, link.href);
+                            const active = isLinkActive(link, pathname);
                             // 等我核准的指令數。/ Commands waiting for my approval.
                             const badge = link.href === "/tunnels/commands" && approvals.pending.length > 0 ? approvals.pending.length : null;
                             const linkEl = (

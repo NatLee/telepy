@@ -242,7 +242,7 @@ async fn register(State(state): State<AppState>, AppJson(body): AppJson<Value>) 
         }
     })?;
     state.webhooks.emit(
-        crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": user.username, "via": "registration" })).link("/tunnels/settings?tab=users"),
+        crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": user.username, "via": "registration" })).link("/tunnels/admin/users"),
     );
     Ok((
         StatusCode::CREATED,
@@ -345,7 +345,7 @@ pub async fn google_sign_in(state: &AppState, claims: GoogleClaims, meta: &Clien
             db::users::social_create(&state.db, u.id, "google", &claims.sub).await?;
             tracing::info!(username = account, email, "[AUTH][GOOGLE] Created user");
             state.webhooks.emit(
-                crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": u.username, "via": "google" })).link("/tunnels/settings?tab=users"),
+                crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": u.username, "via": "google" })).link("/tunnels/admin/users"),
             );
             u
         }

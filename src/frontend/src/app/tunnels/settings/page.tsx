@@ -1,54 +1,43 @@
 "use client";
 
 /**
- * 設定頁(管理員專用),分頁並以 ?tab= 記在網址(MCP 頁可直接連到 AI 分頁):
- * - 帳號與註冊 / 登入 / 遠端瀏覽器 / AI 存取(MCP)…:站台設定依 key 前綴分到各分頁。登入分頁另有「登入頁的樣子」
- *   面板(一般 / 低調 + 預覽,components/auth/SignInLookSettings)。label 與說明優先用前端字典
- *   (siteSettings.<key>.label/.description,隨介面語言切換),找不到才退回後端 meta。
- *   以秒為單位的設定用「數字 + 單位(秒/分/時/天)」輸入(DurationField)。AI 分頁另外顯示 MCP 端點網址。
- * - 使用者:使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
- * 個人偏好(語言/主題/終端機字型/已連接的應用程式)在 sidebar 左下角的齒輪 modal,不在這裡。
- * Settings page (admin-only), tabbed with the tab kept in ?tab= (the MCP page deep-links to
- * the AI tab): site settings split by key prefix into Account & registration / Sign-in / Remote browser /
- * AI access … (labels from the frontend dictionaries, backend-meta fallback; second-based values
- * are edited as a number plus a unit; the AI tab also shows the MCP endpoint), and Users (list + manage
- * modal). Personal preferences live in the sidebar gear modal instead.
+ * 網站設定頁(管理員專用)。分頁記在 ?tab=(MCP 頁可直接連到 AI 分頁),從 lg 起是黏在左側、依「帳號 / 功能」分組的一欄,
+ * 窄一點是一行有分組的下拉選單。設定依 key 分頁(lib/siteSettingsTabs,有測試:後端的每個設定都要有家)。label 與說明
+ * 優先用前端字典(siteSettings.<key>.label/.description),找不到才退回後端 meta;以秒為單位的設定用「數字 + 單位」輸入
+ * (DurationField)。登入分頁另有「登入頁的樣子」面板,註冊分頁有允許的網域,AI 分頁顯示 MCP 端點網址。
+ * 使用者與功能權限搬到管理區的「使用者與權限」(lib/adminAreas);舊的 ?tab=users / ?tab=access 會轉過去。
+ * 個人偏好在 sidebar 左下角的齒輪 modal,不在這裡。
+ * Site settings page (admin-only). The tab is kept in ?tab= (the MCP page deep-links to the AI tab); from lg the
+ * tabs are a sticky left rail grouped as Accounts / Features, below that a one-line grouped select. Settings go to
+ * a tab by key (lib/siteSettingsTabs, tested: every backend setting needs a home). Labels come from the frontend
+ * dictionaries with a backend-meta fallback; seconds are edited as a number plus a unit. Users and feature access
+ * moved to the admin section's "Users & access" (lib/adminAreas); the old ?tab=users / ?tab=access redirect there.
+ * Personal preferences live in the sidebar gear modal instead.
  */
 import React, { Suspense, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare, History, HeartPulse } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
+import { Settings, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, HeartPulse, Waypoints } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
-import { Modal } from "@/components/ui/Modal";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
-import { Segmented } from "@/components/ui/segmented";
-import { NavTabs } from "@/components/ui/nav-tabs";
+import { NavTabs, type NavTab } from "@/components/ui/nav-tabs";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
 import { useMcpServerUrl } from "@/hooks/useMcpPage";
-import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
-import type { Translate } from "@/lib/i18n";
 import { en } from "@/locales/en";
 import type { TranslationKey } from "@/locales/en";
-import { SignInHistory } from "@/components/layout/SignInHistory";
-import { SignInDevices } from "@/components/layout/SignInDevices";
-import { ApiTokens } from "@/components/tokens/ApiTokens";
-import { ConnectedApps } from "@/components/layout/ConnectedApps";
-import { CliSignIns } from "@/components/tokens/CliSignIns";
-import { UserActivity } from "@/components/activity/UserActivity";
-import { AccessTab } from "@/components/access/AccessTab";
-import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
 import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
+import { movedSettingsTab } from "@/lib/adminAreas";
+import { SITE_TAB_GROUPS, parseSiteTab, siteTabOf, type SiteTabId } from "@/lib/siteSettingsTabs";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -128,26 +117,20 @@ function DurationField({ seconds, label, onSave }: { seconds: number; label: str
     );
 }
 
-/** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
 /** 分頁裡排最前面的設定（開關整個功能的）。/ Settings listed first in their tab (the ones that turn a feature on). */
-const LEAD_KEYS = ["notify_user_webhooks"];
+const LEAD_KEYS = ["notify_user_webhooks", "lan_scan_enabled"];
 
-type SiteTabId = "general" | "signin" | "browser" | "desktop" | "ai" | "notify" | "commands";
-type TabId = SiteTabId | "users" | "access";
-
-const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_") && !k.startsWith("terminal_") && !k.startsWith("signin_") && !k.startsWith("mfa_"),
-    // 登入效期與必要的第二因素。/ Sign-in lifetimes and the required second factors.
-    signin: (k) => k.startsWith("signin_") || k.startsWith("mfa_"),
-    browser: (k) => k.startsWith("remote_browser"),
-    desktop: (k) => k.startsWith("desktop_"),
-    ai: (k) => k.startsWith("ai_"),
-    notify: (k) => k.startsWith("notify_"),
-    // 終端機與指令規則：斷線保留上限 + 核准等待時間。/ Terminal & commands: the detach ceiling and the approval wait.
-    commands: (k) => k.startsWith("command_") || k.startsWith("terminal_"),
+/** 每一頁的名字、圖示與上面那段說明。/ Each tab's name, icon and the note on top. */
+const SITE_TABS: Record<SiteTabId, { label: TranslationKey; icon: React.ReactNode; banner: TranslationKey }> = {
+    general: { label: "settings.groupAccount", icon: <UserPlus size={15} />, banner: "settings.generalBanner" },
+    signin: { label: "settings.groupSignin", icon: <LogIn size={15} />, banner: "settings.signinBanner" },
+    commands: { label: "settings.groupCommands", icon: <SquareTerminal size={15} />, banner: "settings.commandsBanner" },
+    desktop: { label: "settings.groupDesktop", icon: <ScreenShare size={15} />, banner: "settings.desktopBanner" },
+    browser: { label: "settings.groupRemoteBrowser", icon: <Globe size={15} />, banner: "settings.browserBanner" },
+    devices: { label: "settings.groupDevices", icon: <Waypoints size={15} />, banner: "settings.devicesBanner" },
+    ai: { label: "settings.groupAi", icon: <Bot size={15} />, banner: "settings.aiBanner" },
+    notify: { label: "settings.groupNotify", icon: <Bell size={15} />, banner: "settings.notifyBanner" },
 };
-
-const TAB_IDS: TabId[] = ["general", "signin", "browser", "desktop", "ai", "notify", "commands", "users", "access"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -185,29 +168,22 @@ function AdminSettings() {
     // 站台設定只載入一次,各分頁共用。/ Load site settings once and share them across the tabs.
     const settings = useSettingsPage();
 
-    const requested = searchParams.get("tab") as TabId | null;
-    const tab: TabId = requested && TAB_IDS.includes(requested) ? requested : "general";
-    const setTab = (next: TabId) => {
+    // 使用者與功能權限搬到管理區了：舊書籤轉過去。/ Users and feature access moved to the admin section: old bookmarks follow.
+    const moved = movedSettingsTab(searchParams.get("tab"), searchParams.get("user"));
+    React.useEffect(() => {
+        if (moved) router.replace(moved);
+    }, [moved, router]);
+
+    const tab = parseSiteTab(searchParams.get("tab"));
+    const setTab = (next: SiteTabId) => {
         const params = new URLSearchParams(searchParams.toString());
         if (next === "general") params.delete("tab");
         else params.set("tab", next);
         const qs = params.toString();
         router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     };
-
-    const tabs: { value: TabId; label: string; icon: React.ReactNode }[] = [
-        { value: "general", label: t("settings.groupAccount"), icon: <UserPlus size={15} /> },
-        { value: "signin", label: t("settings.groupSignin"), icon: <LogIn size={15} /> },
-        { value: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={15} /> },
-        { value: "desktop", label: t("settings.groupDesktop"), icon: <ScreenShare size={15} /> },
-        { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
-        { value: "notify", label: t("settings.groupNotify"), icon: <Bell size={15} /> },
-        { value: "commands", label: t("settings.groupCommands"), icon: <SquareTerminal size={15} /> },
-        { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
-        // 誰可以用哪些功能（群組 + 使用者；跟隧道分享無關）。/ Who may use which features (groups + users; not sharing).
-        { value: "access", label: t("settings.tabAccess"), icon: <KeySquare size={15} /> },
-    ];
-    const accessUser = Number(searchParams.get("user")) || null;
+    const navTabs = (ids: readonly SiteTabId[]): NavTab<SiteTabId>[] => ids.map((id) => ({ value: id, label: t(SITE_TABS[id].label), icon: SITE_TABS[id].icon }));
+    if (moved) return null;
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -218,26 +194,34 @@ function AdminSettings() {
                 description={t("settings.subtitle")}
             />
 
-            <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
-                <Segmented kind="tabs" options={tabs} value={tab} onChange={setTab} />
-            </div>
+            <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start lg:gap-6">
+                {/* 窄的時候是一行有分組的下拉選單（十個分頁的橫列看不到大半）；從 lg 起是黏在左側、分組的一欄。
+                    Below lg a one-line grouped select (a row of ten tabs hides most of them); from lg a sticky grouped rail. */}
+                <NativeSelect className="h-9 lg:hidden" aria-label={t("settings.tabsAria")} value={tab} onChange={(e) => setTab(e.target.value as SiteTabId)}>
+                    {SITE_TAB_GROUPS.map((g) => (
+                        <optgroup key={g.id} label={t(g.key)}>
+                            {g.tabs.map((id) => <option key={id} value={id}>{t(SITE_TABS[id].label)}</option>)}
+                        </optgroup>
+                    ))}
+                </NativeSelect>
+                <nav aria-label={t("settings.tabsAria")} className="hidden space-y-4 lg:sticky lg:top-20 lg:block">
+                    {SITE_TAB_GROUPS.map((g) => (
+                        <div key={g.id}>
+                            <p className="px-3 pb-1 text-xs text-muted-foreground">{t(g.key)}</p>
+                            <NavTabs tabs={navTabs(g.tabs)} value={tab} onChange={setTab} aria-label={t(g.key)} />
+                        </div>
+                    ))}
+                </nav>
 
-            {tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab key={accessUser ?? 0} initialUser={accessUser} /> : <SiteSettingsTab tab={tab} settings={settings} />}
+                <div className="min-w-0">
+                    <SiteSettingsTab tab={tab} settings={settings} />
+                </div>
+            </div>
         </div>
     );
 }
 
 /* ── 站台設定 / Site settings (admin) ───────────────────────────── */
-
-const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
-    general: "settings.generalBanner",
-    signin: "settings.signinBanner",
-    browser: "settings.browserBanner",
-    desktop: "settings.desktopBanner",
-    ai: "settings.aiBanner",
-    notify: "settings.notifyBanner",
-    commands: "settings.commandsBanner",
-};
 
 function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnType<typeof useSettingsPage> }) {
     const { t } = useI18n();
@@ -248,7 +232,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     // 後端的鍵是字母序；開關整個功能的那個排最前面。/ Keys arrive sorted; the switch that turns a feature on goes first.
     // 登入頁的樣子與允許的註冊網域各有自己的面板，不在一般清單裡。/ The sign-in look and the allowed registration domains have their own panels.
     const entries = Object.entries(settingsObj)
-        .filter(([k]) => SITE_TAB_KEYS[tab](k) && !SIGNIN_LOOK_KEYS.includes(k) && !REGISTER_DOMAIN_KEYS.includes(k))
+        .filter(([k]) => siteTabOf(k) === tab && !SIGNIN_LOOK_KEYS.includes(k) && !REGISTER_DOMAIN_KEYS.includes(k))
         .sort(([a], [b]) => Number(!LEAD_KEYS.includes(a)) - Number(!LEAD_KEYS.includes(b)));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
@@ -280,7 +264,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
     return (
         <div className="space-y-6">
-            <Callout tone="info">{t(SITE_TAB_BANNERS[tab])}</Callout>
+            <Callout tone="info">{t(SITE_TABS[tab].banner)}</Callout>
 
             {tab === "ai" && <McpEndpointPanel />}
             {tab === "notify" && <WebhooksPanel />}
@@ -406,353 +390,6 @@ function McpEndpointPanel() {
     );
 }
 
-/* ── 使用者管理 / User management (admin) ───────────────────────── */
-
-function UsersTab() {
-    const { user: currentUser } = useAuth();
-    const { t, locale } = useI18n();
-    const { users, loading, updateUser, resetMfa } = useUserManagement(true);
-    const [editing, setEditing] = useState<ManagedUser | null>(null);
-
-    // modal 內容跟著列表資料走,更新後即時反映。/ Keep the modal in sync with the list data.
-    const editingUser = editing ? users.find((u) => u.id === editing.id) ?? editing : null;
-
-    const formatDate = (iso: string | null) =>
-        iso ? new Date(iso).toLocaleString(locale) : t("settings.neverLoggedIn");
-
-    return (
-        <div className="space-y-6">
-            <Callout tone="info">{t("settings.usersBanner")}</Callout>
-
-            <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
-                {loading ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                        <div className="flex justify-center mb-2">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                        </div>
-                        {t("settings.usersLoading")}
-                    </div>
-                ) : users.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground">{t("settings.usersEmpty")}</div>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-border/70 text-sm">
-                            <thead className="bg-surface">
-                                <tr>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thUsername")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden sm:table-cell">{t("settings.thEmail")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thRole")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thStatus")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden md:table-cell">{t("settings.thLastLogin")}</th>
-                                    <th className="px-4 py-3 text-right text-xs text-muted-foreground">{t("settings.thActions")}</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border/70">
-                                {users.map((u) => (
-                                    <tr key={u.id} className="hover:bg-surface transition-colors">
-                                        <td className="px-4 py-3 text-foreground">
-                                            <span className="mr-2.5 inline-grid size-7 place-items-center rounded-full bg-foreground align-middle text-xs text-background uppercase" aria-hidden>
-                                                {u.username.slice(0, 1)}
-                                            </span>
-                                            {u.username}
-                                            {u.id === currentUser?.id && (
-                                                <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
-                                            )}
-                                            {u.mfa_enabled && (
-                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm text-[0.6875rem] bg-success/10 text-success" title={t("security.adminOn")}>
-                                                    <ShieldCheck size={10} />
-                                                    {t("security.badge")}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{u.email || "—"}</td>
-                                        <td className="px-4 py-3">
-                                            {u.is_superuser ? (
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
-                                                    <Shield size={12} />
-                                                    {t("settings.roleAdmin")}
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
-                                                    {t("settings.roleUser")}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${u.is_active
-                                                    ? "bg-success/10 text-success"
-                                                    : "bg-destructive/10 text-destructive"
-                                                }`}>
-                                                {u.is_active ? t("settings.statusActive") : t("settings.statusInactive")}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{formatDate(u.last_login)}</td>
-                                        <td className="px-4 py-3 text-right">
-                                            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(u)}>
-                                                {t("settings.manage")}
-                                            </Button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-            {editingUser && (
-                <UserEditModal
-                    user={editingUser}
-                    isSelf={editingUser.id === currentUser?.id}
-                    onClose={() => setEditing(null)}
-                    updateUser={updateUser}
-                    resetMfa={resetMfa}
-                    t={t}
-                />
-            )}
-        </div>
-    );
-}
-
-/** 單一使用者的「管理」modal:帳號旗標 + 個人設定,變更即時套用。分頁跟偏好設定一樣放在左側欄
- *  (帳號 / 安全性 / 登入紀錄 / 已連接的應用程式 / API token / AI 活動),fixedHeight 讓切換分頁時視窗不跳動。
- *  Per-user "Manage" modal: account flags + personal settings; changes apply immediately. Tabs sit in
- *  the side rail like the preferences modal (account / security / sign-in history / connected apps / API tokens /
- *  AI activity), and
- *  fixedHeight keeps the dialog the same size when switching tabs. */
-type UserModalTab = "account" | "security" | "history" | "apps" | "tokens" | "activity";
-
-function UserEditModal({
-    user,
-    isSelf,
-    onClose,
-    updateUser,
-    resetMfa,
-    t,
-}: {
-    user: ManagedUser;
-    isSelf: boolean;
-    onClose: () => void;
-    updateUser: (userId: number, patch: ManagedUserPatch) => Promise<boolean>;
-    resetMfa: (userId: number, username: string) => Promise<boolean>;
-    t: Translate;
-}) {
-    const [saving, setSaving] = useState(false);
-    const [confirmReset, setConfirmReset] = useState(false);
-    // 停用前先看會切掉什麼（啟用不必問）。/ Disabling shows what gets cut first; enabling needs no confirmation.
-    const [confirmDisable, setConfirmDisable] = useState(false);
-    const [tab, setTab] = useState<UserModalTab>("account");
-
-    const apply = async (patch: ManagedUserPatch) => {
-        setSaving(true);
-        await updateUser(user.id, patch);
-        setSaving(false);
-    };
-
-    const languageOptions: { value: LanguagePreference; label: string }[] = [
-        { value: "auto", label: t("language.auto") },
-        ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
-    ];
-
-    const tabs = [
-        { value: "account" as const, label: t("settings.userTabAccount"), hint: t("settings.userTabAccountHint"), icon: <UserCog /> },
-        { value: "security" as const, label: t("settings.userTabSecurity"), hint: t("settings.userTabSecurityHint"), icon: <ShieldCheck /> },
-        { value: "history" as const, label: t("settings.userTabHistory"), hint: t("settings.userTabHistoryHint"), icon: <History /> },
-        { value: "apps" as const, label: t("settings.userTabApps"), hint: t("settings.userTabAppsHint"), icon: <Plug /> },
-        { value: "tokens" as const, label: t("settings.userTabTokens"), hint: t("settings.userTabTokensHint"), icon: <KeySquare /> },
-        { value: "activity" as const, label: t("settings.userTabActivity"), hint: t("settings.userTabActivityHint"), icon: <Activity /> },
-    ];
-
-    const role = (
-        <span className={`shrink-0 rounded-sm px-1.5 py-px text-xs ${user.is_superuser ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
-            {user.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
-        </span>
-    );
-
-    return (
-        <Modal
-            isOpen
-            onClose={onClose}
-            title={`${t("settings.userModalTitle")} — ${user.username}`}
-            description={user.email || undefined}
-            icon={<UserCog />}
-            isLoading={saving}
-            size="5xl"
-            fixedHeight
-            nav={
-                <div className="space-y-4">
-                    {/* 被管理的人(桌面在側欄上方)。/ Who is being managed: top of the rail on desktop. */}
-                    <div className="hidden items-center gap-2.5 px-1.5 sm:flex">
-                        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background uppercase" aria-hidden>
-                            {user.username.slice(0, 1)}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm text-foreground">{user.username}</span>
-                            {role}
-                        </span>
-                    </div>
-                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("settings.userModalTitle")} />
-                </div>
-            }
-            footer={
-                <Button type="button" variant="outline" onClick={onClose}>
-                    {t("common.close")}
-                </Button>
-            }
-        >
-            {tab === "account" && (
-                <div className="space-y-6">
-                    {isSelf && <Callout tone="warning">{t("settings.selfEditNote")}</Callout>}
-
-                    {/* 帳號啟用 / Account enabled */}
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
-                            <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
-                        </div>
-                        <Switch
-                            checked={user.is_active}
-                            disabled={isSelf || saving}
-                            onCheckedChange={(v) => (v ? apply({ is_active: true }) : setConfirmDisable(true))}
-                            aria-label={t("settings.userActiveLabel")}
-                        />
-                    </div>
-
-                    {/* 管理員角色 / Administrator role */}
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <p className="text-sm text-foreground">{t("settings.userSuperuserLabel")}</p>
-                            <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
-                        </div>
-                        <Switch
-                            checked={user.is_superuser}
-                            disabled={isSelf || saving}
-                            onCheckedChange={(v) => apply({ is_superuser: v })}
-                            aria-label={t("settings.userSuperuserLabel")}
-                        />
-                    </div>
-
-                    {/* 介面語言 / Interface language */}
-                    <div className="max-w-sm">
-                        <p className="text-sm text-foreground mb-2">{t("settings.userLanguageLabel")}</p>
-                        <NativeSelect
-                            value={user.language ?? ""}
-                            disabled={saving}
-                            onChange={(e) => {
-                                const value = e.target.value as LanguagePreference | "";
-                                if (value) apply({ language: value });
-                            }}
-                        >
-                            {user.language === null && (
-                                <option value="" disabled>
-                                    {t("settings.userLanguageNotSet")}
-                                </option>
-                            )}
-                            {languageOptions.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                    {option.label}
-                                </option>
-                            ))}
-                        </NativeSelect>
-                    </div>
-
-                    {/* 功能權限（存取分頁；跟隧道分享無關）。/ Feature permissions (the Access tab; not tunnel sharing). */}
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <p className="text-sm text-foreground">{t("access.manageTitle")}</p>
-                            <p className="text-sm text-muted-foreground">{user.is_superuser ? t("access.adminAlways") : t("access.manageHint", { user: user.username })}</p>
-                        </div>
-                        <Button asChild type="button" size="sm" variant="outline" className="shrink-0">
-                            <Link href={`/tunnels/settings?tab=access&user=${user.id}`} onClick={onClose}>{t("access.manageOpen")}</Link>
-                        </Button>
-                    </div>
-                </div>
-            )}
-
-            {tab === "security" && (
-                <div className="space-y-6">
-                    {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <p className="text-sm text-foreground">{t("security.adminTitle")}</p>
-                            <p className="text-sm text-muted-foreground">{user.mfa_enabled ? t("security.adminOn") : t("security.adminOff")}</p>
-                        </div>
-                        {user.mfa_enabled && (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                disabled={saving}
-                                onClick={() => setConfirmReset(true)}
-                                className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            >
-                                {t("security.adminReset")}
-                            </Button>
-                        )}
-                    </div>
-
-                    {/* 登入中的瀏覽器（可登出）/ Signed-in browsers (sign out) */}
-                    <SignInDevices userId={user.id} userName={user.username} />
-                </div>
-            )}
-
-            {/* 最近的登入 / Recent sign-ins */}
-            {tab === "history" && (
-                <SignInHistory endpoint={`/api/user/users/${user.id}/sign-ins`} description={t("security.signInsAdminDescription")} />
-            )}
-
-            {/* 這個人核可過的 MCP app（可看詳細、可撤銷）；CLI 登入在 API 與 CLI 分頁。/ Their MCP apps; CLI sign-ins are on the API tab. */}
-            {tab === "apps" && <ConnectedApps userId={user.id} onShowCli={() => setTab("tokens")} />}
-
-            {/* 這個人的個人 API token 與 CLI 登入（可撤銷）/ Their personal API tokens and CLI sign-ins (revoke) */}
-            {tab === "tokens" && (
-                <div className="space-y-6">
-                    <ApiTokens userId={user.id} />
-                    <CliSignIns userId={user.id} />
-                    {/* 這個人的 token 呼叫紀錄在管理區的 API 活動。/ Their token calls are in the admin section's API activity. */}
-                    <Link
-                        href={`/tunnels/admin/api-activity?user=${user.id}`}
-                        prefetch={false}
-                        onClick={onClose}
-                        className="inline-flex items-center gap-1 text-sm text-foreground underline underline-offset-2"
-                    >
-                        {t("settings.userTokensCalls")} <ArrowRight size={13} className="opacity-60" />
-                    </Link>
-                </div>
-            )}
-
-            {/* 這個人的 app 與 token 呼叫過的工具 / Tool calls by their apps and tokens */}
-            {tab === "activity" && <UserActivity userId={user.id} onNavigate={onClose} />}
-
-            <DisableAccountDialog
-                isOpen={confirmDisable}
-                user={user}
-                onClose={() => setConfirmDisable(false)}
-                onConfirm={async () => {
-                    await apply({ is_active: false });
-                    setConfirmDisable(false);
-                }}
-            />
-
-            <ConfirmDialog
-                isOpen={confirmReset}
-                onClose={() => setConfirmReset(false)}
-                onConfirm={async () => {
-                    setConfirmReset(false);
-                    setSaving(true);
-                    await resetMfa(user.id, user.username);
-                    setSaving(false);
-                }}
-                title={t("security.adminReset")}
-                message={t("security.adminResetConfirm", { user: user.username })}
-                confirmText={t("security.adminReset")}
-                isDestructive
-            />
-        </Modal>
-    );
-}
-
-/** 通知分頁：送一則測試告警到存好的 webhook，並說明個人的桌面通知在哪裡開。/ Notifications tab: test send + where desktop notifications live. */
 /** 全站指令規則在管理區的全站指令規則頁編輯；這裡放入口與目前的數量。/ Site-wide rules are edited on the admin section's Site command rules page; this links there. */
 function SiteCommandRulesPanel() {
     const { t } = useI18n();

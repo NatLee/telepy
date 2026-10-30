@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * 設定頁「存取」分頁：誰可以用哪些 Telepy 功能（跟隧道分享無關）。左邊選對象（所有人 / 群組 / 人），右邊是那個對象的
+ * 管理區「功能權限」頁（以前是設定頁的「存取」分頁）：誰可以用哪些 Telepy 功能（跟隧道分享無關）。左邊選對象（所有人 / 群組 / 人），右邊是那個對象的
  * 功能矩陣：每列一個功能，格子 = 沿用 / 允許 / 拒絕；「沿用」顯示會拿到什麼、從哪一層來。群組可以建立、改名、刪除、
  * 編輯成員。資訊按鈕打開兩條線的說明圖（AccessInfoDialog）。解析規則在 lib/features.ts（跟後端一樣、有測試）。
- * The Settings page's Access tab: who may use which Telepy features (unrelated to tunnel sharing). Pick a subject on
+ * The admin Feature access page (formerly the Settings page's Access tab): who may use which Telepy features (unrelated to tunnel sharing). Pick a subject on
  * the left (everyone / a group / a person); the right side is its feature matrix (inherit / allow / deny per row,
  * "inherit" shows what it yields and from where). Groups can be created, renamed, deleted and given members. The info
  * button opens the two-lane explainer. Resolution lives in lib/features.ts (same rules as the backend, tested).
@@ -85,7 +85,14 @@ const FEATURE_ICON: Record<FeatureId, LucideIcon> = {
 
 const sameSubject = (a: Subject, b: Subject) => a.kind === b.kind && (a.kind === "everyone" || (b.kind !== "everyone" && a.id === b.id));
 
-export function AccessTab({ initialUser }: { initialUser?: number | null }) {
+export function AccessTab({
+    initialUser,
+    header,
+}: {
+    initialUser?: number | null;
+    /** 頁首（拿到打開說明的函式）；給了就不畫上面的說明框。/ The page header (gets the explainer opener); replaces the banner. */
+    header?: (openInfo: () => void) => React.ReactNode;
+}) {
     const { t } = useI18n();
     const page = useAccessPage();
     const [subject, setSubject] = useState<Subject>(initialUser ? { kind: "user", id: initialUser } : { kind: "everyone" });
@@ -94,15 +101,30 @@ export function AccessTab({ initialUser }: { initialUser?: number | null }) {
     const [creating, setCreating] = useState(false);
     const policy = page.policy;
 
+    // 說明圖要等政策載入才有內容；載入前的頁首按鈕先記下要開，載入後就開。/ The explainer needs the policy; a click before it loads opens it once loaded.
+    const head = header?.(() => {
+        setInfoFeature(null);
+        setInfoOpen(true);
+    });
     if (page.loading && !policy) {
         return (
-            <div className="flex justify-center py-12 text-muted-foreground">
-                <div className="mr-3 size-6 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden />
-                {t("access.loading")}
+            <div className="space-y-6">
+                {head}
+                <div className="flex justify-center py-12 text-muted-foreground">
+                    <div className="mr-3 size-6 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden />
+                    {t("access.loading")}
+                </div>
             </div>
         );
     }
-    if (!policy) return <Callout tone="danger">{t("access.loadFailed")}</Callout>;
+    if (!policy) {
+        return (
+            <div className="space-y-6">
+                {head}
+                <Callout tone="danger">{t("access.loadFailed")}</Callout>
+            </div>
+        );
+    }
 
     // 選的群組 / 人被刪掉了就回到「所有人」。/ Fall back to everyone when the picked group / person is gone.
     const exists =
@@ -117,12 +139,14 @@ export function AccessTab({ initialUser }: { initialUser?: number | null }) {
 
     return (
         <div className="space-y-6">
-            <Callout tone="info" title={t("access.bannerTitle")}>
-                <p>{t("access.banner")}</p>
-                <Button type="button" variant="link" size="sm" className="mt-1 h-auto px-0" onClick={() => openInfo(null)}>
-                    <Info size={14} /> {t("access.howItWorks")}
-                </Button>
-            </Callout>
+            {head ?? (
+                <Callout tone="info" title={t("access.bannerTitle")}>
+                    <p>{t("access.banner")}</p>
+                    <Button type="button" variant="link" size="sm" className="mt-1 h-auto px-0" onClick={() => openInfo(null)}>
+                        <Info size={14} /> {t("access.howItWorks")}
+                    </Button>
+                </Callout>
+            )}
 
             <div className="grid items-start gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
                 <SubjectList policy={policy} current={current} onPick={setSubject} onCreate={() => setCreating(true)} />
