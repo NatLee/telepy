@@ -45,7 +45,19 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
             default.or_else(|| allowed.first()).map(|a| a.username.clone()).unwrap()
         }
     };
-    match state.remote_browser.start(&state, &username, tunnel.reverse_port, id).await {
+    // 開始畫面的進度：每一步送給按下開始的人，帶著瀏覽器給的 `progress_id`（同一條隧道開兩個分頁也分得開）。
+    // Start progress goes to the person starting it, tagged with the tab's `progress_id` (two tabs on one tunnel stay apart).
+    let progress_id: Option<String> = json_str(&body, "progress_id").filter(|p| !p.is_empty() && p.len() <= 64 && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    let hub = state.hub.clone();
+    let on = move |step: &'static str, phase: &'static str, extra: Value| {
+        let Some(pid) = &progress_id else { return };
+        let mut msg = json!({ "action": "REMOTE-BROWSER-PROGRESS", "tunnel_id": id, "progress_id": pid, "step": step, "state": phase });
+        if let (Some(m), Some(e)) = (msg.as_object_mut(), extra.as_object()) {
+            m.extend(e.clone());
+        }
+        hub.notify_user(user.id, &msg);
+    };
+    match state.remote_browser.start_observed(&state, &username, tunnel.reverse_port, id, on).await {
         Ok(v) => Ok(Json(v)),
         Err(StartError::Coded { message, code }) => Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": message, "code": code }))),
         Err(StartError::Other(message)) => Err(ApiError::internal(message)),

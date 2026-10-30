@@ -1765,6 +1765,8 @@ pub struct SftpSaveRequest {
 pub struct RemoteBrowserStartRequest {
     /// Target username; omitted = the tunnel's default (or first allowed) username
     pub username: Option<String>,
+    /// Optional id chosen by the caller (letters, digits, `-`, ≤ 64). With it, each start step is pushed to the caller as a `REMOTE-BROWSER-PROGRESS` notification `{tunnel_id, progress_id, step: proxy|browser, state: active|done|failed, attempt?, attempts?, secs?, reason?}`
+    pub progress_id: Option<String>,
 }
 
 #[derive(ToSchema)]

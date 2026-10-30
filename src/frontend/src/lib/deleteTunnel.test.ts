@@ -37,6 +37,8 @@ test("live events drive the list; a lost start still shows the next step in prog
 test("a failed request marks the step in progress, a finished report fills the rest", () => {
     const events = [ev("service", "skipped", { reason: "off" }), ev("keys", "done"), ev("stop", "skipped"), ev("watch", "skipped"), ev("telepy", "active")];
     assert.deepEqual(states(deleteSteps(true, false, events, "failed")), ["skipped", "done", "skipped", "skipped", "failed", "waiting"]);
+    // 一步自己報了失敗，請求也失敗：只標那一步。/ A step reported its failure and the request failed: only that step.
+    assert.deepEqual(states(deleteSteps(true, true, [ev("service", "failed")], "failed")), ["failed", "waiting", "waiting", "waiting", "waiting", "waiting"]);
     // 舊後端沒回報 steps：計畫要做的算做完。/ An older backend without steps: planned ones count as done.
     assert.deepEqual(states(deleteSteps(false, false, [], "done")), ["skipped", "skipped", "skipped", "skipped", "done", "done"]);
 });

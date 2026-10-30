@@ -66,6 +66,14 @@ impl RemoteBrowser {
     /// `start_remote_browser`：借一條裝置連線、開行程內 SOCKS（含重試）→ kasm session → 記錄。
     /// 回 `{"session_id","ws_path"}`。
     pub async fn start(&self, state: &AppState, username: &str, reverse_port: i64, server_id: i64) -> Result<Value, StartError> {
+        self.start_observed(state, username, reverse_port, server_id, |_, _, _| {}).await
+    }
+
+    /// [`start`]，每一步開始 / 結束時呼叫 `on(step, state, extra)`：`proxy`（經裝置 SSH 開 SOCKS；`attempt` / `attempts` /
+    /// `secs`）→ `browser`（kasm 開 Chromium；`secs`），state = active / done / failed。網頁的開始畫面靠它一步步顯示。
+    /// [`start`], calling `on(step, state, extra)` as each step starts and ends: `proxy` (the SOCKS proxy through the
+    /// device's SSH; `attempt` / `attempts` / `secs`) → `browser` (Chromium in kasm; `secs`); state = active / done / failed.
+    pub async fn start_observed(&self, state: &AppState, username: &str, reverse_port: i64, server_id: i64, on: impl Fn(&'static str, &'static str, Value)) -> Result<Value, StartError> {
         let (config, db) = (&state.config, &state.db);
         let settings = db::settings::get_solo(db).await.map_err(|e| StartError::Other(e.to_string()))?;
         let max = settings.remote_browser_max_sessions;
@@ -77,11 +85,14 @@ impl RemoteBrowser {
         let ssh_timeout = Duration::from_secs(settings.remote_browser_ssh_timeout.max(1) as u64);
         let attempts = settings.remote_browser_ssh_attempts.max(1);
         let mut proxy: Option<SocksProxy> = None;
+        let mut offline = false;
         for attempt in 1..=attempts {
             if config.gateway_enabled && !state.gateway.has_forward(u16::try_from(reverse_port).unwrap_or(0)) {
                 tracing::warn!(server_id, attempt, attempts, "SSH proxy: device offline (no tunnel)");
+                offline = true;
                 break;
             }
+            on("proxy", "active", json!({ "attempt": attempt, "attempts": attempts, "secs": ssh_timeout.as_secs() }));
             tracing::info!(server_id, attempt, attempts, "Starting SSH proxy for target");
             let opened = tokio::time::timeout(ssh_timeout, async {
                 let lease = state.pool.acquire(state, reverse_port, username).await?;
@@ -98,12 +109,14 @@ impl RemoteBrowser {
             }
         }
         let Some(proxy) = proxy else {
+            on("proxy", "failed", json!({ "reason": if offline { "offline" } else { "timeout" }, "attempts": attempts }));
             return Err(StartError::Coded {
                 message: format!("Failed to start SSH proxy for target {server_id} after {attempts} attempts (no SOCKS listener within {}s each — is the device online?).", ssh_timeout.as_secs()),
                 code: "device_offline",
             });
         };
         let proxy_port = proxy.port;
+        on("proxy", "done", json!({}));
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let session = Arc::new(Session {
@@ -123,9 +136,14 @@ impl RemoteBrowser {
         let homepage = (!settings.remote_browser_homepage.is_empty()).then_some(settings.remote_browser_homepage.as_str());
         let lang = (!settings.remote_browser_language.is_empty()).then_some(settings.remote_browser_language.as_str());
         let kasm_timeout = Duration::from_secs(settings.remote_browser_kasm_create_timeout.max(1) as u64);
+        on("browser", "active", json!({ "secs": kasm_timeout.as_secs() }));
         let (kasm_id, ws_port) = match self.kasm.create_session(&proxy_url, &geometry, lang, homepage, kasm_timeout).await {
-            Ok(v) => v,
+            Ok(v) => {
+                on("browser", "done", json!({}));
+                v
+            }
             Err(e) => {
+                on("browser", "failed", json!({}));
                 self.stop(db, &session_id).await;
                 return Err(StartError::Other(format!("Failed to create VNC browser session: {e}")));
             }
