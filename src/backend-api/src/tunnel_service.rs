@@ -128,6 +128,15 @@ pub struct Prepared {
     pending: Vec<(usize, DeviceConn, Platform, String)>,
 }
 
+impl Prepared {
+    /// 第一段的結果：找到幾樣（`found`）、幾個帳號失敗、總共幾個帳號。/ Phase 1 in numbers: items found, failed accounts, accounts.
+    pub fn summary(&self) -> (usize, usize, usize) {
+        let found = self.accounts.iter().map(|a| a.items.iter().filter(|i| i.kind == "found").count()).sum();
+        let errors = self.accounts.iter().filter(|a| a.error.is_some()).count();
+        (found, errors, self.accounts.len())
+    }
+}
+
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -322,8 +331,25 @@ async fn wait_for(state: &AppState, port: i64, want_listening: bool, limit: Dura
     }
 }
 
+/// 第二段的兩個等待（刪除對話框即時顯示）。/ The two waits of phase 2, shown live by the delete dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishPhase {
+    /// 停止腳本啟動了，等裝置自己斷線（最多這麼多秒）。/ Stop scripts started; waiting for the drop (at most `secs`).
+    Stopping { secs: u64 },
+    /// 等完了：斷了沒、有沒有啟動任何停止腳本。/ Done waiting: whether it dropped and whether anything was launched.
+    Stopped { stopped: bool, launched: bool },
+    /// 看它會不會又連回來（這麼多秒）。/ Watching for a comeback for `secs`.
+    Watching { secs: u64 },
+    Watched { came_back: bool },
+}
+
 /// 第二段：啟動停止腳本，確認裝置自己斷線、而且沒有再連回來。/ Phase 2: start the stop scripts and confirm.
-pub async fn finish(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared) -> Removal {
+pub async fn finish(state: &AppState, tunnel: &Tunnel, prepared: Prepared) -> Removal {
+    finish_observed(state, tunnel, prepared, |_| {}).await
+}
+
+/// [`finish`]，每個等待開始 / 結束時呼叫 `on`。/ [`finish`], calling `on` as each wait starts and ends.
+pub async fn finish_observed(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared, mut on: impl FnMut(FinishPhase)) -> Removal {
     let mut launched = false;
     for (idx, conn, platform, path) in std::mem::take(&mut prepared.pending) {
         let items = match exec::run(&conn.device, &launch_command(platform, &path), LAUNCH_TIMEOUT, 4096).await {
@@ -338,10 +364,14 @@ pub async fn finish(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared) -
     let found = prepared.accounts.iter().any(|a| a.items.iter().any(|i| i.kind == "found"));
     let (mut stopped, mut came_back) = (false, false);
     if launched {
+        on(FinishPhase::Stopping { secs: DROP_WAIT.as_secs() });
         stopped = wait_for(state, tunnel.reverse_port, false, DROP_WAIT).await;
-        if stopped {
-            came_back = wait_for(state, tunnel.reverse_port, true, COMEBACK_WATCH).await;
-        }
+    }
+    on(FinishPhase::Stopped { stopped, launched });
+    if stopped {
+        on(FinishPhase::Watching { secs: COMEBACK_WATCH.as_secs() });
+        came_back = wait_for(state, tunnel.reverse_port, true, COMEBACK_WATCH).await;
+        on(FinishPhase::Watched { came_back });
     }
     tracing::info!(tunnel = tunnel.id, found, launched, stopped, came_back, "device tunnel service removal");
     Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: None, kept: None }
