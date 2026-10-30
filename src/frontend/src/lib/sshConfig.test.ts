@@ -221,3 +221,87 @@ for (const shell of ["posix", "powershell"] as ConfigShell[]) {
         assert.deepEqual(hosts(h.config()), [ME, "pi"]);
     });
 }
+
+// ---------------------------------------------------------------- 簡化版 / the compact form
+
+/** 跟後端產生的一樣的裝置區塊。/ A device stanza as the backend writes it. */
+const fullDevice = (alias: string, user = "root", id = 1, via = ME, strict = "yes"): ConfigStanza => ({
+    alias,
+    options: [
+        { key: "HostName", value: alias },
+        { key: "Port", value: "22" },
+        { key: "Compression", value: "yes" },
+        { key: "StrictHostKeyChecking", value: strict },
+        { key: "UserKnownHostsFile", value: "~/.ssh/telepy_known_hosts" },
+        { key: "HostKeyAlias", value: `${via}-device-${id}` },
+        { key: "User", value: user },
+        { key: "ProxyCommand", value: `ssh -W %h:%p ${via}` },
+    ],
+});
+const FLEET = [fullDevice("pi", "pi", 1), fullDevice("cam", "root", 2, ME, "accept-new"), fullDevice("nas", "root", 3), fullDevice("router", "root", 4)];
+const SHARED_OPEN = `# >>> telepy shared ${ME} >>>`;
+const HAVE_SSH = spawnSync("ssh", ["-V"]).status === 0;
+/** `ssh -G` 讀這份 config 時每個名稱拿到的設定。/ What `ssh -G` makes of each name with this config. */
+function sshG(h: ReturnType<typeof fakeHome>, names: string[]): string[] {
+    return names.map((n) => execFileSync("ssh", ["-G", "-F", join(h.home, ".ssh", "config"), n], { encoding: "utf8" }));
+}
+const sharedHostLine = (text: string) => text.split("\n").find((_, i, all) => i > 0 && all[i - 1] === SHARED_OPEN) ?? null;
+
+for (const shell of ["posix", "powershell"] as ConfigShell[]) {
+    test(`${shell}: the compact form reads the same, re-runs cleanly, and single installs / removals keep the shared block right`, { skip: shell === "powershell" && !PWSH ? "set PWSH to run" : false }, () => {
+        const all = [server("telepy.example"), ...FLEET];
+        const names = FLEET.map((d) => d.alias);
+        const plain = fakeHome("Host github.com\n    User git\n");
+        runShell(shell, plain, installCommand(shell, all, KEYS, null, LEGACY));
+        const h = fakeHome("Host github.com\n    User git\n");
+        const compact = installCommand(shell, all, KEYS, null, LEGACY, { compact: true });
+        runShell(shell, h, compact);
+        const once = h.config();
+        assert.equal(sharedHostLine(once), "Host pi cam nas router", once);
+        assert.ok(once.split("\n").length < plain.config().split("\n").length, "shorter");
+        if (HAVE_SSH) assert.deepEqual(sshG(h, [...names, ME, "github.com"]), sshG(plain, [...names, ME, "github.com"]));
+        // 再跑一次：一模一樣（舊的共用區塊整段換掉）。/ Again: identical (the old shared block is replaced as a whole).
+        runShell(shell, h, compact);
+        assert.equal(h.config(), once);
+
+        // 單台（一般寫法）重裝 cam：共用區塊不再列 cam，cam 的完整區塊接在後面。/ A single plain install of cam.
+        runShell(shell, h, installCommand(shell, [server("telepy.example"), fullDevice("cam", "root", 2)], KEYS, null, LEGACY));
+        assert.equal(sharedHostLine(h.config()), "Host pi nas router", h.config());
+        assert.ok(h.config().includes("# >>> telepy cam >>>\nHost cam\n    HostName cam\n    Port 22\n"), h.config());
+        if (HAVE_SSH) {
+            const single = fakeHome(null);
+            runShell(shell, single, installCommand(shell, [server("telepy.example"), fullDevice("cam", "root", 2)], KEYS, null, LEGACY));
+            assert.deepEqual(sshG(h, ["cam"]), sshG(single, ["cam"]), "cam now reads its own full block");
+            assert.deepEqual(sshG(h, ["pi", "nas", "router"]), sshG(plain, ["pi", "nas", "router"]), "the others are unchanged");
+        }
+        // 移除：名字離開共用區塊；最後一個走了整段不見。/ Removing: names leave the shared block; the last one takes it along.
+        runShell(shell, h, removeCommand(shell, ["pi", "nas"], ME));
+        assert.equal(sharedHostLine(h.config()), "Host router", h.config());
+        // 單台重裝時伺服器區塊也重寫了（換到 cam 前面）。/ The single install rewrote the server block too (now before cam).
+        assert.deepEqual(hosts(h.config()), ["github.com", "router", "router", ME, "cam"]);
+        runShell(shell, h, removeCommand(shell, ["router"], ME));
+        assert.ok(!h.config().includes("telepy shared"), h.config());
+        assert.deepEqual(hosts(h.config()), ["github.com", ME, "cam"]);
+        if (HAVE_SSH) assert.equal(sshG(h, ["router"])[0], sshG(fakeHome(""), ["router"])[0], "router is gone completely");
+    });
+
+    test(`${shell}: compact installs skip another server's device of the same name, in its block and on the shared Host line`, { skip: shell === "powershell" && !PWSH ? "set PWSH to run" : false }, () => {
+        const other = "telepy-other.example-2222";
+        const h = fakeHome(markedBlocks([server("other.example", other), fullDevice("pi", "root", 9, other)]));
+        const out = runWithStderr(shell, h, installCommand(shell, [server("telepy.example"), ...FLEET], KEYS, null, LEGACY, { compact: true }));
+        assert.match(out, /did not overwrite pi/);
+        assert.equal(sharedHostLine(h.config()), "Host cam nas router", h.config());
+        assert.equal(h.config().match(/^Host pi$/gm)?.length, 1);
+        // 共用區塊的 Host 行不算「手寫的同名 Host」。/ A shared block's Host line is not a hand-written Host.
+        const again = runWithStderr(shell, h, installCommand(shell, [server("telepy.example"), ...FLEET], KEYS, null, LEGACY, { compact: true }));
+        assert.doesNotMatch(again, /outside the Telepy blocks/);
+        assert.equal(sharedHostLine(h.config()), "Host cam nas router");
+    });
+}
+
+test("an unterminated shared block is left as it was", () => {
+    const broken = `${SHARED_OPEN}\nHost pi cam\n    Port 22\n`;
+    const h = fakeHome(broken);
+    h.run(installCommand("posix", [server("telepy.example"), fullDevice("pi")], KEYS, null, LEGACY));
+    assert.ok(h.config().startsWith(broken), h.config());
+});
