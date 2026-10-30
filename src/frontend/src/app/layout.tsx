@@ -12,6 +12,7 @@
  * route dynamic (no full Link prefetch; slow navigations). Routes stay static; an inline script
  * sets <html lang> pre-paint and the provider applies the locale in a layout effect.
  */
+import { SshHostGate } from "@/components/auth/SshHostGate";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./huninn.css";
@@ -101,7 +102,7 @@ export default function RootLayout({
             <AuthProvider>
               <UserSettingsSync />
               <ConsoleHello />
-              {children}
+              <SshHostGate>{children}</SshHostGate>
             </AuthProvider>
           </ToastProvider>
         </I18nProvider>

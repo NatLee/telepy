@@ -55,6 +55,12 @@ async fn sign_in_page(State(state): State<AppState>) -> ApiResult<Json<Value>> {
         // Google 登入按鈕要用的 client ID（SOCIAL_GOOGLE_CLIENT_ID → 網站設定 → 空字串）；不是祕密，每個登入頁本來就有。
         // The client ID for the Google button (env → site setting → empty); not a secret, every sign-in page carries it.
         "google_client_id": state.config.google_client().unwrap_or_default(),
+        // 網頁與 SSH 各用哪個名稱（PUBLIC_URL 的主機；SSH 主機只在另外設了時）：用 SSH 的名稱開網頁時前端會指回正確的網址。
+        // Which name the web and SSH use (PUBLIC_URL's host; the SSH host only when set separately): the frontend sends
+        // people who opened the web through the SSH name to the right address.
+        "web_host": crate::ssh_host::web_host(state.config.public_base().as_deref()),
+        "ssh_host": state.config.ssh_host(),
+        "public_url": state.config.public_base(),
     })))
 }
 

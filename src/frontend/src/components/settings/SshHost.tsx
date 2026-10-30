@@ -155,6 +155,9 @@ export function SshHostControl({ shown, locked, onSave }: { shown: unknown; lock
 
             {check && check.verdict !== "local" && <p className="text-xs leading-relaxed text-muted-foreground">{t("sshHost.detectNote")}</p>}
 
+            {/* SSH 的名稱也開得到網頁：代理裡多了一個繞過正式網址的入口。/ The SSH name serves the web too: a second way in. */}
+            {check && !check.same && <WebOnSshHost host={check.ssh.host} />}
+
             {check && (
                 <Callout tone={verdictTone(check.verdict)}>
                     {t(`sshHost.verdict.${check.verdict}` as TranslationKey, { ssh: check.ssh.host, web: check.web.host, port: check.ssh.port })}
@@ -172,6 +175,33 @@ export function SshHostControl({ shown, locked, onSave }: { shown: unknown; lock
             {why && <SshHostDialog isOpen onClose={() => setWhy(false)} check={check ?? null} />}
         </div>
     );
+}
+
+/**
+ * 從瀏覽器試開 `https://<SSH 主機>/api/auth/setup-status`（後端的 CORS 會回應）：有回應 = 那個名稱也接著網頁（例如 NPM 裡
+ * 多了一個 proxy host），該拿掉——它會變成繞過正式網址（與其前面的代理）的入口。連不到 = 正常，不說話。
+ * Try `https://<ssh host>/api/auth/setup-status` from the browser (the backend answers CORS): an answer = the name
+ * serves the web too (a proxy host left in NPM, say), which should go — it is a way around the public address and
+ * whatever sits in front of it. Unreachable = fine, nothing said.
+ */
+function WebOnSshHost({ host }: { host: string }) {
+    const { t } = useI18n();
+    const [serves, setServes] = useState<boolean | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 6000);
+        void fetch(`https://${host}/api/auth/setup-status`, { signal: ctl.signal, cache: "no-store" })
+            .then((r) => !cancelled && setServes(r.ok))
+            .catch(() => !cancelled && setServes(false))
+            .finally(() => clearTimeout(timer));
+        return () => {
+            cancelled = true;
+            ctl.abort();
+        };
+    }, [host]);
+    if (!serves) return null;
+    return <Callout tone="warning">{t("sshHost.webOnSshHost", { host })}</Callout>;
 }
 
 /** 「為什麼要兩個名稱？」。/ "Why two names?". */

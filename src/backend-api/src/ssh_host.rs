@@ -126,6 +126,35 @@ pub fn verdict(ssh: &Lookup, web_host: &str, web_proxied: bool) -> Verdict {
     }
 }
 
+/// 這次請求用的網頁主機（`X-Forwarded-Host`，否則 `Host`；去掉 port、小寫）。/ The host this request used.
+pub fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    let raw = ["x-forwarded-host", "host"].iter().find_map(|h| headers.get(*h).and_then(|v| v.to_str().ok()).map(|v| v.split(',').next().unwrap_or("").trim().to_string()).filter(|v| !v.is_empty()))?;
+    Some(strip_port(&raw))
+}
+
+/// `host[:port]` / `[v6]:port` → 主機，小寫。/ Drop the port, lower-case.
+pub fn strip_port(raw: &str) -> String {
+    let raw = raw.trim();
+    let host = if let Some(rest) = raw.strip_prefix('[') { rest.split(']').next().unwrap_or("") } else if raw.matches(':').count() == 1 { raw.split(':').next().unwrap_or(raw) } else { raw };
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// `PUBLIC_URL` 的主機（沒設 = None）。/ The web host from PUBLIC_URL (None when unset).
+pub fn web_host(public_base: Option<&str>) -> Option<String> {
+    reqwest::Url::parse(public_base?).ok()?.host_str().map(strip_port)
+}
+
+/// 這次請求是不是用 SSH 主機的名稱來看網頁：只有 `PUBLIC_URL` 有設、SSH 主機有設、兩者不同、而且請求的主機就是 SSH
+/// 主機時才算（任何一個不成立 = 不擋，絕不會把人鎖在外面）。/ Whether this request reaches the web through the SSH host's
+/// name: only when PUBLIC_URL and the SSH host are set, differ, and the request's host is the SSH host (anything else =
+/// not blocked, so nobody gets locked out).
+pub fn arrives_on_ssh_host(request_host: Option<&str>, web_host: Option<&str>, ssh_host: Option<&str>) -> bool {
+    match (request_host, web_host, ssh_host) {
+        (Some(r), Some(w), Some(s)) => !s.is_empty() && s != w && r == s,
+        _ => false,
+    }
+}
+
 /// 請求有沒有經過 Cloudflare（它一定加 `CF-Ray`；`CF-Connecting-IP` 也是它加的）。
 /// Whether a request passed through Cloudflare (it always adds `CF-Ray`, and `CF-Connecting-IP`).
 pub fn via_cloudflare(headers: &axum::http::HeaderMap) -> bool {
@@ -153,6 +182,26 @@ mod tests {
         assert_eq!(verdict(&l("dev.test", &["127.0.0.1", "::1"]), "dev.test", false), Verdict::Local);
         let missing = Lookup { host: "nope.example.com".into(), addresses: vec![], error: Some("failed to lookup".into()) };
         assert_eq!(verdict(&missing, "t.example.com", true), Verdict::Unresolved);
+    }
+
+    #[test]
+    fn web_on_the_ssh_host_is_told_apart_safely() {
+        assert_eq!(strip_port("Telepy-SSH.example.com:443"), "telepy-ssh.example.com");
+        assert_eq!(strip_port("[::1]:8787"), "::1");
+        assert_eq!(web_host(Some("https://telepy.example.com/")), Some("telepy.example.com".into()));
+        assert_eq!(web_host(None), None);
+        let s = Some("telepy-ssh.example.com");
+        let w = Some("telepy.example.com");
+        assert!(arrives_on_ssh_host(s, w, s));
+        assert!(!arrives_on_ssh_host(w, w, s), "the web host itself");
+        assert!(!arrives_on_ssh_host(s, None, s), "no PUBLIC_URL = nowhere to send people = never block");
+        assert!(!arrives_on_ssh_host(s, w, None), "no SSH host");
+        assert!(!arrives_on_ssh_host(w, w, w), "same name for both");
+        assert!(!arrives_on_ssh_host(None, w, s));
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("host", "backend:8000".parse().unwrap());
+        h.insert("x-forwarded-host", "Telepy-SSH.example.com, traefik".parse().unwrap());
+        assert_eq!(request_host(&h).as_deref(), Some("telepy-ssh.example.com"), "the forwarded host wins");
     }
 
     #[test]

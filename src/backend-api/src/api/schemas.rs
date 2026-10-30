@@ -126,6 +126,15 @@ pub struct SignInPage {
     /// Google sign-in 的 client ID（SOCIAL_GOOGLE_CLIENT_ID → 網站設定 → 空字串）。/ Google's client ID in effect (env → site setting → empty)
     #[schema(example = "376808175534-example.apps.googleusercontent.com")]
     pub google_client_id: String,
+    /// The web's host from PUBLIC_URL (null when PUBLIC_URL is unset)
+    #[schema(example = "telepy.example.com")]
+    pub web_host: Option<String>,
+    /// The SSH host when set separately (null = the same as the web)
+    #[schema(example = "telepy-ssh.example.com")]
+    pub ssh_host: Option<String>,
+    /// PUBLIC_URL in effect (null when unset)
+    #[schema(example = "https://telepy.example.com")]
+    pub public_url: Option<String>,
 }
 
 /// 呼叫用的委派 token。/ The delegated token the call came with.

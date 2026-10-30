@@ -33,10 +33,14 @@ export interface SignInLook {
      * (an older one), so the build-time value applies.
      */
     googleClientId: string | null;
+    /** 網頁與 SSH 各用哪個名稱（PUBLIC_URL 的主機；SSH 主機只在另外設了時），以及正式網址。/ The web / SSH hosts and PUBLIC_URL. */
+    webHost: string | null;
+    sshHost: string | null;
+    publicUrl: string | null;
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
-export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null };
+export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null, webHost: null, sshHost: null, publicUrl: null };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
 export const LINE_MAX = 80;
@@ -67,7 +71,29 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
         consentStyle,
         message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "",
         googleClientId: typeof google === "string" ? google.trim() : null,
+        webHost: str(o.web_host ?? o.webHost),
+        sshHost: str(o.ssh_host ?? o.sshHost),
+        publicUrl: str(o.public_url ?? o.publicUrl),
     };
+}
+
+const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim().toLowerCase() : null);
+
+/**
+ * 這個分頁是不是用 SSH 主機的名稱在看網頁：PUBLIC_URL 有設、SSH 主機有設、兩者不同、而且這裡的主機就是 SSH 主機時才算
+ * （跟後端 `ssh_host::arrives_on_ssh_host` 同一條規則；任何一個不成立 = 正常顯示，絕不會把人鎖在外面）。
+ * Whether this tab reached the web through the SSH host's name: only when PUBLIC_URL and the SSH host are set, differ,
+ * and this page's host is the SSH host (the backend's rule; anything else = show the page, nobody gets locked out).
+ */
+export function onSshHost(look: SignInLook | null, hostname: string): boolean {
+    if (!look || !look.webHost || !look.sshHost || look.sshHost === look.webHost) return false;
+    return hostname.trim().toLowerCase().replace(/\.$/, "") === look.sshHost;
+}
+
+/** 同一頁在正式網址上的網址（路徑與查詢照搬）。/ The same page at the public URL (path and query kept). */
+export function publicPageUrl(look: SignInLook, pathAndQuery: string): string | null {
+    if (!look.publicUrl) return null;
+    return `${look.publicUrl.replace(/\/+$/, "")}${pathAndQuery.startsWith("/") ? pathAndQuery : `/${pathAndQuery}`}`;
 }
 
 /**

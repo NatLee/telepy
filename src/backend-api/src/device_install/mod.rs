@@ -359,6 +359,19 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         None => current.clone(),
     };
     run.report.transport = switch.as_ref().map(|s| s.transport.to_string());
+    // 換連線方式前先確認伺服器這邊的 SSH 主機連得到（解析得到、不在 Cloudflare 的代理上），不然新服務裝了也連不上，
+    // 白等一次 standby 才復原。/ Before a switch, check the SSH host from this side (resolves, not on Cloudflare's
+    // proxy); otherwise the new service could never connect and the standby wait would just be undone.
+    if switch.is_some() {
+        if let Some(host) = state.config.ssh_host().or_else(|| state.config.server_host().filter(|h| !h.is_empty())) {
+            let l = crate::ssh_host::lookup(&host).await;
+            match crate::ssh_host::verdict(&l, &host, false) {
+                crate::ssh_host::Verdict::Unresolved => return Ok(run.fail("survey", "ssh_host_unresolved", format!("the SSH host {host} does not resolve: {}", l.error.as_deref().unwrap_or("no address"))).await),
+                crate::ssh_host::Verdict::SshProxied => return Ok(run.fail("survey", "ssh_host_proxied", format!("the SSH host {host} resolves to Cloudflare's proxy, which does not carry the SSH port; set a name that goes straight to this server first")).await),
+                _ => {}
+            }
+        }
+    }
     let names = Names::new(&id);
     let survey = match survey_and_record(state, tunnel).await {
         Ok(s) => s,
