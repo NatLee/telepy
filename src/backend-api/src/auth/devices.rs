@@ -64,13 +64,20 @@ pub struct Seen {
 
 /// 這次登入的國家或瀏覽器家族，在 `history`（90 天內的成功登入）裡沒出現過 → 新裝置。
 /// 沒有任何紀錄（第一次登入）不算：沒東西可比，也不該在註冊當下就發警示。認不出來的欄位不比。
+/// 國家只在紀錄裡**曾經**看過國家時才比：紀錄全是內部位址（代理設錯、剛修好 `TRUSTED_PROXY_HOPS`）或剛裝上 GeoIP
+/// 時，第一筆有國家的登入不是「新國家」，只是第一次看得到——否則修好代理那天每個人都會收到新裝置警示。
 /// New device = this sign-in's country or browser family does not appear in `history` (successful sign-ins of
-/// the last 90 days). An empty history (the first sign-in) is never new; unknown fields are not compared.
+/// the last 90 days). An empty history (the first sign-in) is never new; unknown fields are not compared. The
+/// country counts only once the history has ever shown one: with a history of internal addresses only (a
+/// misconfigured proxy, `TRUSTED_PROXY_HOPS` just fixed) or GeoIP just installed, the first sign-in with a
+/// country is merely the first visible one — otherwise everyone would get a new-device alert the day the
+/// proxy is fixed.
 pub fn is_new_device(history: &[Seen], current: &Seen) -> bool {
     if history.is_empty() {
         return false;
     }
-    let new_country = current.country.as_ref().is_some_and(|c| !history.iter().any(|h| h.country.as_ref() == Some(c)));
+    let country_known = history.iter().any(|h| h.country.is_some());
+    let new_country = country_known && current.country.as_ref().is_some_and(|c| !history.iter().any(|h| h.country.as_ref() == Some(c)));
     let new_family = current.family.as_ref().is_some_and(|f| !history.iter().any(|h| h.family.as_ref() == Some(f)));
     new_country || new_family
 }
@@ -119,5 +126,10 @@ mod tests {
         assert!(!is_new_device(&history, &Seen { country: Some("TW".into()), family: None }));
         // 第一次登入不警示。/ The first sign-in never alerts.
         assert!(!is_new_device(&[], &seen(Some("JP"), WIN_EDGE)));
+        // 紀錄裡從沒有國家（代理把位址換成內部位址、或 GeoIP 剛裝好）：第一筆看得到國家的登入不是新國家，
+        // 瀏覽器還是照比。/ A history without any country: the first country seen is not new; the browser still counts.
+        let internal = vec![seen(None, MAC_CHROME), seen(None, MAC_CHROME)];
+        assert!(!is_new_device(&internal, &seen(Some("TW"), MAC_CHROME)));
+        assert!(is_new_device(&internal, &seen(Some("TW"), WIN_EDGE)));
     }
 }
