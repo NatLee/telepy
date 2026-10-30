@@ -65,6 +65,7 @@ services:
       # [Server]
       - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID:-}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
+      - SSH_SERVER_DOMAIN=${SSH_SERVER_DOMAIN:-}
       # [Server] 對外 base URL（MCP 連接器的 OAuth issuer）；留空依網站設定，再沒有就依 X-Forwarded-* 推導。
       # [Server] Public base URL (the OAuth issuer); empty = the site setting, else from the request.
       - PUBLIC_URL=${PUBLIC_URL:-}

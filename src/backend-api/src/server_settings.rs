@@ -30,6 +30,7 @@ pub const ENV_KEYS: &[(&str, &str)] = &[
     ("server_openapi_enabled", "OPENAPI_ENABLED"),
     ("server_google_client_id", "SOCIAL_GOOGLE_CLIENT_ID"),
     ("server_public_url", "PUBLIC_URL"),
+    ("server_ssh_host", "SSH_SERVER_DOMAIN"),
 ];
 
 /// 一個鍵的環境變數名稱。/ The variable behind a key.
@@ -110,6 +111,7 @@ pub struct Saved {
     pub openapi_enabled: bool,
     pub google_client_id: String,
     pub public_url: String,
+    pub ssh_host: String,
 }
 
 impl Default for Saved {
@@ -126,6 +128,7 @@ impl Default for Saved {
             openapi_enabled: true,
             google_client_id: String::new(),
             public_url: String::new(),
+            ssh_host: String::new(),
         }
     }
 }
@@ -143,6 +146,7 @@ impl From<&SiteSettings> for Saved {
             openapi_enabled: s.server_openapi_enabled,
             google_client_id: s.server_google_client_id.clone(),
             public_url: s.server_public_url.clone(),
+            ssh_host: s.server_ssh_host.clone(),
         }
     }
 }
@@ -161,6 +165,7 @@ impl Saved {
             "server_openapi_enabled" => self.openapi_enabled.to_string(),
             "server_google_client_id" => self.google_client_id.clone(),
             "server_public_url" => self.public_url.clone(),
+            "server_ssh_host" => self.ssh_host.clone(),
             _ => return None,
         })
     }
@@ -210,6 +215,7 @@ impl Config {
             "server_openapi_enabled" => self.openapi_enabled.map(|b| b.to_string()),
             "server_google_client_id" => self.google_client_id.clone(),
             "server_public_url" => self.public_url.clone(),
+            "server_ssh_host" => self.ssh_server_domain.clone(),
             _ => None,
         }
         .filter(|v| !v.trim().is_empty())
@@ -288,6 +294,25 @@ impl Config {
     /// `PUBLIC_URL` / `server_public_url`（去掉結尾斜線）。/ The public base URL, without a trailing slash.
     pub fn public_base(&self) -> Option<String> {
         Some(self.effective("server_public_url").0.trim().trim_end_matches('/').to_string()).filter(|v| !v.is_empty())
+    }
+
+    /// 裝置與筆電的 SSH 連的主機（`SSH_SERVER_DOMAIN` / `server_ssh_host`）；沒設（或設錯）= None，呼叫端退回網頁的
+    /// 主機。網頁走 Cloudflare 這類只轉 HTTP(S) 的代理時，SSH 要另一個不經代理的名稱（見 [`check_ssh_host`]）。
+    /// The host devices' and laptops' SSH dial; None when unset (or invalid) = the caller falls back to the web host.
+    /// Needed when the web name sits behind a proxy that only carries HTTP(S), such as Cloudflare's.
+    pub fn ssh_host(&self) -> Option<String> {
+        let (raw, source) = self.effective("server_ssh_host");
+        let cleaned = strip_host(&raw);
+        if cleaned.is_empty() {
+            return None;
+        }
+        match check_ssh_host(&cleaned) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!(error = %e, from = source.as_str(), value = %raw, "SSH_SERVER_DOMAIN is invalid; using the web host for SSH");
+                None
+            }
+        }
     }
 
     /// API 的 `env`：每個可被環境變數蓋過的鍵 → `{var, set, value}`。/ The API's `env` map.
@@ -403,6 +428,36 @@ pub fn check_public_url(v: &str) -> Result<String, String> {
         return Err(bad());
     }
     Ok(v.trim_end_matches('/').to_string())
+}
+
+/// 容錯：`.env` 可能寫成 `ssh://host/` 或 `host:port`；只留主機。/ Tolerate `ssh://host/` or `host:port`: keep the host.
+pub fn strip_host(v: &str) -> String {
+    let v = v.trim();
+    let v = v.split("://").last().unwrap_or(v);
+    let v = v.split('/').next().unwrap_or(v);
+    let v = v.rsplit('@').next().unwrap_or(v);
+    // 只有一個冒號才是 `host:port`（IPv6 不支援，見下）。/ One colon = `host:port`.
+    let v = if v.matches(':').count() == 1 { v.split(':').next().unwrap_or(v) } else { v };
+    v.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// SSH 主機：主機名稱或 IPv4，沒有 scheme、port、路徑；可以空白（= 跟網頁同一個）。不收 IPv6：一鍵加入腳本與
+/// ssh 的 `user@host` 寫法都只認名稱字元。/ A host name or IPv4 address — no scheme, port or path — or blank (= the web
+/// host). No IPv6: the join script and `user@host` only take name characters.
+pub fn check_ssh_host(v: &str) -> Result<String, String> {
+    let v = v.trim().trim_end_matches('.').to_ascii_lowercase();
+    if v.is_empty() {
+        return Ok(String::new());
+    }
+    let bad = || "Enter just a host name (or IPv4 address) that reaches this server's SSH port, like ssh.example.com — no scheme, port or path — or leave it blank.".to_string();
+    if v.len() > 253 || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(bad());
+    }
+    let labels_ok = v.split('.').all(|l| !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-'));
+    if !labels_ok {
+        return Err(bad());
+    }
+    Ok(v)
 }
 
 /// Google OAuth client ID：沒有空白或控制字元，可以空白。/ No whitespace or control characters, or blank.

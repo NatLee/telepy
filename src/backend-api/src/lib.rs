@@ -46,6 +46,7 @@ pub mod terminal_detach;
 pub mod terminal_watch;
 pub mod sftp;
 pub mod ssh;
+pub mod ssh_host;
 pub mod state;
 pub mod step_up;
 pub mod tokens;

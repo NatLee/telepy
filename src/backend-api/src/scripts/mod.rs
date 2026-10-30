@@ -40,7 +40,11 @@ pub fn safe_substitute(text: &str, mapping: &HashMap<&str, String>) -> String {
 #[derive(Debug, Clone)]
 pub struct ScriptContext<'a> {
     pub host_friendly_name: &'a str,
+    /// 這台 Telepy 的網域：known_hosts 別名（`HostKeyAlias`）用它，所以換 SSH 主機不會變成「另一台伺服器」。
+    /// This Telepy's domain: the known_hosts alias (`HostKeyAlias`) is built from it, so a new SSH host is not "another server".
     pub server_domain: &'a str,
+    /// ssh 實際連的主機（`SSH_SERVER_DOMAIN`，沒設 = `server_domain`）。/ The host ssh dials (SSH_SERVER_DOMAIN, else server_domain).
+    pub ssh_host: &'a str,
     pub reverse_port: i64,
     pub ssh_port: i64,
     /// Django 的 settings.REVERSE_SERVER_SSH_PORT 是 env 原字串。
@@ -124,7 +128,8 @@ fn base_mapping(ctx: &ScriptContext) -> HashMap<&'static str, String> {
     let mut m = HashMap::new();
     m.insert("host_friendly_name", ctx.host_friendly_name.to_string());
     m.insert("username", ctx.username.to_string());
-    m.insert("server_domain", ctx.server_domain.to_string());
+    // 模板裡的 `$server_domain` 都是 ssh 連的主機。/ `$server_domain` in the templates is always the host ssh dials.
+    m.insert("server_domain", ctx.ssh_host.to_string());
     m.insert("reverse_port", ctx.reverse_port.to_string());
     m.insert("ssh_port", ctx.ssh_port.to_string());
     m.insert("reverse_server_ssh_port", ctx.reverse_server_ssh_port.to_string());
@@ -254,7 +259,7 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             m.insert("key_path", ctx.key_path.unwrap_or(default_key).to_string());
             // jnovack/autossh：/known_hosts 存在就 StrictHostKeyChecking=yes；沒有 HostKeyAlias，所以依主機名稱寫。
             // jnovack/autossh pins when /known_hosts exists; no HostKeyAlias there, so the lines are keyed by host.
-            let host_lines = known_hosts_lines_for_host(ctx.server_domain, ctx.reverse_server_ssh_port, ctx.gateway_host_keys);
+            let host_lines = known_hosts_lines_for_host(ctx.ssh_host, ctx.reverse_server_ssh_port, ctx.gateway_host_keys);
             if pinned {
                 m.insert(
                     "known_hosts_setup",
@@ -425,11 +430,13 @@ pub fn laptop_proxy_command(ws_url: &str) -> String {
 /// `SshServerTemplate`：`Host telepy-<網域>-<port>` 區塊（[`server_alias`]）。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
 /// `HostKeyAlias`，檔案內容見 [`known_hosts_lines`]），沒有就照舊不驗證。`ws_proxy` = SSH over WebSocket 的
 /// ProxyCommand 行（[`laptop_proxy_command`]），筆電只能出網頁 port 時用。
+/// `ssh_host` = `HostName`（`SSH_SERVER_DOMAIN`，沒設就是網域）；別名與 `HostKeyAlias` 一律用網域。
 /// The `Host telepy-<domain>-<port>` stanza ([`server_alias`]); pins the gateway's host keys when known, else no checking as before.
-pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String], ws_proxy: Option<&str>) -> String {
+/// `ssh_host` is the `HostName` (SSH_SERVER_DOMAIN, else the domain); the alias and `HostKeyAlias` always use the domain.
+pub fn render_server_config(server_domain: &str, ssh_host: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String], ws_proxy: Option<&str>) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
-    m.insert("server_domain", server_domain.into());
+    m.insert("server_domain", ssh_host.into());
     m.insert("reverse_port", String::new());
     m.insert("ssh_port", "-1".into());
     m.insert("reverse_server_ssh_port", reverse_server_ssh_port.into());
@@ -497,6 +504,7 @@ mod tests {
         let ctx = ScriptContext {
             host_friendly_name: "My Box",
             server_domain: "telepy.test",
+            ssh_host: "telepy.test",
             reverse_port: 12345,
             ssh_port: 22,
             reverse_server_ssh_port: "24242",
@@ -527,6 +535,7 @@ mod tests {
         let ctx = ScriptContext {
             host_friendly_name: "My Box",
             server_domain: "telepy.test",
+            ssh_host: "telepy.test",
             reverse_port: 12345,
             ssh_port: 22,
             reverse_server_ssh_port: "24242",
@@ -576,6 +585,7 @@ mod tests {
         let ctx = ScriptContext {
             host_friendly_name: "My Box",
             server_domain: "telepy.test",
+            ssh_host: "telepy.test",
             reverse_port: 12345,
             ssh_port: 22,
             reverse_server_ssh_port: "24242",
@@ -630,14 +640,52 @@ mod tests {
         }
     }
 
+    /// SSH 主機另外設：ssh 連到它，known_hosts 別名（伺服器身分）仍然是網域，所以舊的筆電設定與裝置都認得。
+    /// A separate SSH host: ssh dials it, while the known_hosts alias (the server's identity) stays the domain.
+    #[test]
+    fn a_separate_ssh_host_changes_only_where_ssh_dials() {
+        let keys = vec!["ssh-ed25519 AAAAgateway".to_string()];
+        let ctx = ScriptContext {
+            host_friendly_name: "My Box",
+            server_domain: "telepy.test",
+            ssh_host: "ssh.telepy.test",
+            reverse_port: 12345,
+            ssh_port: 22,
+            reverse_server_ssh_port: "24242",
+            username: "ubuntu",
+            key_path: None,
+            telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
+            gateway_host_keys: &keys,
+            ws: None,
+            install_id: "k7m2q9xd",
+        };
+        for kind in ["ssh", "autossh"] {
+            let (s, _) = render_script(kind, &ctx).unwrap();
+            assert!(s.contains("telepy@ssh.telepy.test") && !s.contains("telepy@telepy.test"), "{kind}: {s}");
+            assert!(s.contains("HostKeyAlias=telepy-telepy.test-24242"), "{kind}: {s}");
+        }
+        let (s, _) = render_script("autossh-service", &ctx).unwrap();
+        assert!(s.contains("-p 24242 -NR '*:0:localhost:22' telepy@ssh.telepy.test") && s.contains("HostKeyAlias=telepy-telepy.test-24242"), "{s}");
+        let (s, _) = render_script("powershell", &ctx).unwrap();
+        assert!(s.contains("\"telepy@ssh.telepy.test\"") && s.contains("HostKeyAlias=telepy-telepy.test-24242"), "{s}");
+        // 容器版沒有 HostKeyAlias：known_hosts 依連的主機寫。/ Containers have no alias: keyed by the dialled host.
+        let (s, _) = render_script("docker-run", &ctx).unwrap();
+        assert!(s.contains("-e SSH_REMOTE_HOST=ssh.telepy.test") && s.contains("[ssh.telepy.test]:24242 ssh-ed25519 AAAAgateway\n"), "{s}");
+        let (s, _) = render_script("docker-compose", &ctx).unwrap();
+        assert!(s.contains("SSH_REMOTE_HOST: \"ssh.telepy.test\"") && s.contains("'[ssh.telepy.test]:24242 ssh-ed25519 AAAAgateway'"), "{s}");
+        let server = render_server_config("telepy.test", "ssh.telepy.test", "24242", &keys, None);
+        assert!(server.starts_with("Host telepy-telepy.test-24242\n"), "the alias stays the server's identity: {server}");
+        assert!(server.contains("HostName ssh.telepy.test\n") && server.contains("HostKeyAlias telepy-telepy.test-24242\n"), "{server}");
+    }
+
     #[test]
     fn ssh_config_blocks() {
-        let server = render_server_config("telepy.test", "24242", &[], None);
+        let server = render_server_config("telepy.test", "telepy.test", "24242", &[], None);
         assert!(server.contains("StrictHostKeyChecking no\n"), "{server}");
-        let pinned = render_server_config("telepy.test", "24242", &["ssh-ed25519 AAAAgateway".to_string()], None);
+        let pinned = render_server_config("telepy.test", "telepy.test", "24242", &["ssh-ed25519 AAAAgateway".to_string()], None);
         assert!(pinned.contains("    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.test-24242\n    User telepy\n"), "{pinned}");
         assert_eq!(known_hosts_lines("telepy-telepy.test-24242", &["ssh-ed25519 AAAAgateway".to_string()]), "telepy-telepy.test-24242 ssh-ed25519 AAAAgateway\n");
-        let server = render_server_config("telepy.test", "24242", &[], None);
+        let server = render_server_config("telepy.test", "telepy.test", "24242", &[], None);
         assert!(server.starts_with("Host telepy-telepy.test-24242\n"), "the server alias is its HostKeyAlias: {server}");
         assert_eq!(server_alias("telepy.test", ""), "telepy-telepy.test");
         assert!(server.contains("Port  24242\n"));

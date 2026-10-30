@@ -4555,6 +4555,43 @@ pub struct DeviceInstallRename {
     pub view: DeviceInstall,
 }
 
+/// `GET /api/site/ssh-host`：網頁與 SSH 的名稱各解析到哪裡、有沒有走 Cloudflare 的代理（管理員）。
+/// Where the web and SSH names resolve and whether either sits on Cloudflare's proxy (superusers).
+#[derive(ToSchema)]
+pub struct SshHostCheck {
+    pub ssh: SshHostName,
+    pub web: SshHostName,
+    /// SSH 與網頁是同一個名稱。/ SSH and the web use the same name.
+    pub same: bool,
+    /// `local` / `unresolved` / `ssh_proxied`（裝置連不到）/ `split` / `same` / `separate`。
+    #[schema(example = "split")]
+    pub verdict: String,
+}
+
+#[derive(ToSchema)]
+pub struct SshHostName {
+    #[schema(example = "telepy-ssh.example.com")]
+    pub host: String,
+    #[schema(example = json!(["203.0.113.10"]))]
+    pub addresses: Vec<String>,
+    /// 有位址落在 Cloudflare 的範圍。/ An address is in Cloudflare's ranges.
+    pub cloudflare: bool,
+    /// 解析失敗的原因。/ Why the lookup failed.
+    pub error: Option<String>,
+    /// SSH：gateway 對外的 port。/ SSH only: the gateway's public port.
+    #[schema(example = "56767")]
+    pub port: Option<String>,
+    /// SSH：`env` / `setting` / `web`（沒另外設，跟網頁同一個）。/ SSH only: where the name comes from.
+    #[schema(example = "env")]
+    pub source: Option<String>,
+    /// 網頁：`public_url` / `request`。/ Web only: where the name comes from.
+    pub from: Option<String>,
+    /// 網頁：這次請求帶著 Cloudflare 的標頭。/ Web only: this request carried Cloudflare's headers.
+    pub via_cloudflare: Option<bool>,
+    /// 網頁：DNS 或標頭顯示走 Cloudflare 的代理。/ Web only: DNS or headers say it is proxied by Cloudflare.
+    pub proxied: Option<bool>,
+}
+
 /// `GET /api/site/address-sources`：「PROXY protocol 來源」的選項（管理員）。/ Options for PROXY protocol sources (superusers).
 #[derive(ToSchema)]
 pub struct AddressSources {

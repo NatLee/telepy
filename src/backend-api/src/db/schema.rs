@@ -1241,6 +1241,7 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "server_openapi_enabled", "bool NOT NULL DEFAULT 1"),
     ("site_settings_sitesettings", "server_google_client_id", "varchar(256) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "server_public_url", "varchar(512) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "server_ssh_host", "varchar(253) NOT NULL DEFAULT ''"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

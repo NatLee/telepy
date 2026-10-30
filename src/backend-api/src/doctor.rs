@@ -287,6 +287,18 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         }
     });
 
+    // 裝置與筆電的 SSH 連哪個名稱：落在 Cloudflare 的代理上就連不到 gateway 的 port。
+    // The name devices' and laptops' SSH dial: on Cloudflare's proxy it never reaches the gateway port.
+    let (ssh, ssh_source) = match config.ssh_host() {
+        Some(h) => (Some(h), source_label(config, "server_ssh_host")),
+        None => (config.server_host().filter(|h| !h.is_empty()), "SERVER_DOMAIN".to_string()),
+    };
+    let port = config.reverse_server_ssh_port.clone();
+    out.push(match ssh {
+        None => check("ssh_host", "SSH host", Status::Info, "not set: scripts and SSH configs use the name the browser opened Telepy at. Set SERVER_DOMAIN (and SSH_SERVER_DOMAIN when the web name goes through a proxy)"),
+        Some(host) => ssh_host_check(&crate::ssh_host::lookup(&host).await, &port, &ssh_source),
+    });
+
     // 相依服務。/ Companion services.
     out.push(match tcp_reachable(&config.guacd_addr, Duration::from_secs(3)).await {
         Ok(()) => check("guacd", "guacd (remote desktop)", Status::Ok, config.guacd_addr.clone()),
@@ -407,6 +419,33 @@ pub fn audit_problem(t: &db::audit_chain::TableReport) -> String {
 /// How many recent sign-in addresses are public. The third value feeds the fingerprint: the setting plus the
 /// sorted internal addresses, never the counts (they change with every sign-in).
 /// 一個設定由誰決定，給人看的：環境變數名稱 / `site setting` / `default`。/ Who decides a value, for people.
+/// SSH 主機的檢查（解析結果已經有了，純函式）。/ The SSH host check, from a finished lookup (pure).
+fn ssh_host_check(l: &crate::ssh_host::Lookup, port: &str, source: &str) -> Check {
+    use crate::ssh_host::{verdict, Verdict};
+    let host = l.host.as_str();
+    let addrs = l.addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    match verdict(l, host, false) {
+        Verdict::Local => check("ssh_host", "SSH host", Status::Info, format!("{host} ({source}): only this machine can connect; devices elsewhere need a public name")).fp(&[host]),
+        Verdict::Unresolved => check(
+            "ssh_host",
+            "SSH host",
+            Status::Warn,
+            format!("{host} ({source}) does not resolve: {}. Devices and laptops are told to connect to this name", l.error.as_deref().unwrap_or("no address")),
+        )
+        .fp(&[host, "unresolved"]),
+        Verdict::SshProxied => check(
+            "ssh_host",
+            "SSH host",
+            Status::Fail,
+            format!(
+                "{host} ({source}) resolves to Cloudflare ({addrs}): its proxy only carries web ports, so devices and laptops cannot reach the SSH port {port} through it. Give SSH a name that goes straight to this server: SSH_SERVER_DOMAIN in .env or Site settings → Server → SSH host"
+            ),
+        )
+        .fp(&[host, "cloudflare"]),
+        _ => check("ssh_host", "SSH host", Status::Ok, format!("{host}:{port} ({source}) → {addrs}; no Cloudflare address (other proxies cannot be detected)")).fp(&[host]),
+    }
+}
+
 fn source_label(config: &Config, key: &str) -> String {
     use crate::server_settings::Source;
     match config.effective(key).1 {
@@ -543,6 +582,22 @@ mod tests {
         assert_eq!(audit_problem(&only_cp), "telepy_gateway_event: checkpoint at row 1 (checkpoint_mismatch)");
         let older = db::audit_chain::TableReport { chain_broken_at: None, chain_reason: None, checkpoint_broken_at: None, checkpoint_reason: None, ..t };
         assert_eq!(audit_problem(&older), "telepy_gateway_event: row 1 (checkpoint_mismatch)");
+    }
+
+    #[test]
+    fn ssh_host_on_cloudflare_fails() {
+        use crate::ssh_host::Lookup;
+        let l = |h: &str, ips: &[&str]| Lookup { host: h.into(), addresses: ips.iter().map(|i| i.parse().unwrap()).collect(), error: None };
+        let c = ssh_host_check(&l("t.example.com", &["104.21.35.8"]), "56767", "SERVER_DOMAIN");
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.detail.contains("SSH_SERVER_DOMAIN") && c.detail.contains("56767"), "{}", c.detail);
+        let c = ssh_host_check(&l("ssh.example.com", &["114.34.69.11"]), "56767", "SSH_SERVER_DOMAIN");
+        assert_eq!((c.status, c.detail.as_str()), (Status::Ok, "ssh.example.com:56767 (SSH_SERVER_DOMAIN) → 114.34.69.11; no Cloudflare address (other proxies cannot be detected)"));
+        // 指紋只看主機與結論，輪替的位址不會讓確認失效。/ The fingerprint ignores rotating addresses.
+        assert_eq!(c.fingerprint, ssh_host_check(&l("ssh.example.com", &["114.34.69.12"]), "56767", "SSH_SERVER_DOMAIN").fingerprint);
+        let missing = Lookup { host: "nope.example.com".into(), addresses: vec![], error: Some("no address".into()) };
+        assert_eq!(ssh_host_check(&missing, "22", "site setting").status, Status::Warn);
+        assert_eq!(ssh_host_check(&l("localhost", &[]), "22", "SERVER_DOMAIN").status, Status::Info);
     }
 
     #[test]
