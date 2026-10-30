@@ -23,6 +23,7 @@ pub mod pool;
 pub mod recordings;
 pub mod retention;
 pub mod schema;
+pub mod server_stats;
 pub mod settings;
 pub mod sharing;
 pub mod shell_history;

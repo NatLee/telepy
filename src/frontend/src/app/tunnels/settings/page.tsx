@@ -363,7 +363,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             {tab === "signin" && (
                 <Callout tone="info" icon={<HeartPulse size={17} className="mt-0.5 shrink-0" aria-hidden />}>
                     {t("health.fromSignin")}{" "}
-                    <Link href="/tunnels/admin/health#client-ip" prefetch={false} className="inline-flex items-center gap-1 text-foreground underline underline-offset-2">
+                    <Link href="/tunnels/admin/health?tab=addresses#client-ip" prefetch={false} className="inline-flex items-center gap-1 text-foreground underline underline-offset-2">
                         {t("nav.adminHealth")} <ArrowRight size={12} className="opacity-60" />
                     </Link>
                 </Callout>

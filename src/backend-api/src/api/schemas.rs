@@ -529,6 +529,9 @@ pub struct ClientIpCheck {
 /// `telepy-server doctor` 的一項檢查。/ One `telepy-server doctor` check.
 #[derive(ToSchema)]
 pub struct HealthCheck {
+    /// 穩定的機器 id（前端分組、翻譯用）。/ Stable machine id the frontend groups and translates by.
+    #[schema(example = "database")]
+    pub id: String,
     #[schema(example = "database")]
     pub name: String,
     /// ok / info / warn / fail
@@ -4339,4 +4342,129 @@ pub struct DeviceInstallReport {
 pub struct DeviceInstallRename {
     pub report: DeviceInstallReport,
     pub view: DeviceInstall,
+}
+
+/// `GET /api/site/health/stats`：伺服器狀態頁的數字（管理員）。/ The Server health page's numbers (superusers).
+#[derive(ToSchema)]
+pub struct ServerStats {
+    pub server: ServerStatsServer,
+    pub tunnels: ServerStatsTunnels,
+    pub gateway: ServerStatsGateway,
+    pub sessions: ServerStatsSessions,
+    pub users: ServerStatsUsers,
+    pub storage: ServerStatsStorage,
+    pub activity: ServerStatsActivity,
+    pub webhooks: ServerStatsWebhooks,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsServer {
+    /// 發行版建置蓋上的版本；本機建的是 null。/ The release version stamped at build time; null for local builds.
+    #[schema(example = "2.9.0")]
+    pub version: Option<String>,
+    /// When this backend process started
+    #[schema(example = "2026-10-30T01:02:03Z")]
+    pub started_at: String,
+    pub uptime_secs: i64,
+    #[schema(example = "2026-10-30T05:06:07Z")]
+    pub now: String,
+}
+
+/// Tunnels per health, the same classification as list items' `health`
+#[derive(ToSchema)]
+pub struct ServerStatsTunnels {
+    pub total: i64,
+    pub online: i64,
+    pub degraded: i64,
+    pub offline: i64,
+    pub never: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsGateway {
+    /// Authenticated SSH connections to the gateway now (devices and laptops)
+    pub connections: i64,
+    /// Registered reverse forwards now
+    pub forwards: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsSessions {
+    pub total: i64,
+    pub by_kind: ServerStatsSessionKinds,
+}
+
+/// Live sessions per presence kind (every kind is present, 0 when none)
+#[derive(ToSchema)]
+pub struct ServerStatsSessionKinds {
+    pub terminal: i64,
+    pub files: i64,
+    pub browser: i64,
+    pub desktop: i64,
+    pub rustdesk: i64,
+    /// A laptop's ssh through the gateway
+    pub ssh: i64,
+    /// Watching someone's web terminal
+    pub watch: i64,
+    /// MCP agent SSH sessions
+    pub ai: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsUsers {
+    pub total: i64,
+    pub active: i64,
+    /// Active superusers
+    pub admins: i64,
+    /// Distinct accounts with a successful sign-in in the last 24 hours
+    pub signed_in_24h: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsStorage {
+    pub db_bytes: i64,
+    /// The SQLite write-ahead log (0 when absent)
+    pub wal_bytes: i64,
+    /// The data directory's filesystem; null when it can't be read
+    pub data_dir: Option<ServerStatsDisk>,
+    /// Sum of `DATA_DIR/recordings`; null when unreadable
+    pub recordings_bytes: Option<i64>,
+    /// The walk stopped after 20000 entries, so `recordings_bytes` is a lower bound
+    pub recordings_truncated: bool,
+    /// Sum of `LOG_ROOT`; null when unreadable
+    pub logs_bytes: Option<i64>,
+    pub logs_truncated: bool,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsDisk {
+    #[schema(example = "/data")]
+    pub path: String,
+    pub free_bytes: i64,
+    pub total_bytes: i64,
+}
+
+/// The last 24 hours in hourly buckets, oldest first; bucket i covers [hours[i], hours[i] + 1 h)
+#[derive(ToSchema)]
+pub struct ServerStatsActivity {
+    /// Each bucket's start (24, RFC 3339 Z)
+    pub hours: Vec<String>,
+    pub gateway_events: Vec<i64>,
+    /// Gateway events of the Logs page's "needs attention" kinds (refused, failed_publickey, invalid_user, expired_key, host_key_mismatch, claim_*, device_warning, degraded, step_up_required, command_blocked)
+    pub gateway_problems: Vec<i64>,
+    pub sign_ins: Vec<i64>,
+    pub sign_ins_failed: Vec<i64>,
+    /// Delegated (API token / CLI sign-in) calls from the call log
+    pub api_calls: Vec<i64>,
+    /// Calls with status >= 400 or an error
+    pub api_errors: Vec<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct ServerStatsWebhooks {
+    pub total: i64,
+    pub enabled: i64,
+    pub paused: i64,
+    /// Webhooks with a failed (non-test) delivery in the last 24 hours
+    pub failing_recent: i64,
 }

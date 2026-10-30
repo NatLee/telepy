@@ -343,6 +343,11 @@ impl Gateway {
         self.server_config.keys.iter().filter_map(|k| k.public_key().to_openssh().ok()).map(|s| s.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).collect()
     }
 
+    /// 現在通過認證的 SSH 連線數與登記的 forward 數（伺服器狀態頁）。/ Authenticated connections and registered forwards now.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.conns.len(), self.forwards.len())
+    }
+
     pub fn has_forward(&self, port: u16) -> bool {
         self.forwards.contains_key(&port)
     }

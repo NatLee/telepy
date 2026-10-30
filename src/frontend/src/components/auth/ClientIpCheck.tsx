@@ -33,6 +33,9 @@ const SCOPE_KEY: Record<string, TranslationKey> = {
     reserved: "clientIp.scope.reserved",
 };
 
+/** 窄欄（手機、放大顯示）把標籤疊在值上面，位址不會一字一行。/ Narrow column (phones, large display size): label above value, so addresses don't break per character. */
+const STACK = "@max-xs:grid-cols-1 @max-xs:gap-1";
+
 const ROLE_KEY: Record<string, TranslationKey> = {
     ignored: "clientIp.role.ignored",
     client: "clientIp.role.client",
@@ -280,7 +283,7 @@ export function ClientIpCheckPanel() {
                             The path is always a column of short nodes. In a wide card (container ≥ 56rem, so the right column gets ~33rem or more) it sits on the left
                             and the right holds the verdict + fix, then the current values; narrow cards put the verdict first.
                             Rows are auto + 1fr so the path's extra height goes to the second row, never between the two. */}
-                        <div className="grid gap-4 @4xl:grid-cols-[minmax(0,19rem)_minmax(0,1fr)] @4xl:grid-rows-[auto_1fr] @4xl:items-start">
+                        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 @4xl:grid-cols-[minmax(0,19rem)_minmax(0,1fr)] @4xl:grid-rows-[auto_1fr] @4xl:items-start">
                             <div className="space-y-4 @4xl:col-start-2 @4xl:row-start-1">
                                 <VerdictCallout check={check} />
                                 {showFix && <ProxyFix check={check} />}
@@ -292,34 +295,34 @@ export function ClientIpCheckPanel() {
                                 <p className="text-xs text-muted-foreground">{t("clientIp.chainNote")}</p>
                             </div>
                             <div className="space-y-4 @4xl:col-start-2 @4xl:row-start-2">
-                                <PropertyList>
-                                    <Property label={t("clientIp.recorded")}>
-                                        <span className="inline-flex flex-wrap items-center gap-2">
-                                            <span className="font-mono">{check.ip ?? t("clientIp.unknownIp")}</span>
+                                <PropertyList className="@container">
+                                    <Property className={STACK} label={t("clientIp.recorded")}>
+                                        <span className="inline-flex max-w-full flex-wrap items-center gap-2">
+                                            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{check.ip ?? t("clientIp.unknownIp")}</span>
                                             <ScopeChip scope={check.scope} />
-                                            {check.from && <span className="text-xs text-muted-foreground">{check.from === "header" ? t("clientIp.fromHeader", { header: check.clientIpHeader ?? "" }) : t("clientIp.fromChain")}</span>}
+                                            {check.from && <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{check.from === "header" ? t("clientIp.fromHeader", { header: check.clientIpHeader ?? "" }) : t("clientIp.fromChain")}</span>}
                                         </span>
                                     </Property>
-                                    <Property label={t("clientIp.hops")}>
-                                        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                                            <span className="font-mono">TRUSTED_PROXY_HOPS={hopsSetting(check)}</span>
-                                            <span className="text-xs text-muted-foreground">
+                                    <Property className={STACK} label={t("clientIp.hops")}>
+                                        <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1">
+                                            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">TRUSTED_PROXY_HOPS={hopsSetting(check)}</span>
+                                            <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                                                 {check.hopsMode === "auto" ? t("clientIp.hopsAuto", { n: String(check.skippedHops) }) : t("clientIp.hopsFixed")}
                                             </span>
                                         </span>
                                     </Property>
-                                    <Property label={t("clientIp.header")}>
-                                        {check.clientIpHeader ? <span className="font-mono">CLIENT_IP_HEADER={check.clientIpHeader}</span> : <span className="text-muted-foreground">{t("clientIp.headerUnset")}</span>}
+                                    <Property className={STACK} label={t("clientIp.header")}>
+                                        {check.clientIpHeader ? <span className="font-mono [overflow-wrap:anywhere]">CLIENT_IP_HEADER={check.clientIpHeader}</span> : <span className="text-muted-foreground">{t("clientIp.headerUnset")}</span>}
                                     </Property>
-                                    <Property label={t("clientIp.otherHeaders")}>
+                                    <Property className={STACK} label={t("clientIp.otherHeaders")}>
                                         {check.headers.length === 0 ? (
                                             <span className="text-muted-foreground">{t("clientIp.none")}</span>
                                         ) : (
                                             <ul className="space-y-1">
                                                 {check.headers.map((h) => (
-                                                    <li key={h.name} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                                        <span className="font-mono text-xs text-muted-foreground">{h.name}</span>
-                                                        <span className="font-mono text-xs break-all">{h.value}</span>
+                                                    <li key={h.name} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                                                        <span className="min-w-0 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{h.name}</span>
+                                                        <span className="min-w-0 font-mono text-xs break-all">{h.value}</span>
                                                         {h.addresses[0] && <ScopeChip scope={h.addresses.some((a) => isPublicScope(a.scope)) ? "public" : h.addresses[0].scope} />}
                                                     </li>
                                                 ))}

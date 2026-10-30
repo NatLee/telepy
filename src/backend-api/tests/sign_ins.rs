@@ -203,6 +203,18 @@ async fn server_health_runs_the_doctor_checks_for_admins() {
     assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
     let checks = r.json["checks"].as_array().unwrap();
     let find = |name: &str| checks.iter().find(|c| c["name"] == name).unwrap_or_else(|| panic!("no check {name}: {}", r.text));
+    // 每項都有非空且不重複的 id。/ Every check has a non-empty, unique id.
+    let ids: Vec<&str> = checks.iter().map(|c| c["id"].as_str().unwrap_or("")).collect();
+    assert!(ids.iter().all(|i| !i.is_empty()), "{}", r.text);
+    let mut uniq = ids.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), ids.len(), "{}", r.text);
+    for id in ["secret_key", "public_url", "internal_api_token", "data_dir", "log_dir", "database", "service_key", "gateway", "guacd", "kasm", "geoip", "oui", "client_addresses", "audit_log"] {
+        assert!(ids.contains(&id), "missing id {id}: {}", r.text);
+    }
+    assert_eq!(find("database")["id"], "database");
+    assert_eq!(find("audit log")["id"], "audit_log");
     assert_eq!(find("database")["status"], "ok", "{}", r.text);
     assert!(find("database")["detail"].as_str().unwrap().contains("users"), "{}", r.text);
     assert_eq!(find("audit log")["status"], "ok", "{}", r.text);
