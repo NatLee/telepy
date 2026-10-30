@@ -1,437 +1,442 @@
-# Remote desktop（RDP / VNC / RustDesk in the browser）
+# Remote desktop (RDP / VNC / RustDesk in the browser)
 
-> 在瀏覽器裡看、操作裝置（或它區網裡電腦）的 RDP / VNC 桌面，以及經通道連 RustDesk。裝置上不裝任何東西：連線由裝置
-> 自己的 sshd 轉接，RDP / VNC 的畫面由 guacd 轉成 Guacamole 協定，RustDesk 由瀏覽器裡的 RustDesk 核心解碼。程式：
-> `src/backend-api/src/desktop/`、`api/desktop.rs`、`ws/desktop.rs`（RustDesk：`rustdesk/`、`api/rustdesk.rs`、
-> `ws/rustdesk.rs`）；前端 `app/tunnels/desktop/`、`components/desktop/`、`hooks/useDesktopPage.ts`、`lib/desktop.ts`；
-> 測試 `tests/desktop_api.rs`、`tests/rustdesk_api.rs`。
+<p align="center"><b>English</b> | <a href="./remote-desktop.zh-TW.md">繁體中文</a> | <a href="./remote-desktop.ja.md">日本語</a></p>
+
+> View and control the RDP / VNC desktop of a device (or of a computer on its LAN) in the browser, and reach RustDesk through the tunnel. Nothing is installed on the device: the connection is relayed by the
+> device's own sshd, guacd turns RDP / VNC pictures into the Guacamole protocol, and RustDesk is decoded by a RustDesk core running in the browser. Code:
+> `src/backend-api/src/desktop/`, `api/desktop.rs`, `ws/desktop.rs` (RustDesk: `rustdesk/`, `api/rustdesk.rs`,
+> `ws/rustdesk.rs`); frontend `app/tunnels/desktop/`, `components/desktop/`, `hooks/useDesktopPage.ts`, `lib/desktop.ts`;
+> tests `tests/desktop_api.rs`, `tests/rustdesk_api.rs`.
 >
-> 入口：`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`（側欄、通道選單、區網主機面板、通道列表的 Desktop 按鈕）。表單最上面是
-> 和終端機頁共用的路徑圖選擇器（`DesktopPathPicker`：目標、協定、埠在最後一個節點裡），下面是畫質、剪貼簿、聲音與登入。
-> 整個功能受功能權限 `remote_desktop` 管（關掉 = REST 回 403 `feature_disabled`，頁面換成說明）。
+> Entry point: `/tunnels/desktop?tunnel=<id>[&lanHost=<id>]` (sidebar, tunnel menu, LAN host panel, the Desktop button in the tunnel list). The form starts with the
+> same path-diagram picker as the terminal page (`DesktopPathPicker`: target, protocol, and the port in the last node); below it come quality, clipboard, sound and login.
+> The whole feature is governed by the feature permission `remote_desktop` (off = REST answers 403 `feature_disabled`, and the page shows an explanation instead).
 
-## 架構
+## Architecture
 
 ```
-瀏覽器（guacamole-common-js）
-  │ wss /ws/desktop/<session>/?ticket=…&width=&height=&dpi=   子協定 guacamole；票證 60 秒、只能用一次
+Browser (guacamole-common-js)
+  │ wss /ws/desktop/<session>/?ticket=…&width=&height=&dpi=   subprotocol guacamole; ticket valid 60 s, single use
   ▼
 backend ws/desktop.rs
-  │  瀏覽器→guacd：只放行 key / mouse / touch / size / sync / nop / disconnect / clipboard / blob / end / ack
-  │  guacd→瀏覽器：透傳（長度單位依兩端重編碼：guacd 數碼點，瀏覽器數 UTF-16）
-  │  TCP guacd:4822：Guacamole 握手在後端做完，帳密不經瀏覽器
+  │  browser→guacd: only key / mouse / touch / size / sync / nop / disconnect / clipboard / blob / end / ack pass
+  │  guacd→browser: passed through (lengths re-encoded for each side: guacd counts code points, the browser counts UTF-16 units)
+  │  TCP guacd:4822: the Guacamole handshake is done in the backend, credentials never reach the browser
   ▼
-guacd 容器（telepy-desktop internal 網路，只有 backend 與 guacd）
-  │  connect 時連回 backend 上這個 session 專屬的 rendezvous 埠（只收 guacd 的來源 IP，收到一條就關）
+guacd container (telepy-desktop internal network, only backend and guacd)
+  │  on connect it dials back to this session's own rendezvous port on the backend (accepts only guacd's source IP, closes after one connection)
   ▼
 backend desktop/bridge.rs
-  │  copy_bidirectional ⇄ russh direct-tcpip 通道（ssh::pool 那條裝置連線上的一個傳輸 lease，不占 session 額度）
+  │  copy_bidirectional ⇄ russh direct-tcpip channel (a transport lease on the device connection from ssh::pool, takes no session slot)
   ▼
-裝置 sshd ──► 127.0.0.1:<port>（裝置自己的桌面）或 <LAN 位址>:<port>（區網主機，和 ssh -J / 區網掃描同一個機制）
+device sshd ──► 127.0.0.1:<port> (the device's own desktop) or <LAN address>:<port> (a LAN host, same mechanism as ssh -J / the LAN scan)
 ```
 
-## 流程
+## Flow
 
-1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?}`：
-   檢查 `desktop_enabled`、通道 VIEW、step-up（敏感通道）、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號；
-   沒帶就用 `choose_username` 挑預設）、區網主機屬於這條通道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip
-   通道到目標，所以 `device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` /
-   `device_unreachable` 在這一步就回 502（`desktop_disabled` / `desktop_busy` 是 503），不必等 WebSocket。
-   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, target, username}`；帳密只留在記憶體。
-   `clipboard`：沒帶就用使用者的個人設定 `desktop_clipboard`，再套上站台的同名上限（取較窄的）；回應的 `clipboard` 是實際用的方向。
-   帶 `credential_id` 時改用憑證庫裡那筆的 login / password / domain（見下方「憑證庫」），請求裡的帳密欄位被忽略。
-2. 瀏覽器用票證開 WS。後端重驗權限、開 rendezvous、連 guacd 握手（`hostname` / `port` = rendezvous），
-   guacd 連回來的那條接到第 1 步的通道。握手完成後先送 `0.,<uuid>;`（guacamole-common-js 收到才把 tunnel 標成開啟），
-   再把握手期間已讀進解析器的指令送出（guacd 常把 `ready` 和第一批畫面放在同一個封包）。
-3. 中繼直到任一端結束。結束原因：使用者、guacd、閒置（`desktop_session_idle_timeout`，reaper 每 10 秒看一次）、
-   `POST /api/reverse/server/desktop/{sid}/stop`（4014）、從即時 session 頁結束、失去權限（4009，見「稽核與可見性」）、
-   開它的那個網頁登入被登出（4010）。
+![The live path of a remote desktop session and the streams on it](images/en/desktop-flow.png)
 
-## 延遲與串流狀況（`desktop/stats.rs`、前端 `lib/desktopStats.ts`、`components/desktop/DesktopStats.tsx`）
+1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?}`:
+   checks `desktop_enabled`, tunnel VIEW, step-up (sensitive tunnels), that `username` is in `permissions::allowed_usernames` (the account for the hop to the device;
+   if omitted, `choose_username` picks the default), that the LAN host belongs to this tunnel, and `desktop_max_sessions`. It then **first** leases a pooled connection and opens a direct-tcpip
+   channel to the target, so `device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` /
+   `device_unreachable` are answered with 502 right here (`desktop_disabled` / `desktop_busy` are 503), without waiting for the WebSocket.
+   It returns `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, target, username}`; credentials stay in memory only.
+   `clipboard`: if omitted, the user's personal setting `desktop_clipboard` is used, then capped by the site setting of the same name (the narrower wins); the `clipboard` in the response is the direction actually used.
+   With `credential_id`, the login / password / domain of that vault entry are used instead (see "Saved logins" below), and the credential fields in the request are ignored.
+2. The browser opens the WS with the ticket. The backend re-checks permissions, opens a rendezvous, connects to guacd and does the handshake (`hostname` / `port` = the rendezvous);
+   the connection guacd makes back is attached to the channel from step 1. After the handshake it first sends `0.,<uuid>;` (guacamole-common-js marks the tunnel open only when it receives this),
+   then sends the instructions the parser already read during the handshake (guacd often puts `ready` and the first screen updates in the same packet).
+3. The relay runs until either side ends. Reasons it ends: the user, guacd, idle (`desktop_session_idle_timeout`, the reaper looks every 10 seconds),
+   `POST /api/reverse/server/desktop/{sid}/stop` (4014), ended from the live sessions page, loss of access (4009, see "Audit and visibility"),
+   or the web sign-in that opened it being signed out (4010).
 
-中繼每秒給瀏覽器兩個自家指令（guacamole-common-js 不認得的 opcode 會被忽略，前端在交給 Client 前攔下）：
+## Latency and stream health (`desktop/stats.rs`, frontend `lib/desktopStats.ts`, `components/desktop/DesktopStats.tsx`)
 
-| 指令 | 方向 | 內容 |
+Every second the relay sends the browser two instructions of its own (guacamole-common-js ignores unknown opcodes; the frontend intercepts them before they reach the Client):
+
+| Instruction | Direction | Content |
 |---|---|---|
-| `telepy-ping <n>` | 中繼 → 瀏覽器 | 瀏覽器立刻回 `telepy-pong <n>`；中繼結算網路往返，**不轉給 guacd** |
-| `telepy-stats <json>` | 中繼 → 瀏覽器 | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind, audio}`（`audio` 見「聲音」） |
+| `telepy-ping <n>` | relay → browser | the browser answers at once with `telepy-pong <n>`; the relay settles the network round trip and **does not forward it to guacd** |
+| `telepy-stats <json>` | relay → browser | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind, audio}` (for `audio` see "Sound") |
 
-- **畫面往返 `frame_ms`**：guacd 每一幀結尾送 `sync <ts>`，瀏覽器把那一幀畫完才回 `sync <ts>`；中繼從送出到收到回音的時間
-  = WebSocket 來回 + 瀏覽器解碼繪製，就是使用者感覺到的「卡」。3 秒沒有新樣本就回 null（桌面靜止）。
-- **網路往返 `net_ms`**：ping / pong，不含繪製，靜止時也量得到。
-- **通道 `tunnel_ms`**：monitor 每 15 秒經轉發通道量到的裝置 sshd 往返（`StatusState::latency`）。
-- `frames` = 這一秒的幀數；`merged` = 一次 `sync` 併了幾個邏輯幀（guacd 1.6 的第二個參數；> 1 = 瀏覽器跟不上，guacd 在併幀）；
-  `behind` = 送出但還沒回音的幀；`down` / `up` = 這一秒的 bytes。
-- 工具列的按鈕：訊號格 + 畫面往返 + 狀態字（串流中 / 延遲中 / 沒有資料 / 靜止；`streamHealth`），點開是每一段的數字、
-  解析度與縮放，以及「延遲主要在哪一段」（`laggingHop`：網路、通道，或畫面往返遠大於網路往返 = 瀏覽器自己畫得慢）。
-  info 對話框的路徑圖在兩段線上標往返時間，最慢的那段標黃。
-- `desktop_close` 事件多了「12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)」。
+- **Frame round trip `frame_ms`**: guacd ends every frame with `sync <ts>`, and the browser echoes `sync <ts>` only after it has drawn that frame; the time from sending to the echo
+  = WebSocket round trip + browser decode and paint, which is the "lag" the user feels. With no new sample for 3 seconds it is null (the desktop is still).
+- **Network round trip `net_ms`**: ping / pong, without painting; measurable even when the desktop is still.
+- **Tunnel `tunnel_ms`**: the device sshd round trip the monitor measures every 15 seconds through the forwarded channel (`StatusState::latency`).
+- `frames` = frames in this second; `merged` = how many logical frames one `sync` combined (guacd 1.6's second argument; > 1 = the browser cannot keep up and guacd is merging frames);
+  `behind` = frames sent but not yet echoed; `down` / `up` = bytes in this second.
+- The toolbar button: signal bars + frame round trip + a status word (streaming / lagging / no data / still; `streamHealth`). Opening it shows the number for each hop,
+  the resolution and zoom, and "where the lag mostly comes from" (`laggingHop`: network, tunnel, or a frame round trip far above the network round trip = the browser itself paints slowly).
+  The info dialog's path diagram labels the round trip on the two links, and the slowest one is marked yellow.
+- The `desktop_close` event now says things like "12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)".
 
-## 畫質預設（`Quality`，start 的 `quality`）
+## Quality presets (`Quality`, `quality` in start)
 
-| 值 | RDP | VNC | 前端 |
+| Value | RDP | VNC | Frontend |
 |---|---|---|---|
-| `auto`（預設） | 和以前一樣（平滑字型） | 不加參數 | — |
-| `speed` | `color-depth 16`、不平滑字型 | `color-depth 16`、`compress-level 6`、`quality-level 5` | — |
-| `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | — |
+| `auto` (default) | as before (smooth fonts) | no parameters added | — |
+| `speed` | `color-depth 16`, no font smoothing | `color-depth 16`, `compress-level 6`, `quality-level 5` | — |
+| `sharp` | `color-depth 24`, `force-lossless` | `color-depth 24`, `quality-level 9`, `force-lossless` | — |
 
-存在帳號上的遠端桌面偏好 `desktop_display.quality`（偏好設定 → 遠端桌面也改得到同一個值）；start 回應帶 `quality`。以前 `sharp` 還順便要 HiDPI 解析度，現在 HiDPI 是「顯示」裡獨立的開關（下一節）。
+The remote desktop preference `desktop_display.quality` lives on the account (Preferences → Remote desktop edits the same value); the start response carries `quality`. `sharp` used to also ask for a HiDPI resolution; HiDPI is now its own switch under Display (next section).
 
-## 顯示：縮放、解析度、HiDPI（前端 `lib/desktopDisplay.ts`、`lib/desktopZoom.ts`、`hooks/useDesktopZoom.ts`、`components/desktop/DisplayMenu.tsx` / `DisplaySettings.tsx`；後端 `desktop::clamp_size`、`ws/desktop.rs` `browser_size`）
+## Display: zoom, resolution, HiDPI (frontend `lib/desktopDisplay.ts`, `lib/desktopZoom.ts`, `hooks/useDesktopZoom.ts`, `components/desktop/DisplayMenu.tsx` / `DisplaySettings.tsx`; backend `desktop::clamp_size`, `browser_size` in `ws/desktop.rs`)
 
-**為什麼以前畫面小（實測，OrbStack + 真 guacd 1.6 + xrdp / x11vnc / Xvnc，1440×900 視窗）：**
-1. 畫面框高 `100dvh − 15rem`、連線時不捲動：1440×900 只有約 1150×684，1280×800 時 990×584，框底在 y = 815（視窗外）。
-2. 「塞進框裡」上限 1:1，VNC / RustDesk 的畫面比框小時不會放大（VNC 1024×768 在 1540×864 的框裡就是 1024×768）。
-3. 畫質選 `sharp` 時，HiDPI 螢幕上上限變成 1 / devicePixelRatio：Retina 上 x11vnc 1024×768 的畫面只畫成 512×384 CSS px（量到的）。
-   RDP 則向 xrdp 要 2 倍像素（2300×1555），xrdp 不理 `dpi`，字只剩一半大。
-4. 站台上限 `desktop_max_resolution` 寬高各自夾（3080×1916 在 2560 下變 2560×1916，比例走樣、畫面加黑邊），而且連線中瀏覽器送的
-   `size` 根本沒經過上限。
-5. 縮放鈕只在觸控裝置上有。
+**Why the picture used to be small (measured with OrbStack + a real guacd 1.6 + xrdp / x11vnc / Xvnc, 1440×900 window):**
+1. The frame height was `100dvh − 15rem` and the page did not scroll on connect: at 1440×900 that is only about 1150×684, at 1280×800 it is 990×584, and the bottom of the frame sits at y = 815 (outside the window).
+2. "Fit into the frame" was capped at 1:1, so a VNC / RustDesk picture smaller than the frame was never enlarged (a 1024×768 VNC screen in a 1540×864 frame stayed 1024×768).
+3. With the `sharp` quality, on a HiDPI screen the cap became 1 / devicePixelRatio: on a Retina display an x11vnc 1024×768 picture was drawn at only 512×384 CSS px (measured).
+   For RDP it asked xrdp for twice the pixels (2300×1555); xrdp ignores `dpi`, so text came out half as large.
+4. The site limit `desktop_max_resolution` clamped width and height separately (3080×1916 under 2560 became 2560×1916, wrong aspect ratio, black borders), and the
+   `size` the browser sends during a session never went through the limit at all.
+5. The zoom buttons existed only on touch devices.
 
-**現在：** 偏好存在帳號上（個人設定 `desktop_display`，一個 JSON：`scale` / `percent` / `resolution` / `width` / `height` / `hidpi` / `vnc_resize` / `quality` / `audio`；
-後端 `desktop::display::parse` 檢查，未知欄位或超出範圍 = 欄位錯誤、百分比夾在 25–400；空 = 還沒選過。localStorage `telepy.desktopDisplay` 只是第一次畫面的快取，
-登入時帳號有值就用帳號的，沒有就把這台瀏覽器的值（含舊的 `telepy.desktopQuality` / `telepy.desktopAudio`）傳上去），
-偏好設定 → 遠端桌面 → 顯示、連線表單的「顯示」欄，與桌面頁工具列的「顯示」選單讀寫同一份：
-- 縮放：`fit`（塞進框裡，小畫面也放大，預設）/ `shrink`（只縮不放 = 以前）/ `actual`（1:1，HiDPI 時一個裝置像素；滑鼠移到邊緣捲動，雙指拖曳）/
-  `custom`（25–400 %）。模式會黏著：視窗變大變小時 fit 重新塞、1:1 維持；工具列 − / % / + 與捏合改成固定比例。
-- RDP 解析度：跟著視窗（預設，`resize-method display-update`，框停 400 ms 才送 `size`）或固定（1280×720、1600×900、1920×1080、2560×1440、自訂）。
-  固定時 start 帶 `resize: false`：guacd 不帶 resize-method，中繼丟掉瀏覽器的 `size`。
-- HiDPI：要 devicePixelRatio 倍（≤ 2）的像素與 `dpi`；預設關。連線中切換、改解析度，跟著視窗的 session 立刻送新的 `size`。
-- VNC 也跟著視窗（預設關）：start 帶 `resize: true` 就不送 `disable-display-resize`，guacd 1.6 用 SetDesktopSize 要伺服器改大小
-  （連線時送一次、之後每個 `size`）；只有虛擬桌面（TigerVNC Xvnc、KasmVNC）照做，實體螢幕（x11vnc、macOS 螢幕共享、多數 Windows 伺服器）
-  維持原解析度。預設關是因為改掉一台真機器的螢幕解析度不是使用者要的。guacd 1.6 的 VNC 預設會送初始大小，所以以前其實就會改 Xvnc 的大小。
-- RustDesk：解析度由遠端決定，只在瀏覽器縮放；網頁核心的 `change_resolution` 沒實作（`setByName change_resolution not implemented (phase 2)`）。
-  **之後可以做：** 像檔案面板的 `ReadEmptyDirs` 一樣，自己編一個 `Misc.change_resolution` 送到核心追蹤的 WebSocket（RustDesk 的 Windows / Linux X11 端支援改解析度），
-  RustDesk 就也能跟著視窗。
-- 「佔滿瀏覽器視窗」：卡片 `fixed inset-0` 蓋住側欄與頁首（不是全螢幕；Esc 照樣送遠端），工具列「回到頁面」退出。
-- 框高改成 `100dvh − 8.5rem`，連線時卡片捲到頁首下方。
-- 上限：`clamp_size` 等比縮到長邊 = `desktop_max_resolution`，握手與連線中每個 `size` 都經過（以前只夾握手，而且各邊分開夾）。start 回 `resize` 與 `max_resolution`。
+**Now:** the preferences live on the account (the personal setting `desktop_display`, one JSON object: `scale` / `percent` / `resolution` / `width` / `height` / `hidpi` / `vnc_resize` / `quality` / `audio`;
+checked by the backend's `desktop::display::parse`; an unknown field or an out-of-range value = field error, percent clamped to 25–400; empty = never chosen. The localStorage key `telepy.desktopDisplay` is only a cache for the first paint;
+at sign-in the account's value wins if it has one, otherwise this browser's value (including the old `telepy.desktopQuality` / `telepy.desktopAudio`) is uploaded).
+Preferences → Remote desktop → Display, the Display field of the connect form, and the Display menu in the desktop page's toolbar all read and write the same one:
+- Zoom: `fit` (fit into the frame, small pictures are enlarged too; default) / `shrink` (only shrinks, never enlarges = the old behaviour) / `actual` (1:1, one device pixel when HiDPI; move the mouse to the edge to scroll, drag with two fingers) /
+  `custom` (25–400 %). Modes are sticky: when the window grows or shrinks, fit fits again and 1:1 stays; the toolbar − / % / + and pinch switch to a fixed scale.
+- RDP resolution: follow the window (default, `resize-method display-update`, `size` is sent only after the frame has stayed put for 400 ms) or fixed (1280×720, 1600×900, 1920×1080, 2560×1440, custom).
+  Fixed sends `resize: false` in start: guacd gets no resize-method and the relay drops the browser's `size`.
+- HiDPI: asks for devicePixelRatio (≤ 2) times the pixels plus `dpi`; off by default. Toggling it or changing the resolution during a session immediately sends a new `size` for sessions that follow the window.
+- VNC following the window (off by default): start with `resize: true` omits `disable-display-resize`, and guacd 1.6 asks the server to resize with SetDesktopSize
+  (once at connect, then on every `size`); only virtual desktops (TigerVNC Xvnc, KasmVNC) comply, real screens (x11vnc, macOS Screen Sharing, most Windows servers)
+  keep their resolution. It is off by default because changing the screen resolution of a real machine is not what the user asked for. guacd 1.6's VNC sends an initial size by default, so in the past this already resized Xvnc.
+- RustDesk: the remote decides the resolution and the browser only scales; the web core's `change_resolution` is not implemented (`setByName change_resolution not implemented (phase 2)`).
+  **Possible later:** like the files panel's `ReadEmptyDirs`, build a `Misc.change_resolution` ourselves and send it on the WebSocket the core tracks (RustDesk's Windows / Linux X11 side supports changing resolution),
+  so RustDesk could follow the window too.
+- "Fill the browser window": the card is `fixed inset-0` and covers the sidebar and the page header (this is not fullscreen; Esc still goes to the remote), and "Back to the page" in the toolbar leaves it.
+- The frame height is now `100dvh − 8.5rem`, and on connect the card scrolls to just below the page header.
+- Limit: `clamp_size` scales proportionally so the longer side = `desktop_max_resolution`; the handshake and every `size` during the session go through it (before, only the handshake was clamped, and each side separately). Start returns `resize` and `max_resolution`.
 
-實測（同一套環境，新框高）：RDP 跟著視窗 1116×764（1440）→ 1534×944（1920）→ 958×664（1280）→ 佔滿 1280×751 → 958×664（`xdpyinfo`）；
-HiDPI 在 Retina 2236×1528，1920 視窗時 2560×1575（等比夾），連線中關 HiDPI → 1534×944；固定 1600×900 不跟著視窗、瀏覽器縮到 70 % / 60 %；
-Xvnc 要求跟著時 1280×800 → 1118×764 → 958×664，不要求時維持、瀏覽器放大到 115 % / 142 %；x11vnc 1024×768 在 Retina 預設畫成
-1019×764（以前 512×384），1:1 → 125 % 後滑鼠移到右緣會往右捲。
-測試：`tests/desktop_api.rs` `desktop_resolution_follows_the_window_within_the_site_limit`，單元測試 `clamp_size`、`browser_size`、
-`lib/desktopZoom.test.ts`、`lib/desktopDisplay.test.ts`。
+Measured (same setup, new frame height): RDP following the window 1116×764 (1440) → 1534×944 (1920) → 958×664 (1280) → fill 1280×751 → 958×664 (`xdpyinfo`);
+HiDPI on Retina 2236×1528, and at a 1920 window 2560×1575 (proportional clamp), turning HiDPI off mid-session → 1534×944; fixed 1600×900 does not follow the window and the browser scales it to 70 % / 60 %;
+Xvnc when asked to follow 1280×800 → 1118×764 → 958×664, when not asked it stays and the browser enlarges to 115 % / 142 %; x11vnc 1024×768 on Retina is drawn by default at
+1019×764 (before, 512×384), and at 1:1 → 125 % moving the mouse to the right edge scrolls right.
+Tests: `tests/desktop_api.rs` `desktop_resolution_follows_the_window_within_the_site_limit`; unit tests `clamp_size`, `browser_size`,
+`lib/desktopZoom.test.ts`, `lib/desktopDisplay.test.ts`.
 
-## 剪貼簿方向（每個人自己選，站台設定是上限）
+## Clipboard direction (each person chooses, the site setting is the ceiling)
 
-- 三個方向：`both`（雙向）/ `to_remote`（只能貼進遠端）/ `off`。個人設定 `desktop_clipboard` 存在帳號上
-  （`/api/user/settings`，同一個回應帶唯讀的 `desktop_clipboard_limit` = 站台設定），在桌面頁的「剪貼簿」欄與
-  偏好設定 → 遠端桌面（`hooks/useDesktopClipboard.ts`，兩處共用一份）都能改；超過上限的選項在介面上停用。
-- 每個 start（RDP / VNC、RustDesk）可以帶 `clipboard` 蓋過這次，沒帶就用個人設定；實際用的是它和站台 `desktop_clipboard`
-  較窄的那個（`desktop::Clipboard::within` / `effective`，前端 `lib/desktop.ts` 的 `clipboardWithin`），回應的 `clipboard` 是實際值。
-- 誰把關：guacd 用 `disable-copy` / `disable-paste`；RustDesk 的資料流後端看不到，由瀏覽器裡的核心套用（off = 那台的
-  `disable-clipboard`，to_remote = 不收遠端的剪貼簿事件）。測試 `desktop_clipboard_is_the_users_choice_within_the_site_limit`。
+- Three directions: `both` / `to_remote` (paste into the remote only) / `off`. The personal setting `desktop_clipboard` lives on the account
+  (`/api/user/settings`; the same response carries the read-only `desktop_clipboard_limit` = the site setting), and can be changed in the desktop page's Clipboard field and in
+  Preferences → Remote desktop (`hooks/useDesktopClipboard.ts`, one store shared by both). Options above the ceiling are disabled in the UI.
+- Every start (RDP / VNC, RustDesk) may carry `clipboard` to override for that session; without it the personal setting is used. What applies is the narrower of it and the site `desktop_clipboard`
+  (`desktop::Clipboard::within` / `effective`, frontend `clipboardWithin` in `lib/desktop.ts`), and the `clipboard` in the response is the actual value.
+- Who enforces it: guacd with `disable-copy` / `disable-paste`; the backend cannot see RustDesk's stream, so the core in the browser applies it (off = that peer's
+  `disable-clipboard`, to_remote = remote clipboard events are not accepted). Test `desktop_clipboard_is_the_users_choice_within_the_site_limit`.
 
-## 聲音（RDP 經 guacd；RustDesk 見下一節）
+## Sound (RDP through guacd; RustDesk in the next section)
 
-- 表單的「聲音」開關（RDP 與 RustDesk 才有；guacd 的 VNC 沒有聲音 —— 它要另接 PulseAudio，裝置那邊不會有 —— 所以 VNC
-  不顯示；VNC 協定本身只有畫面與輸入。macOS 的「螢幕共享」就是 VNC，所以要聽 Mac 的聲音請用 RustDesk），記在
-  帳號上的 `desktop_display.audio`（**預設關**：聲音多吃頻寬；偏好設定 → 遠端桌面改的是同一個值）。
-- RDP：`POST …/desktop/start` 帶 `audio: true`（VNC 帶了也當 false；非布林 → 欄位錯誤），回應帶 `audio`（實際）。
-  開：握手的 `audio` 指令列出 `audio/L8`、`audio/L16`（guacamole-common-js 的 RawAudioPlayer 會播的原始 PCM），
-  guacd 開音訊串流（`audio` / `blob` / `end`）。guacd → 瀏覽器本來就整個透傳；瀏覽器 → guacd 的白名單放 `ack`（接受串流），
-  瀏覽器送的 `audio`（= 麥克風）照樣丟掉。關：連線參數帶 `disable-audio=true`，guacd 不載入 rdpsnd，遠端根本不送。
-  `desktop_open` 事件寫 `Remote desktop (RDP, sound) …`。
-- 工具列的聲音按鈕（`components/desktop/SoundButton.tsx`）：靜音 = 在瀏覽器這邊丟掉 blob（取消靜音時不會一次湧出來）。
-  按鈕的圖示與字跟著 `lib/desktopSound.ts` 的判斷：**在播**、**安靜**（通道開著但沒聲音）、**等遠端**（剛連上）、
-  **聲音被擋住**（資料到了但 AudioContext 沒在跑 —— 旁邊多一顆「點一下啟用聲音」）、**沒有聲音**（連上 10 秒遠端都沒開聲音
-  通道）、靜音、關；提示與資訊對話框「這條連線上走哪些東西」的聲音那一條講原因。
-- **自動播放（使用者「開了聲音卻聽不到」的修正）**：瀏覽器只讓「在使用者手勢裡」建立或 resume 的 AudioContext 出聲
-  （Safari 最嚴格：在手勢外建的 context 一律是 `suspended`）。guacamole-common-js 的播放器是在 guacd 開音訊串流時
-  （WebSocket 訊息裡、沒有手勢）才建 context，原本只靠「在畫面上點擊 / 按鍵」才 resume —— 只看不點就一直沒聲音，
-  而且舊的「正在播」只看有沒有收到 blob，context 被擋著也照樣顯示正在播。現在「連線」那一下點擊（第一個 await 之前）就
-  `primeAudio()` 建好並 resume 一個共用 context，交給 guacd 當 `Guacamole.AudioContextFactory.singleton`；RustDesk 核心也經
-  `installRustDeskTap` 拿到同一個。被擋時狀態如實顯示「聲音被擋住」。
-- 中繼數聲音串流的量（`desktop/stats.rs`：guacd 開的 `audio` 串流上的 `blob`）：`telepy-stats` 帶 `audio`（沒開過聲音串流 =
-  null），統計面板多一列「聲音資料」；`desktop_close` 事件寫 `sound 1.2 MB`，要了聲音卻沒開通道則寫
-  `no sound channel from the RDP server`（Logs 就能看出是遠端不送）。
-- 遠端那一端：Windows 的 RDP 主機預設會轉送聲音，除非原則關掉（「允許音訊及視訊播放重新導向」）；Linux 的 xrdp 要裝
-  `pulseaudio-module-xrdp`（Debian / Ubuntu 沒有打包，要照它的說明從原始碼建）或 `pipewire-module-xrdp`，否則 guacd 拿不到聲音。
-- 實測（OrbStack）：真的 guacd 1.6 + xrdp + 自己建的 pulseaudio-module-xrdp，session 裡用 `module-sine` 放 440 Hz：
-  Chromium（`--autoplay-policy=document-user-activation-required`）與 WebKit 都排進了非靜音的 buffer（峰值 0.5）、context
-  `running`；WebKit 在點擊裡建的 context 是 `suspended`，靠 `primeAudio` 的 resume 才跑起來。把 context 暫停 → 按鈕變「聲音被
-  擋住」→ 點「點一下啟用聲音」→ 又在播。測試 `tests/desktop_api.rs` 的 `desktop_rdp_sound_is_offered_and_relayed`（假 guacd
-  檢查握手格式、`disable-audio`、串流透傳、麥克風被擋、結束事件的聲音量與「沒有聲音通道」）。
+- The Sound switch in the form (only RDP and RustDesk have it; guacd's VNC has no sound, since that would need a separate PulseAudio, which the device does not have, so VNC does not
+  show it; the VNC protocol itself carries only picture and input. macOS "Screen Sharing" is VNC, so to hear a Mac use RustDesk) is stored in
+  `desktop_display.audio` on the account (**off by default**: sound costs bandwidth; Preferences → Remote desktop edits the same value).
+- RDP: `POST …/desktop/start` takes `audio: true` (VNC treats it as false even if sent; a non-boolean = field error) and the response carries `audio` (the value in effect).
+  On: the handshake's `audio` instruction lists `audio/L8` and `audio/L16` (the raw PCM that guacamole-common-js's RawAudioPlayer can play),
+  and guacd opens an audio stream (`audio` / `blob` / `end`). guacd → browser is passed through unchanged as before; the browser → guacd allowlist includes `ack` (accepting the stream),
+  while an `audio` from the browser (= a microphone) is still dropped. Off: the connection parameter `disable-audio=true`, guacd does not load rdpsnd and the remote does not send anything at all.
+  The `desktop_open` event says `Remote desktop (RDP, sound) …`.
+- The sound button in the toolbar (`components/desktop/SoundButton.tsx`): muting drops the blobs in the browser (so unmuting does not release a flood at once).
+  Its icon and text follow `lib/desktopSound.ts`: **playing**, **quiet** (channel open but silent), **waiting for the remote** (just connected),
+  **sound blocked** (data arrived but the AudioContext is not running; an extra "Click to enable sound" button appears beside it), **no sound** (10 seconds after connecting the remote has still
+  not opened a sound channel), muted, off. The tooltip and the sound line under "What travels on this connection" in the info dialog explain why.
+- **Autoplay (the fix for "I turned sound on but hear nothing")**: browsers let an AudioContext make sound only if it was created or resumed inside a user gesture
+  (Safari is strictest: a context created outside a gesture is always `suspended`). The guacamole-common-js player creates its context only when guacd opens the audio stream
+  (inside a WebSocket message, no gesture), and used to resume it only on a click / key press on the picture, so someone who only watched never got sound, and
+  the old "playing" state only checked whether blobs had arrived, so it said playing even while the context was blocked. Now the click on "Connect" (before the first await)
+  runs `primeAudio()`, which creates and resumes one shared context and hands it to guacd as `Guacamole.AudioContextFactory.singleton`; the RustDesk core gets the same one through
+  `installRustDeskTap`. When blocked, the state honestly says "sound blocked".
+- The relay counts the audio stream volume (`desktop/stats.rs`: `blob` on the `audio` streams guacd opens): `telepy-stats` carries `audio` (null if no sound stream was ever opened),
+  the stats panel gets a "Sound data" row, and the `desktop_close` event says `sound 1.2 MB`, or `no sound channel from the RDP server` when sound was requested but no channel opened (so Logs shows the remote is not sending).
+- On the remote end: a Windows RDP host redirects sound by default unless a policy turns it off ("Allow audio and video playback redirection"); Linux xrdp needs
+  `pulseaudio-module-xrdp` (not packaged for Debian / Ubuntu; build it from source following its instructions) or `pipewire-module-xrdp`, otherwise guacd gets no sound.
+- Measured (OrbStack): a real guacd 1.6 + xrdp + a self-built pulseaudio-module-xrdp, with `module-sine` playing 440 Hz in the session:
+  Chromium (`--autoplay-policy=document-user-activation-required`) and WebKit both queued non-silent buffers (peak 0.5) with the context
+  `running`; the context WebKit created inside the click was `suspended` and only `primeAudio`'s resume got it going. Suspending the context → the button became "sound blocked"
+  → clicking "Click to enable sound" → playing again. The test is `desktop_rdp_sound_is_offered_and_relayed` in `tests/desktop_api.rs` (a fake guacd
+  checks the handshake format, `disable-audio`, stream pass-through, the microphone being blocked, and the sound amount and "no sound channel" in the close event).
 
-## 多螢幕：只看一個螢幕（`desktop/screens.rs`、`GET …/desktop/screens`、前端 `lib/desktopScreens.ts`）
+## Multiple monitors: viewing one screen (`desktop/screens.rs`, `GET …/desktop/screens`, frontend `lib/desktopScreens.ts`)
 
-VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x11vnc、TightVNC 都是），guacd 沒有選螢幕的參數，所以
-「指定畫面」是**瀏覽器裁切**：viewer 的 `viewport` 把 Guacamole.Display 的元素挪到裁切框裡（座標仍是整張畫面的，滑鼠
-位置照舊）。螢幕在那張畫面裡的位置：
+A VNC server sends all monitors stitched into one big picture (macOS Screen Sharing, x11vnc and TightVNC all do), and guacd has no parameter for choosing a screen, so
+"pick a screen" is a **crop in the browser**: the viewer's `viewport` moves the Guacamole.Display element into a clipping frame (coordinates stay those of the whole picture, so mouse
+positions are unchanged). Where each screen sits inside that picture:
 
-1. `GET /api/reverse/server/{id}/desktop/screens?username=`（和 start 同一道門：VIEW + 允許的裝置帳號 + step-up）經連線池
-   問裝置：`uname -s` → Darwin 跑 `system_profiler SPDisplaysDataType -json`（只有大小、沒有位置）、其他 POSIX 跑
-   `xrandr --listmonitors`（試 `$DISPLAY`、`:0`、`:1`）、沒有 `uname` 跑 PowerShell `[System.Windows.Forms.Screen]::AllScreens`。
-   回 `{os, source, screens: [{name, x, y, width, height, primary}], username}`；問不到不是錯誤（`screens: []`）。
-   只有「桌面就是裝置自己」時有意義（區網主機沒有 SSH 可問）。解析器是純函式（單元測試）。
-2. 前端 `screenChoices`：有位置的螢幕平移到 (0,0)，整體和畫面大小不符但比例一樣時等比縮放（Windows 的 DPI 縮放）；
-   只有大小的（macOS）用整張畫面推排列 —— 寬相加 = 畫面寬就是側排、高相加 = 畫面高就是疊排，高度不同時取樣畫面裡的
-   黑色區域判斷貼上緣還是下緣（`isBlack` 讀 canvas）；裝置什麼都沒回報（區網主機、偵測失敗、Xvfb 只回報一顆蓋住
-   整張的）就 **`guessScreens` 靠形狀猜**：螢幕比例就那幾種（`SCREEN_RATIOS`：16:9、16:10、MacBook ≈1.545、3:2、
-   4:3、5:4、21:9），把畫面寬拆成 2–4 顆等高的常見比例（或高拆成疊放的），加總誤差 ≤ 0.5%，最準優先、其次同比例、
-   再其次少顆；比例不同的幾顆誰左誰右看不出來，每種排列都試，用黑色區域修正比畫面矮的那顆（`refineHeight`：在那
-   一段取 9 欄量非黑範圍，全部一致且量出的高度和寬度湊成常見比例才採用 —— 黑色桌布就不會被騙），最後取比例最常見
-   的排列。等高組合都湊不出時（MacBook 1728×1117 + 2560×1440），試「一顆等高 + 一顆較矮」並用黑色區域量那顆矮的。
-   單一常見比例的畫面（含 21:9 超寬）就是一顆、不猜；3840×1080 當成兩顆 16:9。猜的項目在選單裡標「依畫面形狀推測」。
-   都推不出來，選單還有等分切法與框選。
-3. 工具列「螢幕」選單（只有 VNC）：整個桌面 + 每個偵測到的螢幕（名稱、大小、主螢幕）+ **等分切法**（左 / 右半、
-   三等分、上 / 下半，`splitChoices`，不靠偵測、隨時可選）+ **自訂區域**（「框選區域…」進入框選模式：viewer 顯示
-   整張畫面、蓋一層 `AreaSelector`，拖一個矩形 → `rectFromPoints` 夾進畫面、最小 64px；Esc 或「取消」放棄；框選中
-   鍵盤滑鼠不送往遠端）+ 重新偵測。選擇記在 localStorage `telepy.desktopScreen.<tunnel>.<lanHost|device>`，
-   自訂區域記在 `telepy.desktopArea.<…>`（JSON，`parseStoredArea` 在畫面大小知道後驗證）。連上就自動偵測一次。
+1. `GET /api/reverse/server/{id}/desktop/screens?username=` (the same gate as start: VIEW + allowed device account + step-up) asks the device through the pool:
+   `uname -s` → on Darwin run `system_profiler SPDisplaysDataType -json` (sizes only, no positions); other POSIX run
+   `xrandr --listmonitors` (trying `$DISPLAY`, `:0`, `:1`); with no `uname`, run PowerShell `[System.Windows.Forms.Screen]::AllScreens`.
+   It returns `{os, source, screens: [{name, x, y, width, height, primary}], username}`; failing to find out is not an error (`screens: []`).
+   It only makes sense when "the desktop is the device itself" (a LAN host has no SSH to ask). The parsers are pure functions (unit tests).
+2. The frontend's `screenChoices`: screens with positions are shifted to (0,0), and if the total differs from the picture size but has the same aspect ratio it is scaled proportionally (Windows DPI scaling);
+   size-only reports (macOS) infer the layout from the whole picture: widths summing to the picture width = side by side, heights summing to the picture height = stacked, and when the heights differ,
+   the black regions of the picture are sampled to decide whether a screen sits at the top or bottom edge (`isBlack` reads the canvas); when the device reports nothing (LAN host, detection failed, Xvfb reporting one
+   screen covering everything) **`guessScreens` guesses from the shape**: screens come in only a few aspect ratios (`SCREEN_RATIOS`: 16:9, 16:10, MacBook ≈1.545, 3:2,
+   4:3, 5:4, 21:9), so it splits the picture width into 2–4 equal-height screens of common ratios (or the height into stacked ones) with total error ≤ 0.5%, preferring the closest fit, then equal ratios,
+   then fewer screens; when the ratios differ it cannot tell which is left or right, so it tries every order, and uses the black regions to correct a screen shorter than the picture (`refineHeight`: measure the non-black extent in 9 columns
+   across that span, and accept it only if all agree and the measured height together with the width makes a common ratio, so a black wallpaper does not fool it), and finally picks the layout whose ratios are the most common.
+   When no equal-height combination fits (a MacBook 1728×1117 + 2560×1440), it tries "one equal-height + one shorter" and measures the shorter one with the black regions.
+   A picture with a single common ratio (21:9 ultrawide included) is one screen and is not guessed at; 3840×1080 is treated as two 16:9. Guessed entries are marked "Guessed from the picture's shape" in the menu.
+   If nothing can be worked out, the menu still offers even splits and drawing an area.
+3. The toolbar "Screen" menu (VNC only): the whole desktop + each detected screen (name, size, primary) + **even splits** (left / right half,
+   thirds, top / bottom half, `splitChoices`, independent of detection and always available) + a **custom area** ("Select an area…" enters selection mode: the viewer shows
+   the whole picture with an `AreaSelector` overlay; drag a rectangle → `rectFromPoints` clamps it into the picture, minimum 64px; Esc or "Cancel" gives up; while selecting,
+   keyboard and mouse are not sent to the remote) + detect again. The choice is remembered in localStorage `telepy.desktopScreen.<tunnel>.<lanHost|device>`, and
+   a custom area in `telepy.desktopArea.<…>` (JSON, validated by `parseStoredArea` once the picture size is known). Detection runs once automatically on connect.
 
-RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只有一個虛擬螢幕。
+RDP does not need this: the size of an RDP session is decided by us (the browser's frame) and there is only one virtual screen.
 
-## 觸控縮放（`lib/desktopZoom.ts` 純函式 + 測試、`hooks/useDesktopZoom.ts`、`components/desktop/ZoomControl.tsx`）
+## Touch zoom (`lib/desktopZoom.ts` pure + tests, `hooks/useDesktopZoom.ts`, `components/desktop/ZoomControl.tsx`)
 
-兩個畫面元件（guacd 的 `DesktopViewer`、`RustDeskViewer`）都經 `useDesktopZoom().layout()` 排版：在「塞進框裡」的比例上再乘
-一個倍率，超出框的部分由框裁切、用平移看。
+Both picture components (guacd's `DesktopViewer` and `RustDeskViewer`) lay out through `useDesktopZoom().layout()`: a multiplier on top of the "fit into the frame" scale;
+whatever sticks out of the frame is clipped by the frame and viewed by panning.
 
-- 雙指捏合縮放、雙指拖曳平移；單指照舊是遠端滑鼠（點一下 = 點擊、長按 = 右鍵）。
-- 觸控裝置（`pointer: coarse`）右上角有 − / 倍率 / + 的小膠囊（點倍率 = 回到塞進框裡），倍率停在 `ZOOM_STEPS`，上限至少 4 倍。
-- 手機（`(pointer: coarse) and (max-width: 639px)`）上，畫面被縮小時（VNC / RustDesk 的固定解析度）一打開就是 `PHONE_ZOOM`
-  （1.5 倍、從左上角開始），遠端的字才看得清楚；RDP 的解析度跟著框走，不放大。新的連線、換螢幕 / 區域、解析度改變時重新套用。
-- 只有滑鼠的瀏覽器看不到任何差別。
+- Pinch with two fingers to zoom, drag with two fingers to pan; one finger is still the remote mouse (tap = click, long-press = right click).
+- On touch devices (`pointer: coarse`) there is a small −  / zoom / + pill at the top right (tapping the zoom value = back to fit); the zoom stops at `ZOOM_STEPS`, with an upper limit of at least 4×.
+- On phones (`(pointer: coarse) and (max-width: 639px)`), when the picture is shrunk (VNC / RustDesk with a fixed resolution) it opens at `PHONE_ZOOM`
+  (1.5×, starting from the top-left corner) so the remote text is readable; RDP's resolution follows the frame and is not enlarged. It is re-applied for a new connection, when switching screen / area, and when the resolution changes.
+- A browser with only a mouse sees no difference.
 
-## RustDesk（瀏覽器裡連，或經通道轉發給原生 client）
+## RustDesk (in the browser, or forwarded through the tunnel to a native client)
 
-RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，**都經通道**，桌面頁協定選「RustDesk」時預設走第一條：
+RustDesk speaks its own protocol, which guacd does not understand. Telepy has two paths, **both through the tunnel**; when the desktop page's protocol is "RustDesk" the first one is the default:
 
-> 歷史：「Telepy 當 RustDesk 的 ID / 中繼伺服器」（裝置不需要通道）的模式在 #201–#208 做過，#212 又拿掉了，只留經通道這條
-> （終端機、檔案、分享、即時 session、錄影等功能都走同一條路）。研究紀錄在 [`rustdesk-id-server.md`](rustdesk-id-server.md)；
-> 資料遷移 `2026-10-26-drop-rustdesk-server-devices` 刪掉它存的登入與兩張表。
+> History: a mode where "Telepy acts as RustDesk's ID / relay server" (devices need no tunnel) was built in #201–#208 and removed again in #212, leaving only the through-the-tunnel path
+> (terminal, files, sharing, live sessions, recording and the other features all take the same road). The research notes are in [`rustdesk-id-server.md`](rustdesk-id-server.md);
+> the data migration `2026-10-26-drop-rustdesk-server-devices` deleted the logins and two tables it stored.
 
-### 瀏覽器裡連（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`；前端 `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
+### Connecting in the browser (`rustdesk/`, `api/rustdesk.rs`, `ws/rustdesk.rs`; frontend `components/desktop/RustDeskViewer.tsx`, `lib/rustdesk.ts`)
 
-RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendored 在 `src/frontend/public/vendor/rustdesk-web-core/`，
-來源與版本記在旁邊的 `README.md`）在瀏覽器裡跑：解碼影像（WebCodecs）、做密碼挑戰、送鍵鼠。Telepy **不架 hbbs / hbbr**：
-核心以為自己在連 ID 伺服器與 relay，其實兩條都連到同一個 WebSocket，後端看第一則訊息分角色，然後把 relay 那條
-重新分框成 RustDesk 的 TCP 線路格式，接到裝置 Direct IP 埠（21118）的 `direct-tcpip` 通道。研究紀錄與量測在
-[`rustdesk-spike.md`](rustdesk-spike.md)（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
+The core of RustDesk's web client (a community TypeScript port, AGPL-3.0, vendored in `src/frontend/public/vendor/rustdesk-web-core/`,
+with its source and version recorded in the `README.md` beside it) runs in the browser: it decodes video (WebCodecs), answers the password challenge, and sends keys and mouse. Telepy **does not run hbbs / hbbr**:
+the core thinks it is connecting to an ID server and a relay, but both connections go to the same WebSocket; the backend looks at the first message to decide the role, then
+re-frames the relay one into RustDesk's TCP wire format and attaches it to a `direct-tcpip` channel to the device's Direct IP port (21118). The research notes and measurements are in
+[`rustdesk-spike.md`](rustdesk-spike.md) (1280×800 high motion: the core through the relay 28 fps / ~645 KB/s, guacd VNC 4–5 fps / 0.5–1.3 MB/s).
 
-- `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?, credential_id?, clipboard?}`；和桌面同一道門：
-  `desktop_enabled`、VIEW、step-up、`choose_username` / `allowed_usernames`、`desktop_max_sessions` 算的是 guacd + RustDesk 的總數）：
-  先 `desktop::prepare` —— 池的 lease + 對目標 Direct IP 埠開好 `direct-tcpip`（`device_offline` / `target_unreachable` … 在這裡就是
-  502）—— 再發 60 秒單次票證：`{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username, clipboard,
-  clipboard_limit, file_transfer}`（帶 `credential_id` 時多一個 `password`，見憑證庫）。
-  **密碼不經後端**：固定密碼只交給瀏覽器裡的核心，它用 RustDesk 的雜湊挑戰回應；Telepy 只中繼。
-- `/ws/rustdesk/{sid}/?ticket=`：核心會連兩次（`custom-rendezvous-server` 與 `relay-server` 都設成這個網址）。第一則 binary
-  訊息是 `RendezvousMessage`：`punch_hole_request`（欄位 8）= hbbs 角色，後端回 `relay_response`（欄位 19：uuid + relay_server =
-  同一網址）後只等著、再有 punch 就再回；`request_relay`（欄位 18）= relay 角色，接過 `prepare` 好的通道，之後 WS 的每則
-  binary 訊息 → `codec::encode_frame`（1–4 byte LE 前綴，低 2 bits = 前綴長 − 1）→ 通道；通道的 bytes → `decode_frame`
-  （上限 16 MiB）→ 一則一訊息。presence kind `rustdesk`，gateway events `rustdesk_open` / `rustdesk_close`（含時長、原因、
-  兩個方向的 byte 數）。關閉碼：4404 票證無效 / 過期、4403 權限或登入守門拒絕、4013 裝置端關閉、4014 被伺服器停止（`POST
-  /api/reverse/server/rustdesk/{sid}/stop`；檔案 session 另有「畫面那條結束了」「站台關掉傳檔」「被新的取代」）、4400 協定錯、
-  4009 從即時 session 頁結束或失去權限、4010 開它的網頁登入被登出。RustDesk 沒有閒置斷線（`desktop_session_idle_timeout` 只管 guacd）。
-- 前端（桌面頁）：表單多「RustDesk 密碼」欄（留在瀏覽器），主要按鈕「在瀏覽器裡連線」；`RustDeskViewer` 載入核心（一頁
-  同時只能有一個，核心是 window 上的全域物件），設兩個 server 選項 = `rustdeskWsUrl()`、`session_add_sync` + `session_start`，
-  自動確認「不加密的直連」msgbox（通道本身加密），`onVideoFrame` 畫到 canvas（等比縮小、不放大），鍵盤焦點在隱藏的
-  textarea（輸入法組字 → `input_string`；按鍵 → `input_key`，鍵名表在 `lib/rustdesk.ts`），滑鼠座標除以縮放比例，游標從
-  `cursor_data` 轉成 CSS cursor。工具列：延遲 / 串流按鈕（吃核心的 `update_quality_status`：延遲、fps、目標位元率）、
-  螢幕選單（對方 `peer_info` 的 displays → `switch_display`，RustDesk 原生切螢幕；畫質 best / balanced / low 對應 Telepy
-  的三個預設）、鍵盤選單（送出文字、Ctrl+Alt+Del）、全螢幕、說明、中斷。info 路徑圖用 `inBrowser` 變體（三步）。
-  剪貼簿：核心自己在分頁有焦點時讀瀏覽器剪貼簿送過去；遠端複製的文字顯示在工具列下方。
-- **準備清單（「讓那台電腦的 RustDesk 準備好」，`components/desktop/RustDeskSetup.tsx`，純函式 `lib/rustdeskSetup.ts` + 測試）**：
-  RustDesk 模式一打開（或換了目標）就從裝置探一次 Direct IP 埠，清單四步各有狀態與一張扁平的小視窗示意（用 RustDesk 自己
-  的翻譯標籤，標出要點的地方）：① RustDesk 開著且「啟用 IP 直接存取」（設定 → 安全 → 解鎖安全設定；探測被拒 =
-  `desktop.err.rdDirectIpOff`）② 固定密碼且密碼設定不是「使用一次性密碼」（連線回 `rdPassword` = 失敗）③ macOS 的螢幕錄製 /
-  輔助使用（`rdNoDisplay` = 失敗）④ 系統服務（看不到，只提醒：沒裝的話 app 一關、重開機就連不到）。這次開頁連上過 = 前三步
-  都好、清單收成一行。只有「現在該看的那一步」（第一個失敗的，否則第一個還不知道的）攤開示意，其他各一行、可點「看要點哪裡」。
-  起因：一台 Mac mini 開著 RustDesk 卻沒勾 IP 直接存取、密碼設定是「只用一次性密碼」，頁面只說沒偵測到。
-- 憑證庫：RustDesk 密碼也能存（`protocol: rustdesk`）；表單有「已存的登入」選單與「儲存這組登入」。start 帶
-  `credential_id` 時後端解開、放進回應交給核心（見憑證庫一節）；`rustdesk_open` 事件註明 with saved login '<label>'。
-  統計：通道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
-  待畫幀（核心在瀏覽器解碼，沒有這兩個數字），「網路往返」是核心自己量的瀏覽器 ↔ 裝置。
-- 範圍：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質、**聲音**、**傳檔**。沒有終端機、遠端列印、麥克風 —— 要這些用下面的 app 路。
-- **聲音**：核心自己解（RustDesk 送 Opus，WebCodecs `AudioDecoder` → `AudioContext`；瀏覽器沒有 WebCodecs 音訊就沒有聲音，
-  按鈕停用並說明）。關 = 那台的 `disable-audio`：登入的 `OptionMessage` 就請裝置別送（裝置不開 audio service，不只是靜音）；
-  連線中工具列切換走核心的 `option:toggle`（送 option 給裝置並靜音 / 取消靜音）。和 RDP 共用帳號上的 `desktop_display.audio`。
-  裝置那端送什麼（看 RustDesk 1.5 原始碼）：**Linux** 錄 PulseAudio / PipeWire 的 monitor，由已登入桌面工作階段的連線管理員
-  （`--cm`）行程負責 —— 沒人登入桌面就沒有聲音；**Windows** 錄預設輸出的 WASAPI loopback；**macOS（Apple 晶片版）** 經
-  ScreenCaptureKit 錄系統聲音（用的是本來就要給的「螢幕錄製」權限）；**macOS（Intel 版）** 只錄「音訊輸入裝置」（預設是
-  麥克風），要聽 Mac 播的聲音得裝 BlackHole 這類 loopback 裝置並在 RustDesk 設定 → 一般 → 音訊輸入裝置選它。開了聲音、
-  上次連到的是 Mac 時，準備清單多一步「Mac 的聲音」（附 RustDesk 設定的示意）。
-  實測：容器裡的 Linux RustDesk 1.5（PulseAudio null sink + 440 Hz），補上假的 `loginctl` 與 `sudo` 讓它能起連線管理員後，
-  Chromium 與 WebKit 都播出非靜音的 Opus 解碼結果；連線中從關切到開也有聲音。核心的 AudioContext 就是點擊裡解鎖的那個。
-- **傳檔（「檔案」面板，`components/desktop/RustDeskFiles.tsx`、純函式 `lib/rustdeskFiles.ts`）**：RustDesk 的傳檔是**另一條
-  連線**（登入時帶 `file_transfer`），所以面板向 `POST /api/reverse/server/rustdesk/{sid}/files` 要一個掛在畫面 session 底下的
-  子 session（`rustdesk::Kind::Files`：同目標、同帳號、自己的票證與 direct-tcpip 通道；只有開畫面的人能開；不佔
-  `desktop_max_sessions`、不另算 presence、不另發 webhook；同一個畫面最多兩個，再開收掉最舊的 —— 重新整理或 React 開發模式的
-  雙重 effect 會短暫重疊；畫面那條結束就一起結束）。錯誤碼：409 `not_connected`、503 `file_transfer_disabled` /
-  `desktop_disabled`、502 同 start。站台設定 `desktop_file_transfer`（預設開）關掉 → 不發子 session、start 回應
-  `file_transfer: false`（按鈕停用並說明）、reaper 收掉開著的。
-  - 為什麼要第二份核心：核心是 window 上的全域物件，而且同一個核心裡只有「最上面」的 session 拿得到畫面（`videoFrame` /
-    `rgba` 只給 top）；檔案 session 開在畫面那個核心裡，遠端畫面就停了。所以面板在看不見的同源 iframe 裡再載一份核心。
-  - 用的是核心自己的檔案 API：`read_remote_dir`（登入後主動要一次，空路徑 = 家目錄）、`send_files {is_remote: true}`（下載）、
-    `select_files` + `send_local_files`（上傳）、`confirm_override_file`、`cancel_job`；事件 `file_dir`、`job_progress`、
-    `job_done`、`job_error`、`update_folder_files`、`override_file_confirm`、`selected_files`。
-  - 對話框要使用者的手勢：存檔對話框（`showSaveFilePicker`）在這一頁的點擊裡開，把手換進 iframe 的核心；選檔用這一頁的
-    `<input type=file>`（也能拖放），iframe 裡核心建的 input 的 `click()` 被換成「放進這一頁已選好的檔案」。沒有存檔對話框的
-    瀏覽器（Firefox / Safari）由核心整個放記憶體再下載，所以每個檔案 ≤ 2 GB（上傳同樣限制）。
-  - 面板：麵包屑（Windows 最上層 = 磁碟機）、上一層、家目錄、隱藏檔、新資料夾、上傳資料夾、上傳、每一列的下載鈕與「⋯」選單
-    （下載 / 改名 / 刪除）、勾選多個一起刪、傳輸清單（進度、速度、取消、同名時「略過 / 取代」，只顯示最近 4 筆、進行中的在前）。
-    桌面寬度在畫面右邊（`lg:w-80`），手機在畫面下面。
-  - **整個資料夾下載成 .zip**（純函式 `lib/rustdeskFileOps.ts`、`lib/zipStream.ts`，zip 用 client-zip（MIT，串流 + ZIP64））：
-    點下載 → 存檔對話框（要在點擊裡開）→ `read_dir_to_remove_recursive`（= `ReadAllFiles`，回答是帶 id 的 `file_dir`，名稱是
-    相對路徑）數檔案與大小 → 再問一次空資料夾（`ReadEmptyDirs`：核心處理回答（`empty_dirs` 事件）但沒有送出的呼叫，面板自己
-    編這一則從 iframe 的 WebSocket 送；舊版 RustDesk 不回答，4 秒後當沒有）→ 超過 500 個檔案或 2 GB 先在傳輸清單裡問 →
-    `send_files {is_dir: true}`：核心向 `showDirectoryPicker()` 要資料夾把手再逐檔 `getFileHandle().createWritable()`，面板換成
-    一個假把手（`zipDirectoryHandle`），每個檔案的內容一塊一塊流進 zip，再串流寫進使用者選的 .zip；沒有存檔對話框的瀏覽器收在
-    記憶體（≤ 2 GB，事先就擋）。核心不會為 0 byte 的檔案開把手，所以完成後依清單補上空檔案與空資料夾。進度 = 第幾個檔案 / 總數 + 位元組。
-  - **刪除**：檔案 = `remove_file`；資料夾 = 先（連隱藏檔）遞迴列出、確認對話框講資料夾名稱與裡面幾個檔案多大，再逐一
-    `remove_file`（沿用列出的 id）最後 `remove_all_empty_dirs`（RustDesk 只刪「空的」樹）。可多選。**改名**（`rename_file`）：
-    裝置把 `new_name` 接在原本的上一層後面，所以打 `../x/名字` 或絕對路徑就是同一顆磁碟裡的搬移（對話框即時顯示結果路徑，
-    換資料夾時按鈕變「搬移」）。**新資料夾**（`create_dir`）。**上傳資料夾**（`webkitdirectory` 或拖進資料夾，拖放保留空資料夾）：
-    先依序建好資料夾（「已存在」不算錯）再逐檔上傳。每個動作等裝置對那個 id 的 `job_done` / `job_error`，錯誤原樣顯示裝置的訊息。
-  - **稽核（`rustdesk/file_audit.rs`，純函式 + 單元測試）**：中繼看得到檔案 session 的明文（加密被拒），所以讀瀏覽器送的
-    `file_action`（`ReadAllFiles` / `RemoveFile` / `RemoveDir` / `Rename`）與裝置回的 `done` / `error`，寫 `rustdesk_file_delete`
-    / `rustdesk_file_rename` 事件（只有路徑與數量，不含內容）：刪資料夾整個合成一筆（「deleted folder /x (12 files)」，有失敗就
-    附上數量與第一個錯誤），單一檔案與改名等裝置回答後各一筆，session 結束時還沒回答的也寫出來。
-  - 說明圖：面板的 info 鈕（`RustDeskFilesFlow.tsx`）畫 你的瀏覽器（第二份核心）─ Telepy 中繼 ─ 通道 ─ 裝置上的 RustDesk ─ 磁碟，
-    依階段與正在做的動作亮起，下面是四種動作各自的狀態；頁面的資料流圖在「檔案」那一列底下也列出下載 / 上傳 / 改名 / 刪除的狀態。
-- **登入守門（`rustdesk::codec::LoginGuard`）**：中繼唯一解析的東西是瀏覽器 → 裝置方向的 peer `Message` 最外層：
-  `login_request`（欄位 7）的 oneof 分支決定這條連線登入成什麼（遙控 / 傳檔 / 埠轉發 / 鏡頭 / 終端機）。畫面 session 只准遙控、
-  檔案 session 只准傳檔，不符 → 4403，`rustdesk_close` 事件寫 `refused: a file transfer login on a remote control session`。
-  帶內容的 `public_key`（欄位 4，= 要加密）也拒絕：Telepy 的假 hbbs 從不給裝置的金鑰，我們的核心永遠走不加密的 Direct IP
-  （整段在 TLS + SSH 裡），會加密的只會是改過的客戶端，而加密後就看不到它登入成什麼了。登入前超過 32 則訊息也拒絕。
-  畫面 session 上出現的 `file_action` / `file_response`（核心的檔案 API 只走傳檔連線，只有改過的客戶端會這樣送）也拒絕。
-  所以站台設定 `desktop_file_transfer` 是伺服器把關，不只是隱藏按鈕。
-- 實測（OrbStack：Debian + RustDesk 1.5.0）：畫面 session 開著時開「檔案」，遠端畫面持續更新；容器裡的 RustDesk 沒有
-  連線管理員 UI（Linux 的檔案操作、聲音擷取都交給它），所以傳檔用一層測試用的前置代理（遙控照轉、傳檔由代理服務）驗證：
-  清單、下載文字檔與 3 MB 二進位（md5 相同）、上傳、同名取代、資料流圖、手機寬度無水平捲動。之後的資料夾 / 刪除 / 改名
-  也用同一層代理（加上 `ReadAllFiles`、`ReadEmptyDirs`、多檔 `send`、`remove_*`、`create`、`rename`）驗證：資料夾 zip（串流
-  與記憶體兩條路，空資料夾、0 byte 檔案都在、md5 相同）、501 個檔案先問、改名與 `../` 搬移、新資料夾、上傳資料夾、多選刪除
-  （確認數到隱藏檔）、裝置錯誤原樣顯示、Logs 的兩種事件。聲音：開著時裝置進入 audio
-  service，關著登入時不進入、連線中切關時退出（真的聲音見上面「聲音」）。
-- 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
-  `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
-  `setTimeout(…, 0)` 下一個 tick 再答。裝置端 RustDesk 跑在 C locale（沒有 `LANG`）時 xdo 拒絕多位元組文字（log
-  `Invalid multi-byte sequence encountered`），`input_string` 的中文打不進去 —— 那是裝置的環境，不是 Telepy。
-- 實測（OrbStack 裡的 Debian + RustDesk 1.5.0 + Xvfb，headless Chrome）：連上 < 1 s，點擊 / 滾輪 / 移動落在裝置上的座標
-  分毫不差（`xev`），打字到達 xterm，即時 session 頁列出 `rustdesk`，Logs 有兩個事件。（這個瀏覽器端的 E2E 腳本沒有放進
-  repo；repo 裡的是 `tests/rustdesk_api.rs` 的假裝置測試。）
+- `POST /api/reverse/server/{id}/rustdesk/start` (`{username?, port?, lan_host_id?, credential_id?, clipboard?}`; the same gate as desktop:
+  `desktop_enabled`, VIEW, step-up, `choose_username` / `allowed_usernames`, and `desktop_max_sessions` counts guacd + RustDesk together):
+  first `desktop::prepare` — a pool lease + a `direct-tcpip` to the target's Direct IP port already open (`device_offline` / `target_unreachable` … are
+  502 right here) — then a 60-second single-use ticket: `{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username, clipboard,
+  clipboard_limit, file_transfer}` (with `credential_id` there is one more field, `password`; see saved logins).
+  **The password never goes through the backend**: the permanent password is handed only to the core in the browser, which answers RustDesk's hash challenge; Telepy only relays.
+- `/ws/rustdesk/{sid}/?ticket=`: the core connects twice (both `custom-rendezvous-server` and `relay-server` are set to this URL). The first binary
+  message is a `RendezvousMessage`: `punch_hole_request` (field 8) = the hbbs role, to which the backend answers `relay_response` (field 19: uuid + relay_server =
+  the same URL) and then just waits, answering again for each further punch; `request_relay` (field 18) = the relay role, which takes over the channel `prepare` set up, after which every binary
+  WS message → `codec::encode_frame` (1–4 byte LE prefix, low 2 bits = prefix length − 1) → channel; bytes from the channel → `decode_frame`
+  (limit 16 MiB) → one message each. Presence kind `rustdesk`, gateway events `rustdesk_open` / `rustdesk_close` (with duration, reason and
+  the byte counts in both directions). Close codes: 4404 ticket invalid / expired, 4403 refused by permissions or the login guard, 4013 closed by the device, 4014 stopped by the server (`POST
+  /api/reverse/server/rustdesk/{sid}/stop`; a files session also has "the screen session ended", "the site turned file transfer off" and "replaced by a newer one"), 4400 protocol error,
+  4009 ended from the live sessions page or access lost, 4010 the web sign-in that opened it was signed out. RustDesk has no idle disconnect (`desktop_session_idle_timeout` covers guacd only).
+- Frontend (desktop page): the form gains a "RustDesk password" field (it stays in the browser) and the main button is "Connect in the browser". `RustDeskViewer` loads the core (only one per page,
+  because the core is a global on window), sets the two server options = `rustdeskWsUrl()`, calls `session_add_sync` + `session_start`,
+  automatically confirms the "unencrypted direct connection" msgbox (the tunnel itself is encrypted), and draws `onVideoFrame` onto a canvas (scaled down proportionally, never up). Keyboard focus is in a hidden
+  textarea (IME composition → `input_string`; key presses → `input_key`, with the key-name table in `lib/rustdesk.ts`), mouse coordinates are divided by the zoom factor, and the cursor is turned from
+  `cursor_data` into a CSS cursor. Toolbar: a latency / stream button (fed by the core's `update_quality_status`: latency, fps, target bitrate),
+  a Screen menu (the peer's `peer_info` displays → `switch_display`, RustDesk's native screen switching; quality best / balanced / low maps to Telepy's
+  three presets), a Keyboard menu (type text, Ctrl+Alt+Del), fullscreen, help and disconnect. The info path diagram uses the `inBrowser` variant (three steps).
+  Clipboard: the core itself reads the browser clipboard while the tab has focus and sends it; text copied on the remote is shown below the toolbar.
+- **Setup checklist ("Get that computer's RustDesk ready", `components/desktop/RustDeskSetup.tsx`, pure `lib/rustdeskSetup.ts` + tests)**:
+  as soon as RustDesk mode opens (or the target changes) it probes the Direct IP port from the device once. The checklist has four steps, each with a state and a flat little window mock-up (using RustDesk's own
+  translated labels and marking where to click): ① RustDesk is open and "Enable direct IP access" is on (Settings → Security → Unlock security settings; a refused probe =
+  `desktop.err.rdDirectIpOff`) ② a permanent password, and the password setting is not "Use one-time password" (a connect that answers `rdPassword` = failed) ③ on macOS, Screen Recording /
+  Accessibility (`rdNoDisplay` = failed) ④ the system service (cannot be seen, only a reminder: without it, closing the app or rebooting makes the machine unreachable). Having connected in this page visit = the first three
+  steps are fine and the checklist folds to one line. Only "the step to look at now" (the first failed one, otherwise the first still unknown one) expands its mock-up; the others are one line each, with "Show where" to click.
+  Origin: a Mac mini had RustDesk open but IP direct access unchecked and the password setting on "only one-time password", and the page only said nothing was detected.
+- Saved logins: the RustDesk password can be stored too (`protocol: rustdesk`); the form has a "Saved login" select and "Save this login". When start carries
+  `credential_id` the backend decrypts it and puts it in the response for the core (see the Saved logins section); the `rustdesk_open` event notes with saved login '<label>'.
+  Stats: the tunnel segment is filled in from the monitor's latency (read once from the dashboard at connect, then following `UPDATE-TUNNEL-LATENCY`); the panel does not show frame round trip /
+  frames behind (the core decodes in the browser, so those two numbers do not exist), and "network round trip" is the browser ↔ device figure the core measures itself.
+- Scope: picture, mouse and keyboard, clipboard text, switching screens, quality, **sound**, **file transfer**. No terminal, remote printing or microphone — for those use the app path below.
+- **Sound**: the core decodes it itself (RustDesk sends Opus; WebCodecs `AudioDecoder` → `AudioContext`; a browser without WebCodecs audio has no sound,
+  and the button is disabled with an explanation). Off = that peer's `disable-audio`: the login `OptionMessage` asks the device not to send it (the device does not start its audio service, which is more than muting);
+  switching during a session from the toolbar goes through the core's `option:toggle` (sends the option to the device and mutes / unmutes). It shares `desktop_display.audio` on the account with RDP.
+  What the device sends (from the RustDesk 1.5 source): **Linux** records the PulseAudio / PipeWire monitor, handled by the connection manager
+  (`--cm`) process of the signed-in desktop session — no one signed in to the desktop means no sound; **Windows** records the WASAPI loopback of the default output; **macOS (Apple silicon)** records system sound through
+  ScreenCaptureKit (using the "Screen Recording" permission it needs anyway); **macOS (Intel)** records only the "audio input device" (by default the
+  microphone), so to hear what the Mac plays you need to install a loopback device such as BlackHole and pick it in RustDesk Settings → General → Audio input device. When sound is on and
+  the last peer connected was a Mac, the checklist gains a "Sound from a Mac" step (with a mock-up of RustDesk's settings).
+  Measured: RustDesk 1.5 for Linux in a container (a PulseAudio null sink + 440 Hz), with a fake `loginctl` and `sudo` added so it could start the connection manager,
+  Chromium and WebKit both played non-silent Opus-decoded output; switching from off to on during a session also produced sound. The core's AudioContext is the one unlocked inside the click.
+- **File transfer (the "Files" panel, `components/desktop/RustDeskFiles.tsx`, pure `lib/rustdeskFiles.ts`)**: RustDesk transfers files on a **separate
+  connection** (the login carries `file_transfer`), so the panel asks `POST /api/reverse/server/rustdesk/{sid}/files` for a
+  child session under the screen session (`rustdesk::Kind::Files`: same target, same account, its own ticket and direct-tcpip channel; only the person who opened the screen can open it; it does not count toward
+  `desktop_max_sessions`, has no presence of its own and sends no webhook; at most two per screen, and opening another closes the oldest — a reload or React dev mode's
+  double effect overlaps briefly; it ends together with the screen session). Error codes: 409 `not_connected`, 503 `file_transfer_disabled` /
+  `desktop_disabled`, 502 as in start. The site setting `desktop_file_transfer` (default on) off → no child sessions, start answers
+  `file_transfer: false` (the button is disabled with an explanation), and the reaper closes the open ones.
+  - Why a second core: the core is a global on window, and inside one core only the "top" session gets video (`videoFrame` /
+    `rgba` go only to the top one); opening the files session in the screen's core freezes the remote picture. So the panel loads a second copy of the core in a hidden same-origin iframe.
+  - It uses the core's own file API: `read_remote_dir` (asked for once after login, an empty path = the home folder), `send_files {is_remote: true}` (download),
+    `select_files` + `send_local_files` (upload), `confirm_override_file`, `cancel_job`; events `file_dir`, `job_progress`,
+    `job_done`, `job_error`, `update_folder_files`, `override_file_confirm`, `selected_files`.
+  - Dialogs need the user's gesture: the save dialog (`showSaveFilePicker`) is opened in this page's click and the handle is swapped into the iframe's core; file picking uses this page's
+    `<input type=file>` (drag and drop works too), and the `click()` of the input the core creates inside the iframe is replaced by "put in the files already chosen in this page". Browsers without a save dialog
+    (Firefox / Safari) have the core keep everything in memory and then download it, so each file is ≤ 2 GB (uploads have the same limit).
+  - The panel: breadcrumbs (on Windows the top level = the drives), up one level, home folder, hidden files, new folder, upload folder, upload, a download button and a "⋯" menu on each row
+    (download / rename / delete), multi-select to delete together, and a transfer list (progress, speed, cancel, "Skip / Replace" on a name clash, showing only the latest 4 with running ones first).
+    On desktop widths it sits to the right of the picture (`lg:w-80`), on phones below it.
+  - **Downloading a whole folder as a .zip** (pure `lib/rustdeskFileOps.ts`, `lib/zipStream.ts`; the zip is built with client-zip (MIT, streaming + ZIP64)):
+    click download → save dialog (must be opened in the click) → `read_dir_to_remove_recursive` (= `ReadAllFiles`; the answer is a `file_dir` carrying an id, names are
+    relative paths) to count files and size → ask again for empty folders (`ReadEmptyDirs`: a call the core handles the answer to (the `empty_dirs` event) but never sends; the panel
+    builds this message itself and sends it on the iframe's WebSocket; older RustDesk does not answer, and after 4 seconds it counts as none) → over 500 files or 2 GB it asks first in the transfer list →
+    `send_files {is_dir: true}`: the core asks `showDirectoryPicker()` for a folder handle and then calls `getFileHandle().createWritable()` per file; the panel substitutes
+    a fake handle (`zipDirectoryHandle`), each file's content streams into the zip chunk by chunk, and the zip is streamed into the .zip the user picked; browsers without a save dialog collect it
+    in memory (≤ 2 GB, refused up front). The core never opens a handle for a 0-byte file, so after it finishes the empty files and empty folders are added from the listing. Progress = which file / total + bytes.
+  - **Delete**: files = `remove_file`; folders = first a recursive listing (hidden files included), a confirmation naming the folder and how many files and how large, then
+    `remove_file` one by one (reusing the listing's id) and finally `remove_all_empty_dirs` (RustDesk only deletes "empty" trees). Multi-select is possible. **Rename** (`rename_file`):
+    the device appends `new_name` to the original parent folder, so typing `../x/name` or an absolute path is a move within the same disk (the dialog shows the resulting path live,
+    and when the folder changes the button becomes "Move"). **New folder** (`create_dir`). **Upload folder** (`webkitdirectory` or dragging in a folder; drag and drop keeps empty folders):
+    the folders are created first in order ("already exists" is not an error) and then the files are uploaded. Each action waits for the device's `job_done` / `job_error` for that id, and an error shows the device's message verbatim.
+  - **Audit (`rustdesk/file_audit.rs`, pure + unit tests)**: the relay sees the plaintext of the files session (encryption is refused), so it reads the browser's
+    `file_action` (`ReadAllFiles` / `RemoveFile` / `RemoveDir` / `Rename`) and the device's `done` / `error`, and writes `rustdesk_file_delete`
+    / `rustdesk_file_rename` events (paths and counts only, no content): deleting a folder is merged into one entry ("deleted folder /x (12 files)", with the count and the first error appended on failure),
+    single files and renames get one entry each after the device answers, and anything still unanswered when the session ends is written out too.
+  - Explainer diagram: the panel's info button (`RustDeskFilesFlow.tsx`) draws your browser (the second core) ─ Telepy relay ─ tunnel ─ RustDesk on the device ─ disk,
+    lit by phase and by the action in progress, with the state of the four actions below; the page's streams diagram also lists the download / upload / rename / delete states under its Files row.
+- **Login guard (`rustdesk::codec::LoginGuard`)**: the only thing the relay parses is the outermost layer of the browser → device peer `Message`:
+  the oneof branch of `login_request` (field 7) decides what this connection logs in as (remote control / file transfer / port forwarding / camera / terminal). A screen session may only do remote control,
+  a files session only file transfer; anything else → 4403, and the `rustdesk_close` event says `refused: a file transfer login on a remote control session`.
+  A `public_key` with content (field 4, = asking for encryption) is refused too: Telepy's fake hbbs never hands out the device's key, our core always uses unencrypted Direct IP
+  (the whole thing is inside TLS + SSH), so only a modified client would encrypt, and once encrypted we could no longer see what it logs in as. More than 32 messages before login are refused as well.
+  A `file_action` / `file_response` on a screen session (the core's file API only uses the file-transfer connection, so only a modified client would send these) is also refused.
+  So the site setting `desktop_file_transfer` is enforced by the server, not just by hiding a button.
+- Measured (OrbStack: Debian + RustDesk 1.5.0): opening "Files" while a screen session is open, the remote picture keeps updating; the RustDesk in the container has no
+  connection manager UI (Linux file operations and audio capture are left to it), so file transfer was verified through a test front proxy (remote control forwarded as is, file transfer served by the proxy):
+  listing, downloading a text file and a 3 MB binary (same md5), upload, replacing on name clash, the streams diagram, no horizontal scroll at phone width. The later folder / delete / rename work
+  was verified with the same proxy (plus `ReadAllFiles`, `ReadEmptyDirs`, multi-file `send`, `remove_*`, `create`, `rename`): folder zip (both the streaming
+  and the in-memory path, empty folders and 0-byte files present, same md5), 501 files asking first, rename and `../` move, new folder, upload folder, multi-select delete
+  (the confirmation counts hidden files), device errors shown verbatim, the two kinds of events in Logs. Sound: with it on the device enters the audio
+  service, with it off at login it does not, and switching it off mid-session makes it leave (real sound is under "Sound" above).
+- A pitfall: the core's `confirmInsecure()` fires the msgbox event synchronously and **only afterwards** records the resolver that waits for the answer, so answering
+  `continue-insecure-connection` synchronously inside the event handler is dropped (the connection hangs, the device side closes after 30 seconds, and the relay stats show "0 B to the device") — the viewer
+  answers in the next tick with `setTimeout(…, 0)`. When RustDesk on the device runs in the C locale (no `LANG`), xdo refuses multibyte text (log
+  `Invalid multi-byte sequence encountered`) and Chinese in `input_string` cannot be typed — that is the device's environment, not Telepy.
+- Measured (Debian + RustDesk 1.5.0 + Xvfb in OrbStack, headless Chrome): connected in < 1 s, clicks / wheel / movement landed on the device at exactly
+  the right coordinates (`xev`), typing reached xterm, the live sessions page listed `rustdesk`, and Logs had two events. (This browser-side E2E script is not in the
+  repo; what is in the repo is the fake-device test in `tests/rustdesk_api.rs`.)
 
-### 用 RustDesk app（埠轉發）
+### Using the RustDesk app (port forwarding)
 
-桌面頁的「想用 RustDesk app？」展開：把 **Direct IP Access**（TCP 21118）經裝置轉到使用者電腦，用 app 連 `127.0.0.1`。
-多螢幕切換、傳檔、聲音都是 RustDesk 自己的功能。
+The "Prefer the RustDesk app?" section on the desktop page expands to forward the device's **Direct IP Access** (TCP 21118) to the user's computer, where the app connects to `127.0.0.1`.
+Switching between multiple screens, file transfer and sound are all RustDesk's own features.
 
-- 「從裝置檢查」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：和 start 同一道門、同一條路 ——
-  池的 lease + direct-tcpip 通道，通了立刻關；不看 `desktop_enabled`；錯誤碼同 start）→ `ssh -L 21118:<host>:21118 <alias>`
-  （命令表的 `rustdesk` recipe，別名來自 `/tunnels/server/config/{id}`）→ app 的 ID 填 `127.0.0.1`（本機埠非 21118 時
-  `127.0.0.1:<port>`）。info 路徑圖在探測過、瀏覽器裡沒在連時顯示這條路（你的電腦 ─ssh─ Telepy ─通道─ 裝置 ─ RustDesk）。
-- 命令表多了「用 RustDesk」情境（`-L`，欄位：主機 `localhost` = 裝置自己、RustDesk 埠、本機埠）；區網掃描預設探測
-  21118，`lib/lanConnect.ts` 把它顯示成 RustDesk，網路頁的指令分頁也會列出它的 `-L`。
+- "Check from the device" (`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`: the same gate and path as start —
+  a pool lease + a direct-tcpip channel, closed at once when it connects; it does not look at `desktop_enabled`; error codes as in start) → `ssh -L 21118:<host>:21118 <alias>`
+  (the `rustdesk` recipe of the command sheet, the alias coming from `/tunnels/server/config/{id}`) → in the app, type `127.0.0.1` as the ID (`127.0.0.1:<port>` if the local port is not 21118).
+  After a probe, when no browser connection is active, the info path diagram shows this route (your computer ─ssh─ Telepy ─tunnel─ device ─ RustDesk).
+- The command sheet has a "Use RustDesk" scenario (`-L`, fields: host `localhost` = the device itself, RustDesk port, local port); the LAN scan probes
+  21118 by default, `lib/lanConnect.ts` shows it as RustDesk, and the Network page's Commands tab lists its `-L` too.
 
-## 輸入法（IME）與跨系統鍵盤
+## Input methods (IME) and cross-OS keyboards
 
-- 畫面把鍵盤焦點放在 `Guacamole.InputSink` 的隱藏 textarea，而不是 div：輸入法只會在可編輯元素上組字，所以 Windows 瀏覽器
-  連 macOS / Linux VNC 也能打中文、日文（組好的字以 Unicode keysym `0x01000000 + codepoint` 送出；RDP 轉成 unicode 鍵盤
-  事件，VNC 直接送 keysym，macOS 螢幕共享、x11vnc、TigerVNC、TightVNC 都收）。
-- 「鍵盤 → 送出文字」：在對話框裡用自己的輸入法打字，每個字當一次按鍵送出（每字間隔 8 ms；換行 = Enter）。遠端桌面
-  仍不理組合文字時的備援；最後手段還有「貼上」（送到遠端剪貼簿）。
-- 「Ctrl 當作 ⌘」：Control_L/R → Meta_L/R（Command）。裝置偵測為 Darwin 且瀏覽器不是 Mac 時預設開（`telepy.desktopCtrlAsCmd`
-  = auto / on / off）；按下時記住實際送出的 keysym，放開用同一個，中途切換不會卡住修飾鍵。
+- The picture puts keyboard focus on the hidden textarea of a `Guacamole.InputSink` rather than a div: an input method only composes in editable elements, so a Windows browser
+  can type Chinese or Japanese into a macOS / Linux VNC too (composed text is sent as the Unicode keysym `0x01000000 + codepoint`; RDP turns it into a unicode keyboard
+  event, VNC sends the keysym directly, and macOS Screen Sharing, x11vnc, TigerVNC and TightVNC all accept it).
+- "Keyboard → Type text…": type with your own input method in a dialog, and each character is sent as one key press (8 ms between characters; a newline = Enter). This is the fallback for when the remote desktop
+  still ignores composed text; as a last resort there is also "Paste" (sent to the remote clipboard).
+- "Send Ctrl as ⌘ Command": Control_L/R → Meta_L/R (Command). On by default when the device is detected as Darwin and the browser is not a Mac (`telepy.desktopCtrlAsCmd`
+  = auto / on / off); it remembers the keysym actually sent on key down and uses the same one on release, so switching midway never leaves a modifier stuck.
 
-## 關閉碼
+## Close codes
 
-WebSocket 關閉時把代碼也放進 reason（guacamole-common-js 的 WebSocketTunnel 以 `parseInt(reason)` 當狀態碼；
-自訂代碼本身會被翻成籠統的 SERVER_ERROR）。
+When the WebSocket closes, the code is also put in the reason (guacamole-common-js's WebSocketTunnel takes `parseInt(reason)` as the status code;
+a custom code itself would be turned into a generic SERVER_ERROR).
 
-| 代碼 | 意思 |
+| Code | Meaning |
 |---|---|
-| 4404 | session / 票證無效或過期 |
-| 4403 | 已沒有權限（VIEW 或裝置帳號） |
-| 4011 | guacd 連不上或握手失敗 |
-| 4013 | guacd 斷線或送了壞指令 |
-| 4014 | 伺服器端結束（閒置、`…/desktop/{sid}/stop`） |
-| 4400 | 瀏覽器送了解析不了的指令 |
-| 4009 | 從即時 session 頁被結束（reason = 誰），或失去權限（reason = `Telepy (access changed)`） |
-| 4010 | 開它的那個網頁登入被登出（「這個瀏覽器已被登出」；reason = user / admin / logout / reuse / disabled） |
+| 4404 | session / ticket invalid or expired |
+| 4403 | access is gone (VIEW or the device account) |
+| 4011 | guacd unreachable or the handshake failed |
+| 4013 | guacd disconnected or sent a bad instruction |
+| 4014 | ended by the server (idle, `…/desktop/{sid}/stop`) |
+| 4400 | the browser sent an instruction that could not be parsed |
+| 4009 | ended from the live sessions page (reason = who), or access lost (reason = `Telepy (access changed)`) |
+| 4010 | the web sign-in that opened it was signed out ("this browser has been signed out"; reason = user / admin / logout / reuse / disabled) |
 
-上表是 guacd 這條（`/ws/desktop/`）；RustDesk（`/ws/rustdesk/`）的關閉碼見上面 RustDesk 一節。兩條 socket 都沒有 auth frame
-（一次性 `?ticket=`），功能權限與 step-up 在 REST start 就擋了，所以不會出現 4012 / 4008。
+The table above is for the guacd path (`/ws/desktop/`); for RustDesk (`/ws/rustdesk/`) see the RustDesk section above. Neither socket has an auth frame
+(a one-time `?ticket=`), and the feature permission and step-up are already enforced at the REST start, so 4012 / 4008 never appear.
 
-guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203 / 0x0301 = RDP 登入被拒），
-前端 `lib/desktop.ts` 的 `sessionFailure` 對到翻譯與「卡在哪一段」。
+guacd's own errors reach the browser as Guacamole `error` instructions (for example 0x0203 / 0x0301 = RDP login refused),
+and `sessionFailure` in the frontend's `lib/desktop.ts` maps them to a translation and to "which hop it got stuck on".
 
-## 憑證庫（saved logins）
+## Saved logins (credential vault)
 
-`vault.rs`、`db/credentials.rs`、`api/credentials.rs`；測試 `tests/credentials_api.rs` 與 `tests/desktop_api.rs` 的 vault 段落。
+`vault.rs`, `db/credentials.rs`, `api/credentials.rs`; tests `tests/credentials_api.rs` and the vault part of `tests/desktop_api.rs`.
 
-- 每位使用者自己的：`GET /api/credentials`（可用 `tunnel_id` / `lan_host_id` / `protocol` 篩選）、`POST`、
-  `PATCH /api/credentials/{id}`、`DELETE`。只有本人看得到、用得到；管理員也不例外。
-- 每筆綁一個桌面：`protocol`（`rdp` / `vnc` / `rustdesk`）+ `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`
-  （RustDesk 只有固定密碼，`login` 留空）。同一個憑證庫也存 `ssh` 列（網路頁區網主機那一跳的登入：密碼和 / 或私鑰），
-  那是終端機的事，不在這份文件的範圍。
-  `start` 收到的 `credential_id` 若不是同一個目標（通道、區網主機、協定）就回 `credential_id` 欄位錯誤，
-  所以一筆 Windows 密碼不會被拿去登另一台。
-- 密碼以 AES-256-GCM 封存，金鑰由 `SECRET_KEY` 衍生（前綴 `telepy-vault-v1:`），AAD =
-  `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`（`ssh` 列另有 `has_key`），密碼永不回傳；
-  解密只發生在 `start`，結果跟手打的一樣只留在 session 記憶體。輪換 `SECRET_KEY` 會讓舊的存檔解不開（重存即可）。
-  **RustDesk 是唯一的例外**：挑戰回應由瀏覽器裡的核心做，後端代答不了，所以 `POST …/rustdesk/start` 帶 `credential_id`
-  時後端解開後放進回應的 `password`（只有這一次、走 TLS、不記錄），前端交給核心後不留在頁面狀態。
-- 通道或區網主機刪除時，綁在上面的憑證一起刪。使用後更新 `last_used_at`；`desktop_open` 事件會註明
-  「with saved login '<label>'」（只有名稱，沒有帳密）。
-- 前端：桌面頁的「已存的登入」選單（`hooks/useSavedLogins.ts`）與「儲存這組登入」勾選（連線前先存，再用
-  `credential_id` 連）；偏好設定的 Saved logins 分頁（`components/layout/SavedLogins.tsx`）列出與刪除。
-  任一處新增 / 刪除都會發 `telepy:saved-logins-changed`，其他畫面跟著重載。
+- Each user's own: `GET /api/credentials` (filter with `tunnel_id` / `lan_host_id` / `protocol`), `POST`,
+  `PATCH /api/credentials/{id}`, `DELETE`. Only the owner can see or use them; admins are no exception.
+- Each entry is bound to one desktop: `protocol` (`rdp` / `vnc` / `rustdesk`) + `tunnel_id` + an optional `lan_host_id` / `port`, plus `label`, `login`, `domain`
+  (RustDesk has only a permanent password, so `login` is left empty). The same vault also stores `ssh` rows (the login for the LAN host hop on the Network page: a password and / or a private key),
+  which belong to the terminal and are outside the scope of this document.
+  If the `credential_id` passed to `start` is not for the same target (tunnel, LAN host, protocol) it answers a `credential_id` field error,
+  so a Windows password is never used to log in to another machine.
+- Passwords are sealed with AES-256-GCM using a key derived from `SECRET_KEY` (prefix `telepy-vault-v1:`), with AAD =
+  `telepy-credential:{user_id}:{id}`: moving the ciphertext to another person or another entry makes it undecryptable. The API returns only `has_password` (`ssh` rows also have `has_key`) and never the password;
+  decryption happens only at `start`, and the result stays in session memory just like a typed one. Rotating `SECRET_KEY` makes old entries undecryptable (save them again).
+  **RustDesk is the only exception**: the challenge response is made by the core in the browser, and the backend cannot answer for it, so when `POST …/rustdesk/start` carries `credential_id`
+  the backend decrypts it and puts it in the response's `password` (only this once, over TLS, not logged), and the frontend hands it to the core without keeping it in page state.
+- When a tunnel or LAN host is deleted, the credentials bound to it go too. `last_used_at` is updated on use; the `desktop_open` event notes
+  "with saved login '<label>'" (the name only, no credentials).
+- Frontend: the desktop page's "Saved login" select (`hooks/useSavedLogins.ts`) and the "Save this login" checkbox (saved before connecting, then connecting with
+  `credential_id`); the Saved logins tab in Preferences (`components/layout/SavedLogins.tsx`) lists and deletes them.
+  Adding or deleting in either place fires `telepy:saved-logins-changed`, and the other views reload.
 
-## 稽核與可見性
+## Audit and visibility
 
-- gateway 事件 `desktop_open` / `desktop_close`（含持續時間、結束原因、串流摘要、guacd 的最後錯誤）與 `rustdesk_open` /
-  `rustdesk_close`（含兩個方向的 byte 數）、`rustdesk_file_delete` / `rustdesk_file_rename`，在該通道的 Logs。
-- presence 種類 `desktop` / `rustdesk`（帶它登入的裝置帳號）：擁有者 / ADMIN 在通道列表的「N 人使用中」看得到誰正開著，
-  即時 session 頁（`/tunnels/sessions`、管理員 `/tunnels/admin/sessions`）列出並可結束（4009，reason = 誰結束的）。
-- **失去權限就結束**（`access_recheck.rs`，和終端機、檔案、遠端瀏覽器同一套）：取消分享 / 分享到期、權限或允許清單變小、
-  裝置帳號改名或刪除、功能 `remote_desktop` 被關、帳號停用等一發生就 `access_recheck::kick`，另有每 10 秒的 `run` 接住其他的；
-  判斷是純函式 `lost()`（VIEW + 這個 session 用的裝置帳號還在允許清單）。結束走即時 session 的路徑：socket 4009、reason
-  `Telepy (access changed)`，`desktop_close` / `rustdesk_close` 附上 `ended by …: <為什麼>`，本人收到 `SESSION-ENDED`。
-  桌面 / RustDesk 自己的 reaper 不再重驗權限。測試 `desktop_ends_when_access_is_lost`、`rustdesk_ends_when_access_is_lost`。
-- 開它的網頁登入被撤銷（從「你的裝置」登出、管理員登出、帳號停用）：start 時記下的 web session 一被撤銷就 4010。
+- The gateway events `desktop_open` / `desktop_close` (with duration, end reason, stream summary and guacd's last error), `rustdesk_open` /
+  `rustdesk_close` (with byte counts in both directions) and `rustdesk_file_delete` / `rustdesk_file_rename` appear in that tunnel's Logs.
+- Presence kinds `desktop` / `rustdesk` (carrying the device account used to log in): owners / ADMIN see who has one open under "N using" in the tunnel list,
+  and the live sessions page (`/tunnels/sessions`, for admins `/tunnels/admin/sessions`) lists them and can end them (4009, reason = who ended it).
+- **Losing access ends the session** (`access_recheck.rs`, the same mechanism as the terminal, files and remote browser): unsharing / share expiry, a smaller permission or allow-list,
+  a device account renamed or deleted, the feature `remote_desktop` turned off, an account disabled and so on trigger `access_recheck::kick` at once, and `run` every 10 seconds catches the rest;
+  the decision is the pure `lost()` (VIEW + the device account this session uses is still on the allow-list). Ending goes through the live session path: the socket gets 4009 with the reason
+  `Telepy (access changed)`, `desktop_close` / `rustdesk_close` gain `ended by …: <why>`, and the person receives `SESSION-ENDED`.
+  The desktop / RustDesk reapers no longer re-check access. Tests `desktop_ends_when_access_is_lost`, `rustdesk_ends_when_access_is_lost`.
+- When the web sign-in that opened it is revoked (signed out from "Your devices", signed out by an admin, account disabled): the web session recorded at start gets 4010 as soon as it is revoked.
 
-## 站台設定（Settings → Remote desktop）
+## Site settings (Settings → Remote desktop)
 
-| key | 預設 | 說明 |
+| key | Default | Description |
 |---|---|---|
-| `desktop_enabled` | true | 關閉後不能開新的 session |
-| `desktop_max_sessions` | 4 | 整站同時上限（含尚未認領的票證），0 = 不限 |
-| `desktop_session_idle_timeout` | 900 | 沒有鍵盤 / 滑鼠 / 剪貼簿輸入多久就斷線（秒），0 = 不斷 |
-| `desktop_clipboard` | both | **上限**：both / to_remote / off。每個人在桌面頁或偏好設定裡自己選方向（個人設定 `desktop_clipboard`），實際用兩者較窄的那個；guacd 用 disable-copy / disable-paste 把關，RustDesk 由瀏覽器裡的核心套用（off = 那台的 `disable-clipboard`） |
-| `desktop_max_resolution` | 2560 | 要求的遠端大小上限（長邊，像素），超過等比縮小；握手與連線中的 `size` 都夾 |
-| `desktop_file_transfer` | true | 網頁內 RustDesk 的「檔案」面板（上傳 / 下載 / 改名 / 刪除）；關掉時中繼也拒絕傳檔登入、收掉開著的 |
+| `desktop_enabled` | true | When off, no new sessions can be opened |
+| `desktop_max_sessions` | 4 | Site-wide concurrent limit (including tickets not yet claimed), 0 = unlimited |
+| `desktop_session_idle_timeout` | 900 | How long without keyboard / mouse / clipboard input before disconnecting (seconds), 0 = never |
+| `desktop_clipboard` | both | **Ceiling**: both / to_remote / off. Each person picks a direction on the desktop page or in Preferences (the personal setting `desktop_clipboard`), and the narrower of the two applies; guacd enforces it with disable-copy / disable-paste, RustDesk is applied by the core in the browser (off = that peer's `disable-clipboard`) |
+| `desktop_max_resolution` | 2560 | Upper limit of the requested remote size (longer side, in pixels), scaled down proportionally if exceeded; the handshake and the `size` during a session are both clamped |
+| `desktop_file_transfer` | true | The "Files" panel of in-browser RustDesk (upload / download / rename / delete); when off the relay also refuses file-transfer logins and closes open ones |
 
-## 這條連線上走什麼（info 對話框的資料流圖）
+## What travels on this connection (the info dialog's streams diagram)
 
-`lib/desktopStreams.ts`（純函式 + 測試）→ `components/desktop/DesktopStreams.tsx`，放在 `DesktopFlow` 路徑圖下面：畫面、鍵盤與
-滑鼠、剪貼簿、聲音、檔案五條並排的直線（左 = 你的瀏覽器、右 = 桌面，箭頭 = 方向），每條的狀態 on / oneWay（剪貼簿 to_remote）/
-off（自己關的、RDP 在這個分頁靜音）/ blocked（站台上限）/ unsupported（這種連法沒有：guacd 的 VNC 沒聲音、RDP / VNC 畫面不傳檔、
-瀏覽器沒有 WebCodecs 音訊），旁邊一句為什麼。聲音那一條跟著 `lib/desktopSound.ts` 的判斷（等遠端 / 被擋住 / 沒有聲音），
-檔案那一列在 RustDesk 底下列出下載 / 上傳 / 改名 / 刪除各自的狀態。
+`lib/desktopStreams.ts` (pure + tests) → `components/desktop/DesktopStreams.tsx`, placed below the `DesktopFlow` path diagram: picture, keyboard and
+mouse, clipboard, sound and files as five parallel straight lines (left = your browser, right = the desktop, arrows = direction), each with a state: on / oneWay (clipboard to_remote) /
+off (turned off by you, RDP muted in this tab) / blocked (site ceiling) / unsupported (this way of connecting does not have it: guacd's VNC has no sound, RDP / VNC pictures do not carry files,
+the browser has no WebCodecs audio), and a one-line reason beside it. The sound line follows `lib/desktopSound.ts` (waiting for the remote / blocked / no sound),
+and the Files row lists the states of download / upload / rename / delete under RustDesk.
 
-info 對話框（`DesktopInfoDialog`）上半是 `DesktopFlow` 的路徑圖：你的瀏覽器 ─ Telepy ─ 裝置 ─ 桌面，每一點 waiting / active /
-ok / failed（`lib/desktop.ts` 的 `spotStates`，失敗由 `sessionFailure` 對到卡在哪一段），連線中兩段線上標往返時間；RustDesk
-在瀏覽器裡連時用 `inBrowser` 變體，用 app 時畫埠轉發那條路。
+The info dialog (`DesktopInfoDialog`) has the `DesktopFlow` path diagram in its upper half: your browser ─ Telepy ─ device ─ desktop, each point waiting / active /
+ok / failed (`spotStates` in `lib/desktop.ts`; a failure is mapped by `sessionFailure` to the hop it got stuck on), with round trips labelled on the two links while connected; in-browser RustDesk
+uses the `inBrowser` variant, and with the app it draws the port-forwarding route.
 
-## 連線方式比較（`components/desktop/ConnectionWays.tsx`、純函式 `lib/connectionWays.ts` + 測試）
+## Comparing the ways to connect (`components/desktop/ConnectionWays.tsx`, pure `lib/connectionWays.ts` + tests)
 
-一個對話框並排比較兩種都經通道的連法：RDP / VNC 經 guacd（Telepy 把畫面轉成圖片）與 RustDesk（瀏覽器裡的核心解碼）。
-兩條路徑欄位對齊（瀏覽器 ─ Telepy ─ 裝置 ─ 桌面；通道 = 雙線、裝置到桌面的那一跳 = 虛線），每條下面是「誰加密哪一段」
-的標尺（TLS / SSH / 協定自己的，`layerColumns`），標出畫面在哪裡畫；再來是一張事實表（手機上變卡片，`ROWS`：含聲音與檔案）
-和怎麼選。現在用的那種（`wayFor(protocol)`）會被標出來。從桌面頁標題列、協定欄的提示、info 對話框的頁尾都打得開。
-事實變了就改 `ROWS`。
+![The two ways to connect, side by side](images/en/desktop-ways.png)
 
-## 部署
+One dialog compares side by side the two ways of connecting, both through the tunnel: RDP / VNC through guacd (Telepy turns the screen into images) and RustDesk (decoded by the core in the browser).
+The two paths are aligned in columns (browser ─ Telepy ─ device ─ desktop; tunnel = double line, the device-to-desktop hop = dashed line), under each is a ruler of "who encrypts which hop"
+(TLS / SSH / the protocol's own, `layerColumns`), marking where the picture is drawn; next comes a fact table (cards on phones, `ROWS`: including sound and files)
+and how to choose. The one in use (`wayFor(protocol)`) is marked. It can be opened from the desktop page's title bar, the hint on the protocol field and the footer of the info dialog.
+When a fact changes, update `ROWS`.
 
-`docker-compose.yml` 的 `guacd` 服務（`guacamole/guacd:1.6.0`）只在 internal 網路 `telepy-desktop-${PROJECT_NAME}`；
-backend 同時在 `telepy-network` 與它上面。環境變數：`GUACD_ADDR`（預設 `guacd:4822`）、`DESKTOP_CALLBACK_HOST`
-（guacd 連回 backend 用的名字，compose 裡是 `backend`；未設時用 `HOSTNAME`）。
+## Deployment
 
-## 裝置端需求
+The `guacd` service in `docker-compose.yml` (`guacamole/guacd:1.6.0`) is only on the internal network `telepy-desktop-${PROJECT_NAME}`;
+the backend is on both `telepy-network` and that one. Environment variables: `GUACD_ADDR` (default `guacd:4822`), `DESKTOP_CALLBACK_HOST`
+(the name guacd uses to connect back to the backend, `backend` in compose; if unset, `HOSTNAME` is used).
 
-- sshd 允許 TCP 轉發（`AllowTcpForwarding`，OpenSSH 與 Win32-OpenSSH 預設開啟）。
-- 桌面伺服器：Windows 遠端桌面（3389）、macOS 螢幕共享（5900，要在「VNC 檢視器可以使用密碼控制螢幕」設密碼）、
-  TigerVNC / x11vnc（5900 + display，例如 :1 = 5901）、xrdp（3389）。
-- RDP 用 `security=any` + `ignore-cert=true`；NLA 需要正確的 Windows 帳密（含網域）。
+## Device requirements
+
+- sshd allows TCP forwarding (`AllowTcpForwarding`, on by default in OpenSSH and Win32-OpenSSH).
+- A desktop server: Windows Remote Desktop (3389), macOS Screen Sharing (5900; set a password under "VNC viewers may control screen with password"),
+  TigerVNC / x11vnc (5900 + display, for example :1 = 5901), xrdp (3389).
+- RDP uses `security=any` + `ignore-cert=true`; NLA needs the correct Windows credentials (domain included).

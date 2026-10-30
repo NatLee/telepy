@@ -1,5 +1,7 @@
 # The `telepy` command line and personal API tokens
 
+<p align="center"><b>English</b> | <a href="./cli.zh-TW.md">繁體中文</a> | <a href="./cli.ja.md">日本語</a></p>
+
 `telepy` is Telepy from your terminal: list tunnels, `ssh` / `scp` / `sftp` straight into a device, run a command
 on one device or on every device with a label, copy files, see and end live sessions, play terminal recordings and
 run toolbox snippets. Scripts and CI use the same commands with a **personal API token** instead of a browser sign-in.
@@ -13,6 +15,8 @@ computer you ran `telepy login` on), **Your tokens**, **What a token can call** 
 the matching `telepy` command) and **Activity** (what your tokens and CLI sign-ins did).
 
 ## Four ways in, four keys
+
+![Four ways in: revoking one lane leaves the others working](images/en/ways-in.gif)
 
 ```
  this browser ───────────────── web sign-in session ─────────────────────┐
@@ -161,6 +165,8 @@ output is piped; `NO_COLOR` draws it without colour). The text beside it is wrap
 terminal it goes below Tapi, and in a very narrow one Tapi is left out. Set `TELEPY_NO_MASCOT=1` to leave it out.
 
 ## Commands
+
+![How the CLI reaches your devices](images/en/cli-flow.png)
 
 ```sh
 telepy ls                                  # NAME  HEALTH  LATENCY  ACCOUNTS  LABELS  GROUP  SEEN

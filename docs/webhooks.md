@@ -1,122 +1,130 @@
 # Webhooks
 
-> 每個人把自己會收到的 Telepy 通知送到 Slack、Discord、Google Chat、Microsoft Teams、Telegram、ntfy（手機推播）
-> 或自己的服務；管理員另外共管「全站」webhook，收整台伺服器的重要事件。
-> 後端程式：`webhooks/`（`catalog.rs` 事件目錄、`text.rs` 三種語言的句子、`format.rs` 各服務格式、`sign.rs` 簽章、
-> `target.rs` 位址檢查、`mod.rs` 發送）；`api/webhooks.rs`、`db/webhooks.rs`；狀態告警的計時在 `monitor/alerts.rs` + `monitor/runner.rs`。
-> 前端：`/tunnels/webhooks` = 我的 webhook（管理員也只看到自己的；下面唯讀列出全站 webhook）、`/tunnels/admin/webhooks` =
-> 全站 webhook（側欄管理區「規則與通知 → Webhooks」）；兩頁共用 `components/webhooks/WebhooksView.tsx`（`hooks/useWebhooksPage.ts`、
-> `lib/webhooks.ts`），退出用的對話框在 `components/webhooks/OptOut.tsx`。
+<p align="center"><b>English</b> | <a href="./webhooks.zh-TW.md">繁體中文</a> | <a href="./webhooks.ja.md">日本語</a></p>
 
-## 兩種 webhook
+> Everyone can send the Telepy notifications they would receive anyway to Slack, Discord, Google Chat, Microsoft Teams, Telegram, ntfy (phone push)
+> or their own service; admins can also run "site-wide" webhooks that carry the important events of the whole server.
+> Backend: `webhooks/` (`catalog.rs` event catalogue, `text.rs` sentences in three languages, `format.rs` per-service formats, `sign.rs` signing,
+> `target.rs` address check, `mod.rs` delivery); `api/webhooks.rs`, `db/webhooks.rs`; the timing of status alerts lives in `monitor/alerts.rs` + `monitor/runner.rs`.
+> Frontend: `/tunnels/webhooks` = my webhooks (admins see only their own there; the site-wide webhooks are listed read-only below them), `/tunnels/admin/webhooks` =
+> site-wide webhooks (sidebar admin section "Rules & alerts → Webhooks"); both pages share `components/webhooks/WebhooksView.tsx` (`hooks/useWebhooksPage.ts`,
+> `lib/webhooks.ts`), and the opt-out dialogs are in `components/webhooks/OptOut.tsx`.
 
-| | 個人 webhook | 全站 webhook |
+## Two kinds of webhook
+
+| | Personal webhook | Site-wide webhook |
 | --- | --- | --- |
-| 誰建立 / 管理 | 每個人自己的（別人看不到） | 管理員；每位管理員都看得到、都能改 |
-| 收什麼 | 他在網頁上本來就會收到的通知 | 精選的重要事件（狀態、裝置身分與安全、帳號） |
-| 範圍 | 自己擁有或被分享的通道（可再限定幾條） | 每條通道、每個帳號（可限定在任何通道） |
-| 內網位址 | 預設不准（見「位址檢查」） | 可以 |
-| 別人看得到什麼 | 什麼都看不到 | 每個人在自己的 Webhooks 頁看得到摘要（不含網址、header、密鑰） |
-| 能不能把通道排除 | — | 「預設」模式：通道的 owner 與 ADMIN 被分享者可以退出自己的通道；「強制」模式：不行 |
+| Who creates / manages it | Each person, for themselves (nobody else can see it) | Admins; every admin can see and edit it |
+| What it carries | The notifications that person already gets in the web UI | A curated set of important events (status, device identity and security, accounts) |
+| Scope | Tunnels the person owns or that are shared with them (can be narrowed to a few) | Every tunnel and every account (can be limited to chosen tunnels) |
+| Private addresses | Not allowed by default (see "Address check") | Allowed |
+| What others can see | Nothing | Everyone sees a summary on their own Webhooks page (no URL, headers or secret) |
+| Can a tunnel be excluded | — | "Default" mode: a tunnel's owner and ADMIN sharees can opt their own tunnels out; "Enforced" mode: they cannot |
 
-網站設定 → 通知分頁（`notify_*`）：
+Site settings → Notifications tab (`notify_*`):
 
-- `notify_user_webhooks`（預設開）：關掉就暫停所有個人 webhook，全站的不受影響。
-- `notify_private_targets`（預設關）：個人 webhook 能不能連內網 / 本機 / 雲端 metadata。
-- `notify_max_webhooks`（預設 10，0–100）：每人上限。
+- `notify_user_webhooks` (on by default): turning it off pauses every personal webhook; site-wide ones are unaffected.
+- `notify_private_targets` (off by default): whether personal webhooks may reach private networks, localhost and cloud metadata.
+- `notify_max_webhooks` (default 10, 0–100): the per-person limit.
 
-管理員也可以在管理 → 使用者與權限 → 功能權限（`/tunnels/admin/access`）替某些人（或某個使用者群組）關掉「個人 webhook」
-功能：那個人的 Webhooks 頁換成說明，`/api/webhooks*` 回 403 `feature_disabled`（退出全站 webhook 的兩個路由不受影響）。
-帳號被停用時，他的個人 webhook 不再送出。
+Admins can also turn the "Personal webhooks" feature off for certain people (or a user group) under Users & access → Feature permissions (`/tunnels/admin/access`):
+that person's Webhooks page is replaced by an explanation, and `/api/webhooks*` answers 403 `feature_disabled` (the two routes for opting out of site-wide webhooks are not affected).
+When an account is disabled, its personal webhooks stop sending.
 
-以前的單一告警網址（`notify_webhook_url` / `notify_down_delay`）在升級時（data migration
-`2026-10-26-site-webhook-from-settings`）搬成一個名為 “Status alerts” 的全站 webhook：同樣的四個狀態事件加上
-`tunnel.ip_changed`、同樣的延遲，然後清掉設定。
+The former single alert URL (`notify_webhook_url` / `notify_down_delay`) was moved during the upgrade (data migration
+`2026-10-26-site-webhook-from-settings`) into a site-wide webhook named "Status alerts": the same four status events plus
+`tunnel.ip_changed`, the same delay, and the old settings were cleared.
 
-## 全站 webhook：誰看得到、誰能退出
+## Site-wide webhooks: who sees them, who can opt out
 
-**每個人都看得到。** 個人 Webhooks 頁在自己的 webhook 下面有一段唯讀的「全站 Webhook」：名稱、服務（Slack、Teams…）、
-事件、涵蓋哪些通道（只列他看得到的，其餘只說還有幾條）、開著 / 暫停。網址、自訂 header、簽章密鑰、送出紀錄與建立者都不給。
-一般使用者只看到開著的與因為一直失敗而暫停的；管理員在這裡看到「管理」連結，改的地方仍是管理區的全站 Webhook 頁。
+![Where a tunnel's events go: event, site-wide webhook, opt-out, channel](images/en/webhook-optout.png)
 
-**兩種模式**（`mode`，只有全站 webhook 有）：
+**Everyone can see them.** Under their own webhooks, the personal Webhooks page has a read-only "Site-wide webhooks" section: name, service (Slack, Teams…),
+events, which tunnels it covers (only the ones that person can see; the rest are just counted), on / paused.
+The URL, custom headers, signing secret, delivery history and creator are never shown.
+Regular users see only webhooks that are on, or paused because they keep failing; admins see a "Manage" link there, but changes are still made on the site-wide Webhooks page in the admin section.
 
-- **預設**（`default`）：管理員對話框裡的「允許使用者覆寫」開著（新建的預設如此；升級前就有的全站 webhook 也是這個）。
-  通道的 **owner 或 ADMIN 被分享者**可以把那條通道從這個 webhook 退出：在 Webhooks 頁的全站區塊按「退出我的通道」，
-  逐條通道開關（只列他管、而且這個 webhook 涵蓋的通道；別人已經退出的也會顯示）。
-- **強制**（`enforced`）：「允許使用者覆寫」關掉，卡片上有「強制」標籤；涵蓋的通道一律送，沒有人能退出，之前的退出暫時不算。
+**Two modes** (`mode`, site-wide webhooks only):
 
-送出時的規則（`webhooks::opted_out`）：一個關於通道的事件，只要那條通道**現在的**管理者（owner 與目前權限是 ADMIN 的被分享者，
-送出當下才讀）裡有人退出了，預設模式的全站 webhook 就不送；某人失去 ADMIN，他的退出就不再算。帳號事件（登入失敗、新使用者）
-不能退出；個人 webhook 沒有退出這回事。狀態告警（offline / online / degraded / recovered）一樣照這條規則；測試送出與重送不看退出。
+- **Default** (`default`): "Let people override" is on in the admin dialog (this is the default for new webhooks, and for site-wide webhooks that existed before the upgrade).
+  A tunnel's **owner or ADMIN sharee** can opt that tunnel out of the webhook: in the site-wide section of the Webhooks page, press "Opt my tunnels out"
+  and switch tunnels off one by one (only tunnels they manage that this webhook covers are listed; tunnels that someone else already opted out also show up).
+- **Enforced** (`enforced`): "Let people override" is off and the card shows an "Enforced" chip. Every covered tunnel is always sent, nobody can opt out, and earlier opt-outs are ignored for now.
 
-管理員在全站 webhook 卡片上看到「N 條已退出」，點開是哪條通道、誰退出、什麼時候、現在還算不算。每次退出或取消退出都在那條
-通道的 Logs 記一筆 `webhook_optout` 事件。通道刪掉、webhook 刪掉時，相關的退出一起刪。全站區塊的「退出怎麼運作」按鈕打開一張圖：
-事件 ─ 全站 webhook ─ 退出 ─ 管理員的頻道，挑一個 webhook 和一條通道就亮出會不會送、由哪一層決定。
+Delivery rule (`webhooks::opted_out`): an event about a tunnel is not sent to a default-mode site-wide webhook as soon as **any current** manager of that tunnel
+(the owner, plus sharees whose permission is ADMIN, read at the moment of delivery) has opted out; when someone loses ADMIN, their opt-out stops counting.
+Account events (failed sign-in, new user) cannot be opted out of; personal webhooks have no opt-out. Status alerts (offline / online / degraded / recovered) follow the same rule;
+test sends and re-sends ignore opt-outs.
 
-## 事件
+On a site-wide webhook's card, admins see "N opted out"; opening it shows which tunnel, who opted out, when, and whether it still counts. Every opt-out or cancelled opt-out is recorded
+as a `webhook_optout` event in that tunnel's Logs. When a tunnel or a webhook is deleted, the related opt-outs are deleted with it. The "How opt-outs work" button in the site-wide section opens a diagram:
+event ─ site-wide webhook ─ opt-out ─ admins' channel; pick a webhook and a tunnel and it lights up whether the event is sent and which layer decides.
 
-收件人一律沿用同一件事的站內通知對象，所以 webhook 不會讓任何人知道他在網頁上看不到的事；取消分享、權限調降之後，
-那條通道的事件就不再送給他。
+## Events
 
-| 事件 | 分組 | 個人 webhook 誰收得到 | 全站 |
+Recipients always follow the in-app notification for the same event, so a webhook never tells anyone about something they cannot see in the web UI; after a share is ended
+or a permission is lowered, events of that tunnel are no longer sent to that person.
+
+| Event | Group | Who receives it (personal webhook) | Site-wide |
 | --- | --- | --- | --- |
-| `tunnel.offline` / `tunnel.online` | 通道狀態 | owner 與所有被分享者 | ✓ |
-| `tunnel.degraded` / `tunnel.recovered` | 通道狀態 | owner 與所有被分享者 | ✓ |
-| `tunnel.ip_changed` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
-| `tunnel.host_key_changed` | 裝置身分 | owner 與所有被分享者 | ✓ |
-| `device.claim_attempt` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
-| `tunnel.device_warning` | 裝置身分 | owner 與 ADMIN 被分享者（根磁碟剩不到 10 % 或 2 GB、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數兩倍、等著重開機；每條通道每種一天最多一次，data 有 `warning` / `detail` / `avail` / `total` / `load1` / `cpus`） | ✓ |
-| `share.received` | 分享與存取 | 被分享的人 | |
-| `share.ended` | 分享與存取 | 分享的雙方，不含動手的人 | |
-| `access.requested` | 分享與存取 | owner 與 ADMIN，不含申請人 | |
-| `access.decided` | 分享與存取 | 申請人 | |
-| `command.approval_requested` | 指令規則 | 這條規則的核准人（規則有指定就是那些人，否則 owner 與 ADMIN；自己在終端機打的不送，自己的 MCP agent 的會送） | |
-| `command.approval_decided` | 指令規則 | 申請人（自己決定或取消的不送） | |
-| `command.blocked` | 指令規則 | owner 與 ADMIN，不含本人；訊息含指令 | |
-| `session.started` | 連線 | owner 與 ADMIN，不含本人（終端機、區網終端機、檔案、瀏覽器、桌面、RustDesk） | |
-| `session.watched` | 連線 | 被看的人（owner / ADMIN / 管理員開始看他的網頁終端機；data 有 `by` / `account` / `lan_host`） | |
-| `mcp.session_opened` / `mcp.session_closed` | 連線 | agent 的使用者與通道 owner（data 的 `kind`：`ssh` 或 `browser`） | |
-| `account.sign_in` | 登入 | 帳號本人 | |
-| `account.sign_in_new_device` | 登入 | 帳號本人（90 天內成功登入都沒見過的國家或瀏覽器） | |
-| `account.sign_in_failed` | 登入 | 帳號本人 | ✓（任何帳號） |
-| `key.expiring` | SSH 金鑰 | 金鑰的擁有者（個人 SSH 金鑰 7 天內到期） | |
-| `key.expired` | SSH 金鑰 | 金鑰的擁有者（剛到期：gateway 拒絕、從裝置移除） | |
-| `user.created` | 管理 | — | ✓ |
-| `webhook.test` | — | 「送測試」按鈕，不能訂 | |
+| `tunnel.offline` / `tunnel.online` | Tunnel status | The owner and all sharees | ✓ |
+| `tunnel.degraded` / `tunnel.recovered` | Tunnel status | The owner and all sharees | ✓ |
+| `tunnel.ip_changed` | Device identity | The owner and ADMIN sharees | ✓ |
+| `tunnel.host_key_changed` | Device identity | The owner and all sharees | ✓ |
+| `device.claim_attempt` | Device identity | The owner and ADMIN sharees | ✓ |
+| `tunnel.device_warning` | Device identity | The owner and ADMIN sharees (root disk under 10 % or 2 GB free, available memory under 10 %, 1-minute load above twice the CPU count, reboot pending; at most once a day per tunnel and kind; data has `warning` / `detail` / `avail` / `total` / `load1` / `cpus`) | ✓ |
+| `share.received` | Sharing and access | The person it was shared with | |
+| `share.ended` | Sharing and access | Both sides of the share, except whoever did it | |
+| `access.requested` | Sharing and access | The owner and ADMINs, except the requester | |
+| `access.decided` | Sharing and access | The requester | |
+| `command.approval_requested` | Command rules | The approvers of that rule (the people the rule names, otherwise the owner and ADMINs; not sent for commands typed in your own terminal, but sent for commands from your own MCP agent) | |
+| `command.approval_decided` | Command rules | The requester (not sent when they decided or cancelled it themselves) | |
+| `command.blocked` | Command rules | The owner and ADMINs, except the person involved; the message includes the command | |
+| `session.started` | Connections | The owner and ADMINs, except the person involved (terminal, LAN terminal, files, browser, desktop, RustDesk) | |
+| `session.watched` | Connections | The person being watched (the owner / an ADMIN / an admin starts watching their web terminal; data has `by` / `account` / `lan_host`) | |
+| `mcp.session_opened` / `mcp.session_closed` | Connections | The agent's user and the tunnel owner (`kind` in data: `ssh` or `browser`) | |
+| `account.sign_in` | Sign-in | The account holder | |
+| `account.sign_in_new_device` | Sign-in | The account holder (a country or browser not seen in any successful sign-in within 90 days) | |
+| `account.sign_in_failed` | Sign-in | The account holder | ✓ (any account) |
+| `key.expiring` | SSH keys | The key's owner (a personal SSH key expires within 7 days) | |
+| `key.expired` | SSH keys | The key's owner (just expired: the gateway refuses it and it is removed from devices) | |
+| `user.created` | Administration | — | ✓ |
+| `webhook.test` | — | The "Send test" button; cannot be subscribed to | |
 
-`key.*` 指的是金鑰頁上的**個人 SSH 金鑰**（筆電經 gateway 連裝置用的那把；管理員用 `user_key_max_days` 讓它們有效期限）。
-通道（裝置）金鑰刻意不會到期，所以沒有對應事件。每 10 分鐘看一次（`webhooks/keys.rs`）：7 天內到期送 `key.expiring`
-（`days_left` 無條件進位），到期了送 `key.expired`（只送 48 小時內到期的，舊的到期不補發）；每把金鑰每個階段每個到期時間只送一次
-（`telepy_key_expiry_notice`），續期改了到期時間就重新算。
+`key.*` is about the **personal SSH keys** on the Keys page (the one a laptop uses to reach devices through the gateway; admins give them a lifetime with `user_key_max_days`).
+Tunnel (device) keys deliberately never expire, so there is no event for them. The check runs every 10 minutes (`webhooks/keys.rs`): a key expiring within 7 days sends `key.expiring`
+(`days_left` rounded up), an expired one sends `key.expired` (only keys that expired in the last 48 hours; older expiries are not sent retroactively); each key sends each stage once per expiry time
+(`telepy_key_expiry_notice`), and a renewal that changes the expiry time starts over.
 
-狀態事件（offline / online / degraded / recovered）不是一發生就送：每個 webhook 有自己的延遲（立刻 – 1 天，預設 1 分鐘），
-狀況要持續超過延遲才送；只有送過 offline / degraded 的，結束時才送 online / recovered。只追蹤 webhook 建立之後的變化。
+Status events (offline / online / degraded / recovered) are not sent the instant they happen: each webhook has its own delay (immediately – 1 day, default 1 minute),
+and the condition must last longer than the delay; online / recovered is only sent when offline / degraded was sent before. Only changes after the webhook was created are tracked.
 
-### 跟頁面提示、桌面通知的關係
+### How this relates to in-page toasts and desktop notifications
 
-網頁上的提示（toast）與桌面通知有自己的一套偏好（偏好設定 → 通知；管理員在管理 → 規則與通知 → 通知設全站預設，
-可以強制某些事件一定提示；每條通道的選單還能把那條通道的狀態或全部通知靜音）。那套設定**只決定瀏覽器顯示什麼**，
-不影響 webhook：在網頁上關掉或靜音的事件，個人 webhook 有訂就照送；反過來，webhook 只看它自己的事件清單、通道篩選與
-（全站的）退出。
+![How an in-app or desktop notification is decided](images/en/notify-flow.png)
 
-## 送出的內容
+In-page notifications (toasts) and desktop notifications have their own preferences (Preferences → Notifications; admins set site-wide defaults under Rules & alerts → Notifications
+and can enforce some events so they are always shown; each tunnel's menu can also mute that tunnel's status or all of its notifications). Those settings **only decide what the browser shows**
+and do not affect webhooks: an event you turned off or muted in the web UI is still sent to a personal webhook that subscribes to it; conversely, a webhook looks only at its own event list, its tunnel filter and
+(for site-wide ones) opt-outs.
 
-每個 webhook 選格式（預設依網址判斷）與訊息語言（English / 繁體中文 / 日本語，句子在後端組，因為訊息直接進聊天室）。
+## What is sent
 
-| 格式 | 網址判斷 | 內容 |
+Each webhook picks a format (by default detected from the URL) and a message language (English / 繁體中文 / 日本語; the sentences are built in the backend, because the message goes straight into a chat room).
+
+| Format | Detected from the URL | Content |
 | --- | --- | --- |
-| Telepy JSON | 其他網址 | 下面的完整 JSON |
-| Slack 相容 | `hooks.slack.com` | `{"text"}`，跳脫 `& < >`（Mattermost、Rocket.Chat 也吃） |
+| Telepy JSON | Any other URL | The full JSON below |
+| Slack-compatible | `hooks.slack.com` | `{"text"}`, with `& < >` escaped (Mattermost and Rocket.Chat accept it too) |
 | Discord | `discord.com/api/webhooks/…` | `{"content", "allowed_mentions": {"parse": []}}` |
-| Google Chat | `chat.googleapis.com` | `{"text"}`，`<…>` 語法失效 |
-| Microsoft Teams | `*.logic.azure.com`、`*.webhook.office.com`、`*.powerplatform.com` | Adaptive Card（Workflows 的「收到 webhook 時張貼」） |
-| Telegram | `api.telegram.org` | `{"text"}`；`chat_id` 放在網址（`…/sendMessage?chat_id=…`） |
-| ntfy | `ntfy.sh`、`ntfy.*` | 純文字，`title` / `tags` / `priority` / `click` 加在網址參數 |
+| Google Chat | `chat.googleapis.com` | `{"text"}`, with the `<…>` syntax neutralised |
+| Microsoft Teams | `*.logic.azure.com`, `*.webhook.office.com`, `*.powerplatform.com` | An Adaptive Card (Workflows' "When a webhook request is received") |
+| Telegram | `api.telegram.org` | `{"text"}`; `chat_id` goes in the URL (`…/sendMessage?chat_id=…`) |
+| ntfy | `ntfy.sh`, `ntfy.*` | Plain text; `title` / `tags` / `priority` / `click` are added as URL parameters |
 
-名稱、指令這些是使用者打的字，所以各格式都讓 `@everyone` / `<!channel>` 這類提及失效。
+Names and commands are text that users typed, so every format neutralises mentions such as `@everyone` / `<!channel>`.
 
-Telepy JSON：
+Telepy JSON:
 
 ```json
 {
@@ -133,64 +141,64 @@ Telepy JSON：
 }
 ```
 
-`tunnel` 只有跟通道有關的事件才有；`data` 依事件不同（`by`、`command`、`reason`…，見 `webhooks/text.rs` 用到的欄位）。
-連結用 `PUBLIC_URL`（沒設就 `https://SERVER_DOMAIN`；都沒有就不附連結）。
+`tunnel` is present only for events about a tunnel; `data` depends on the event (`by`, `command`, `reason`…; see the fields used in `webhooks/text.rs`).
+The link uses `PUBLIC_URL` (or `https://SERVER_DOMAIN` if unset; with neither, no link is included).
 
-## 自訂 header
+## Custom headers
 
-每個 webhook 最多 10 個，例如自己服務的 `Authorization`、ntfy 的 access token。名稱必須是 HTTP token、不能重複，
-Telepy 自己設的（`content-type`、`user-agent`、`webhook-*`、`x-telepy-event`、`host`、`content-length`…）不能改；
-值是 1–2048 個可見 ASCII（不能換行）。以 `SECRET_KEY` 衍生的金鑰加密存放（AAD `telepy-webhook-headers:<id>`），
-API 只回給能管這個 webhook 的人；`PATCH` 帶 `headers` 就整組取代，沒帶就不變。換掉 `SECRET_KEY` 之後讀不出來：送出會失敗並說明，
-編輯畫面提示重新輸入（`headers_unreadable`）。
+Up to 10 per webhook, for example your own service's `Authorization` or an ntfy access token. Names must be HTTP tokens and unique;
+the ones Telepy sets itself (`content-type`, `user-agent`, `webhook-*`, `x-telepy-event`, `host`, `content-length`…) cannot be changed;
+values are 1–2048 visible ASCII characters (no line breaks). They are stored encrypted with a key derived from `SECRET_KEY` (AAD `telepy-webhook-headers:<id>`),
+and the API returns them only to people who can manage that webhook; a `PATCH` with `headers` replaces the whole set, and without it nothing changes. After `SECRET_KEY` is replaced they cannot be read:
+deliveries fail with an explanation, and the edit screen asks you to enter them again (`headers_unreadable`).
 
-## 簽章（Standard Webhooks）
+## Signing (Standard Webhooks)
 
-每個請求都有：
+Every request carries:
 
-- `webhook-id`：訊息代號，重試時不變（拿來去重）
-- `webhook-timestamp`：這次送出的 Unix 秒（拒絕太舊的，防重送）
-- `webhook-signature`：`v1,` + base64(HMAC-SHA256(key, `{id}.{timestamp}.{body}`))，key = 密鑰 `whsec_` 後面 base64 解開的位元組
-- `x-telepy-event`：事件名稱
+- `webhook-id`: the message id, unchanged across retries (use it to de-duplicate)
+- `webhook-timestamp`: the Unix seconds of this attempt (reject old ones to prevent replay)
+- `webhook-signature`: `v1,` + base64(HMAC-SHA256(key, `{id}.{timestamp}.{body}`)), where key = the bytes you get by base64-decoding what follows `whsec_` in the secret
+- `x-telepy-event`: the event name
 
-密鑰在卡片選單的「簽章密鑰」看 / 複製 / 換；以 `SECRET_KEY` 衍生的金鑰加密存放（AAD 綁 webhook id），換掉 `SECRET_KEY`
-之後讀不出來，要換一把新的。任何 Standard Webhooks 函式庫都能驗；對話框裡有 Node.js / Python 範例。
+View, copy or rotate the secret under "Signing secret" in the card menu; it is stored encrypted with a key derived from `SECRET_KEY` (the AAD is bound to the webhook id), and after `SECRET_KEY`
+is replaced it can no longer be read, so rotate to a new one. Any Standard Webhooks library can verify it; the dialog has Node.js / Python examples.
 
-## 送出、重試、暫停
+## Delivery, retries, pausing
 
-- 失敗（連線錯誤、逾時、408、429、5xx）在 10 秒與 1 分鐘後各重試一次；其他 4xx 不重試；3xx 不跟（請填最終網址）。
-- 每個 webhook 一分鐘最多 30 則，超過的跳過，第一次跳過記一筆 `skipped`。
-- 連續失敗 20 次就暫停（`paused_reason = failing`），通知擁有者（全站的通知每位管理員，`WEBHOOK-PAUSED`）；重新打開就清掉。
-- 每個 webhook 留最新 50 筆送出紀錄（含內容，最多 16 KB），保留 30 天。送之前就先記成 `sending`，送完補結果；
-  重試還在等時後端重啟的，啟動時改成失敗（「Telepy restarted before this was delivered.」）。
-- **重送**：送出紀錄裡失敗 / 跳過的（送達的展開後也有）可以按「重送」：同一個 `webhook-id`、依 webhook 現在的格式 / 語言 / header 重組，
-  不重試、不算進連續失敗、關著的 webhook 也能送，記成新的一筆（`redelivered_from`）。事件本身存在 `event_json`；測試送出不能重送。
-- 全站 webhook 的新增 / 修改（含改模式）/ 刪除 / 換密鑰記成 `webhook` gateway 事件（管理區的稽核日誌）；退出與取消退出記在
-  那條通道的 Logs（`webhook_optout`）。
+- Failures (connection errors, timeouts, 408, 429, 5xx) are retried once after 10 seconds and once after 1 minute; other 4xx are not retried; 3xx are not followed (enter the final URL).
+- At most 30 messages per webhook per minute; the rest are skipped, and the first skip is recorded as `skipped`.
+- After 20 failures in a row the webhook is paused (`paused_reason = failing`) and the owner is notified (for site-wide webhooks, every admin; `WEBHOOK-PAUSED`); turning it back on clears the pause.
+- Each webhook keeps its latest 50 deliveries (with the body, up to 16 KB) for 30 days. A delivery is recorded as `sending` before it goes out and completed afterwards;
+  if the backend restarted while a retry was still waiting, startup marks it failed ("Telepy restarted before this was delivered.").
+- **Resend**: failed / skipped deliveries in the delivery history (delivered ones too, once expanded) have a "Resend" button: same `webhook-id`, rebuilt with the webhook's current format / language / headers,
+  no retries, not counted towards consecutive failures, works on a disabled webhook, and is recorded as a new entry (`redelivered_from`). The event itself is stored in `event_json`; test sends cannot be resent.
+- Creating / editing (including mode changes) / deleting a site-wide webhook and rotating its secret are recorded as `webhook` gateway events (the audit log in the admin section); opting out and cancelling an opt-out are recorded in
+  that tunnel's Logs (`webhook_optout`).
 
-## 位址檢查（SSRF）
+## Address check (SSRF)
 
-個人 webhook 的網址是任何人都能填的，伺服器會照著連，所以預設只准公網位址：儲存時解析主機名稱，任何一個位址落在
-內網 / 本機 / link-local（含雲端 metadata 169.254.169.254）/ CGNAT / 保留段，或是 IPv6 裡包著這些 IPv4（mapped、NAT64、6to4）
-就拒絕（`private_target`）；送出時再用只回傳公網位址的 DNS resolver 連線（擋 DNS rebinding），IP 字面值另外檢查，
-也不跟 redirect、不走環境變數的 proxy。管理員打開 `notify_private_targets` 才放行；全站 webhook 一律放行。
+The URL of a personal webhook can be filled in by anyone and the server connects to it, so by default only public addresses are allowed: on save the host name is resolved, and if any address falls in a
+private / localhost / link-local (including cloud metadata 169.254.169.254) / CGNAT / reserved range, or is an IPv6 address wrapping such an IPv4 (mapped, NAT64, 6to4),
+it is refused (`private_target`); at delivery time the connection goes through a DNS resolver that returns public addresses only (against DNS rebinding), IP literals are checked separately,
+redirects are not followed and proxies from environment variables are not used. Only when an admin turns on `notify_private_targets` are they allowed; site-wide webhooks are always allowed.
 
 ## API
 
 | | |
 | --- | --- |
-| `GET /api/webhooks` | 我的、（管理員）全站的完整資料、`site_summary`（每個人：全站 webhook 的摘要，含 `mode`、`my_optout`、我管的涵蓋通道 `managed`）、兩個範圍的事件目錄、`policy` |
-| `POST /api/webhooks` | `{scope?, name?, url, format?, language?, events?, all_tunnels?, tunnel_ids?, delay?, enabled?, headers?, mode?}` → `{webhook, secret}`；`mode` = `default` / `enforced`，只對全站的有意義 |
-| `GET / PATCH / DELETE /api/webhooks/{id}` | 只有自己的（全站的：管理員）；別人的一律 404 |
-| `POST /api/webhooks/{id}/test` | 送 `webhook.test` 並等結果（不重試、不算進連續失敗） |
-| `GET /api/webhooks/{id}/deliveries` | 最新 50 筆 |
-| `POST /api/webhooks/{id}/deliveries/{delivery_id}/redeliver` | 重送一筆（409 `not_redeliverable`：測試送出） |
-| `GET / POST /api/webhooks/{id}/secret` | 讀 / 換簽章密鑰 |
-| `PUT /api/webhooks/{id}/optout` | `{tunnel_ids}`：整組取代**我的**退出（只能是我管、這個全站 webhook 涵蓋的通道），回我的摘要；強制模式 400 `enforced`，個人 webhook 404 |
-| `DELETE /api/webhooks/{id}/optout` | 清掉我的退出 |
+| `GET /api/webhooks` | Mine, (admins) the full site-wide data, `site_summary` (for everyone: a summary of the site-wide webhooks, including `mode`, `my_optout` and `managed`, the covered tunnels I manage), the event catalogue for both scopes, `policy` |
+| `POST /api/webhooks` | `{scope?, name?, url, format?, language?, events?, all_tunnels?, tunnel_ids?, delay?, enabled?, headers?, mode?}` → `{webhook, secret}`; `mode` = `default` / `enforced`, meaningful for site-wide only |
+| `GET / PATCH / DELETE /api/webhooks/{id}` | Only your own (site-wide: admins); anyone else's is always 404 |
+| `POST /api/webhooks/{id}/test` | Sends `webhook.test` and waits for the result (no retries, not counted towards consecutive failures) |
+| `GET /api/webhooks/{id}/deliveries` | The latest 50 |
+| `POST /api/webhooks/{id}/deliveries/{delivery_id}/redeliver` | Resend one (409 `not_redeliverable`: test sends) |
+| `GET / POST /api/webhooks/{id}/secret` | Read / rotate the signing secret |
+| `PUT /api/webhooks/{id}/optout` | `{tunnel_ids}`: replaces **my** opt-outs as a whole (only tunnels I manage that this site-wide webhook covers) and returns my summary; enforced mode is 400 `enforced`, a personal webhook is 404 |
+| `DELETE /api/webhooks/{id}/optout` | Clears my opt-outs |
 
-錯誤是 `{field: [message], code}` 或 `{error, code}`；`code`：`private_target`、`invalid_url`、`unresolvable`、`no_events`、
-`no_tunnels`、`limit`、`personal_disabled`、`admins_only`、`secret_unreadable`、`bad_header`、`not_redeliverable`、`enforced`、
-`not_manager`（不是那條通道的 owner / ADMIN）、`not_covered`（這個 webhook 不涵蓋那條通道）。管理員拿到的全站 webhook 另外有
-`optouts [{tunnel_id, tunnel_name, by, at, active}]`。
-`GET /api/webhooks` 對管理員另外回 `site_tunnels`（整台伺服器的通道，給全站 webhook 選）。
+Errors are `{field: [message], code}` or `{error, code}`; `code`: `private_target`, `invalid_url`, `unresolvable`, `no_events`,
+`no_tunnels`, `limit`, `personal_disabled`, `admins_only`, `secret_unreadable`, `bad_header`, `not_redeliverable`, `enforced`,
+`not_manager` (not the owner / ADMIN of that tunnel), `not_covered` (this webhook does not cover that tunnel). The site-wide webhooks that admins receive also carry
+`optouts [{tunnel_id, tunnel_name, by, at, active}]`.
+For admins, `GET /api/webhooks` also returns `site_tunnels` (every tunnel on the server, for picking in a site-wide webhook).
