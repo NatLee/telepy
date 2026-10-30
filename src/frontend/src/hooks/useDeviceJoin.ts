@@ -11,7 +11,7 @@ import { apiFetch, readJson } from "@/lib/api";
 import { useNotificationHandlers, useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificationActions";
 import { useI18n } from "@/lib/i18n";
-import type { JoinFacts, JoinPhase } from "@/lib/joinScript";
+import type { JoinFacts, JoinPhase, JoinTransport } from "@/lib/joinScript";
 
 export type { JoinPhase } from "@/lib/joinScript";
 
@@ -19,8 +19,8 @@ export interface JoinTicket {
     id: string;
     name: string | null;
     key_list_mine: boolean;
-    /** ssh（24242）或 websocket（只開網頁 port 的網路）。/ How the device reaches the gateway. */
-    transport: "ssh" | "websocket";
+    /** auto（SSH port 優先，不通走網頁 port）、ssh（24242）或 websocket（只開網頁 port 的網路）。/ How the device reaches the gateway. */
+    transport: JoinTransport;
     phase: JoinPhase;
     detail: string | null;
     tunnel_id: number | null;
@@ -51,7 +51,8 @@ export function useDeviceJoin() {
     const { t } = useI18n();
     const [name, setName] = useState("");
     const [keyList, setKeyList] = useState<"mine" | "empty">("mine");
-    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
+    // 預設自動：先 SSH 的 port，不通才走網頁的 port。/ Automatic by default: the SSH port first, the web port when blocked.
+    const [transport, setTransport] = useState<JoinTransport>("auto");
     const [myKeyCount, setMyKeyCount] = useState<number | null>(null);
     const [creating, setCreating] = useState(false);
     const [nameError, setNameError] = useState<string | null>(null);

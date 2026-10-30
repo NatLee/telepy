@@ -38,6 +38,7 @@ interface Props {
 
 const WAYS: { id: LaptopTransport; title: TranslationKey; what: TranslationKey; when: TranslationKey; needs: TranslationKey }[] = [
     { id: "ssh", title: "config.transportSsh", what: "config.ti.sshWhat", when: "config.ti.sshWhen", needs: "config.ti.sshNeeds" },
+    { id: "auto", title: "config.transportAuto", what: "config.ti.autoWhat", when: "config.ti.autoWhen", needs: "config.ti.autoNeeds" },
     { id: "websocket", title: "config.transportWeb", what: "config.ti.webWhat", when: "config.ti.webWhen", needs: "config.ti.webNeeds" },
 ];
 
@@ -56,7 +57,7 @@ export function TransportInfoDialog({ isOpen, onClose, choice, onChoose, server,
                 <figure className="space-y-3" aria-label={t("config.ti.mapAria")}>
                     <FlowPath>
                         <FlowNode icon={Laptop} title={t("config.map.you")} sub="~/.ssh/config" stateText={t("config.ti.youState")} />
-                        <FlowLink label={`① ${t("config.ti.linkMine")}`} note={t(choice === "websocket" ? "config.ti.noteWeb" : "config.ti.noteSsh")} state="active" />
+                        <FlowLink label={`① ${t("config.ti.linkMine")}`} note={t(choice === "websocket" ? "config.ti.noteWeb" : choice === "auto" ? "config.ti.noteAuto" : "config.ti.noteSsh")} state="active" />
                         <FlowNode brand title="Telepy" sub={server?.host ?? "—"} state="ok" stateText={t("config.ti.meet")} />
                         <FlowLink label={`② ${t("config.ti.linkDevice")}`} state={linkState} />
                         <FlowNode
@@ -76,7 +77,7 @@ export function TransportInfoDialog({ isOpen, onClose, choice, onChoose, server,
 
                 <section className="space-y-3">
                     <h3 className="text-base text-foreground">{t("config.ti.waysTitle")}</h3>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         {WAYS.map((w) => {
                             const chosen = w.id === choice;
                             return (
@@ -92,7 +93,7 @@ export function TransportInfoDialog({ isOpen, onClose, choice, onChoose, server,
                                     <p>{code(`ssh → ${laptopAddress(w.id, server, wsUrl)}`)}</p>
                                     <p className="text-foreground/85">{t(w.what)}</p>
                                     <p className="text-muted-foreground">{t(w.when)}</p>
-                                    <p className="text-xs text-muted-foreground">{w.id === "websocket" ? tn(w.needs, { path: code("~/.ssh/telepy-ws.py") }) : t(w.needs)}</p>
+                                    <p className="text-xs text-muted-foreground">{w.id !== "ssh" ? tn(w.needs, { path: code("~/.ssh/telepy-ws.py") }) : t(w.needs)}</p>
                                 </div>
                             );
                         })}

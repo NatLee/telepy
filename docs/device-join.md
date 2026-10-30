@@ -41,7 +41,7 @@ Docker 的真平台驗證在第五節。
 |---|---|---|
 | ok | — | `keepalive=ssh`（預設，照舊） |
 | timeout | ok | 這個版本的 ssh 一設 timeout 就立刻逾時（OpenWrt #12574：fortify-headers 的 `ppoll` 把 64 位元 `time_t` 當 32 位元讀，big-endian 的 ath79 上 30 秒變成 30 奈秒；GL-AR750S）。自動改用 **compat 模式**：`ServerAliveInterval=0 -o TCPKeepAlive=yes`，`facts.compat = ["no_server_alive"]`，網頁與事件都標出來。`--no-compat` 禁止自動切換（改成報錯並說明），`--compat-no-server-alive` 強制 |
-| timeout / unreachable | timeout / unreachable | 連不到 gateway：對外 TCP 被擋（或用 `--via-web`）。**不**套用 compat |
+| timeout / unreachable | timeout / unreachable | 連不到 gateway：對外 TCP 被擋（或用 `--auto` / `--via-web`，有 python3 時改走網頁 port）。**不**套用 compat |
 | hostkey | — | gateway 的 host key 跟它宣告的不符：停 |
 
 compat 模式的限制會印在裝置上、記在 `facts` 與安裝紀錄裡：SSH 層心跳關了，斷線要等 TCP keepalive（內核預設常是 2 小時）才發現，

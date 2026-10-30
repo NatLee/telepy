@@ -37,9 +37,15 @@ export interface JoinCommands {
     checkWget: string;
 }
 
+/** 裝置怎麼連：自動（SSH port 優先，不通走網頁 port）/ 只走 SSH port / 只走網頁 port。/ How the device reaches Telepy. */
+export type JoinTransport = "auto" | "ssh" | "websocket";
+
+/** 每種方式加在指令後面的旗標。/ The flag each way adds to the command. */
+export const TRANSPORT_FLAG: Record<JoinTransport, string> = { auto: " --auto", ssh: "", websocket: " --via-web" };
+
 /** 指令變體；`sudo` = 以 sudo 執行（路由器上本來就是 root，不需要）。/ The command variants. */
-export function joinCommands(installUrl: string, token: string, opts: { sudo: boolean; viaWeb: boolean }): JoinCommands {
-    const flags = `--token ${token}${opts.viaWeb ? " --via-web" : ""}`;
+export function joinCommands(installUrl: string, token: string, opts: { sudo: boolean; transport: JoinTransport }): JoinCommands {
+    const flags = `--token ${token}${TRANSPORT_FLAG[opts.transport] ?? ""}`;
     const su = opts.sudo ? "sudo " : "";
     const file = "/tmp/telepy-join.sh";
     return {

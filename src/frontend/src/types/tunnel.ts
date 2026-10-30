@@ -95,7 +95,8 @@ export interface PresenceSession {
  * last came in), `tls` = whether that WebSocket had TLS (wss). When they differ, it came in another way.
  */
 export interface TunnelWayIn {
-    setup: "ssh" | "websocket" | null;
+    /** `auto` = SSH 的 port 優先，被擋時自己改走網頁的 port。/ `auto` = the SSH port first, the web port by itself when blocked. */
+    setup: "ssh" | "websocket" | "auto" | null;
     last: "ssh" | "websocket" | null;
     live: boolean;
     tls: boolean | null;

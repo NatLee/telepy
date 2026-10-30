@@ -188,3 +188,63 @@ async fn the_python_carrier_works_as_a_proxy_command() {
     let item = r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == dev.tunnel_id).unwrap();
     assert_eq!(item["endpoint"]["transport"], "websocket", "{item}");
 }
+
+/// 自動：小程式先連 SSH 的 port（拿到 gateway 的 banner 才算），連不上（關掉的 port、只轉網頁的代理）才走 WebSocket；
+/// 每次連線都重新判斷。一鍵加入的指令多 `--auto`，腳本與筆電的 ssh config 帶 `--tcp <SSH 主機>:<port>`。
+/// Automatic: the carrier dials the SSH port first (it must see the gateway's banner) and takes the WebSocket only
+/// when that fails (a closed port, a proxy that only carries web ports), on every connection. The join command gets
+/// `--auto`; scripts and the laptop config carry `--tcp <ssh host>:<port>`.
+#[tokio::test]
+async fn the_automatic_carrier_takes_the_ssh_port_first_and_the_web_port_when_it_is_blocked() {
+    let Some(lab) = Lab::start().await else { return };
+    if !common::lab::have("python3") {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let script = lab.app.get("/api/join/telepy-ws.py", None).await.text;
+    let path = lab.dir.path().join("telepy-ws.py");
+    std::fs::write(&path, script).unwrap();
+    let url = format!("{}/ws/gateway/", lab.ws_base().await);
+    let transport_of = |r: &common::Resp, id: i64| r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()["endpoint"]["transport"].clone();
+
+    // SSH 的 port 開著：直接連。/ The SSH port answers: direct.
+    let a = lab.machine("auto-a", &[("ubuntu", &[&lab.service])], false).await;
+    let proxy = ["-o".to_string(), format!("ProxyCommand=python3 {} --tcp 127.0.0.1:{} {url}", path.display(), lab.gw_port)];
+    let dev = lab.device_via_port(&alice, "auto-a", &a, 1, &proxy).await;
+    assert!(wait_forward(&lab, dev.reverse_port).await);
+    lab.username(&alice, &dev, "ubuntu").await;
+    assert_eq!(lab.backend_exec(&dev, "ubuntu", "whoami").await.unwrap(), "ubuntu");
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "tcp", "{}", r.text);
+
+    // SSH 的 port 不通（這裡是一個沒人聽的 port）：改走網頁的 port。/ The SSH port is blocked: the web port.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let b = lab.machine("auto-b", &[("ubuntu", &[&lab.service])], false).await;
+    let proxy = ["-o".to_string(), format!("ProxyCommand=python3 {} --tcp 127.0.0.1:{closed} {url}", path.display())];
+    let dev = lab.device_via_port(&alice, "auto-b", &b, 1, &proxy).await;
+    assert!(wait_forward(&lab, dev.reverse_port).await);
+    lab.username(&alice, &dev, "ubuntu").await;
+    assert_eq!(lab.backend_exec(&dev, "ubuntu", "whoami").await.unwrap(), "ubuntu");
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "websocket", "{}", r.text);
+
+    // API：票、腳本、筆電設定。/ The API: ticket, scripts, laptop config.
+    let app = &lab.app;
+    let r = app.post("/api/reverse/join", Some(&alice.token), json!({"transport": "auto"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.json["transport"], "auto");
+    assert!(r.json["command"].as_str().unwrap().ends_with(" --auto"), "{}", r.json["command"]);
+    let r = app.get(&format!("/tunnels/server/script/autossh/{}/22?transport=auto", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let s = r.json["script"].as_str().unwrap();
+    assert!(s.contains(&format!("--tcp telepy.test:{} ws", lab.app.state.config.reverse_server_ssh_port)) || s.contains("--tcp "), "{s}");
+    let r = app.get(&format!("/tunnels/server/script/powershell/{}/22?transport=auto", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "automatic = the SSH port where the carrier can't run: {}", r.text);
+    // 裝置拿走自動版的一次性腳本 = 設定成自動。/ Taking the automatic one-time script = set up as automatic.
+    take_one_time_script(app, &alice.token, json!({"server_id": dev.tunnel_id, "ssh_port": 22, "script_type": "autossh", "transport": "auto"})).await;
+    assert_eq!(way_in(app, &alice.token, dev.tunnel_id).await["setup"], "auto");
+    let r = app.get(&format!("/tunnels/server/config/{}?transport=auto", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.json["transport"], "auto");
+    assert!(r.json["config"].as_str().unwrap().contains("ProxyCommand python3 ~/.ssh/telepy-ws.py --tcp "), "{}", r.json["config"]);
+}

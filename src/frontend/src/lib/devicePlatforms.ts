@@ -110,6 +110,9 @@ export interface WayIn {
      * the set-up way; null when they match or the set-up way is unknown.
      */
     setup: Via | null;
+    /** 設定成自動（SSH port 優先，被擋時自己改走網頁 port）：走哪種都不算「跟設定不同」。
+     *  Set up as automatic (the SSH port first, the web port by itself when blocked): either way matches the setup. */
+    auto: boolean;
 }
 
 type Carrier = "ssh" | "websocket";
@@ -130,10 +133,12 @@ export function wayInOf(t: Pick<Tunnel, "way_in" | "endpoint"> | null | undefine
     if (!w) return null;
     const last = carrier(w.last);
     const setup = carrier(w.setup);
+    const auto = w.setup === "auto";
     if (last) {
-        return { via: viaFor(last, w.tls, https), state: w.live ? "live" : "last", setup: setup && setup !== last ? viaFor(setup, null, https) : null };
+        return { via: viaFor(last, w.tls, https), state: w.live ? "live" : "last", setup: setup && setup !== last ? viaFor(setup, null, https) : null, auto };
     }
-    if (setup) return { via: viaFor(setup, null, https), state: "setup", setup: null };
+    // 自動、還沒連過：先試的是 SSH port。/ Automatic, never connected: the SSH port is tried first.
+    if (setup || auto) return { via: viaFor(setup ?? "ssh", null, https), state: "setup", setup: null, auto };
     return null;
 }
 

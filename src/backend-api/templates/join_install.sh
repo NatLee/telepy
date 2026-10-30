@@ -37,6 +37,8 @@
 #   --no-service             same as --service loop
 #   --via-web                carry the tunnel inside a WebSocket on Telepy's web port (networks that only let
 #                            443 out); needs python3 on this machine
+#   --auto                   the SSH port first, the web port (WebSocket) whenever that is blocked, decided on
+#                            every connection; without python3 the tunnel uses the SSH port only
 #   --ssh-dir DIR            where the tunnel key, known_hosts, record and uninstall script go (default: ~/.ssh)
 #
 # Without sudo the tunnel runs as a user service (systemd --user / LaunchAgent), which may stop when you log out.
@@ -72,6 +74,7 @@ Join this machine to Telepy as a device.
   --no-compat             never switch to the compat mode automatically
   --no-service            same as --service loop
   --via-web               carry the tunnel inside a WebSocket on Telepy's web port (needs python3)
+  --auto                  the SSH port first, the web port when it is blocked (uses python3 when present)
   --ssh-dir DIR           where the key, known_hosts, record and uninstall script go (default: ~/.ssh)
 USAGE
 }
@@ -568,6 +571,7 @@ main() {
             --compat-no-server-alive) COMPAT_OPT=force; shift ;;
             --no-compat) COMPAT_OPT=never; shift ;;
             --via-web) VIA_WEB=1; shift ;;
+            --auto) VIA_WEB=2; shift ;;
             -h|--help) usage; exit 0 ;;
             *) die "unknown option: $1 (see --help)" ;;
         esac
@@ -687,6 +691,12 @@ main() {
     if [ "$VIA_WEB" -eq 1 ]; then
         PYTHON=$(command -v python3 || true)
         [ -n "$PYTHON" ] || die "--via-web needs python3 on this machine (it carries the SSH connection inside a WebSocket)"
+    elif [ "$VIA_WEB" -eq 2 ]; then
+        PYTHON=$(command -v python3 || true)
+        if [ -z "$PYTHON" ]; then
+            note "no python3 here: the tunnel uses the SSH port only (the web-port fallback needs python3)"
+            VIA_WEB=0
+        fi
     fi
 
     CURRENT_USER=$(id -un)
@@ -958,17 +968,38 @@ main() {
     # --- SSH over WebSocket carrier (needed by the probe already) --------------------------------------------------
     PROXY_OPT=""
     PROXY_J=""
+    # --auto: the carrier tries the SSH port itself (it wants the gateway's SSH banner) and takes the WebSocket only
+    # when that fails, on every connection; a failed download just means the SSH port only.
+    WS_ARGS="$WS_URL"
+    if [ "$VIA_WEB" -eq 2 ]; then
+        WS_ARGS="--tcp $GATEWAY_HOST:$GATEWAY_PORT $WS_URL"
+        case "$WS_URL" in
+            ws://*|wss://*)
+                WS_PY="$TMP/telepy-ws.py"
+                if ! http_raw "$TELEPY_URL/api/join/telepy-ws.py" > "$WS_PY" || [ ! -s "$WS_PY" ]; then
+                    note "cannot download the WebSocket carrier: the tunnel uses the SSH port only"
+                    VIA_WEB=0
+                fi ;;
+            *) note "Telepy sent no WebSocket address: the tunnel uses the SSH port only"; VIA_WEB=0 ;;
+        esac
+    fi
     if [ "$VIA_WEB" -eq 1 ]; then
         case "$WS_URL" in ws://*|wss://*) ;; *) die "Telepy sent no WebSocket address" ;; esac
         WS_PY="$TMP/telepy-ws.py"
         http_raw "$TELEPY_URL/api/join/telepy-ws.py" > "$WS_PY" || die "cannot download the WebSocket carrier"
         [ -s "$WS_PY" ] || die "cannot download the WebSocket carrier (empty)"
+    fi
+    if [ "$VIA_WEB" -ne 0 ]; then
         WS_SH="$TMP/telepy-ws.sh"
-        printf '#!/bin/sh\nexec %s %s %s\n' "$PYTHON" "$WS_PY" "$WS_URL" > "$WS_SH"
+        printf '#!/bin/sh\nexec %s %s %s\n' "$PYTHON" "$WS_PY" "$WS_ARGS" > "$WS_SH"
         chmod 700 "$WS_PY" "$WS_SH"
         PROXY_OPT="-o ProxyCommand=$WS_SH "
         PROXY_J="-J $WS_SH"
-        note "transport: WebSocket on the web port ($WS_URL)"
+        if [ "$VIA_WEB" -eq 2 ]; then
+            note "transport: automatic, the SSH port $GATEWAY_HOST:$GATEWAY_PORT first, else the web port ($WS_URL)"
+        else
+            note "transport: WebSocket on the web port ($WS_URL)"
+        fi
     fi
 
     # Keepalive probe. Both runs are the same connection to the same gateway; only ServerAlive differs. On some
@@ -1095,9 +1126,13 @@ main() {
     step "Registering this machine with Telepy"
     COMPAT_JSON=""
     [ -z "$COMPAT" ] || COMPAT_JSON="\"$COMPAT\""
-    FACTS=$(printf '{"shell":"%s","os":"%s","arch":"%s","http":"%s","client":"%s","server":"%s","init":"%s","keepalive":"%s","key_format":"%s","authorized_keys":"%s","ssh_host":"%s","compat":[%s]}' \
+    # How the tunnel will actually connect (--auto without python3 ends up on the SSH port only).
+    TRANSPORT_NAME=ssh
+    [ "$VIA_WEB" -eq 1 ] && TRANSPORT_NAME=websocket
+    [ "$VIA_WEB" -eq 2 ] && TRANSPORT_NAME=auto
+    FACTS=$(printf '{"shell":"%s","os":"%s","arch":"%s","http":"%s","client":"%s","server":"%s","init":"%s","keepalive":"%s","key_format":"%s","authorized_keys":"%s","ssh_host":"%s","transport":"%s","compat":[%s]}' \
         "$(jstr "$SHELL_KIND")" "$(jstr "$DISTRO")" "$(jstr "$ARCH")" "$(jstr "$HTTP_TOOL")" "$(jstr "$CLIENT_DESC")" "$(jstr "${SERVER_DESC:-unknown}")" \
-        "$(jstr "$SERVICE")" "$(jstr "$KEEPALIVE")" "$KEY_FORMAT" "$(jstr "$AUTH_KEYS")" "$(jstr "$SSH_HOST:$SSH_PORT")" "$COMPAT_JSON")
+        "$(jstr "$SERVICE")" "$(jstr "$KEEPALIVE")" "$KEY_FORMAT" "$(jstr "$AUTH_KEYS")" "$(jstr "$SSH_HOST:$SSH_PORT")" "$TRANSPORT_NAME" "$COMPAT_JSON")
     BODY=$(printf '{"public_key":"%s","hostname":"%s","username":"%s","ssh_port":%s,"os":"%s","name":"%s","host_keys":[%s],"facts":%s}' \
         "$PUBLIC_KEY" "$HOST_NAME" "$TARGET_USER" "$SSH_PORT" "$OS_INFO" "$NAME" "$HOST_KEYS_JSON" "$FACTS")
     if ! http POST "$TELEPY_URL/api/join/$TOKEN" "$BODY"; then
@@ -1199,11 +1234,15 @@ main() {
     fi
 
     # --- SSH over WebSocket: move the carrier next to the key ---------------------------------------------------
-    if [ "$VIA_WEB" -eq 1 ]; then
+    if [ "$VIA_WEB" -ne 0 ]; then
         WS_PY_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.py"
         WS_SH_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.sh"
         cp "$WS_PY" "$WS_PY_FINAL"
-        printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY_FINAL" "$WS_URL" > "$WS_SH_FINAL"
+        if [ "$VIA_WEB" -eq 2 ]; then
+            printf '#!/bin/sh\n# Telepy tunnel %s: the SSH port first, a WebSocket on the web port when that is blocked.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY_FINAL" "$WS_ARGS" > "$WS_SH_FINAL"
+        else
+            printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY_FINAL" "$WS_ARGS" > "$WS_SH_FINAL"
+        fi
         chmod 700 "$WS_PY_FINAL" "$WS_SH_FINAL"
         [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$WS_PY_FINAL" "$WS_SH_FINAL"
         WS_PY=$WS_PY_FINAL; WS_SH=$WS_SH_FINAL
@@ -1223,7 +1262,7 @@ main() {
 
     # --- run the tunnel -----------------------------------------------------------------------------
     FILES="$KEY $KEY.pub $KNOWN_HOSTS $RECORD $UNINSTALL"
-    [ "$VIA_WEB" -eq 1 ] && FILES="$FILES $WS_PY $WS_SH"
+    [ "$VIA_WEB" -ne 0 ] && FILES="$FILES $WS_PY $WS_SH"
     LOGS=""
     RUNNING=unknown; BOOT=unknown; SERVICE_KIND=""; SERVICE_NAME=""; SERVICE_FILE=""
     step "Starting the tunnel ($SERVICE_DESC)"
@@ -1264,7 +1303,7 @@ main() {
     record SERVICE_FILE "$SERVICE_FILE"
     record KEEPALIVE "$KEEPALIVE"
     [ -z "$COMPAT" ] || record COMPAT "$COMPAT"
-    record TRANSPORT "$([ "$VIA_WEB" -eq 1 ] && printf websocket || printf ssh)"
+    record TRANSPORT "$TRANSPORT_NAME"
     record UNINSTALL "$UNINSTALL"
     record FILES "$FILES"
     chmod 600 "$RECORD"

@@ -99,7 +99,7 @@ export function TransportBadge({ tunnel, className }: { tunnel: Pick<Tunnel, "wa
     const way = wayInOf(tunnel, https);
     if (!way) return null;
     const label = t(VIA_LABEL[way.via]);
-    const lines = [t(VIA_TITLE[way.via]), t(STATE_TEXT[way.state]), way.setup ? t("platforms.via.setupDiffers", { way: t(VIA_LABEL[way.setup]) }) : null].filter((l): l is string => !!l);
+    const lines = [t(VIA_TITLE[way.via]), t(STATE_TEXT[way.state]), way.auto ? t("platforms.via.auto") : null, way.setup ? t("platforms.via.setupDiffers", { way: t(VIA_LABEL[way.setup]) }) : null].filter((l): l is string => !!l);
     const Icon = way.via === "ssh" ? KeyRound : Globe;
     // 滑鼠停著看 title；點一下（觸控也行）開一個小說明。/ Hover shows the title; a click (touch too) opens a short note.
     return (

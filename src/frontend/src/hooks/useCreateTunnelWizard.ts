@@ -119,7 +119,9 @@ export function useCreateTunnelWizard() {
     const [method, setMethod] = useState<ConnectMethod>("autossh-service");
     // 裝置只能出網頁 port 時，腳本把 ssh 包進 WebSocket（只有 ssh / autossh / systemd 三種腳本支援）。
     // Devices that can only reach the web port: the script carries ssh in a WebSocket (ssh / autossh / systemd only).
-    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
+    // 預設自動：先 SSH 的 port，不通才走網頁的 port（裝置沒有 python3 就只走 SSH 的 port）。
+    // Automatic by default: the SSH port first, the web port when blocked (the SSH port only without python3).
+    const [transport, setTransport] = useState<"auto" | "ssh" | "websocket">("auto");
     const transportSupported = method === "ssh" || method === "autossh" || method === "autossh-service";
     const effectiveTransport = transportSupported ? transport : "ssh";
     const [serviceAccountId, setServiceAccountId] = useState<number | null>(null);
@@ -401,7 +403,7 @@ export function useCreateTunnelWizard() {
         const key = scriptKey;
         const params = new URLSearchParams();
         if (needsAccount && serviceAccountId !== null) params.set("username_id", String(serviceAccountId));
-        if (effectiveTransport === "websocket") params.set("transport", "websocket");
+        if (effectiveTransport !== "ssh") params.set("transport", effectiveTransport);
         const qs = params.size ? `?${params.toString()}` : "";
         try {
             const res = await apiFetch(`/tunnels/server/script/${method}/${created.id}/${sshPort}${qs}`);

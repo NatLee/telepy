@@ -54,12 +54,16 @@ pub fn ws_url(base: &str) -> String {
     format!("{ws}/ws/gateway/")
 }
 
-/// 裝置怎麼連：`ssh`（預設）或 `websocket`。/ Validate the transport choice.
+/// 裝置怎麼連：`ssh`（只走 SSH 的 port；沒給時的預設，舊的呼叫端照舊）、`websocket`（只走網頁的 port）或 `auto`
+/// （先試 SSH 的 port，連不上就走網頁的 port；`telepy-ws.py --tcp`，要 python3）。
+/// How a device connects: `ssh` (the SSH port only; the default when omitted, so older callers are unchanged),
+/// `websocket` (the web port only) or `auto` (the SSH port first, the web port when that fails; needs python3).
 pub fn parse_transport(v: Option<String>) -> Result<&'static str, ApiError> {
     match v.as_deref().map(str::trim) {
         None | Some("") | Some("ssh") => Ok("ssh"),
         Some("websocket") => Ok("websocket"),
-        Some(_) => Err(ApiError::field("transport", "Use \"ssh\" or \"websocket\".")),
+        Some("auto") => Ok("auto"),
+        Some(_) => Err(ApiError::field("transport", "Use \"auto\", \"ssh\" or \"websocket\".")),
     }
 }
 /// 伺服器透過隧道登入一次的時限。/ Time limit for the test login through the new tunnel.
@@ -91,8 +95,15 @@ fn base_url(state: &AppState, headers: &HeaderMap) -> String {
     crate::oauth::issuer(state.config.public_base().as_deref(), headers)
 }
 
-pub fn install_command(base: &str, token: &str, sudo: bool, via_web: bool) -> String {
-    format!("curl -fsSL '{base}/api/join/install.sh' | {}sh -s -- --token {token}{}", if sudo { "sudo " } else { "" }, if via_web { " --via-web" } else { "" })
+/// `transport`：`websocket` → `--via-web`，`auto` → `--auto`，其他 = 只走 SSH 的 port。
+/// `transport`: `websocket` → `--via-web`, `auto` → `--auto`, anything else = the SSH port only.
+pub fn install_command(base: &str, token: &str, sudo: bool, transport: &str) -> String {
+    let flag = match transport {
+        "websocket" => " --via-web",
+        "auto" => " --auto",
+        _ => "",
+    };
+    format!("curl -fsSL '{base}/api/join/install.sh' | {}sh -s -- --token {token}{flag}", if sudo { "sudo " } else { "" })
 }
 
 fn ticket_json(t: &Ticket) -> Value {
@@ -137,9 +148,8 @@ async fn create_ticket(State(state): State<AppState>, AuthUser(user): AuthUser, 
     let o = v.as_object_mut().unwrap();
     o.insert("token".into(), json!(token));
     o.insert("install_url".into(), json!(format!("{base}/api/join/install.sh")));
-    let via_web = t.transport == "websocket";
-    o.insert("command".into(), json!(install_command(&base, &token, true, via_web)));
-    o.insert("command_no_sudo".into(), json!(install_command(&base, &token, false, via_web)));
+    o.insert("command".into(), json!(install_command(&base, &token, true, &t.transport)));
+    o.insert("command_no_sudo".into(), json!(install_command(&base, &token, false, &t.transport)));
     Ok((StatusCode::CREATED, Json(v)))
 }
 
@@ -390,8 +400,11 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     if let Some(f) = &facts {
         let _ = db::device_install::record_join_facts(&state.db, tunnel.id, &f.to_string()).await;
     }
-    // 怎麼加進來的：這張票選的方式（重新加入就覆蓋）。/ How it was added: this ticket's way (a rejoin overwrites it).
-    db::tunnels::set_way_in(&state.db, tunnel.id, &t.transport).await.map_err(internal)?;
+    // 怎麼加進來的：腳本實際裝的方式（自動但沒有 python3 = 只走 SSH 的 port），舊腳本沒說就用這張票選的（重新加入就覆蓋）。
+    // How it was added: what the script actually installed (automatic without python3 = the SSH port only), else
+    // this ticket's way (a rejoin overwrites it).
+    let installed = facts.as_ref().and_then(|f| f.get("transport")).and_then(Value::as_str).filter(|w| matches!(*w, "ssh" | "websocket" | "auto"));
+    db::tunnels::set_way_in(&state.db, tunnel.id, installed.unwrap_or(&t.transport)).await.map_err(internal)?;
     config_lines(state, headers, &tunnel, &username, same_machine_as.as_ref()).await
 }
 

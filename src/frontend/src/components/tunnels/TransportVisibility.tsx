@@ -15,9 +15,11 @@ import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 import { Disclosure } from "./CreateWizardSteps/parts";
 
-export type Transport = "ssh" | "websocket";
+/** `auto` = SSH 的 port 優先，不通才走網頁的 port（兩欄都可能）。/ `auto` = the SSH port first, the web port when blocked (either column). */
+export type Transport = "auto" | "ssh" | "websocket";
+type Column = "ssh" | "websocket";
 
-const COLUMNS: { id: Transport; label: TranslationKey }[] = [
+const COLUMNS: { id: Column; label: TranslationKey }[] = [
     { id: "ssh", label: "wizard.connect.transportSsh" },
     { id: "websocket", label: "wizard.connect.transportWeb" },
 ];
@@ -39,9 +41,11 @@ export function useHttps(): boolean {
 export function TransportVisibility({ selected }: { selected: Transport }) {
     const { t } = useI18n();
     const https = useHttps();
+    // 自動：平常是 SSH port 那欄，被擋時是網頁 port 那欄，兩欄都標。/ Automatic: either column, so both are marked.
+    const marked = (id: Column) => selected === "auto" || id === selected;
     return (
         <>
-            {selected === "websocket" && !https && <Callout tone="warning">{t("wizard.seen.http")}</Callout>}
+            {selected !== "ssh" && !https && <Callout tone="warning">{t("wizard.seen.http")}</Callout>}
             <Disclosure title={t("wizard.seen.title")} icon={<Eye size={15} />}>
                 {/* 窄的時候（手機）每列的標題獨佔一行、兩個選項並排在下面；夠寬才是三欄表格。表格元素改了 display，
                     所以明寫 role 保住表格語意。/ Narrow (phones): each row's label gets its own line with the two options
@@ -52,9 +56,9 @@ export function TransportVisibility({ selected }: { selected: Transport }) {
                             <tr role="row" className="grid grid-cols-2 @md:table-row">
                                 <td className="hidden w-[30%] @md:table-cell" />
                                 {COLUMNS.map(({ id, label }) => (
-                                    <th key={id} role="columnheader" scope="col" className={cn("px-2 py-1.5 text-left align-bottom font-normal @md:pt-0", id === selected ? "bg-primary/[0.06] text-foreground" : "text-muted-foreground")}>
+                                    <th key={id} role="columnheader" scope="col" className={cn("px-2 py-1.5 text-left align-bottom font-normal @md:pt-0", marked(id) ? "bg-primary/[0.06] text-foreground" : "text-muted-foreground")}>
                                         {t(label)}
-                                        {id === selected && <span className="sr-only"> ({t("wizard.seen.chosen")})</span>}
+                                        {marked(id) && <span className="sr-only"> ({t("wizard.seen.chosen")})</span>}
                                     </th>
                                 ))}
                             </tr>
@@ -64,7 +68,7 @@ export function TransportVisibility({ selected }: { selected: Transport }) {
                                 <tr key={row.label} role="row" className="grid grid-cols-2 border-t border-border @md:table-row">
                                     <th role="rowheader" scope="row" className="col-span-2 pt-2 pr-2 text-left align-top font-normal text-muted-foreground @md:py-2">{t(row.label)}</th>
                                     {COLUMNS.map(({ id }) => (
-                                        <td key={id} role="cell" className={cn("px-2 py-2 align-top text-foreground/85", id === selected && "bg-primary/[0.06]")}>
+                                        <td key={id} role="cell" className={cn("px-2 py-2 align-top text-foreground/85", marked(id) && "bg-primary/[0.06]")}>
                                             {t(row[id])}
                                         </td>
                                     ))}

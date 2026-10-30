@@ -139,7 +139,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
     const shownEligible = shownIds ? shownIds.filter((id) => eligible.has(id)) : [];
     const groupChoices = groups.map((g) => ({ g, ids: g.tunnel_ids.filter((id) => eligible.has(id)) })).filter((x) => x.ids.length > 0);
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
-    const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
+    const wsClient = data && data.transport !== "ssh" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
 
     // 「我已經加好了」：每台 × 帳號一筆，跟單台的對話框、指令速查共用。/ "I've added it", per device × account, shared.
     const [configDone, setConfigDone] = useState<ConfigDone>(readConfigDone);
@@ -194,6 +194,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                             onChange={bulk.setTransport}
                             options={[
                                 { value: "ssh", label: t("config.transportSsh") },
+                                { value: "auto", label: t("config.transportAuto") },
                                 { value: "websocket", label: t("config.transportWeb") },
                             ]}
                         />

@@ -108,6 +108,18 @@ async fn the_join_script_checks_joins_and_uninstalls_for_real() {
     assert!(!ssh_dir.exists(), "--check writes nothing");
     assert_eq!(app.get("/api/reverse/server/dashboard", Some(&alice.token)).await.json["tunnels"].as_array().unwrap().len(), 0, "--check registers nothing");
 
+    // --auto：有 python3 就經小程式（先 SSH 的 port）跑同一套探測；沒有就只走 SSH 的 port。
+    // --auto: with python3 the same probes run through the carrier (the SSH port first); without it, the SSH port only.
+    let r = run_script(&script, &bin, &[&["--check", "--auto"][..], &common_args[..]].concat());
+    assert_eq!(r.status, 0, "{}", r.out);
+    if common::lab::have("python3") {
+        assert!(r.out.contains(&format!("transport: automatic, the SSH port 127.0.0.1:{} first", lab.gw_port)), "{}", r.out);
+    } else {
+        assert!(r.out.contains("no python3 here: the tunnel uses the SSH port only"), "{}", r.out);
+    }
+    assert!(r.out.contains("Preflight passed") && r.out.contains("handshake with ServerAliveInterval=30 completed"), "{}", r.out);
+    assert!(!ssh_dir.exists(), "--check writes nothing");
+
     // 錯的 port：清楚說沒有 SSH server 在那裡，而不是叫人裝 openssh-server。/ A wrong port is reported as "nothing answers there".
     let r = run_script(&script, &bin, &["--check", "--ssh-port", "1", "--ssh-dir", ssh_dir.to_str().unwrap()]);
     assert!(r.status != 0 && r.out.contains("no SSH server answers on 127.0.0.1:1") && !r.out.contains("apt install"), "{}", r.out);

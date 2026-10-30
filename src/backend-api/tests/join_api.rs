@@ -287,3 +287,25 @@ async fn soft_answers_gateway_info_config_recovery_and_facts() {
     assert!(r.text.contains("not JSON"), "{}", r.text);
     assert!(app.state.join.by_token(&token2).unwrap().open(), "a bad body does not consume the ticket");
 }
+
+/// 自動的票：腳本說它實際裝了什麼（沒有 python3 = 只走 SSH 的 port），就記那個；舊腳本沒說就記票上的。
+/// An automatic ticket: what the script says it installed is recorded (no python3 = the SSH port only); an older
+/// script that says nothing gets the ticket's way.
+#[tokio::test]
+async fn an_automatic_join_records_what_was_installed() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    for (name, facts, want) in [("auto-noproxy", json!({"transport": "ssh"}), "ssh"), ("auto-carrier", json!({"transport": "auto"}), "auto"), ("auto-old", json!(null), "auto")] {
+        let r = app.post("/api/reverse/join", Some(&alice.token), json!({"name": name, "transport": "auto", "key_list": "empty"})).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+        assert!(r.json["command"].as_str().unwrap().ends_with(" --auto"), "{}", r.json["command"]);
+        let token = r.json["token"].as_str().unwrap().to_string();
+        let key = lab.keygen(name);
+        let reg = device_post(app, &token, json!({"public_key": key.public, "hostname": name, "username": "ubuntu", "ssh_port": 22, "facts": facts})).await;
+        assert_eq!(reg.status, StatusCode::CREATED, "{}", reg.text);
+        let id: i64 = one(&kv(&reg.text), "TUNNEL_ID").parse().unwrap();
+        let t = telepy_server::db::tunnels::by_id(&app.state.db, id).await.unwrap().unwrap();
+        assert_eq!(t.way_in.as_deref(), Some(want), "{name}");
+    }
+}

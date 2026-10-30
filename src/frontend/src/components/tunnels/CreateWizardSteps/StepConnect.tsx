@@ -48,14 +48,15 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                     onChange={c.setTransport}
                     ariaLabel={t("wizard.connect.transportLabel")}
                     options={[
+                        { value: "auto", label: t("wizard.connect.transportAuto") },
                         { value: "ssh", label: t("wizard.connect.transportSsh") },
                         { value: "websocket", label: t("wizard.connect.transportWeb") },
                     ]}
                 />
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                    {!c.transportSupported && c.transport === "websocket"
+                    {!c.transportSupported && c.transport !== "ssh"
                         ? t("wizard.connect.transportUnsupported")
-                        : c.transport === "websocket" ? t("wizard.connect.transportWebHint") : t("wizard.connect.transportSshHint")}
+                        : t(c.transport === "websocket" ? "wizard.connect.transportWebHint" : c.transport === "auto" ? "wizard.connect.transportAutoHint" : "wizard.connect.transportSshHint")}
                 </p>
                 <TransportVisibility selected={c.transportSupported ? c.transport : "ssh"} />
             </div>

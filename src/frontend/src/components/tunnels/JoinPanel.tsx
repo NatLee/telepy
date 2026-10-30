@@ -103,11 +103,12 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                         onChange={form.setTransport}
                         ariaLabel={t("join.transportLabel")}
                         options={[
+                            { value: "auto", label: t("join.transportAuto") },
                             { value: "ssh", label: t("join.transportSsh") },
                             { value: "websocket", label: t("join.transportWeb") },
                         ]}
                     />
-                    <p className="text-xs leading-relaxed text-muted-foreground">{form.transport === "websocket" ? t("join.transportWebHint") : t("join.transportSshHint")}</p>
+                    <p className="text-xs leading-relaxed text-muted-foreground">{t(form.transport === "websocket" ? "join.transportWebHint" : form.transport === "auto" ? "join.transportAutoHint" : "join.transportSshHint")}</p>
                     <TransportVisibility selected={form.transport} />
                 </fieldset>
                 {form.error && <Callout tone="danger">{form.error}</Callout>}
@@ -131,7 +132,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
         if (i === phaseIndex) return expired && ticket.phase === "waiting" ? "todo" : "active";
         return "todo";
     };
-    const commands = joinCommands(ticket.install_url, ticket.token, { sudo: sudo === "sudo", viaWeb: ticket.transport === "websocket" });
+    const commands = joinCommands(ticket.install_url, ticket.token, { sudo: sudo === "sudo", transport: ticket.transport });
     const command = how === "pipe" ? (sudo === "sudo" ? ticket.command : ticket.command_no_sudo) : commands.download;
     const device = ticket.tunnel_name ?? ticket.name ?? t("join.thisDevice");
     const hostInfo = [ticket.hostname, ticket.os].filter(Boolean).join(" · ");
@@ -196,7 +197,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
             {/* 指令在裝置上做什麼：七步流程圖，照階段亮起。/ What the command does on the device: seven steps, lit by the phase. */}
             <Disclosure title={t("join.whatItDoes")} icon={<ShieldCheck size={15} />} defaultOpen>
                 <JoinScriptFlow phase={ticket.phase} hasTunnel={!!ticket.tunnel_id} expired={expired} account={ticket.username} deviceName={ticket.tunnel_name ?? ticket.name} />
-                {ticket.transport === "websocket" && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("join.doesWeb")}</p>}
+                {ticket.transport !== "ssh" && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t(ticket.transport === "auto" ? "join.doesAuto" : "join.doesWeb")}</p>}
             </Disclosure>
 
             <div className="flex flex-col items-center gap-5 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center">

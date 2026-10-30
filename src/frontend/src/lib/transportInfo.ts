@@ -8,8 +8,8 @@
 import type { SpotState } from "./flow.ts";
 import type { TranslationKey } from "../locales/en.ts";
 
-/** 你的電腦到 Telepy 的方式。/ How your computer reaches Telepy. */
-export type LaptopTransport = "ssh" | "websocket";
+/** 你的電腦到 Telepy 的方式（auto = SSH port 優先，不通走網頁 port）。/ How your computer reaches Telepy (auto = the SSH port first). */
+export type LaptopTransport = "ssh" | "auto" | "websocket";
 
 /** gateway 看到的裝置連線方式（連著時才有）。/ How the device's tunnel reached the gateway (only while connected). */
 export type DeviceTransport = "tcp" | "websocket" | null | undefined;
@@ -65,8 +65,9 @@ export function deviceLinkText(c: DeviceCounts): { key: TranslationKey; count: n
 /** 你的電腦連到哪裡（圖上與卡片上顯示的位址）。/ Where your computer connects (shown on the diagram and the cards). */
 export function laptopAddress(choice: LaptopTransport, server: { host: string; port: string } | null, wsUrl: string | null): string {
     if (choice === "websocket") return wsUrl || "wss://…/ws/gateway/";
-    if (!server) return "…";
-    return server.port ? `${server.host}:${server.port}` : server.host;
+    const direct = !server ? "…" : server.port ? `${server.host}:${server.port}` : server.host;
+    // 自動：先 SSH 的 port，不通才網頁的 port。/ Automatic: the SSH port, else the web port.
+    return choice === "auto" ? `${direct} | ${wsUrl || "wss://…/ws/gateway/"}` : direct;
 }
 
 /** 兩條連線的對照表：①（你的，這裡設定）vs ②（裝置的通道，建立通道時設定）。/ Your connection vs the device's tunnel. */

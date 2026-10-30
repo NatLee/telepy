@@ -3,14 +3,16 @@ import assert from "node:assert/strict";
 import { compatNoServerAlive, factChips, joinCommands, scriptProgress, SCRIPT_STEPS } from "./joinScript.ts";
 
 test("command variants carry the token once and the download forms check syntax first", () => {
-    const c = joinCommands("https://t.example/api/join/install.sh", "tpj_abc", { sudo: true, viaWeb: false });
+    const c = joinCommands("https://t.example/api/join/install.sh", "tpj_abc", { sudo: true, transport: "ssh" });
     assert.equal(c.pipe, "curl -fsSL 'https://t.example/api/join/install.sh' | sudo sh -s -- --token tpj_abc");
     assert.equal(c.download, "curl -fsSL 'https://t.example/api/join/install.sh' -o /tmp/telepy-join.sh && sh -n /tmp/telepy-join.sh && sudo sh /tmp/telepy-join.sh --token tpj_abc");
     assert.equal(c.wget, "wget -O /tmp/telepy-join.sh 'https://t.example/api/join/install.sh' && sh -n /tmp/telepy-join.sh && sudo sh /tmp/telepy-join.sh --token tpj_abc");
     assert.ok(!c.check.includes("tpj_abc") && c.check.endsWith("--check"), "the preflight never carries the token");
-    const noSudo = joinCommands("http://x/api/join/install.sh", "tpj_x", { sudo: false, viaWeb: true });
+    const noSudo = joinCommands("http://x/api/join/install.sh", "tpj_x", { sudo: false, transport: "websocket" });
     assert.ok(!noSudo.pipe.includes("sudo") && noSudo.pipe.endsWith("--token tpj_x --via-web"));
     assert.ok(noSudo.checkWget.startsWith("wget -O /tmp/telepy-join.sh") && noSudo.checkWget.endsWith("sh /tmp/telepy-join.sh --check"));
+    const auto = joinCommands("https://t.example/api/join/install.sh", "tpj_a", { sudo: true, transport: "auto" });
+    assert.ok(auto.pipe.endsWith("--token tpj_a --auto") && auto.download.endsWith("--token tpj_a --auto"), auto.pipe);
 });
 
 test("the script's seven steps follow the ticket phase", () => {
