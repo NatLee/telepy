@@ -616,6 +616,8 @@ pub struct ServerHealth {
     pub acknowledged: i64,
     #[schema(example = "2026-10-30T01:02:03Z")]
     pub ran_at: String,
+    /// Only in the answer to a re-seal: one record per table re-sealed
+    pub resealed: Option<Vec<AuditReseal>>,
 }
 
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
@@ -1474,6 +1476,81 @@ pub struct AuditTableReport {
     pub checkpoint_reason: Option<String>,
     /// Lines of audit-anchors.log written by another database (restored / replaced), not compared
     pub checkpoints_foreign: i64,
+    /// Lines of audit-anchors.log set aside by a re-seal, not compared
+    pub checkpoints_retired: i64,
+    /// The table's latest re-seal
+    pub last_reseal: Option<AuditReseal>,
+}
+
+/// 審計鏈的一次重新封存（一張表）。/ One table of one re-seal of the audit chain.
+#[derive(ToSchema)]
+pub struct AuditReseal {
+    /// Shared by the tables re-sealed together; the matching line in audit-anchors.log carries it as `reseal`
+    #[schema(example = "9c1f0a3b5e7d2468")]
+    pub reseal_id: String,
+    #[schema(example = "2026-10-30T01:02:03Z")]
+    pub at: String,
+    #[schema(example = "telepy_gateway_event")]
+    pub table: String,
+    /// The chain head afterwards (0 = no hashed rows)
+    pub row_id: i64,
+    /// Rows whose prev_hash / hash were rewritten, and the first one
+    pub rehashed: i64,
+    pub from_row: Option<i64>,
+    /// audit-anchors.log lines set aside
+    pub retired: i64,
+    /// The problem it covered, in the doctor's words
+    #[schema(example = "telepy_gateway_event: checkpoint at row 58 (checkpoint_mismatch)")]
+    pub problem: String,
+    pub user_id: Option<i64>,
+    #[schema(example = "admin")]
+    pub username: String,
+    pub note: String,
+}
+
+/// 一張表的驗證結果加上重新封存的試算。/ One table's verification plus what re-sealing would do.
+#[derive(ToSchema)]
+pub struct AuditResealTable {
+    #[schema(inline)]
+    #[serde(flatten)]
+    pub report: AuditTableReport,
+    /// The doctor's words for a failing table, null when intact
+    pub problem: Option<String>,
+    /// Rows re-sealing would re-hash, and the first one
+    pub rehash: i64,
+    pub from_row: Option<i64>,
+    /// audit-anchors.log lines re-sealing would set aside
+    pub retire: i64,
+}
+
+/// `GET /api/site/health/audit`：審計鏈現況與重新封存的試算（管理員）。/ The audit log now and the re-seal dry run.
+#[derive(ToSchema)]
+pub struct AuditResealPlan {
+    /// The audit-log check's status: ok / warn (cannot verify) / fail
+    #[schema(example = "fail")]
+    pub status: String,
+    /// Send it back to re-seal; a different one now = 409 `changed`
+    pub fingerprint: String,
+    pub detail: String,
+    /// Only a failing audit log can be re-sealed
+    pub can_reseal: bool,
+    /// Empty when verification itself failed
+    pub tables: Vec<AuditResealTable>,
+    /// Earlier re-seals, newest first (at most 1000 records, one per table)
+    pub reseals: Vec<AuditReseal>,
+    /// Whether this server writes audit-anchors.log
+    pub anchors_file: bool,
+}
+
+/// `POST /api/site/health/audit/reseal`：重新封存審計鏈。/ Re-seal the audit chain.
+#[derive(ToSchema)]
+pub struct AuditResealBody {
+    /// The audit-log fingerprint the page showed
+    pub fingerprint: String,
+    /// 1–500 characters, trimmed: what happened
+    pub note: String,
+    /// Re-authentication proof, required once the account has a second factor
+    pub reauth: Option<serde_json::Value>,
 }
 
 #[derive(ToSchema)]

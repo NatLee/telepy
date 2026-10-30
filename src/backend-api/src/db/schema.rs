@@ -612,6 +612,28 @@ const TABLES: &[(&str, &str)] = &[
             "row_hash" varchar(64) NULL
         )"#,
     ),
+    // Rust 自有：審計鏈的重新封存紀錄（每次每張表一列；同一次共用 reseal_id，錨點檔有同 id 的 reseal 行才算數）。
+    // 見 db/audit_chain.rs `reseal`。永久保留（很少）。
+    // Re-seals of the audit chain, one row per table and time (the tables of one re-seal share reseal_id; it only
+    // counts with the matching reseal line in the anchors file). See db/audit_chain.rs `reseal`. Kept for good.
+    (
+        "telepy_audit_reseal",
+        r#"CREATE TABLE "telepy_audit_reseal" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "reseal_id" TEXT NOT NULL,
+            "at" TEXT NOT NULL,
+            "table_name" TEXT NOT NULL,
+            "row_id" INTEGER NOT NULL,
+            "row_hash" TEXT NULL,
+            "rehashed" INTEGER NOT NULL,
+            "from_row" INTEGER NULL,
+            "retired" INTEGER NOT NULL,
+            "problem" TEXT NOT NULL,
+            "user_id" INTEGER NULL,
+            "username" TEXT NOT NULL,
+            "note" TEXT NOT NULL
+        )"#,
+    ),
     // Rust 自有：某使用者對某條隧道的終端機外觀覆寫（字型 / 字級 / 配色）；NULL 欄位 = 跟隨
     // user_management_usersettings 的個人預設。隧道刪除時一併刪（db::tunnels::delete）。
     // Per-user terminal appearance override for one tunnel (font / size / colour scheme); a NULL field
