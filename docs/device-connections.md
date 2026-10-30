@@ -323,5 +323,23 @@ OpenWrt 的 procd 腳本（`/etc/init.d/*`，有 `/etc/rc.common` 才看）與 `
 
 一鍵加入重新跑時，若看到同一條隧道舊名稱的安裝（`telepy-tunnel-<id>`），先停掉、拿掉再裝新的，兩個不會搶同一條隧道。
 
+**多出來的一份（看證據，不看名字）**：正式站 GL-AR750S 路由器（隧道 #34）的盤點出現 `/etc/init.d/telepy-6m35fshq`，被標成「要改名」，
+但改名又因為 init 腳本 `unsupported` 而做不了。實際上它是刪掉的隧道 #33 留下的（那次刪除早於 init.d 支援），而重新加入把新金鑰寫進
+**同一個** `~/.ssh/telepy_tunnel_ed25519`，所以它用的正是 #34 的金鑰——重開機時兩個 init 腳本都會起來搶這條隧道。光看名字分不出
+「人取的名字」和「另一個代號」（`telepy-natlee` 也長得像代號），所以判斷改成三個問題，只有最後一個跟名字有關：
+1. **是不是這條隧道的**：用這條隧道的金鑰、連這台 gateway（原本就是這樣認的）。
+2. **哪個在跑**：盤點看到的 ssh 全是用代號取名的那個（命令列帶 `telepy-<id>.known_hosts`）時，同一條隧道的其他服務 / 容器都是
+   **多出來的**（`Part.extra`，`plan::mark_extras`），不管叫什麼。它們不算「要改名」，改名的 `plan` 回 `extra`。
+3. **名字看不看得出人**：只有代號取的名字是私人的。**帳本** `telepy_device_install_retired`：刪隧道時把它的代號、名稱、擁有者記下
+   （`db::device_install::retire`；新代號不會跟它們重複），名稱裡的 `telepy-<x>` / `com.telepy.tunnel.<x>`（`plan::id_in_name`，只是候選）
+   對得上帳本才標成「刪掉的隧道 X 留下的」（`Part.retired`；隧道名稱只給同一個擁有者）。Telepy 以前的標準名稱（`earlier_name`）
+   本來就是 Telepy 自己出過的版本，那份清單留在程式裡。
+
+**拿掉多出來的**（`POST …/device-install/tidy`，`device_install::tidy`）：不用交接——多出來的不是連著的那個。重新盤點（`plan::tidy_check`：
+要有多出來的、不是 Windows、系統層的要有 root 登入）→ 經**現在的**連線跑 `T_MODE=relabel`（跳過用代號取名的一切、留金鑰；init 腳本
+`disable` 後由停止腳本 `stop` + 刪掉，只有它用的 known_hosts 一起刪）→ `finish_tidy` 看 13 秒：連線一直在、forward 沒換、沒有別的連線冒出來
+→ 再盤點確認。事件 `service_extra_removed`。移除腳本也會掃 `~/.ssh/telepy-*.sh`，用這條隧道金鑰連這台伺服器的迴圈就算這條隧道的
+（沒在跑的也算），刪掉的隧道留下、沒在跑的迴圈因此也找得到。
+
 測試：`tests/device_install.rs`（真的 `/bin/sh` 裝置、真的重連迴圈當舊服務、`<home>/bin` 放假的 crontab / ssh，
-改名過程中 forward 一次都沒釋放；新服務連不上時自動復原），單元測試在 `device_install/plan.rs`、`names.rs`。
+改名過程中 forward 一次都沒釋放；新服務連不上時自動復原；刪掉的隧道留下的迴圈被認成多出來的、帳本標出來源、拿掉時隧道不斷線），單元測試在 `device_install/plan.rs`、`names.rs`。

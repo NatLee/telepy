@@ -180,7 +180,7 @@ pub const ROUTES: &[RouteRule] = {
         rule("PATCH|PUT|DELETE", "/api/reverse/server/keys/{t}", MANAGE, Path),
         rule("GET", "/api/reverse/server/{t}/delete-check", MANAGE, Path),
         // 裝置上的服務：盤點、改名（刪隧道本來就能移除它，所以同一個 scope）。/ The device's service: survey, rename.
-        rule("POST", "/api/reverse/server/{t}/device-install/survey|rename", MANAGE, Path),
+        rule("POST", "/api/reverse/server/{t}/device-install/survey|rename|tidy", MANAGE, Path),
         rule("PUT", "/api/reverse/server/{t}/labels", MANAGE, Path),
         rule("PUT|DELETE", "/api/reverse/server/{t}/pin", MANAGE, Path),
         rule("PATCH", "/api/reverse/server/{t}/default-username", MANAGE, Path),
@@ -339,6 +339,7 @@ mod tests {
             ("GET", "/api/reverse/server/7/device-install", rule("tunnels:read", Path(7))),
             ("POST", "/api/reverse/server/7/device-install/survey", rule("tunnels:manage", Path(7))),
             ("POST", "/api/reverse/server/7/device-install/rename", rule("tunnels:manage", Path(7))),
+            ("POST", "/api/reverse/server/7/device-install/tidy", rule("tunnels:manage", Path(7))),
             ("POST", "/api/ai/sessions", rule("ssh:exec", Handler)),
             ("POST", "/api/ai/sessions/ais_x/exec", rule("ssh:exec", Handler)),
             ("GET", "/api/recordings/3/cast", rule("ssh:exec", Handler)),

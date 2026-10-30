@@ -2,6 +2,7 @@
 //! - `GET  /api/reverse/server/{id}/device-install`：安裝代號、各種名稱、最近一次盤點到的東西、能不能自動改名
 //! - `POST /api/reverse/server/{id}/device-install/survey`：現在重新盤點（裝置要在線）
 //! - `POST /api/reverse/server/{id}/device-install/rename`：把舊名稱的服務換成用代號取名的新服務（先接上再拆舊的）
+//! - `POST /api/reverse/server/{id}/device-install/tidy`：已經由用代號取名的服務在跑時，拿掉多出來的那份（連線不斷）
 //!
 //! 都只給擁有者 / ADMIN 被分享者；看不到隧道 → 404。
 //!
@@ -21,7 +22,7 @@ use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(show)).routes(routes!(survey)).routes(routes!(rename))
+    OpenApiRouter::new().routes(routes!(show)).routes(routes!(survey)).routes(routes!(rename)).routes(routes!(tidy))
 }
 
 fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
@@ -65,6 +66,19 @@ async fn rename(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let report = match device_install::rename(&state, &tunnel, &user.username).await {
         Ok(r) => r,
         Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being renamed right now.")),
+        Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
+        Err(RenameError::NoAccounts) => return Err(coded(StatusCode::CONFLICT, "no_accounts", "The tunnel has no login accounts, so Telepy cannot log in to the device.")),
+    };
+    let view = device_install::view(&state, &tunnel).await?;
+    Ok(Json(json!({ "report": report, "view": view })))
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/tidy", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The removal of the extra copies ran (see ok / steps / code); the view after it", body = super::schemas::DeviceInstallRename), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
+async fn tidy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let tunnel = load(&state, user.id, id).await?;
+    let report = match device_install::tidy(&state, &tunnel, &user.username).await {
+        Ok(r) => r,
+        Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being changed right now.")),
         Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
         Err(RenameError::NoAccounts) => return Err(coded(StatusCode::CONFLICT, "no_accounts", "The tunnel has no login accounts, so Telepy cannot log in to the device.")),
     };

@@ -121,12 +121,33 @@ pub async fn survey_if_due(state: &AppState, tunnel: &Tunnel) {
     }
 }
 
-/// 列表項目的摘要（擁有者 / ADMIN）：代號、上次盤點找到的舊名稱服務。/ The list item summary for managers.
+/// 列表項目的摘要（擁有者 / ADMIN）：代號、上次盤點找到的舊名稱服務、多出來的那份。/ The list item summary for managers.
 pub fn summary(row: Option<&db::device_install::Row>) -> Value {
     let Some(row) = row else { return Value::Null };
     let names = Names::new(&row.install_id);
-    let older = plan::older_services(&plan::parts(&stored(row), &names));
-    json!({ "id": row.install_id, "older": older })
+    let parts = plan::parts(&stored(row), &names);
+    json!({ "id": row.install_id, "older": plan::older_services(&parts), "extra": plan::extra_services(&parts) })
+}
+
+/// 盤點的各部分，名稱裡帶的代號對過帳本（刪掉的隧道的名字只給同一個擁有者）。
+/// The survey's parts, with ids in names looked up in the ledger (a deleted tunnel's name only for the same owner).
+async fn parts_with_ledger(state: &AppState, tunnel: &Tunnel, survey: &[AccountResult], names: &Names) -> Vec<plan::Part> {
+    let mut parts = plan::parts(survey, names);
+    let ids = plan::candidate_ids(&parts);
+    if ids.is_empty() {
+        return parts;
+    }
+    let ledger: std::collections::HashMap<String, plan::RetiredRef> = db::device_install::retired(&state.db, &ids)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, r)| {
+            let mine = r.user_id == tunnel.user_id;
+            (id, plan::RetiredRef { install_id: r.install_id, tunnel_id: mine.then_some(r.tunnel_id), tunnel_name: mine.then_some(r.tunnel_name), retired_at: db_to_iso_utc_z(&r.retired_at) })
+        })
+        .collect();
+    plan::mark_retired(&mut parts, &ledger);
+    parts
 }
 
 /// `GET …/device-install` 的內容。/ The device-install JSON.
@@ -135,10 +156,15 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
     let row = db::device_install::get(&state.db, tunnel.id).await?;
     let names = Names::new(&id);
     let survey = row.as_ref().map(stored).unwrap_or_default();
-    let parts = plan::parts(&survey, &names);
+    let parts = parts_with_ledger(state, tunnel, &survey, &names).await;
     let older = plan::older_services(&parts);
     let earlier = plan::earlier_services(&parts);
+    let extra = plan::extra_services(&parts);
     let planned = plan::plan(&survey, &names);
+    let tidy = match plan::tidy_check(&survey, &names) {
+        Ok(names) => json!({ "possible": true, "blocker": null, "names": names }),
+        Err(b) => json!({ "possible": false, "blocker": b, "names": extra }),
+    };
     let rename = match &planned {
         Ok(p) => json!({
             "possible": true,
@@ -171,10 +197,12 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
         "parts": parts,
         "older": older,
         "earlier": earlier,
+        "extra": extra,
         "others": plan::others(&survey),
         "shared_key": plan::shared_key(&survey),
         "server_port": state.config.reverse_server_ssh_port.trim(),
         "rename": rename,
+        "tidy": tidy,
         "renamed_at": row.as_ref().and_then(|r| r.renamed_at.as_deref()).map(db_to_iso_utc_z),
         "renamed_from": renamed_from,
     }))
@@ -406,6 +434,89 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
                 p.run_user,
                 p.old.join(", "),
                 if confirmed { String::new() } else { format!("; still on the device: {}", if still_old.is_empty() { "the old connection".to_string() } else { still_old.join(", ") }) }
+            ),
+        )
+        .await;
+    notify(state, tunnel, json!({ "done": true })).await;
+    Ok(run.report)
+}
+
+/// 拿掉多出來的那份：這條隧道已經由用代號取名的服務在跑，別的服務（例如刪掉的隧道留下、開機時會跟它搶的 init
+/// 腳本）經**現在這條**連線以 relabel 模式移除——金鑰與用代號取名的一切留著，連線不會斷。
+/// Remove the extra copies: the tunnel already runs from its install-id service; the others (e.g. a deleted tunnel's
+/// init script that would fight it on boot) go over the current connection in relabel mode — the key and everything
+/// named after the install id stay, so the connection never drops.
+pub async fn tidy(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Report, RenameError> {
+    {
+        let mut b = BUSY.lock().unwrap();
+        if !b.insert(tunnel.reverse_port) {
+            return Err(RenameError::Busy);
+        }
+    }
+    let _guard = BusyGuard(tunnel.reverse_port);
+    if !online(state, tunnel) {
+        return Err(RenameError::Offline);
+    }
+    let accounts = login_accounts(state, tunnel).await.unwrap_or_default();
+    if accounts.is_empty() {
+        return Err(RenameError::NoAccounts);
+    }
+    let port = u16::try_from(tunnel.reverse_port).map_err(|_| RenameError::Offline)?;
+    let mut run = Run { state, tunnel, report: Report::default() };
+
+    // 1. 重新盤點（不信舊紀錄）。/ Survey afresh.
+    let id = match db::device_install::ensure(&state.db, tunnel.id).await {
+        Ok(id) => id,
+        Err(e) => return Ok(run.fail("survey", "internal", format!("{e:#}")).await),
+    };
+    let names = Names::new(&id);
+    let survey = match survey_and_record(state, tunnel).await {
+        Ok(s) => s,
+        Err(e) => return Ok(run.fail("survey", "survey_failed", e).await),
+    };
+    let extra = match plan::tidy_check(&survey, &names) {
+        Ok(e) => e,
+        Err(b) => {
+            let code = serde_json::to_value(b).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+            return Ok(run.fail("survey", &code, format!("nothing to remove automatically: {code}")).await);
+        }
+    };
+    run.report.old = extra.clone();
+    run.step("survey", "done", Some(extra.join(", "))).await;
+
+    // 2. 經現在的連線移除（relabel 模式）。/ Remove over the current connection (relabel mode).
+    let Some(keep_conn) = state.gateway.forward_conn(port) else {
+        return Ok(run.fail("remove", "device_offline", "the device went offline".into()).await);
+    };
+    let ctx = tunnel_service::Context { install_id: Some(id.clone()), gateway_port: tunnel_service::Context::load(state, tunnel).await.gateway_port };
+    let prepared = tunnel_service::prepare_with(state, tunnel, &accounts, Mode::Relabel, &ctx).await;
+    let removal = tunnel_service::finish_tidy(state, tunnel, prepared, keep_conn).await;
+    let needs_root: Vec<String> = removal.accounts.iter().flat_map(|a| a.items.iter().filter(|i| i.kind == "needs_root").map(|i| i.detail.clone())).collect();
+    let kept = removal.kept == Some(true);
+    run.step("remove", if kept && needs_root.is_empty() { "done" } else { "failed" }, (!needs_root.is_empty()).then(|| needs_root.join("\n"))).await;
+    run.report.removal = Some(removal.clone());
+
+    // 3. 再盤點，確認多出來的不見了、隧道還在自己的服務上。/ Survey again: the extras are gone, the tunnel still on its own service.
+    let after = survey_and_record(state, tunnel).await.unwrap_or_default();
+    let still = plan::extra_services(&plan::parts(&after, &names));
+    let confirmed = kept && still.is_empty() && !removal.came_back;
+    run.step("confirm", if confirmed { "done" } else { "failed" }, (!still.is_empty()).then(|| still.join(", "))).await;
+    run.report.ok = confirmed;
+    if !confirmed {
+        run.report.code = Some(if !kept { "connection_lost" } else if removal.came_back { "old_came_back" } else { "old_left" }.into());
+    }
+    state
+        .gateway
+        .event(
+            "service_extra_removed",
+            None,
+            Some(port),
+            Some(tunnel.id),
+            format!(
+                "Extra device service of '{}' removed by {by}: {}{}",
+                tunnel.host_friendly_name,
+                extra.join(", "),
+                if confirmed { String::new() } else { format!("; still on the device: {}", if still.is_empty() { "something restarts it".to_string() } else { still.join(", ") }) }
             ),
         )
         .await;

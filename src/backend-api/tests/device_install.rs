@@ -362,3 +362,111 @@ async fn a_launch_agent_plist_is_read_as_a_command_line() {
     let parts = r.json["parts"].as_array().unwrap();
     assert!(parts.iter().any(|p| p["what"] == "known_hosts" && p["name"].as_str().unwrap_or("").ends_with("telepy_natlee_known_hosts")), "the plist's known_hosts is read too: {}", r.json);
 }
+
+/// 用安裝代號取名、正在跑的重連迴圈（一鍵加入裝的那種）。/ A running reconnect loop named after the install id.
+async fn start_id_loop(lab: &Lab, dev: &Device, home: &Path, install: &str) -> (PathBuf, Child) {
+    let runner = home.join(format!(".ssh/telepy-{install}.sh"));
+    let body = loop_body(lab, dev, home, install);
+    write_exec(&runner, &body);
+    let child = Command::new("/bin/sh").arg(&runner).env("HOME", home).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true).spawn().unwrap();
+    wait_online(lab, dev, true).await;
+    (runner, child)
+}
+
+fn loop_body(lab: &Lab, dev: &Device, home: &Path, id: &str) -> String {
+    format!(
+        "#!/bin/sh\n# Telepy reverse tunnel {id}: reconnects forever.\nwhile :; do\n    ssh -F /dev/null -N -o StrictHostKeyChecking=no -o UserKnownHostsFile={kh} -o BatchMode=yes -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=5 -o LogLevel=ERROR -i {key} -p {port} -R '0:127.0.0.1:{target}' telepy@127.0.0.1 >> {log} 2>&1\n    sleep 1\ndone\n",
+        kh = home.join(format!(".ssh/telepy-{id}.known_hosts")).display(),
+        key = dev.key.path.display(),
+        port = lab.gw_port,
+        target = dev.target.port,
+        log = home.join(format!(".ssh/telepy-{id}.log")).display(),
+    )
+}
+
+/// 重新加入後，刪掉的隧道留下的迴圈（同一把金鑰檔、沒在跑）：不是「要改名」，是多出來的一份；帳本認得它的代號，
+/// 拿掉它的時候隧道一直在線。
+/// After a rejoin a deleted tunnel's loop is left (same key file, not running): an extra copy, not a name to change;
+/// the ledger knows its id, and removing it never drops the tunnel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_tunnels_leftover_is_an_extra_copy_removed_without_a_drop() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("router", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let dev = lab.device_requesting(&alice, "router", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    let id = dev.tunnel_id;
+    let r = lab.app.get(&format!("/api/reverse/server/{id}/device-install"), Some(&alice.token)).await;
+    let install = r.json["install_id"].as_str().unwrap().to_string();
+    lab.disconnect_device(&dev).await;
+    let (current, _running) = start_id_loop(&lab, &dev, &home, &install).await;
+    // 刪掉的隧道（帳本裡有）留下的迴圈與 known_hosts，開機時會跟現在的搶。/ A deleted tunnel's loop that would fight it on boot.
+    let retired = "6m35fshq";
+    sqlx::query("INSERT INTO telepy_device_install_retired (install_id, tunnel_id, tunnel_name, user_id, retired_at) VALUES (?, 999, 'router-before', ?, '2026-10-29 18:50:00.000000')")
+        .bind(retired)
+        .bind(alice.id)
+        .execute(&lab.app.state.db.write)
+        .await
+        .unwrap();
+    let leftover = home.join(format!(".ssh/telepy-{retired}.sh"));
+    let leftover_kh = home.join(format!(".ssh/telepy-{retired}.known_hosts"));
+    write_exec(&leftover, &loop_body(&lab, &dev, &home, retired));
+    std::fs::write(&leftover_kh, "x ssh-ed25519 AAAA\n").unwrap();
+    stub_crontab(&home, &format!("0 3 * * * echo keep-me\n@reboot sh {} >/dev/null 2>&1\n@reboot sh {} >/dev/null 2>&1\n", current.display(), leftover.display()));
+
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/survey"), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let v = r.json.clone();
+    assert_eq!(names(&v, "extra"), vec![format!("telepy-{retired}.sh")], "{v:#}");
+    assert!(names(&v, "older").is_empty(), "not a name to change: {v:#}");
+    assert_eq!((v["tidy"]["possible"].clone(), v["rename"]["blocker"].clone()), (Value::Bool(true), Value::from("extra")), "{v:#}");
+    let part = v["parts"].as_array().unwrap().iter().find(|p| p["name"] == format!("telepy-{retired}.sh")).unwrap().clone();
+    assert_eq!((part["retired"]["tunnel_name"].as_str(), part["retired"]["tunnel_id"].as_i64()), (Some("router-before"), Some(999)), "{part}");
+    let list = lab.app.get("/api/reverse/server/keys", Some(&alice.token)).await;
+    let item = list.json.as_array().unwrap().iter().find(|t| t["id"] == id).unwrap().clone();
+    assert_eq!(item["device_install"]["extra"][0], format!("telepy-{retired}.sh"), "{item}");
+
+    let watch = {
+        let state = lab.app.state.clone();
+        let port = dev.reverse_port;
+        tokio::spawn(async move {
+            for _ in 0..800 {
+                if !state.status.listen_ports().map(|p| p.contains(&port)).unwrap_or(false) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            false
+        })
+    };
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/tidy"), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rep = &r.json["report"];
+    assert_eq!(rep["ok"], true, "{rep:#}");
+    let steps: Vec<String> = rep["steps"].as_array().unwrap().iter().map(|s| format!("{}:{}", s["id"].as_str().unwrap(), s["state"].as_str().unwrap())).collect();
+    assert_eq!(steps, ["survey:done", "remove:done", "confirm:done"], "{rep:#}");
+    assert!(!watch.await.unwrap(), "the tunnel never went offline");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while leftover.exists() || leftover_kh.exists() {
+        assert!(tokio::time::Instant::now() < deadline, "the leftover was not removed: {rep:#}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(current.exists() && alive(&current.to_string_lossy()), "the tunnel's own loop stays and runs");
+    assert!(dev.key.path.exists(), "the key stays");
+    let cron = std::fs::read_to_string(home.join("crontab.txt")).unwrap();
+    assert!(cron.contains("keep-me") && cron.contains(&current.display().to_string()) && !cron.contains(retired), "{cron}");
+    assert!(events(&lab).iter().any(|e| e == "service_extra_removed"));
+    let v = &r.json["view"];
+    assert!(names(v, "extra").is_empty() && v["tidy"]["blocker"] == "nothing_extra", "{v:#}");
+
+    // 刪隧道：它的代號進帳本。/ Deleting the tunnel puts its id in the ledger.
+    let r = lab.app.delete(&format!("/api/reverse/server/keys/{id}?remove_device_keys=false"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let row: (i64, String) = sqlx::query_as("SELECT tunnel_id, tunnel_name FROM telepy_device_install_retired WHERE install_id = ?").bind(&install).fetch_one(&lab.app.state.db.read).await.unwrap();
+    assert_eq!(row, (id, "router".to_string()));
+}

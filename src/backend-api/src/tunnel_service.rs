@@ -115,6 +115,10 @@ pub struct Removal {
     /// 改名：舊的連線斷了，forward 留在新的服務上。/ Relabel: the old connection dropped and the forward stayed on the new one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handed_over: Option<bool>,
+    /// 拿掉多出來的那份：這條隧道自己的連線一直在，forward 也沒換人。/ Removing an extra copy: the tunnel's own
+    /// connection stayed up and kept the forward.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kept: Option<bool>,
 }
 
 /// 第一段做完、還沒停的狀態：留著每個帳號的連線（等一下金鑰可能被移掉，新連線就登不進去了）。
@@ -334,7 +338,7 @@ pub async fn finish(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared) -
         }
     }
     tracing::info!(tunnel = tunnel.id, found, launched, stopped, came_back, "device tunnel service removal");
-    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: None }
+    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: None, kept: None }
 }
 
 /// 改名的第二段：舊服務的停止腳本跑在**新**連線上（舊的會斷，我們不在它上面）。確認舊連線斷了、forward 還在
@@ -373,7 +377,40 @@ pub async fn finish_relabel(state: &AppState, tunnel: &Tunnel, mut prepared: Pre
     }
     let handed_over = stopped && new_conn.is_some() && new_conn != Some(old_conn) && state.gateway.forward_conn(port) == new_conn;
     tracing::info!(tunnel = tunnel.id, found, launched, stopped, came_back, handed_over, "device tunnel service relabel cleanup");
-    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: Some(handed_over) }
+    Removal { accounts: prepared.accounts, found, launched, stopped, came_back, handed_over: Some(handed_over), kept: None }
+}
+
+/// 拿掉多出來那份的第二段：停止腳本跑在這條隧道**自己的**連線上（它不會被停）。看一陣子：連線還在、forward 沒換、
+/// 也沒有別的連線冒出來（多出來的那份還在被重啟）。
+/// Phase 2 of removing an extra copy: the stop scripts run over the tunnel's own connection, which they never stop.
+/// Watch for a while that it stays up, keeps the forward, and that nothing else shows up (the extra still restarting).
+pub async fn finish_tidy(state: &AppState, tunnel: &Tunnel, mut prepared: Prepared, keep_conn: u64) -> Removal {
+    let mut launched = false;
+    for (idx, conn, platform, path) in std::mem::take(&mut prepared.pending) {
+        let items = match exec::run(&conn.device, &launch_command(platform, &path), LAUNCH_TIMEOUT, 4096).await {
+            Ok(r) => parse_items(&r.stdout.text),
+            Err(e) => vec![Item { kind: "failed".into(), what: "launch".into(), detail: format!("{e:#}") }],
+        };
+        launched |= items.iter().any(|i| i.kind == "launched");
+        prepared.accounts[idx].items.extend(items);
+        drop(conn);
+    }
+    let found = prepared.accounts.iter().any(|a| a.items.iter().any(|i| i.kind == "found"));
+    let port = u16::try_from(tunnel.reverse_port).unwrap_or(0);
+    let (mut kept, mut came_back) = (true, false);
+    let watch = tokio::time::Instant::now() + COMEBACK_WATCH;
+    while tokio::time::Instant::now() < watch {
+        if !state.gateway.conn_alive(keep_conn) || state.gateway.forward_conn(port) != Some(keep_conn) {
+            kept = false;
+            break;
+        }
+        if state.gateway.tunnel_conns(tunnel.id).iter().any(|c| *c != keep_conn) {
+            came_back = true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tracing::info!(tunnel = tunnel.id, found, launched, kept, came_back, "device tunnel extra copy removal");
+    Removal { accounts: prepared.accounts, found, launched, stopped: launched, came_back, handed_over: None, kept: Some(kept) }
 }
 
 #[cfg(test)]
