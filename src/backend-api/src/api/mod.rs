@@ -16,6 +16,7 @@ pub mod doc;
 pub mod groups;
 pub mod health;
 pub mod health_stats;
+pub mod address_sources;
 pub mod host_keys;
 pub mod join;
 pub mod lan;

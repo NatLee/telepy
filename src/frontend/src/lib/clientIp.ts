@@ -145,7 +145,7 @@ export const hopsSetting = (c: ClientIpCheck) => (c.hopsMode === "auto" ? "auto"
  * Headers a CDN sets itself. None of them arriving means the request did not pass a CDN (a Cloudflare record set
  * to DNS only, say), and CLIENT_IP_HEADER would then only let visitors write their own address.
  */
-export const CDN_HEADERS = ["cf-connecting-ip", "true-client-ip", "fastly-client-ip"];
+export const CDN_HEADERS: readonly string[] = ["cf-connecting-ip", "true-client-ip", "fastly-client-ip", "cloudfront-viewer-address", "x-azure-clientip", "fly-client-ip", "do-connecting-ip"];
 
 export const viaCdn = (c: ClientIpCheck) => c.headers.some((h) => CDN_HEADERS.includes(h.name.toLowerCase()));
 

@@ -37,6 +37,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     refused_forward: { key: "logs.event.refused_forward", tone: "destructive", category: "problem" },
     refused_direct: { key: "logs.event.refused_direct", tone: "destructive", category: "problem" },
     refused_proxy: { key: "logs.event.refused_proxy", tone: "destructive", category: "problem" },
+    proxy_unlisted: { key: "logs.event.proxy_unlisted", tone: "warning", category: "problem" },
     failed_publickey: { key: "logs.event.failed_publickey", tone: "destructive", category: "problem" },
     invalid_user: { key: "logs.event.invalid_user", tone: "destructive", category: "problem" },
     expired_key: { key: "logs.event.expired_key", tone: "destructive", category: "problem" },
