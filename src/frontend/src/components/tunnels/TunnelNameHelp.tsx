@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { NAME_PROBLEM_KEY, badChars, suggestTunnelName, tunnelNameProblem } from "@/lib/tunnelName";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 /** 名稱的錯誤訊息（`null` = 沒問題；空字串不在這裡算錯，交給「必填」）。/ The live error, or null (empty is the caller's "required"). */
 export function useTunnelNameError(): (name: string) => string | null {
@@ -98,14 +99,14 @@ export function TunnelNameHelp({ value, error, onUse, id, original, rulesKey = "
 }
 
 /** 舊名稱（規則之前建的）在卡片 / 列表上的提醒，點了開詳情改名。/ An older name's flag; opens the details to rename. */
-export function SshNameChip({ name, onOpen, className }: { name: string; onOpen: () => void; className?: string }) {
+export function SshNameChip({ name, onOpen, variant = "chip", className }: { name: string; onOpen: () => void; variant?: RowVariant; className?: string }) {
     const { t } = useI18n();
     if (tunnelNameProblem(name) === null) return null;
     return (
         <button
             type="button"
             onClick={onOpen}
-            className={cn("inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20", className)}
+            className={cn(variant === "text" ? quiet("warning") : "inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20", className)}
             title={t("tunnelName.old.chipHint")}
         >
             <TriangleAlert size={13} aria-hidden /> {t("tunnelName.old.chip")}

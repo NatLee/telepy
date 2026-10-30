@@ -31,6 +31,7 @@ import {
     KeyRound,
     LockKeyholeOpen,
     LogOut,
+    MoreHorizontal,
     Rocket,
     ScreenShare,
     ScrollText,
@@ -53,6 +54,8 @@ import type { MuteScope } from "@/lib/notifyPrefs";
 interface TunnelActionsProps extends TunnelActionHandlers {
     tunnel: Tunnel;
     className?: string;
+    /** `button` = 「更多 ▾」（卡片）；`icon` = 只有「…」（表格列，省寬度）。/ "More ▾" on cards; a bare "…" on table rows. */
+    variant?: "button" | "icon";
 }
 
 function ActionItem({
@@ -149,6 +152,7 @@ export function TunnelActions({
     onCommandRules,
     onToolbox,
     onMoveToGroup,
+    variant = "button",
 }: TunnelActionsProps) {
     const { t } = useI18n();
     // 管理員替這個人關掉的功能不放進選單（API 也會拒絕）。/ Features turned off for this person stay out of the menu.
@@ -157,15 +161,27 @@ export function TunnelActions({
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className={cn("gap-1 data-[state=open]:bg-accent", className)}
-                    aria-label={t("tunnelActions.aria")}
-                >
-                    {t("tunnelActions.more")}
-                    <ChevronDown size={14} className="opacity-60" />
-                </Button>
+                {variant === "icon" ? (
+                    <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className={cn("text-muted-foreground hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground", className)}
+                        aria-label={t("tunnelActions.aria")}
+                        title={t("tunnelActions.more")}
+                    >
+                        <MoreHorizontal />
+                    </Button>
+                ) : (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn("gap-1 data-[state=open]:bg-accent", className)}
+                        aria-label={t("tunnelActions.aria")}
+                    >
+                        {t("tunnelActions.more")}
+                        <ChevronDown size={14} className="opacity-60" />
+                    </Button>
+                )}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" collisionPadding={12} className="w-[22rem] max-w-[calc(100vw-1.5rem)] p-1.5 rounded-xl">
                 <GroupLabel>{t("tunnelActions.groupConnect")}</GroupLabel>

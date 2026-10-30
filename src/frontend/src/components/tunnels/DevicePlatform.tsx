@@ -17,6 +17,7 @@ import { PLATFORM_ART, pixelRuns } from "@/lib/platformArt";
 import type { TranslationKey } from "@/locales/en";
 import type { Tunnel, TunnelEndpoint } from "@/types/tunnel";
 import { useHttps } from "@/components/tunnels/TransportVisibility";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 export const PLATFORM_NAME: Record<PlatformId, TranslationKey> = {
     linux: "platforms.name.linux",
@@ -54,7 +55,7 @@ const CHIP = "inline-flex max-w-full items-center gap-1 rounded-sm border px-1.5
  * 裝置的作業系統（每天一次的裝置資訊讀到的）；點一下開詳情的「裝置」分頁。沒讀到就不顯示。
  * The device's OS from the daily device facts; a click opens the details' Device tab. Hidden until read.
  */
-export function DeviceOsChip({ endpoint, onOpen, className }: { endpoint?: TunnelEndpoint | null; onOpen?: () => void; className?: string }) {
+export function DeviceOsChip({ endpoint, onOpen, variant = "chip", className }: { endpoint?: TunnelEndpoint | null; onOpen?: () => void; variant?: RowVariant; className?: string }) {
     const { t, locale } = useI18n();
     const facts = endpoint?.facts;
     const id = platformOf(facts);
@@ -73,7 +74,12 @@ export function DeviceOsChip({ endpoint, onOpen, className }: { endpoint?: Tunne
             onClick={onOpen}
             title={title}
             aria-label={t("platforms.osAria", { os: facts.os ?? name })}
-            className={cn(CHIP, endpoint.live ? "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground" : "border-border/70 text-muted-foreground hover:text-foreground", className)}
+            className={cn(
+                variant === "text"
+                    ? quiet(endpoint.live ? "plain" : "muted")
+                    : cn(CHIP, endpoint.live ? "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground" : "border-border/70 text-muted-foreground hover:text-foreground"),
+                className
+            )}
         >
             <PlatformIcon id={id} size={14} />
             <span className="truncate">{name}</span>
@@ -92,7 +98,7 @@ const STATE_TEXT: Record<WayInState, TranslationKey> = { live: "platforms.via.st
  * Telepy is on http). Solid while connected; dashed when offline (the last way) or not connected yet (how it was set
  * up). A ⇄ marks a device that came in another way than it was set up for.
  */
-export function TransportBadge({ tunnel, className }: { tunnel: Pick<Tunnel, "way_in" | "endpoint">; className?: string }) {
+export function TransportBadge({ tunnel, variant = "chip", className }: { tunnel: Pick<Tunnel, "way_in" | "endpoint">; variant?: RowVariant; className?: string }) {
     const { t } = useI18n();
     const https = useHttps();
     const [open, setOpen] = useState(false);
@@ -110,13 +116,18 @@ export function TransportBadge({ tunnel, className }: { tunnel: Pick<Tunnel, "wa
                     title={open ? undefined : lines.join("\n")}
                     aria-label={t("platforms.via.aria", { way: label })}
                     className={cn(
-                        CHIP,
-                        "font-mono [&>svg]:size-3 [&>svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                        way.state === "live"
-                            ? way.via !== "ssh"
-                                ? "border-info/40 bg-info/10 text-info hover:border-info/70"
-                                : "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground"
-                            : "border-dashed border-border/70 text-muted-foreground hover:text-foreground",
+                        // 表格列：安靜的等寬文字（網頁 port 的方式維持 info 色，離線 / 還沒連過淡一點）。/ Table rows: quiet mono text.
+                        variant === "text"
+                            ? quiet(way.state !== "live" ? "muted" : way.via !== "ssh" ? "info" : "plain", "font-mono")
+                            : cn(
+                                  CHIP,
+                                  "font-mono [&>svg]:size-3 [&>svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                                  way.state === "live"
+                                      ? way.via !== "ssh"
+                                          ? "border-info/40 bg-info/10 text-info hover:border-info/70"
+                                          : "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground"
+                                      : "border-dashed border-border/70 text-muted-foreground hover:text-foreground"
+                              ),
                         className
                     )}
                 >

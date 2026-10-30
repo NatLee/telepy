@@ -21,9 +21,10 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { DeviceFacts, DeviceWarningKind, TunnelEndpoint } from "@/types/tunnel";
 import { DeviceFactsInfoDialog } from "./DeviceFactsInfoDialog";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 /** 列表上的警示標記（點了開詳細資訊）。/ The list's warning chip; opens the details. */
-export function DeviceWarningChip({ endpoint, onOpen }: { endpoint?: TunnelEndpoint | null; onOpen: () => void }) {
+export function DeviceWarningChip({ endpoint, onOpen, variant = "chip" }: { endpoint?: TunnelEndpoint | null; onOpen: () => void; variant?: RowVariant }) {
     const { t } = useI18n();
     const kinds = warningKinds(endpoint);
     if (kinds.length === 0) return null;
@@ -33,7 +34,7 @@ export function DeviceWarningChip({ endpoint, onOpen }: { endpoint?: TunnelEndpo
         <button
             type="button"
             onClick={onOpen}
-            className="inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20"
+            className={variant === "text" ? quiet("warning") : "inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20"}
             title={title}
         >
             <TriangleAlert size={13} aria-hidden /> {label}

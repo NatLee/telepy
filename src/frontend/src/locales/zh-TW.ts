@@ -843,7 +843,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "tunnels.noMatch": "沒有符合篩選條件的通道。",
     "tunnels.clearFilters": "清除篩選",
     "tunnels.thStatus": "狀態",
-    "tunnels.thPort": "埠",
+    "tunnels.thDevice": "裝置",
     "tunnels.thAccess": "存取",
 
     // ── Tunnel 動作選單 / Tunnel actions ───────────────────────────

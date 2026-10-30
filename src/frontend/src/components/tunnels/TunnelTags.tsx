@@ -7,6 +7,7 @@ import React from "react";
 import { Pin, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 export function PinButton({ pinned, onToggle, className }: { pinned: boolean; onToggle?: () => void; className?: string }) {
     const { t } = useI18n();
@@ -30,11 +31,11 @@ export function PinButton({ pinned, onToggle, className }: { pinned: boolean; on
     );
 }
 
-export function TunnelLabels({ labels, onLabel, className }: { labels?: string[]; onLabel?: (label: string) => void; className?: string }) {
+export function TunnelLabels({ labels, onLabel, variant = "chip", className }: { labels?: string[]; onLabel?: (label: string) => void; variant?: RowVariant; className?: string }) {
     const { t } = useI18n();
     if (!labels || labels.length === 0) return null;
     return (
-        <span className={cn("inline-flex flex-wrap items-center gap-1", className)}>
+        <span className={cn("inline-flex flex-wrap items-center", variant === "text" ? "gap-x-2" : "gap-1", className)}>
             {labels.map((l) => (
                 <button
                     key={l}
@@ -42,7 +43,11 @@ export function TunnelLabels({ labels, onLabel, className }: { labels?: string[]
                     onClick={onLabel ? () => onLabel(l) : undefined}
                     disabled={!onLabel}
                     title={t("tunnels.filterByLabel", { label: l })}
-                    className="inline-flex items-center gap-1 rounded-sm border border-border bg-surface px-1.5 py-px text-[0.75rem] text-foreground/75 transition-colors hover:border-foreground/30 hover:text-foreground disabled:pointer-events-none [&>svg]:size-3"
+                    className={
+                        variant === "text"
+                            ? quiet("muted", "disabled:pointer-events-none")
+                            : "inline-flex items-center gap-1 rounded-sm border border-border bg-surface px-1.5 py-px text-[0.75rem] text-foreground/75 transition-colors hover:border-foreground/30 hover:text-foreground disabled:pointer-events-none [&>svg]:size-3"
+                    }
                 >
                     <Tag aria-hidden /> {l}
                 </button>
