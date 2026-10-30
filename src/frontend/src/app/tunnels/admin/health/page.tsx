@@ -5,14 +5,17 @@
  * The admin section's "Server health": the `telepy-server doctor` checks from the web, plus "How Telepy sees your
  * address". Admins only.
  */
-import React from "react";
+import React, { Suspense } from "react";
 import { AdminGate } from "@/components/layout/AdminViews";
 import { ServerHealthView } from "@/components/health/ServerHealthView";
 
 export default function AdminHealthPage() {
     return (
         <AdminGate>
-            <ServerHealthView />
+            {/* useSearchParams（?tab=）需要 Suspense 邊界。/ useSearchParams (?tab=) needs a Suspense boundary. */}
+            <Suspense fallback={null}>
+                <ServerHealthView />
+            </Suspense>
         </AdminGate>
     );
 }

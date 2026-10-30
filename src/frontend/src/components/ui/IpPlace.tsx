@@ -20,7 +20,7 @@ import { flagEmoji, isNonPublic, placeLabel, type IpGeo } from "@/lib/geo";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 /** 管理員看「Telepy 怎麼看你的位址」的地方：管理區的伺服器狀態頁。/ Where admins run the address check: the admin Server health page. */
-export const CLIENT_IP_CHECK_HREF = "/tunnels/admin/health#client-ip";
+export const CLIENT_IP_CHECK_HREF = "/tunnels/admin/health?tab=addresses#client-ip";
 
 function InternalAddress({ className }: { className?: string }) {
     const { t } = useI18n();

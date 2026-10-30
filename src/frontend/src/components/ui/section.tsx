@@ -56,9 +56,9 @@ export function PropertyList({ children, className }: { children: React.ReactNod
     return <dl className={cn("divide-y divide-border rounded-lg border border-border bg-surface px-4", className)}>{children}</dl>;
 }
 
-export function Property({ label, children, mono = false }: { label: React.ReactNode; children: React.ReactNode; mono?: boolean }) {
+export function Property({ label, children, mono = false, className }: { label: React.ReactNode; children: React.ReactNode; mono?: boolean; className?: string }) {
     return (
-        <div className="grid grid-cols-[minmax(6rem,9rem)_1fr] items-baseline gap-3 py-2.5 text-sm">
+        <div className={cn("grid grid-cols-[minmax(6rem,9rem)_1fr] items-baseline gap-3 py-2.5 text-sm", className)}>
             <dt className="text-muted-foreground">{label}</dt>
             <dd className={cn("min-w-0 break-words text-foreground", mono && "font-mono")}>{children}</dd>
         </div>

@@ -83,6 +83,9 @@ pub struct Inner {
     pub api_tokens: crate::auth::api_tokens::TokenCache,
     /// 委派 token 的呼叫紀錄（背景批次寫入）。/ The delegated-token call log (batch-written in the background).
     pub api_calls: crate::api_calls::ApiCalls,
+    /// 狀態建立的時間（= 程序啟動），給伺服器狀態頁的 uptime。/ When the state was built (≈ process start), for uptime.
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub started: std::time::Instant,
 }
 
 #[derive(Clone)]
@@ -152,6 +155,8 @@ impl AppState {
             features,
             api_tokens: Default::default(),
             api_calls: crate::api_calls::ApiCalls::new(db.clone()),
+            started_at: chrono::Utc::now(),
+            started: std::time::Instant::now(),
             config,
             db,
         }))
