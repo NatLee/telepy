@@ -5,7 +5,7 @@
  * pick the ticked ones, and tell from the key matrix whether my keys get in. No React.
  */
 import { parseStanzas, type ConfigStanza } from "./sshConfig.ts";
-import type { KeyDevice } from "../types/keys.ts";
+import type { DeviceKeys, KeyDevice } from "../types/keys.ts";
 
 export type BulkAccounts = "default" | "all";
 
@@ -105,10 +105,90 @@ export function deviceAccess(device: KeyDevice | undefined, usernames: string[])
     return "installing";
 }
 
-/** 我有哪些金鑰還不在這台的清單上（一鍵補上時要送的）。/ My key ids not yet on this device's list. */
-export function keysToAdd(device: KeyDevice | undefined, myKeyIds: number[]): number[] {
-    const listed = new Set((device?.keys ?? []).map((k) => k.user_key_id));
-    return myKeyIds.filter((id) => !listed.has(id));
+/**
+ * 我的一把金鑰怎麼到這台的帳號：直接在清單上（`accounts` = 只裝到這些帳號 id，null = 我能用的全部）或經由金鑰群組
+ * （每個授予的帳號名稱，null = 全部）。
+ * How one of my keys reaches this device's accounts: listed directly (`accounts` = chosen ids, null = every account
+ * I may use) or through key groups (each grant's account names, null = all).
+ */
+export interface KeyReach {
+    id: number;
+    direct: boolean;
+    accounts: number[] | null;
+    groups: (string[] | null)[];
+}
+
+/**
+ * 「把我的金鑰加上去」要做的事——只裝到 config 用的帳號，不是我在這台能用的每個帳號。`add` = 還沒直接在清單上的
+ * 金鑰，一次加進來、只裝到 `addAccounts`；`widen` = 直接在清單上但帳號不夠的，改成原本的 + 缺的；`accounts` = 至少
+ * 會多一把金鑰的帳號（提示上列的那些）。
+ * What "add my keys" does — only into the accounts the config uses, never every account I may use there. `add` =
+ * keys not listed directly, added limited to `addAccounts`; `widen` = listed directly with too few accounts, widened
+ * to theirs + the missing ones; `accounts` = the accounts that gain at least one key (what the hint lists).
+ */
+export interface KeyPlan {
+    add: number[];
+    addAccounts: number[];
+    widen: { keyId: number; accounts: number[] }[];
+    accounts: { id: number; username: string }[];
+}
+
+export const EMPTY_PLAN: KeyPlan = { add: [], addAccounts: [], widen: [], accounts: [] };
+
+export function planIsEmpty(plan: KeyPlan): boolean {
+    return plan.add.length === 0 && plan.widen.length === 0;
+}
+
+/** 計畫會動到幾把金鑰。/ How many keys the plan touches. */
+export function planKeyCount(plan: KeyPlan): number {
+    return plan.add.length + plan.widen.length;
+}
+
+export function keyPlan(listed: KeyReach[], myKeyIds: number[], hosts: { username: string; username_id: number }[]): KeyPlan {
+    if (hosts.length === 0) return EMPTY_PLAN;
+    const byId = new Map(listed.map((k) => [k.id, k]));
+    const configIds = [...new Set(hosts.map((h) => h.username_id))].sort((a, b) => a - b);
+    const plan: KeyPlan = { add: [], addAccounts: configIds, widen: [], accounts: [] };
+    const gaining = new Set<number>();
+    for (const id of myKeyIds) {
+        const k = byId.get(id);
+        const reaches = (h: { username: string; username_id: number }) =>
+            !!k &&
+            ((k.direct && (k.accounts === null || k.accounts.includes(h.username_id))) ||
+                k.groups.some((g) => g === null || g.includes(h.username)));
+        const lacking = hosts.filter((h) => !reaches(h));
+        if (lacking.length === 0) continue;
+        for (const h of lacking) gaining.add(h.username_id);
+        // 直接在清單上（帳號有限）就加寬；沒在清單上或只經由群組來 = 直接加一筆。
+        // Listed directly (limited) → widen; not listed, or only through groups → add a direct entry.
+        if (k?.direct && k.accounts !== null) {
+            const accounts = [...new Set([...k.accounts, ...lacking.map((h) => h.username_id)])].sort((a, b) => a - b);
+            plan.widen.push({ keyId: id, accounts });
+        } else plan.add.push(id);
+    }
+    plan.accounts = hosts.filter((h) => gaining.has(h.username_id)).map((h) => ({ id: h.username_id, username: h.username }));
+    return plan;
+}
+
+/** 金鑰矩陣裡一台的金鑰 → `KeyReach`。/ The key matrix's keys for one device. */
+export function reachOnDevice(device: KeyDevice | undefined): KeyReach[] {
+    return (device?.keys ?? []).map((k) => ({
+        id: k.user_key_id,
+        direct: k.direct ?? true,
+        accounts: k.accounts,
+        groups: (k.groups ?? []).map((g) => g.accounts),
+    }));
+}
+
+/** 單台裝置清單的 `my_keys` → `KeyReach`。/ One device's `my_keys`. */
+export function reachInList(myKeys: DeviceKeys["my_keys"]): KeyReach[] {
+    return myKeys.map((k) => ({ id: k.id, direct: k.in_list, accounts: k.accounts, groups: (k.via_groups ?? []).map((g) => g.accounts) }));
+}
+
+/** 我在這台能用、但這次不會裝金鑰的帳號（照帳號順序）。/ Accounts I may use here that this leaves alone. */
+export function untouchedAccounts(allowed: string[], used: string[]): string[] {
+    const set = new Set(used);
+    return allowed.filter((a) => !set.has(a));
 }
 
 export type AccessCounts = Record<DeviceAccess, number>;
