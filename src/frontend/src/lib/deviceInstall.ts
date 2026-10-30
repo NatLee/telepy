@@ -65,6 +65,8 @@ export interface DeviceInstallView {
     rename: { possible: boolean; blocker: RenameBlocker | null; method?: InstallMethod; account?: string; run_user?: string; new_name?: string; old: string[] };
     /** 拿掉多出來的那份。/ Removing the extra copies. */
     tidy?: { possible: boolean; blocker: RenameBlocker | null; names: string[] };
+    /** 換連線方式（例如改成自動）；舊後端沒有。/ Switching how it connects (e.g. to automatic); absent on older backends. */
+    switch?: { possible: boolean; blocker: RenameBlocker | null; way_in: WayInSetup | null; old?: string[] };
     renamed_at: string | null;
     renamed_from: string[];
     /** 一鍵加入腳本回報的環境（沒有一鍵加入過 = null）。/ What the join script found (null when never joined that way). */
@@ -130,8 +132,13 @@ export interface ReportedStep {
     detail?: string;
 }
 
+/** 裝置設定成怎麼連 Telepy。/ How the device is set up to reach Telepy. */
+export type WayInSetup = "ssh" | "websocket" | "auto";
+
 export interface RenameReport {
     ok: boolean;
+    /** 換連線方式時：換成哪種。/ When switching: the new way. */
+    transport?: WayInSetup;
     steps: ReportedStep[];
     code?: string;
     error?: string;
@@ -215,7 +222,20 @@ const FAILURE_KEY: Record<string, TranslationKey> = {
     old_came_back: "deviceInstall.fail.old_came_back",
     device_offline: "deviceInstall.fail.device_offline",
     connection_lost: "deviceInstall.fail.connection_lost",
+    no_python: "deviceInstall.fail.no_python",
 };
+
+/** 「怎麼連 Telepy」的文字。/ The label of a way in. */
+export const WAY_IN_KEY: Record<WayInSetup, TranslationKey> = {
+    auto: "deviceInstall.switch.wayAuto",
+    ssh: "deviceInstall.switch.waySsh",
+    websocket: "deviceInstall.switch.wayWeb",
+};
+
+/** 要不要提議改成自動：還不是自動、而且做得到。/ Whether to offer switching to automatic. */
+export function offerAutomatic(view: Pick<DeviceInstallView, "switch" | "online">): boolean {
+    return !!view.switch?.possible && view.switch.way_in !== "auto";
+}
 
 /** 失敗的說明：先看是不是盤點擋下（blocker），再看失敗代碼。/ Explain a failure: a blocker first, then the code. */
 export function failureKey(code: string | undefined): TranslationKey {

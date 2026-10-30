@@ -407,6 +407,36 @@ pub struct Plan {
     pub spec: SshSpec,
     /// 要換掉的舊服務。/ The older services to replace.
     pub old: Vec<String>,
+    /// 換連線方式時新服務改連哪裡、怎麼連；None = 跟舊的一樣（單純改名）。
+    /// When switching how it connects: where and how the new service dials; None = as before (a plain rename).
+    #[serde(skip)]
+    pub route: Option<Route>,
+}
+
+/// 新服務的連線：gateway 的 `user@host`、port，經小程式的話它的參數與程式本身。
+/// The new service's connection: the gateway's `user@host` and port, and the carrier when there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    pub dest: String,
+    pub port: u16,
+    pub carrier: Option<RouteCarrier>,
+}
+
+/// `telepy-ws.py` 的參數（`[--tcp host:port] <ws url>`）與內容。/ The carrier's arguments and program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteCarrier {
+    pub args: String,
+    pub program: String,
+}
+
+impl Plan {
+    fn route_carrier(&self) -> Option<&RouteCarrier> {
+        self.route.as_ref().and_then(|r| r.carrier.as_ref())
+    }
+    /// 會裝小程式：換成經小程式的連線，或沿用舊的一鍵加入載具。/ Whether carrier files get installed.
+    fn has_carrier(&self) -> bool {
+        self.route_carrier().is_some() || (self.route.is_none() && carrier(self).is_some())
+    }
 }
 
 fn safe_word(s: &str) -> bool {
@@ -502,7 +532,7 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
         let Some(a) = accounts.iter().find(|a| a.account == run_user) else { return Err(Blocker::UnknownOwner) };
         (a.account.clone(), false)
     };
-    Ok(Plan { method, account, sudo, run_user, home, spec, old })
+    Ok(Plan { method, account, sudo, run_user, home, spec, old, route: None })
 }
 
 /// 新服務的 ssh 參數（不含程式本身）。/ The new service's ssh arguments (without the program).
@@ -514,8 +544,19 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
     } else {
         a.extend(["-o".into(), "StrictHostKeyChecking=no".into(), "-o".into(), "UserKnownHostsFile=/dev/null".into()]);
     }
-    if let Some(pc) = proxy_for(plan, names) {
-        a.extend(["-o".into(), format!("ProxyCommand={pc}")]);
+    match &plan.route {
+        // 換連線方式：只用新的小程式（舊的 ProxyCommand 屬於舊的安裝代號，會被拆掉）。
+        // Switching: only the new carrier (the old ProxyCommand belongs to the old install id and goes away).
+        Some(r) => {
+            if r.carrier.is_some() {
+                a.extend(["-o".into(), format!("ProxyCommand={ssh_dir}/{}", names.ws_sh())]);
+            }
+        }
+        None => {
+            if let Some(pc) = proxy_for(plan, names) {
+                a.extend(["-o".into(), format!("ProxyCommand={pc}")]);
+            }
+        }
     }
     if let Some(k) = &plan.spec.key {
         let k = match k.strip_prefix("~/") {
@@ -524,10 +565,11 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
         };
         a.extend(["-o".into(), "IdentitiesOnly=yes".into(), "-i".into(), k]);
     }
-    if let Some(p) = plan.spec.port {
+    if let Some(p) = plan.route.as_ref().map(|r| r.port).or(plan.spec.port) {
         a.extend(["-p".into(), p.to_string()]);
     }
-    a.extend(["-R".into(), format!("0:{}", plan.spec.target), plan.spec.dest.clone()]);
+    let dest = plan.route.as_ref().map_or_else(|| plan.spec.dest.clone(), |r| r.dest.clone());
+    a.extend(["-R".into(), format!("0:{}", plan.spec.target), dest]);
     a
 }
 
@@ -619,7 +661,22 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
     if !known_hosts.is_empty() {
         s.push_str(&format!("put {} {} 644\n", sh_quote(&kh), sh_quote(known_hosts)));
     }
-    if let Some((from_sh, from_py)) = carrier(plan) {
+    if let Some(c) = plan.route_carrier() {
+        // 新的小程式：裝置要有 python3（沒有就停，舊服務完全沒動）；包裝腳本寫死 python3 的路徑（服務的 PATH 可能很短）。
+        // The new carrier: the device needs python3 (else stop; the old service is untouched); the wrapper pins
+        // python3's path (a service's PATH may be short).
+        let to_sh = format!("{ssh_dir}/{}", names.ws_sh());
+        let to_py = format!("{ssh_dir}/{}", names.ws_py());
+        s.push_str("PY=$(command -v python3 2>/dev/null) || PY=''\n[ -n \"$PY\" ] || { out failed python3 'python3 is not installed on the device'; exit 0; }\n");
+        s.push_str(&format!("put {} {} 700\n", sh_quote(&to_py), sh_quote(&c.program)));
+        s.push_str(&format!(
+            "put {ts} \"$(printf '#!/bin/sh\\n# %s: the way to Telepy (the SSH port first when --tcp is given).\\nexec %s %s %s\\n' {desc} \"$PY\" {tp} {args})\" 700\n",
+            ts = sh_quote(&to_sh),
+            desc = sh_quote(&names.description()),
+            tp = sh_quote(&to_py),
+            args = sh_quote(&c.args),
+        ));
+    } else if let Some((from_sh, from_py)) = carrier(plan).filter(|_| plan.route.is_none()) {
         let to_sh = format!("{ssh_dir}/{}", names.ws_sh());
         let to_py = format!("{ssh_dir}/{}", names.ws_py());
         s.push_str(&format!(
@@ -637,7 +694,7 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
     // 家目錄裡的檔案歸隧道的帳號。/ Files in the home belong to the tunnel's account.
     if plan.sudo || plan.account == "root" {
         let mut owned = vec![kh.clone()];
-        if carrier(plan).is_some() {
+        if plan.has_carrier() {
             owned.push(format!("{ssh_dir}/{}", names.ws_sh()));
             owned.push(format!("{ssh_dir}/{}", names.ws_py()));
         }
@@ -687,7 +744,7 @@ pub fn undo_script(plan: &Plan, names: &Names) -> String {
         ),
     });
     let mut files = vec![path, format!("{ssh_dir}/{}", names.known_hosts()), format!("{ssh_dir}/{}", names.log())];
-    if carrier(plan).is_some() {
+    if plan.has_carrier() {
         files.push(format!("{ssh_dir}/{}", names.ws_sh()));
         files.push(format!("{ssh_dir}/{}", names.ws_py()));
     }

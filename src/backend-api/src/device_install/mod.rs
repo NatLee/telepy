@@ -165,6 +165,12 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
         Ok(names) => json!({ "possible": true, "blocker": null, "names": names }),
         Err(b) => json!({ "possible": false, "blocker": b, "names": extra }),
     };
+    // 換連線方式：用一個不存在的代號排計畫，現在的服務（不論叫什麼）都算「要換掉的」。
+    // Switching: plan with an id nothing uses, so the current service (whatever its name) is the one to replace.
+    let switch = match plan::plan(&survey, &Names::new("switchprobe")) {
+        Ok(p) => json!({ "possible": true, "blocker": null, "way_in": tunnel.way_in, "old": p.old }),
+        Err(b) => json!({ "possible": false, "blocker": b, "way_in": tunnel.way_in }),
+    };
     let rename = match &planned {
         Ok(p) => json!({
             "possible": true,
@@ -211,6 +217,7 @@ pub async fn view(state: &AppState, tunnel: &Tunnel) -> sqlx::Result<Value> {
         "server_port": state.config.reverse_server_ssh_port.trim(),
         "rename": rename,
         "tidy": tidy,
+        "switch": switch,
         "renamed_at": row.as_ref().and_then(|r| r.renamed_at.as_deref()).map(db_to_iso_utc_z),
         "renamed_from": renamed_from,
     }))
@@ -258,6 +265,27 @@ pub struct Report {
     /// 新服務沒連上來時它自己的 log 最後幾行。/ The new service's last log lines when it did not connect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
+    /// 換連線方式時：換成哪種（`auto` / `websocket` / `ssh`）。/ When switching: the new way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+}
+
+/// 換連線方式：新服務怎麼連 Telepy。`ws_url` = 網頁的 `/ws/gateway/`（auto / websocket 用）。
+/// Switching how a device connects: the new way, and the web `/ws/gateway/` URL for auto / websocket.
+pub struct Switch {
+    pub transport: &'static str,
+    pub ws_url: String,
+}
+
+/// 新服務要連的 gateway（`telepy@<SSH 主機>`、port）與 known_hosts 別名（網域的，見 `scripts::gateway_alias`）；
+/// 沒設網域時用舊指令裡的主機。/ Where the new service dials and its known_hosts alias; the old command's host
+/// when no domain is configured.
+fn gateway_route(state: &AppState, old_dest: &str, old_port: Option<u16>) -> (String, u16, String) {
+    let old_host = old_dest.rsplit('@').next().unwrap_or("").to_string();
+    let host = state.config.ssh_host().or_else(|| state.config.server_host().filter(|h| !h.is_empty())).unwrap_or_else(|| old_host.clone());
+    let port = state.config.reverse_server_ssh_port.trim().parse::<u16>().ok().or(old_port).unwrap_or(22);
+    let domain = state.config.server_host().filter(|h| !h.is_empty()).unwrap_or(old_host);
+    (format!("{}@{host}", state.config.gateway_user), port, crate::scripts::gateway_alias(&domain, &port.to_string()))
 }
 
 pub enum RenameError {
@@ -287,6 +315,19 @@ impl Run<'_> {
 
 /// 把裝置上跑這條隧道的服務換成用安裝代號取名的新服務（先接上再拆舊的）。/ Rename the device's service, make-before-break.
 pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Report, RenameError> {
+    replace(state, tunnel, by, None).await
+}
+
+/// 換連線方式（例如改成自動）：同一套先接上再拆舊的，只是新服務用**新的安裝代號**取名（才能跟現在的並存），連到現在的
+/// SSH 主機，需要時帶小程式；接手後隧道改用新代號，舊代號進紀錄（這條隧道以前的安裝）。
+/// Switch how the device connects (e.g. to automatic): the same make-before-break, but the new service is named
+/// after a **fresh install id** (so it can run next to the current one), dials the current SSH host and carries the
+/// carrier when needed; once it took over the tunnel adopts the new id and the old one goes to the ledger.
+pub async fn switch_transport(state: &AppState, tunnel: &Tunnel, by: &str, switch: Switch) -> Result<Report, RenameError> {
+    replace(state, tunnel, by, Some(switch)).await
+}
+
+async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Switch>) -> Result<Report, RenameError> {
     {
         let mut b = BUSY.lock().unwrap();
         if !b.insert(tunnel.reverse_port) {
@@ -304,17 +345,26 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
     let port = u16::try_from(tunnel.reverse_port).map_err(|_| RenameError::Offline)?;
     let mut run = Run { state, tunnel, report: Report::default() };
 
-    // 1. 盤點（每次都重新看，不信舊的紀錄）。/ Survey afresh.
-    let id = match db::device_install::ensure(&state.db, tunnel.id).await {
+    // 1. 盤點（每次都重新看，不信舊的紀錄）。換連線方式時用一個新的代號（現在的服務在它眼裡就是「舊的」）。
+    // Survey afresh. A switch uses a fresh id (the current service then counts as the older one).
+    let current = match db::device_install::ensure(&state.db, tunnel.id).await {
         Ok(id) => id,
         Err(e) => return Ok(run.fail("survey", "internal", format!("{e:#}")).await),
     };
+    let id = match &switch {
+        Some(_) => match db::device_install::fresh_id(&state.db).await {
+            Ok(id) => id,
+            Err(e) => return Ok(run.fail("survey", "internal", format!("{e:#}")).await),
+        },
+        None => current.clone(),
+    };
+    run.report.transport = switch.as_ref().map(|s| s.transport.to_string());
     let names = Names::new(&id);
     let survey = match survey_and_record(state, tunnel).await {
         Ok(s) => s,
         Err(e) => return Ok(run.fail("survey", "survey_failed", e).await),
     };
-    let p = match plan::plan(&survey, &names) {
+    let mut p = match plan::plan(&survey, &names) {
         Ok(p) => p,
         Err(b) => {
             let code = serde_json::to_value(b).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
@@ -328,8 +378,22 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
     run.step("survey", "done", Some(p.old.join(", "))).await;
 
     // 2. 經舊連線裝好新服務。/ Install the new service over the current connection.
-    let host = p.spec.dest.rsplit('@').next().unwrap_or("").to_string();
-    let alias = crate::scripts::gateway_alias(&host, &p.spec.port.unwrap_or(22).to_string());
+    let alias = match &switch {
+        Some(sw) => {
+            let (dest, port, alias) = gateway_route(state, &p.spec.dest, p.spec.port);
+            let carrier = match sw.transport {
+                "auto" => Some(plan::RouteCarrier { args: format!("--tcp {}:{port} {}", dest.rsplit('@').next().unwrap_or(""), sw.ws_url), program: crate::api::join::WS_CLIENT.to_string() }),
+                "websocket" => Some(plan::RouteCarrier { args: sw.ws_url.clone(), program: crate::api::join::WS_CLIENT.to_string() }),
+                _ => None,
+            };
+            p.route = Some(plan::Route { dest, port, carrier });
+            alias
+        }
+        None => {
+            let host = p.spec.dest.rsplit('@').next().unwrap_or("").to_string();
+            crate::scripts::gateway_alias(&host, &p.spec.port.unwrap_or(22).to_string())
+        }
+    };
     let host_keys = state.gateway.host_public_keys();
     let known = crate::scripts::known_hosts_lines(&alias, &host_keys);
     let args = plan::ssh_args(&p, &names, &alias, !host_keys.is_empty());
@@ -359,8 +423,9 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
     run.report.install = items.clone();
     if let Some(f) = items.iter().find(|i| i.kind == "failed").or(if items.iter().any(|i| i.kind == "done") { None } else { items.last() }) {
         let detail = format!("{} {}", f.what, f.detail);
+        let code = if f.kind == "failed" && f.what == "python3" { "no_python" } else { "install_failed" };
         undo(&mut run, &conn, &p, &names, port).await;
-        return Ok(run.fail("install", "install_failed", detail).await);
+        return Ok(run.fail("install", code, detail).await);
     }
     if !items.iter().any(|i| i.kind == "done") {
         undo(&mut run, &conn, &p, &names, port).await;
@@ -404,6 +469,16 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
     }
     state.gateway.disarm_handover(port);
     drop(conn);
+    // 新服務接手了：換連線方式時隧道從這裡起用新的代號，舊的進紀錄；記下它現在怎麼連。
+    // The new service took over: a switch makes the tunnel use the new id from here on and records the way in.
+    if let Some(sw) = &switch {
+        if let Err(e) = db::device_install::adopt(&state.db, tunnel.id, &id, &tunnel.host_friendly_name, tunnel.user_id).await {
+            tracing::warn!(tunnel = tunnel.id, error = %e, "cannot adopt the new install id");
+        }
+        if let Err(e) = db::tunnels::set_way_in(&state.db, tunnel.id, sw.transport).await {
+            tracing::warn!(tunnel = tunnel.id, error = %e, "cannot record the new way in");
+        }
+    }
     run.step("switch", "done", None).await;
 
     // 6. 經新連線移除舊服務（留下金鑰與新服務）。/ Remove the older service over the new connection.
@@ -427,15 +502,19 @@ pub async fn rename(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Repor
     if !confirmed {
         run.report.code = Some(if removal.came_back { "old_came_back" } else { "old_left" }.into());
     }
+    let (kind, verb) = match &switch {
+        Some(sw) => ("service_switched", format!("switched to {}, now", if sw.transport == "auto" { "automatic (the SSH port first, the web port when it is blocked)" } else if sw.transport == "websocket" { "the web port only" } else { "the SSH port only" })),
+        None => ("service_renamed", "renamed to".to_string()),
+    };
     state
         .gateway
         .event(
-            "service_renamed",
+            kind,
             None,
             Some(port),
             Some(tunnel.id),
             format!(
-                "Device service of '{}' renamed to {} ({}, as {}) by {by}; was {}{}",
+                "Device service of '{}' {verb} {} ({}, as {}) by {by}; was {}{}",
                 tunnel.host_friendly_name,
                 run.report.new_name.as_deref().unwrap_or("?"),
                 p.method.as_str(),
