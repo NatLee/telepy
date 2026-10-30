@@ -308,6 +308,13 @@ for r in "$HOME/.ssh/telepy-tunnel-$T_ID.sh" ${T_INSTALL:+"$HOME/.ssh/telepy-$T_
         FOUND_JOIN=1
     fi
 done
+# Other loops in ~/.ssh that run this tunnel with its key, running or not: told apart by what they do, not by name
+# (a deleted tunnel's loop is left behind when a rejoin writes a new key to the same file).
+for r in "$HOME"/.ssh/telepy-*.sh; do
+    case "$r" in *-uninstall.sh|*-ws.sh) continue ;; esac
+    case "$RUNNERS " in *" $r "*) continue ;; esac
+    has_port "$r" && RUNNERS="$RUNNERS $r"
+done
 PIDS=""
 pinfo() {
     if [ -r "/proc/$1/cmdline" ]; then tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null

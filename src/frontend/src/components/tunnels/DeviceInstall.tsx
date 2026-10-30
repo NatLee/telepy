@@ -10,7 +10,7 @@
  * Also the list's "older name" chip.
  */
 import React, { useState } from "react";
-import { ArrowRightLeft, Box, FileText, Info, KeyRound, Loader2, Package, RefreshCw, Server, TriangleAlert } from "lucide-react";
+import { ArrowRightLeft, Box, Copy, FileText, Info, KeyRound, Loader2, Package, RefreshCw, Server, Trash2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -19,7 +19,7 @@ import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowPath, StateLine } from "@/components/flow/PathFlow";
 import { useDeviceInstall } from "@/hooks/useDeviceInstall";
 import { useNow } from "@/hooks/useNow";
-import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, failureKey, groupParts, lanes, mapRows, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type ReportedStep } from "@/lib/deviceInstall";
+import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, TIDY_STEPS, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type RenameStep, type ReportedStep } from "@/lib/deviceInstall";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
@@ -27,15 +27,17 @@ import type { TranslationKey } from "@/locales/en";
 /** 列表上的標記：上次盤點看到舊名稱的服務（點了開詳細資訊的裝置頁）。/ The list chip for older-named services. */
 export function DeviceNameChip({ summary, onOpen }: { summary?: DeviceInstallSummary | null; onOpen: () => void }) {
     const { t } = useI18n();
-    if (!summary || summary.older.length === 0) return null;
+    const flagged = needsAttention(summary);
+    if (flagged.length === 0) return null;
+    const extra = (summary?.extra?.length ?? 0) > 0;
     return (
         <button
             type="button"
             onClick={onOpen}
             className="inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20"
-            title={`${summary.older.join(", ")}\n${t("deviceInstall.chipHint")}`}
+            title={`${flagged.join(", ")}\n${t(extra ? "deviceInstall.chipExtraHint" : "deviceInstall.chipHint")}`}
         >
-            <TriangleAlert size={13} aria-hidden /> {t("deviceInstall.chip")}
+            <TriangleAlert size={13} aria-hidden /> {t(extra ? "deviceInstall.chipExtra" : "deviceInstall.chip")}
         </button>
     );
 }
@@ -50,8 +52,10 @@ const KIND_KEY: Record<InstallPart["kind"], TranslationKey> = {
 };
 
 function PartRow({ part }: { part: InstallPart }) {
-    const { t } = useI18n();
+    const { t, locale } = useI18n();
+    const now = useNow(60_000);
     const named = part.kind === "service" || part.kind === "container";
+    const note = noteOf(part);
     return (
         <li className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
             <span className="min-w-0 flex-1 font-mono text-xs break-all text-foreground">{part.name}</span>
@@ -59,14 +63,23 @@ function PartRow({ part }: { part: InstallPart }) {
                 {part.what && part.kind !== "process" && <Chip>{part.what}</Chip>}
                 <Chip>{part.account}</Chip>
                 {named &&
-                    (part.private ? (
+                    (note === "private" ? (
                         <Chip tone="success">{t("deviceInstall.private")}</Chip>
-                    ) : part.earlier ? (
+                    ) : note === "extra" ? (
+                        <Chip tone="warning" title={t("deviceInstall.extraHint")}>{t("deviceInstall.extra")}</Chip>
+                    ) : note === "earlier" ? (
                         <Chip title={t("deviceInstall.earlierHint")}>{t("deviceInstall.earlier")}</Chip>
                     ) : (
                         <Chip tone="warning">{t("deviceInstall.older")}</Chip>
                     ))}
             </span>
+            {part.retired && (
+                <span className="basis-full text-xs text-muted-foreground">
+                    {part.retired.tunnel_name
+                        ? t("deviceInstall.retiredNamed", { name: part.retired.tunnel_name, id: part.retired.install_id, time: formatRelativeTime(part.retired.retired_at, locale, now) })
+                        : t("deviceInstall.retiredOther", { id: part.retired.install_id, time: formatRelativeTime(part.retired.retired_at, locale, now) })}
+                </span>
+            )}
         </li>
     );
 }
@@ -75,6 +88,7 @@ const NOTE_KEY: Record<MapRow["services"][number]["note"], TranslationKey> = {
     private: "deviceInstall.private",
     earlier: "deviceInstall.earlier",
     older: "deviceInstall.older",
+    extra: "deviceInstall.extra",
     process: "deviceInstall.map.process",
     other: "deviceInstall.map.otherService",
 };
@@ -104,7 +118,7 @@ export function DeviceMap({ view, deviceName }: { view: Pick<DeviceInstallView, 
                                 <span className="mt-1 flex flex-wrap gap-1">
                                     <Chip>{deviceName}</Chip>
                                     {[...new Set(row.services.map((s) => s.note))].map((n) => (
-                                        <Chip key={n} tone={n === "private" ? "success" : n === "older" ? "warning" : "neutral"}>{t(NOTE_KEY[n])}</Chip>
+                                        <Chip key={n} tone={n === "private" ? "success" : n === "older" || n === "extra" ? "warning" : "neutral"}>{t(NOTE_KEY[n])}</Chip>
                                     ))}
                                 </span>
                             }
@@ -174,12 +188,12 @@ function RenameFlow({ view, steps, running, report }: { view: DeviceInstallView;
     );
 }
 
-function StepList({ steps, running }: { steps: ReportedStep[]; running: boolean }) {
+function StepList({ steps, running, order = RENAME_STEPS, hintPrefix = "deviceInstall.step" }: { steps: ReportedStep[]; running: boolean; order?: readonly RenameStep[]; hintPrefix?: string }) {
     const { t } = useI18n();
-    const states = stepStates(steps, running);
+    const states = stepStates(steps, running, order);
     return (
         <ol className="space-y-1.5">
-            {RENAME_STEPS.map((id, i) => {
+            {order.map((id, i) => {
                 const detail = steps.find((s) => s.id === id)?.detail;
                 return (
                     <li key={id} className="flex min-w-0 items-start gap-2.5">
@@ -189,7 +203,7 @@ function StepList({ steps, running }: { steps: ReportedStep[]; running: boolean 
                                 <span className="text-sm">{t(`deviceInstall.step.${id}` as TranslationKey)}</span>
                                 <StateLine state={states[id]} text={states[id] === "ok" ? t("deviceInstall.stepDone") : undefined} />
                             </span>
-                            <span className="block text-xs leading-snug text-muted-foreground">{t(`deviceInstall.step.${id}Hint` as TranslationKey)}</span>
+                            <span className="block text-xs leading-snug text-muted-foreground">{t(`${hintPrefix}.${id}Hint` as TranslationKey)}</span>
                             {detail && states[id] === "failed" && <span className="mt-0.5 block font-mono text-xs break-all whitespace-pre-wrap text-destructive">{detail}</span>}
                         </span>
                     </li>
@@ -268,6 +282,107 @@ function RenameDialog({ isOpen, onClose, view, steps, running, report, onStart, 
     );
 }
 
+/**
+ * 拿掉多出來那份的圖：Telepy ─ 隧道（一直走用代號取名的那個）─ 裝置（裡面：帶著隧道的那個 / 多出來的那份）。
+ * The extra-copy diagram: Telepy ─ the tunnel (always on the install-id service) ─ the device, holding the service that
+ * carries the tunnel and the extra copy beside it.
+ */
+function TidyFlow({ view, steps, running, report, sample }: { view: DeviceInstallView; steps: ReportedStep[]; running: boolean; report?: RenameReport | null; sample?: { current: string; extra: string } }) {
+    const { t } = useI18n();
+    const s = stepStates(steps, running, TIDY_STEPS);
+    const current = sample?.current ?? (view.parts.find((p) => (p.kind === "service" || p.kind === "container") && p.private)?.name || view.install_id);
+    const extra = sample?.extra ?? (report?.old.join(", ") || view.tidy?.names.join(", ") || view.extra?.join(", ") || "—");
+    const lost = report?.code === "connection_lost";
+    const extraState = s.confirm === "ok" ? "waiting" : s.remove === "failed" || s.confirm === "failed" ? "failed" : s.remove === "active" || s.confirm === "active" ? "active" : "failed";
+    const extraText = s.confirm === "ok" ? t("deviceInstall.lane.removed") : extraState === "active" ? t("deviceInstall.lane.removing") : extraState === "failed" && steps.length > 0 ? t("deviceInstall.lane.leftover") : t("deviceInstall.tidyLane.fights");
+    return (
+        <FlowPath>
+            <FlowNode brand title="Telepy" sub={t("deviceInstall.flow.telepy")} state="ok" />
+            <FlowLink label={t("deviceInstall.tidyLane.link")} state={lost ? "failed" : running ? "active" : "ok"} />
+            <FlowNode
+                icon={Server}
+                wide
+                title={t("deviceInstall.flow.device")}
+                state={lost ? "failed" : running ? "active" : "ok"}
+                stateText={running ? undefined : t("deviceInstall.flow.online")}
+                control={
+                    <ul className="space-y-2">
+                        <li className="rounded-lg border border-border bg-surface px-2.5 py-2">
+                            <span className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs text-muted-foreground">{t("deviceInstall.tidyLane.current")}</span>
+                                <StateLine state={lost ? "failed" : "ok"} text={t("deviceInstall.lane.carrying")} />
+                            </span>
+                            <span className="block font-mono text-xs break-all">{current}</span>
+                        </li>
+                        <li className="rounded-lg border border-dashed border-border px-2.5 py-2">
+                            <span className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                    <Copy size={12} aria-hidden /> {t("deviceInstall.tidyLane.extra")}
+                                </span>
+                                <StateLine state={extraState} text={extraText} />
+                            </span>
+                            <span className="block font-mono text-xs break-all">{extra}</span>
+                        </li>
+                    </ul>
+                }
+            />
+        </FlowPath>
+    );
+}
+
+function TidyDialog({ isOpen, onClose, view, steps, running, report, onStart, deviceName }: { isOpen: boolean; onClose: () => void; view: DeviceInstallView; steps: ReportedStep[]; running: boolean; report: RenameReport | null; onStart: () => void; deviceName: string }) {
+    const { t } = useI18n();
+    const started = running || report !== null;
+    const possible = view.tidy?.possible ?? false;
+    const roots = report ? rootCommands(report) : [];
+    return (
+        <Modal
+            isOpen={isOpen}
+            onClose={running ? () => {} : onClose}
+            title={t("deviceInstall.tidyTitle", { name: deviceName })}
+            description={t("deviceInstall.tidyDescription")}
+            icon={<Trash2 />}
+            size="4xl"
+            footer={
+                <>
+                    <Button type="button" variant="outline" onClick={onClose} disabled={running}>
+                        {report ? t("common.close") : t("common.cancel")}
+                    </Button>
+                    {!report && (
+                        <Button type="button" onClick={onStart} disabled={running || !possible}>
+                            {running ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                            {running ? t("deviceInstall.tidying") : t("deviceInstall.tidyStart")}
+                        </Button>
+                    )}
+                </>
+            }
+        >
+            <div className="space-y-5">
+                <TidyFlow view={view} steps={steps} running={running} report={report} />
+                <StepList steps={steps} running={running} order={TIDY_STEPS} hintPrefix="deviceInstall.tidyStep" />
+                {!started && <Callout tone="info">{t("deviceInstall.tidyNote")}</Callout>}
+                {report &&
+                    (report.ok ? (
+                        <Callout tone="tip" title={t("deviceInstall.tidyDone")}>
+                            {t("deviceInstall.tidyDoneBody", { names: report.old.join(", ") })}
+                        </Callout>
+                    ) : (
+                        <Callout tone={report.code === "connection_lost" ? "danger" : "warning"} title={t("deviceInstall.tidyFailed")}>
+                            <p>{t(failureKey(report.code))}</p>
+                            {report.error && !report.steps.some((s) => s.detail === report.error) && <p className="mt-1 font-mono text-xs break-all">{report.error}</p>}
+                            {roots.length > 0 && (
+                                <>
+                                    <p className="mt-2">{t("deviceInstall.needsRootAfter")}</p>
+                                    <pre className="mt-1 max-w-full overflow-x-auto rounded-md bg-surface p-2 font-mono text-xs whitespace-pre-wrap">{roots.join("\n")}</pre>
+                                </>
+                            )}
+                        </Callout>
+                    ))}
+            </div>
+        </Modal>
+    );
+}
+
 /** 「怎麼取名的」：代號、舊名稱看得出什麼、改名為什麼不會斷線。/ How the names work and why the rename keeps the tunnel up. */
 function InfoDialog({ isOpen, onClose, view }: { isOpen: boolean; onClose: () => void; view: DeviceInstallView }) {
     const { t } = useI18n();
@@ -305,6 +420,15 @@ function InfoDialog({ isOpen, onClose, view }: { isOpen: boolean; onClose: () =>
                     </div>
                     <p className="text-xs text-muted-foreground">{t("deviceInstall.info.notHidden")}</p>
                 </Section>
+                <Section title={t("deviceInstall.info.decideTitle")} description={t("deviceInstall.info.decideBody")}>
+                    <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                        <li>{t("deviceInstall.info.decideTunnel")}</li>
+                        <li>{t("deviceInstall.info.decideRunning")}</li>
+                        <li>{t("deviceInstall.info.decideName")}</li>
+                    </ol>
+                    <p className="text-sm text-muted-foreground">{t("deviceInstall.info.decideExample")}</p>
+                    <TidyFlow view={view} steps={[]} running={false} sample={{ current: view.names.systemd, extra: "telepy-6m35fshq" }} />
+                </Section>
                 <Section title={t("deviceInstall.info.renameTitle")} description={t("deviceInstall.info.renameBody")}>
                     <RenameFlow view={view} steps={[]} running={false} />
                     <StepList steps={[]} running={false} />
@@ -340,6 +464,7 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
     const now = useNow(30_000);
     const d = useDeviceInstall(tunnelId, isOpen, true, onChanged);
     const [renameOpen, setRenameOpen] = useState(false);
+    const [tidyOpen, setTidyOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     const v = d.view;
     if (!v) {
@@ -367,6 +492,19 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                 </span>
             }
         >
+            {(v.extra?.length ?? 0) > 0 && (
+                <Callout tone="warning" title={t("deviceInstall.extraTitle")}>
+                    <p>{t("deviceInstall.extraBody", { names: (v.extra ?? []).join(", "), id: v.install_id })}</p>
+                    {v.tidy?.possible ? (
+                        <Button type="button" size="sm" className="mt-2" onClick={() => setTidyOpen(true)} disabled={!v.online || d.renaming}>
+                            <Trash2 size={14} /> {t("deviceInstall.tidyButton")}
+                        </Button>
+                    ) : (
+                        v.tidy?.blocker && <p className="mt-1">{t(BLOCKER_KEY[v.tidy.blocker])}</p>
+                    )}
+                </Callout>
+            )}
+
             {v.older.length > 0 && (
                 <Callout tone="warning" title={t("deviceInstall.olderTitle")}>
                     <p>{t("deviceInstall.olderBody", { names: v.older.join(", ") })}</p>
@@ -457,6 +595,19 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                 running={d.renaming}
                 report={d.report}
                 onStart={() => void d.rename()}
+                deviceName={deviceName}
+            />
+            <TidyDialog
+                isOpen={tidyOpen}
+                onClose={() => {
+                    setTidyOpen(false);
+                    d.resetRename();
+                }}
+                view={v}
+                steps={d.steps}
+                running={d.renaming}
+                report={d.report}
+                onStart={() => void d.tidy()}
                 deviceName={deviceName}
             />
             <InfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} view={v} />

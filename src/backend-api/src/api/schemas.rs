@@ -4247,6 +4247,27 @@ pub struct DeviceInstallPart {
     pub private: bool,
     /// One of Telepy's earlier standard names
     pub earlier: bool,
+    /// An extra copy: the tunnel already runs from its install-id service and this one would fight it on boot (decided from the key, server and what runs — not the name)
+    pub extra: bool,
+    /// The deleted tunnel whose install id this name carries (from the ledger); tunnel_id / tunnel_name only when it had the same owner
+    pub retired: Option<DeviceInstallRetired>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallRetired {
+    pub install_id: String,
+    pub tunnel_id: Option<i64>,
+    pub tunnel_name: Option<String>,
+    pub retired_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceInstallTidyPlan {
+    pub possible: bool,
+    /// not_surveyed | windows | nothing_extra | needs_root (null when possible)
+    pub blocker: Option<String>,
+    /// The extra services / containers that would be removed
+    pub names: Vec<String>,
 }
 
 #[derive(ToSchema)]
@@ -4261,7 +4282,7 @@ pub struct DeviceInstallOther {
 #[derive(ToSchema)]
 pub struct DeviceInstallRenamePlan {
     pub possible: bool,
-    /// not_surveyed | windows | nothing_to_rename | no_process | unparsed | needs_root | unknown_owner | odd_command | unsupported (null when possible)
+    /// not_surveyed | windows | nothing_to_rename | no_process | unparsed | needs_root | unknown_owner | odd_command | unsupported | extra (null when possible)
     pub blocker: Option<String>,
     /// systemd | systemd_user | launchd_daemon | launchd_agent | loop
     pub method: Option<String>,
@@ -4299,6 +4320,8 @@ pub struct DeviceInstall {
     pub older: Vec<String>,
     /// Telepy's earlier standard names (telepy-tunnel-<n>.service, com.telepy.tunnel.<n>, telepy-tunnel.service): fine to keep, may be renamed
     pub earlier: Vec<String>,
+    /// Extra copies to remove (the tunnel already runs from its install-id service)
+    pub extra: Vec<String>,
     /// Things on the device that dial another server; never touched by delete, survey or rename
     pub others: Vec<DeviceInstallOther>,
     /// The tunnel's key file when another server's tunnel uses it too (kept on delete)
@@ -4306,13 +4329,14 @@ pub struct DeviceInstall {
     /// The gateway port this server's devices dial
     pub server_port: String,
     pub rename: DeviceInstallRenamePlan,
+    pub tidy: DeviceInstallTidyPlan,
     pub renamed_at: Option<String>,
     pub renamed_from: Vec<String>,
 }
 
 #[derive(ToSchema)]
 pub struct DeviceInstallStep {
-    /// survey | install | standby | check | switch | remove | confirm
+    /// survey | install | standby | check | switch | remove | confirm (removing an extra copy: survey | remove | confirm)
     pub id: String,
     /// done | failed
     pub state: String,
@@ -4324,7 +4348,7 @@ pub struct DeviceInstallReport {
     /// The new service took over and nothing of the old one is left
     pub ok: bool,
     pub steps: Vec<DeviceInstallStep>,
-    /// Failure code: a blocker, survey_failed, login_failed, install_failed, standby_timeout, check_failed, switch_failed, old_left, old_came_back
+    /// Failure code: a blocker, survey_failed, login_failed, install_failed, standby_timeout, check_failed, switch_failed, old_left, old_came_back, connection_lost
     pub code: Option<String>,
     pub error: Option<String>,
     pub method: Option<String>,

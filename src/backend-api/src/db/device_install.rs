@@ -35,6 +35,10 @@ pub async fn ensure(db: &Db, tunnel_id: i64) -> sqlx::Result<String> {
     }
     for _ in 0..8 {
         let id = crate::device_install::names::new_id();
+        // 刪掉的隧道用過的代號不再發（裝置上可能還留著它的東西）。/ Never reissue a deleted tunnel's id.
+        if is_retired(db, &id).await? {
+            continue;
+        }
         let r = sqlx::query("INSERT INTO telepy_device_install (tunnel_id, install_id, created_at) VALUES (?, ?, ?) ON CONFLICT (tunnel_id) DO NOTHING")
             .bind(tunnel_id)
             .bind(&id)
@@ -89,7 +93,49 @@ pub async fn survey_due(db: &Db, tunnel_id: i64, older_than_days: i64) -> sqlx::
     Ok(at < cutoff)
 }
 
-pub async fn delete(db: &Db, tunnel_id: i64) -> sqlx::Result<()> {
+/// 刪掉的隧道留下的代號（帳本裡的一列）。/ An install id of a deleted tunnel (a ledger row).
+#[derive(Debug, Clone, FromRow)]
+pub struct Retired {
+    pub install_id: String,
+    pub tunnel_id: i64,
+    pub tunnel_name: String,
+    pub user_id: i64,
+    pub retired_at: String,
+}
+
+/// 隧道刪除時：代號記進帳本，再刪這一列。/ On tunnel delete: put the id in the ledger, then drop the row.
+pub async fn retire(db: &Db, tunnel_id: i64, tunnel_name: &str, user_id: i64) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO telepy_device_install_retired (install_id, tunnel_id, tunnel_name, user_id, retired_at)
+         SELECT install_id, tunnel_id, ?, ?, ? FROM telepy_device_install WHERE tunnel_id = ?
+         ON CONFLICT (install_id) DO NOTHING",
+    )
+    .bind(tunnel_name)
+    .bind(user_id)
+    .bind(now_db())
+    .bind(tunnel_id)
+    .execute(&db.write)
+    .await?;
     sqlx::query("DELETE FROM telepy_device_install WHERE tunnel_id = ?").bind(tunnel_id).execute(&db.write).await?;
     Ok(())
+}
+
+/// 帳本裡的這些代號。/ Ledger rows for these ids.
+pub async fn retired(db: &Db, ids: &[String]) -> sqlx::Result<HashMap<String, Retired>> {
+    let mut out = HashMap::new();
+    for id in ids {
+        if let Some(r) = sqlx::query_as::<_, Retired>("SELECT install_id, tunnel_id, tunnel_name, user_id, retired_at FROM telepy_device_install_retired WHERE install_id = ?")
+            .bind(id)
+            .fetch_optional(&db.read)
+            .await?
+        {
+            out.insert(id.clone(), r);
+        }
+    }
+    Ok(out)
+}
+
+async fn is_retired(db: &Db, id: &str) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_device_install_retired WHERE install_id = ?").bind(id).fetch_one(&db.read).await?;
+    Ok(n > 0)
 }
