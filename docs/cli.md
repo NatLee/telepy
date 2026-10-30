@@ -171,6 +171,8 @@ telepy ssh box@pi -- uname -a              # <tunnel>@<account> (pi@box works to
 telepy ssh box -L 8080:localhost:80        # forward a port; -D 1080 for SOCKS
 telepy ssh box -i ~/.ssh/id_work           # a specific key for both hops
 telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # any other ssh option (repeatable; scp / sftp take it too)
+telepy ssh box --via ssh                   # straight to Telepy's SSH port instead of the web port (see "Which port" below)
+telepy config fallback always              # this server: use the SSH port without asking when the web port can't be reached
 telepy scp ./build.tar.gz box@pi:/tmp/
 telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
@@ -249,6 +251,25 @@ text by its length unless `--show`), and step-up tunnels refuse them.
 Exit codes: `exec` / `run` on a single target exit with the remote command's code (124 when it timed out and was
 killed, 255 when Telepy refused or could not run it); several targets exit 1 when any failed. `ssh` / `scp` / `sftp`
 exit with OpenSSH's code. Other errors from Telepy exit 1 and print the server's message.
+
+### Which port `ssh / scp / sftp` use
+
+They reach Telepy through its **web port** by default: `telepy` itself is the ProxyCommand of the hop to Telepy and
+carries the SSH inside a WebSocket (`/ws/gateway/`, no python3 needed). The SSH inside is the same — your key, the
+pinned host key, the device's own sshd — but Telepy now records your real address, which something in front of the
+SSH port (OrbStack's or Docker's port forwarding, a NAT) often hides. The SSH hop sends a keepalive every 30 s so a
+proxy in front of the web port (Cloudflare, a load balancer) does not close an idle session.
+
+When the web port can't be reached, `telepy` only uses the SSH port with your consent:
+
+| `--fallback` / `telepy config fallback` | What happens |
+| --- | --- |
+| `ask` (default) | Asks in the terminal: **y** this time, **a** always for this server (saved), **N** no. Without a terminal (CI, scripts) it does not fall back and says how to allow it. |
+| `always` | Uses the SSH port and says so on stderr. |
+| `never` | Fails with the reason. |
+
+The setting is saved per server in `<config dir>/prefs.json`; `--fallback` or `TELEPY_SSH_FALLBACK` overrides it for
+one run, and `--via ssh` / `TELEPY_SSH_VIA=ssh` skips the web port altogether. `telepy doctor` shows both.
 
 ## Using a token with curl or an MCP client
 

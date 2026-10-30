@@ -20,8 +20,15 @@ struct Out {
 }
 
 async fn telepy(home: &Path, args: &[&str]) -> Out {
+    telepy_env(home, args, &[]).await
+}
+
+async fn telepy_env(home: &Path, args: &[&str], envs: &[(&str, &str)]) -> Out {
     let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_telepy"))
         .args(args)
+        .envs(envs.iter().copied())
+        .env_remove("TELEPY_SSH_VIA")
+        .env_remove("TELEPY_SSH_FALLBACK")
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("TELEPY_CONFIG_DIR", home.join("config"))
@@ -104,6 +111,41 @@ async fn cli_against_the_server() {
     assert!(o.stdout.contains("via-ssh"), "{}", o.stdout);
     let conf = std::fs::read_to_string(h.join("ssh").join("box.conf")).unwrap();
     assert!(conf.contains("StrictHostKeyChecking yes") && conf.contains("ProxyCommand ssh -F"), "{conf}");
+    // 預設經網頁 port：伺服器那一跳是 telepy 自己當載具，gateway 記成 websocket。
+    // By default through the web port: telepy itself carries the server hop, and the gateway records a websocket.
+    assert!(conf.contains(" _carrier --url ws://") && conf.contains("ServerAliveInterval 30"), "{conf}");
+    // 最後一筆 gateway 的 accepted。/ The last gateway "accepted" event.
+    let last_accept = || async {
+        sqlx::query_scalar::<_, String>("SELECT message FROM telepy_gateway_event WHERE event = 'accepted' ORDER BY id DESC LIMIT 1").fetch_one(&lab.app.state.db.read).await.unwrap()
+    };
+    assert!(last_accept().await.contains("over websocket"), "{}", last_accept().await);
+    let ssh_args = ["ssh", "box@pi", "-i", alice.key.path.to_str().unwrap(), "--ssh-opt", "-o BatchMode=yes"];
+    // --via ssh：照舊直接連 SSH 的 port。/ --via ssh: the SSH port directly, as before.
+    let o = telepy(h, &[&ssh_args[..], &["--via", "ssh", "--", "echo", "plain"]].concat()).await;
+    assert!(o.code == 0 && o.stdout.contains("plain"), "{}", o.stderr);
+    assert!(!std::fs::read_to_string(h.join("ssh").join("box.conf")).unwrap().contains("_carrier"));
+    assert!(!last_accept().await.contains("over websocket"), "{}", last_accept().await);
+    // 網頁 port 連不到：沒有終端機可以問 → 不退回，說怎麼允許。/ Web port down, no terminal to ask: no fallback, says how to allow it.
+    let dead = [("TELEPY_WS_URL", "ws://127.0.0.1:1/ws/gateway/")];
+    let o = telepy_env(h, &[&ssh_args[..], &["--", "echo", "never-here"]].concat(), &dead).await;
+    assert!(o.code != 0 && !o.stdout.contains("never-here"), "{}", o.stdout);
+    assert!(o.stderr.contains("no terminal to ask") && o.stderr.contains("telepy config fallback always"), "{}", o.stderr);
+    // --fallback always：改走 SSH 的 port，並說一聲。/ --fallback always: the SSH port, and it says so.
+    let o = telepy_env(h, &[&ssh_args[..], &["--fallback", "always", "--", "echo", "fell-back"]].concat(), &dead).await;
+    assert!(o.code == 0 && o.stdout.contains("fell-back"), "{}", o.stderr);
+    assert!(o.stderr.contains("connecting on the SSH port"), "{}", o.stderr);
+    // 存成這台伺服器的設定：never → 不退回；always → 不問直接退回；ask → 回到預設。
+    // Saved per server: never → no fallback; always → falls back without asking; ask → the default again.
+    let o = telepy(h, &["config", "fallback", "never"]).await;
+    assert!(o.code == 0 && o.stdout.contains("never use the SSH port"), "{}{}", o.stdout, o.stderr);
+    let o = telepy_env(h, &[&ssh_args[..], &["--", "echo", "x"]].concat(), &dead).await;
+    assert!(o.code != 0 && o.stderr.contains("turned off for this server"), "{}", o.stderr);
+    assert_eq!(telepy(h, &["config", "fallback", "always"]).await.code, 0);
+    let o = telepy_env(h, &[&ssh_args[..], &["--", "echo", "saved-always"]].concat(), &dead).await;
+    assert!(o.code == 0 && o.stdout.contains("saved-always"), "{}", o.stderr);
+    let o = telepy(h, &["config", "fallback"]).await;
+    assert!(o.stdout.contains(": always"), "{}", o.stdout);
+    assert_eq!(telepy(h, &["config", "fallback", "ask"]).await.code, 0);
 
     // lan：手動加一台、列出、用標籤刪掉。/ lan: add one by hand, list, remove it by label.
     let o = telepy(h, &["lan", "add", "box", "192.168.50.9", "--label", "nas", "--user", "pi"]).await;

@@ -279,10 +279,18 @@ pub fn config_path(p: &std::path::Path) -> String {
 
 /// `ssh -F` 用的獨立檔：ProxyCommand 改成讀同一個檔，known_hosts 指到 `known_hosts`；`identity` 給兩跳都用。
 /// The standalone file for `ssh -F`: ProxyCommand reads the same file, known_hosts points at ours; `identity` is used by both hops.
-pub fn standalone(stanzas: &[Stanza], self_path: &str, known_hosts: &str, identity: Option<&str>) -> String {
+/// `server_proxy` = (伺服器區塊的別名, 它的 ProxyCommand)：經網頁 port 連 Telepy 時，那一跳交給 `telepy _carrier`。
+/// `server_proxy` = (the server stanza's alias, its ProxyCommand): through the web port the hop goes to `telepy _carrier`.
+pub fn standalone(stanzas: &[Stanza], self_path: &str, known_hosts: &str, identity: Option<&str>, server_proxy: Option<(&str, &str)>) -> String {
     let mut out = String::from("# Written by the telepy CLI; rewritten on every `telepy ssh`.\n");
     for s in stanzas {
         let mut s = s.clone();
+        if let Some((_, cmd)) = server_proxy.filter(|(a, _)| *a == s.alias) {
+            s.options.retain(|(k, _)| !k.eq_ignore_ascii_case("ProxyCommand") && !k.eq_ignore_ascii_case("ServerAliveInterval"));
+            s.options.push(("ProxyCommand".into(), cmd.to_string()));
+            // 代理（例如 Cloudflare）會關掉閒置的 WebSocket：讓 ssh 定時送點東西。/ Proxies close idle WebSockets: keep it busy.
+            s.options.push(("ServerAliveInterval".into(), "30".into()));
+        }
         for (k, v) in s.options.iter_mut() {
             if k.eq_ignore_ascii_case("ProxyCommand") && v.starts_with("ssh ") && !v.contains(" -F ") {
                 *v = format!("ssh -F {self_path} {}", &v[4..]);
@@ -459,11 +467,24 @@ mod tests {
     #[test]
     fn standalone_points_both_hops_at_itself() {
         let s = parse_stanzas(GENERATED);
-        let out = standalone(&s, "/home/a/.ssh/telepy/box.conf", "/home/a/.ssh/telepy/known_hosts", Some("/k/id"));
+        let out = standalone(&s, "/home/a/.ssh/telepy/box.conf", "/home/a/.ssh/telepy/known_hosts", Some("/k/id"), None);
         assert!(out.contains("ProxyCommand ssh -F /home/a/.ssh/telepy/box.conf -W %h:%p telepy-ssh-server"), "{out}");
         assert!(out.contains("UserKnownHostsFile /home/a/.ssh/telepy/known_hosts"));
         assert!(out.ends_with("Host *\n    IdentityFile /k/id\n    IdentitiesOnly yes\n"));
         assert_eq!(config_path(std::path::Path::new("C:\\Users\\A B\\x")), "\"C:/Users/A B/x\"");
+    }
+
+    /// 經網頁 port：只有伺服器那一跳換成 `telepy _carrier`，加上 ServerAliveInterval；裝置那一跳不動。
+    /// Through the web port: only the server hop goes to `telepy _carrier`, with ServerAliveInterval; the device hop stays.
+    #[test]
+    fn the_server_hop_can_ride_the_web_port() {
+        let s = parse_stanzas(GENERATED);
+        let cmd = "\"/usr/local/bin/telepy\" _carrier --url wss://t.example/ws/gateway/ --tcp t.example:24242 --fallback ask --server https://t.example";
+        let out = standalone(&s, "/home/a/.ssh/telepy/box.conf", "/k/known_hosts", None, Some(("telepy-ssh-server", cmd)));
+        let server = out.split("Host box").next().unwrap();
+        assert!(server.contains(&format!("    ProxyCommand {cmd}\n")) && server.contains("    ServerAliveInterval 30\n"), "{out}");
+        assert!(out.contains("ProxyCommand ssh -F /home/a/.ssh/telepy/box.conf -W %h:%p telepy-ssh-server"), "the device hop is unchanged: {out}");
+        assert_eq!(out.matches("_carrier").count(), 1, "{out}");
     }
 
     #[test]

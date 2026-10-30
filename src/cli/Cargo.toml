@@ -36,6 +36,10 @@ sha2 = "0.10"
 # 終端機寬度與字元欄寬：Tapi 旁邊的文字先折行，不讓終端機自己換行把圖切開。
 # Terminal width and character widths: the text beside Tapi is wrapped first, so the terminal never wraps it through the art.
 terminal_size = "0.4"
+# `telepy ssh` 經網頁 port 連 Telepy（自己當 ProxyCommand，不需要 python3）。/ `telepy ssh` through the web port, no python3.
+tokio = { version = "1", features = ["rt", "io-std", "io-util", "net", "time", "macros", "sync"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 unicode-width = "0.2"
 url = "2"
 urlencoding = "2"
@@ -51,6 +55,8 @@ libc = "0.2"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [dev-dependencies]
+# 讀 lab 的資料庫（gateway 事件）。/ Read the lab's database (gateway events).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 # 整合測試：在測試裡起真的伺服器（同一個 lab：gateway + 假裝置 sshd），再跑編好的 `telepy`。
 # Integration test: the real server (the same SSH lab) in-process, then the built `telepy` binary against it.
 telepy-server = { path = "../backend-api" }
