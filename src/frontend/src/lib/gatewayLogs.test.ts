@@ -21,6 +21,7 @@ test("categories", () => {
     assert.equal(categoryOf("command_rule"), "change");
     assert.equal(categoryOf("lan_scan"), "change");
     assert.equal(categoryOf("health_ack"), "change");
+    assert.equal(categoryOf("audit_reseal"), "change");
     assert.equal(categoryOf("something_new"), null);
 });
 

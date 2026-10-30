@@ -17,10 +17,11 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, Puzzle, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, Puzzle, SlidersHorizontal, Stamp } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
+import { AuditResealDialog } from "@/components/health/AuditResealDialog";
 import { HealthAckDialog } from "@/components/health/HealthAckDialog";
 import { ServerHealthInfoDialog } from "@/components/health/ServerHealthInfoDialog";
 import { ServerStats } from "@/components/health/ServerStats";
@@ -33,6 +34,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useReauth } from "@/hooks/useReauth";
 import { useServerHealth, type AckOutcome } from "@/hooks/useServerHealth";
+import { canReseal } from "@/lib/auditReseal";
 import { ackedSummary, canAcknowledge, cardLook, tileTone } from "@/lib/healthAck";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -147,7 +149,7 @@ export function ServerHealthView() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
-    const { health, failed, busy, reload, acknowledge, unacknowledge } = useServerHealth();
+    const { health, failed, busy, reload, acknowledge, unacknowledge, loadAuditPlan, reseal } = useServerHealth();
     const { request: requestReauth, dialog: reauthDialog } = useReauth();
     const { showSuccess, showError } = useToast();
     // 正在確認的那張卡。/ The card being acknowledged.
@@ -156,7 +158,9 @@ export function ServerHealthView() {
         if (await unacknowledge(c)) showSuccess(t("health.ack.undone"));
         else showError(t("health.ack.undoFailed"));
     };
-    const cardActions: CardActions = { onAck: setAcking, onUndo: (c) => void undo(c) };
+    // 重新封存審計鏈的視窗。/ The audit-chain re-seal dialog.
+    const [resealing, setResealing] = useState(false);
+    const cardActions: CardActions = { onAck: setAcking, onUndo: (c) => void undo(c), onReseal: () => setResealing(true) };
     const bodyRef = useRef<HTMLDivElement>(null);
     const [info, setInfo] = useState(false);
     // 每按一次重新整理就加一，讓即時數據也重抓。/ Bumped on every Refresh so the live stats reload too.
@@ -252,6 +256,7 @@ export function ServerHealthView() {
                 onClose={() => setAcking(null)}
                 onSubmit={(note): Promise<AckOutcome> => (acking ? acknowledge(acking, note, requestReauth) : Promise.resolve({ kind: "cancelled" }))}
             />
+            <AuditResealDialog open={resealing} onClose={() => setResealing(false)} load={loadAuditPlan} onSubmit={(fingerprint, note) => reseal(fingerprint, note, requestReauth)} />
             {reauthDialog}
         </div>
     );
@@ -369,6 +374,7 @@ function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick:
 interface CardActions {
     onAck: (check: HealthCheck) => void;
     onUndo: (check: HealthCheck) => void;
+    onReseal: () => void;
 }
 
 function GroupPanel({ health, group, actions }: { health: ServerHealth; group: HealthGroup; actions: CardActions }) {
@@ -438,14 +444,24 @@ function CheckCard({ check, actions }: { check: HealthCheck; actions: CardAction
                 ) : (
                     <StatusChip status={check.status} />
                 )}
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-60">
                     <p className={cn("text-base [overflow-wrap:anywhere]", look === "acked" ? "text-foreground/80" : "text-foreground")}>{checkTitle(t, check)}</p>
                     {check.id && <p className="mt-0.5 text-sm text-muted-foreground">{t(tKey(check.id, "what"))}</p>}
                 </div>
-                {canAcknowledge(check) && (
-                    <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => actions.onAck(check)}>
-                        {t("health.ack.button")}
-                    </Button>
+                {(canReseal(check) || canAcknowledge(check)) && (
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                        {/* 審計鏈：知道原因就重新封存（真的修好），確認只是先不當警報。/ Audit log: re-seal fixes it, acknowledging only quiets it. */}
+                        {canReseal(check) && (
+                            <Button type="button" variant="outline" size="sm" onClick={actions.onReseal}>
+                                <Stamp aria-hidden /> {t("health.reseal.button")}
+                            </Button>
+                        )}
+                        {canAcknowledge(check) && (
+                            <Button type="button" variant="outline" size="sm" onClick={() => actions.onAck(check)}>
+                                {t("health.ack.button")}
+                            </Button>
+                        )}
+                    </div>
                 )}
             </div>
             {look === "acked" && check.ack ? (

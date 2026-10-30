@@ -3,14 +3,19 @@
 //! 修剪（列數上限、90 天保留）前先寫一筆 `prune` 錨點（被刪的最新一列的 id + hash），驗證從最新的 prune 錨點接著走。
 //! 鏈頭每 10 分鐘（以及每次修剪後）附加到 DB 外的 `<log_root>/audit-anchors.log`（JSON lines）並記一筆 `checkpoint`
 //! 錨點：就算有人改完內容再把整條鏈重算一遍，檔案裡的舊鏈頭也對不上。升級前的列 hash 為 NULL，鏈從第一筆有 hash 的列開始。
+//! 重新封存（[`reseal`]，管理員知道原因之後）：把現在的列重算成一條完好的鏈，錨點檔附加一行 `reseal`（誰、為什麼），
+//! 它之前的行不再比對；資料庫另記一筆 `telepy_audit_reseal`。兩邊都有的 reseal 行才算數。
 //!
 //! Hash chain over the three audit tables. Every row stores `prev_hash` and `hash = SHA-256(prev_hash, id,
 //! fields…)`, so editing, deleting or reordering rows breaks the chain. Pruning first writes a `prune` anchor
 //! (id + hash of the newest deleted row); verification resumes from the newest one. The chain head is appended
 //! every 10 minutes (and after each prune) to `<log_root>/audit-anchors.log` outside the database, so rewriting
 //! the whole chain after an edit is still caught. Rows written before the upgrade keep NULL hashes.
+//! Re-sealing ([`reseal`], once an admin knows the cause) re-hashes the rows as they are into an intact chain and
+//! appends a `reseal` line (who, why) to the anchors file; earlier lines are no longer compared. The database keeps
+//! a `telepy_audit_reseal` row too, and only a reseal line that both sides know counts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -151,6 +156,10 @@ impl AuditChains {
     }
 }
 
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 async fn load_head(conn: &mut SqliteConnection, table: Table) -> sqlx::Result<Head> {
     let last: Option<Option<String>> = sqlx::query_scalar(&format!("SELECT hash FROM {} ORDER BY id DESC LIMIT 1", table.name())).fetch_optional(&mut *conn).await?;
     if let Some(hash) = last {
@@ -237,8 +246,10 @@ async fn insert_anchor(conn: &mut SqliteConnection, table: Table, kind: &str, ro
 }
 
 /// 外部錨點檔的一行。`db` = 寫這行的資料庫的鏈 id；沒有的是這個欄位出現前寫的（照樣比對）。
+/// `reseal` = 這行是一次重新封存（id 對得上 `telepy_audit_reseal`）：它之前同一張表的行作廢；`by` / `note` 給讀檔的人看。
 /// One line of the anchors file. `db` = the chain id of the database that wrote it; lines without one predate
-/// the field and are still compared.
+/// the field and are still compared. `reseal` = this line re-seals the table (the id matches a
+/// `telepy_audit_reseal` row): the table's earlier lines are set aside; `by` / `note` are for whoever reads the file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointLine {
     pub at: String,
@@ -247,6 +258,23 @@ pub struct CheckpointLine {
     pub row_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reseal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// 附加一行到錨點檔（資料夾不在就建）。/ Append one line to the anchors file, creating its folder.
+async fn write_line(path: &std::path::Path, line: &CheckpointLine) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut f = tokio::fs::OpenOptions::new().create(true).append(true).open(path).await?;
+    f.write_all(format!("{}\n", serde_json::to_string(line)?).as_bytes()).await?;
+    f.flush().await?;
+    Ok(())
 }
 
 /// 讀這個資料庫的鏈 id（唯讀；還沒有 = None）。/ This database's chain id, read only (None = not created yet).
@@ -302,14 +330,9 @@ pub async fn checkpoint(db: &Db, table: Table) -> anyhow::Result<Option<Checkpoi
     let mut conn = db.write.acquire().await?;
     let head: Option<(i64, Option<String>)> = sqlx::query_as(&format!("SELECT id, hash FROM {} ORDER BY id DESC LIMIT 1", table.name())).fetch_optional(&mut *conn).await?;
     let Some((row_id, Some(row_hash))) = head else { return Ok(None) };
-    let line = CheckpointLine { at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), table: table.name().to_string(), row_id, row_hash, db: Some(chain) };
+    let line = CheckpointLine { at: now_rfc3339(), table: table.name().to_string(), row_id, row_hash, db: Some(chain), reseal: None, by: None, note: None };
     if let Some(path) = db.audit.anchors_file() {
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let mut f = tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await?;
-        f.write_all(format!("{}\n", serde_json::to_string(&line)?).as_bytes()).await?;
-        f.flush().await?;
+        write_line(&path, &line).await?;
     }
     insert_anchor(&mut conn, table, "checkpoint", line.row_id, Some(&line.row_hash)).await?;
     Ok(Some(line))
@@ -368,6 +391,10 @@ pub struct TableReport {
     pub checkpoint_reason: Option<String>,
     /// 錨點檔裡別的資料庫寫的行（沒比對）。/ Anchors-file lines written by another database (not compared).
     pub checkpoints_foreign: u64,
+    /// 被重新封存作廢的行（沒比對）。/ Lines set aside by a re-seal (not compared).
+    pub checkpoints_retired: u64,
+    /// 這張表最近一次重新封存。/ The table's latest re-seal.
+    pub last_reseal: Option<ResealRecord>,
 }
 
 impl TableReport {
@@ -411,16 +438,257 @@ pub struct Report {
 pub async fn verify(db: &Db) -> anyhow::Result<Report> {
     let lines = read_checkpoints(db).await?;
     let ours = chain_id(db).await?;
+    // 表不在（還沒升級的舊資料庫，doctor 直接開的）= 沒有重新封存過。/ No table yet (an older database) = never re-sealed.
+    let reseals = list_reseals(db).await.unwrap_or_default();
     let mut tables = Vec::new();
     for t in TABLES {
-        // 別的資料庫寫的行略過；沒有 `db` 的舊行照樣比。/ Skip another database's lines; legacy lines are compared.
-        let (cps, foreign): (Vec<&CheckpointLine>, Vec<&CheckpointLine>) =
-            lines.iter().filter(|l| l.table == t.name()).partition(|l| l.db.is_none() || l.db == ours);
-        let mut r = verify_table(db, t, &cps).await?;
-        r.checkpoints_foreign = foreign.len() as u64;
+        let (cps, foreign) = lines_of(&lines, t, ours.as_deref());
+        let (retired, active) = split_retired(&cps, &confirmed(&reseals, t));
+        let mut r = verify_table(db, t, active).await?;
+        r.checkpoints_foreign = foreign;
+        r.checkpoints_retired = retired;
+        r.last_reseal = reseals.iter().rev().find(|x| x.table == t.name()).cloned();
         tables.push(r);
     }
     Ok(Report { ok: tables.iter().all(|t| t.ok), tables })
+}
+
+/// 一張表在錨點檔裡屬於這個資料庫的行（檔案順序；沒有 `db` 的舊行算），以及別的資料庫寫的行數。
+/// The table's lines that belong to this database (file order; legacy lines without `db` count), and how many
+/// another database wrote.
+fn lines_of<'a>(lines: &'a [CheckpointLine], table: Table, ours: Option<&str>) -> (Vec<&'a CheckpointLine>, u64) {
+    let (mine, foreign): (Vec<&CheckpointLine>, Vec<&CheckpointLine>) =
+        lines.iter().filter(|l| l.table == table.name()).partition(|l| l.db.is_none() || l.db.as_deref() == ours);
+    (mine, foreign.len() as u64)
+}
+
+/// 資料庫裡有紀錄的重新封存 id（這張表的）。/ The table's re-seal ids the database knows.
+fn confirmed(reseals: &[ResealRecord], table: Table) -> HashSet<&str> {
+    reseals.iter().filter(|r| r.table == table.name()).map(|r| r.reseal_id.as_str()).collect()
+}
+
+/// 純函式：最後一個資料庫也有紀錄的 reseal 行之前的行作廢；回傳（作廢幾行, 還要比對的行，從那個 reseal 行起）。
+/// 只在檔案裡、資料庫沒有的 reseal 行不算（寫檔之後資料庫那步失敗的，或別人自己加的）。
+/// Pure: lines before the last reseal line the database also knows are set aside; returns (how many, the lines
+/// still compared, starting with that reseal line). A reseal line only the file knows does not count (the database
+/// step failed after the file was written, or someone added it by hand).
+pub fn split_retired<'l, 'a>(lines: &'l [&'a CheckpointLine], confirmed: &HashSet<&str>) -> (u64, &'l [&'a CheckpointLine]) {
+    match lines.iter().rposition(|l| l.reseal.as_deref().is_some_and(|id| confirmed.contains(id))) {
+        Some(i) => (i as u64, &lines[i..]),
+        None => (0, lines),
+    }
+}
+
+/// 一次重新封存的一張表（`telepy_audit_reseal` 的一列；同一次的幾張表共用 `reseal_id`）。
+/// One table of one re-seal (a `telepy_audit_reseal` row; the tables of one re-seal share `reseal_id`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, sqlx::FromRow)]
+pub struct ResealRecord {
+    pub reseal_id: String,
+    /// RFC 3339 `…Z`
+    pub at: String,
+    #[sqlx(rename = "table_name")]
+    pub table: String,
+    /// 封存後的鏈頭（0 = 表裡沒有有 hash 的列）。/ The head afterwards (0 = no hashed rows).
+    pub row_id: i64,
+    /// 重算了幾列、從哪一列起。/ Rows re-hashed, and the first one.
+    pub rehashed: i64,
+    pub from_row: Option<i64>,
+    /// 作廢的錨點檔行數。/ Anchors-file lines set aside.
+    pub retired: i64,
+    /// 封存前的問題（`doctor` 的說法）。/ The problem it covered, as the doctor put it.
+    pub problem: String,
+    pub user_id: Option<i64>,
+    pub username: String,
+    pub note: String,
+}
+
+/// 全部重新封存紀錄，舊的在前。/ Every re-seal record, oldest first.
+pub async fn list_reseals(db: &Db) -> sqlx::Result<Vec<ResealRecord>> {
+    sqlx::query_as(
+        "SELECT reseal_id, at, table_name, row_id, rehashed, from_row, retired, problem, user_id, username, note FROM telepy_audit_reseal ORDER BY id",
+    )
+    .fetch_all(&db.read)
+    .await
+}
+
+/// 重新封存要做的事（一張表）。/ What re-sealing one table would do.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ResealPlan {
+    pub table: String,
+    /// 要重算的列數、第一列。/ Rows to re-hash and the first one.
+    pub rehash: u64,
+    pub from_row: Option<i64>,
+    /// 會作廢的錨點檔行數。/ Anchors-file lines that would be set aside.
+    pub retire: u64,
+}
+
+/// 重算的走法：從最新的 prune 錨點起依 id 算每列該有的 prev_hash / hash（鏈開始前沒有 hash 的舊列不動，與驗證一樣）；
+/// `write` 時把不同的列改掉。回傳不同的列數、第一列、之後的鏈頭（最後一列有 hash 的）。
+/// The re-hash walk: from the newest prune anchor, compute each row's prev_hash / hash in id order (rows from before
+/// the chain keep NULL, as in verification); with `write`, store the ones that differ. Returns how many differ, the
+/// first one and the head afterwards (the last hashed row).
+struct Rehash {
+    rows: u64,
+    from_row: Option<i64>,
+    head: Option<(i64, String)>,
+}
+
+async fn rehash(conn: &mut SqliteConnection, table: Table, write: bool) -> sqlx::Result<Rehash> {
+    let anchor: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT row_id, row_hash FROM telepy_audit_anchor WHERE table_name = ? AND kind = 'prune' ORDER BY id DESC LIMIT 1")
+            .bind(table.name())
+            .fetch_optional(&mut *conn)
+            .await?;
+    let mut cursor = anchor.as_ref().map(|a| a.0).unwrap_or(0);
+    let mut expected_prev: Option<String> = anchor.and_then(|a| a.1);
+    let mut out = Rehash { rows: 0, from_row: None, head: None };
+    let mut started = false;
+    let n_fields = table.fields().len();
+    let sql = format!("SELECT id, prev_hash, hash, {} FROM {} WHERE id > ? ORDER BY id LIMIT ?", table.select_fields(), table.name());
+    let update = format!("UPDATE {} SET prev_hash = ?, hash = ? WHERE id = ?", table.name());
+    loop {
+        let rows = sqlx::query(&sql).bind(cursor).bind(VERIFY_BATCH).fetch_all(&mut *conn).await?;
+        if rows.is_empty() {
+            break;
+        }
+        let mut changes: Vec<(Option<String>, String, i64)> = Vec::new();
+        for row in &rows {
+            let id: i64 = row.try_get(0)?;
+            let prev: Option<String> = row.try_get(1)?;
+            let hash: Option<String> = row.try_get(2)?;
+            cursor = id;
+            if hash.is_none() && !started {
+                expected_prev = None;
+                continue;
+            }
+            started = true;
+            let mut texts: Vec<Option<String>> = Vec::with_capacity(n_fields);
+            for i in 0..n_fields {
+                texts.push(row.try_get(3 + i)?);
+            }
+            let refs: Vec<Option<&str>> = texts.iter().map(|s| s.as_deref()).collect();
+            let new = row_hash(expected_prev.as_deref(), id, &refs);
+            if prev != expected_prev || hash.as_deref() != Some(new.as_str()) {
+                out.rows += 1;
+                out.from_row.get_or_insert(id);
+                if write {
+                    changes.push((expected_prev.clone(), new.clone(), id));
+                }
+            }
+            expected_prev = Some(new.clone());
+            out.head = Some((id, new));
+        }
+        for (prev, hash, id) in changes {
+            sqlx::query(&update).bind(prev).bind(hash).bind(id).execute(&mut *conn).await?;
+        }
+    }
+    Ok(out)
+}
+
+/// 試算重新封存（不寫入）：每張表要重算幾列、會作廢幾行錨點檔。/ Dry run: rows to re-hash and lines to set aside per table.
+pub async fn reseal_plan(db: &Db, tables: &[Table]) -> anyhow::Result<Vec<ResealPlan>> {
+    let lines = read_checkpoints(db).await?;
+    let ours = chain_id(db).await?;
+    let reseals = list_reseals(db).await?;
+    let mut out = Vec::new();
+    for &t in tables {
+        let (cps, _) = lines_of(&lines, t, ours.as_deref());
+        let (_, active) = split_retired(&cps, &confirmed(&reseals, t));
+        let mut tx = db.read.begin().await?;
+        let walk = rehash(&mut tx, t, false).await?;
+        tx.commit().await?;
+        out.push(ResealPlan { table: t.name().to_string(), rehash: walk.rows, from_row: walk.from_row, retire: active.len() as u64 });
+    }
+    Ok(out)
+}
+
+/// 誰、為什麼重新封存。/ Who re-seals, and why.
+pub struct ResealBy<'a> {
+    pub user_id: Option<i64>,
+    pub username: &'a str,
+    pub note: &'a str,
+}
+
+/// 重新封存幾張表（呼叫端給每張表封存前的問題）：把現在的列重算成完好的鏈、錨點檔附加一行 `reseal`（之前的行作廢）、
+/// 記一筆 `telepy_audit_reseal`。每張表在自己的鎖與 transaction 裡做：先重算，再寫錨點檔，最後 commit——寫檔失敗就整張表
+/// 不動；commit 失敗留下的那行資料庫不認得，不算數。改的是證據的基準，不是證據本身：原來的列內容不會回來。
+/// Re-seal tables (the caller passes each table's problem): re-hash the rows as they are into an intact chain,
+/// append a `reseal` line to the anchors file (earlier lines are set aside) and record a `telepy_audit_reseal` row.
+/// Each table under its own lock and transaction: re-hash, write the file line, then commit — a failed file write
+/// leaves the table untouched, and a line left by a failed commit is unknown to the database, so it does not count.
+/// It changes the baseline, not the evidence: edited rows do not come back.
+pub async fn reseal(db: &Db, targets: &[(Table, String)], by: &ResealBy<'_>) -> anyhow::Result<Vec<ResealRecord>> {
+    // 鏈 id、錨點檔、舊紀錄先讀（寫入池只有一條連線）。/ Chain id, file and records first (the write pool has one connection).
+    let chain = ensure_chain_id(db).await?;
+    let lines = read_checkpoints(db).await?;
+    let reseals = list_reseals(db).await?;
+    let reseal_id: String = {
+        use rand::RngCore;
+        let mut b = [0u8; 8];
+        rand::thread_rng().fill_bytes(&mut b);
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    };
+    let mut out = Vec::new();
+    for (table, problem) in targets {
+        let table = *table;
+        let (cps, _) = lines_of(&lines, table, Some(&chain));
+        let (_, active) = split_retired(&cps, &confirmed(&reseals, table));
+        let retired = active.len() as i64;
+        let mut guard = db.audit.heads[table.idx()].lock().await;
+        let mut tx = db.write.begin().await?;
+        let walk = rehash(&mut tx, table, true).await?;
+        let (row_id, row_hash) = walk.head.clone().unwrap_or((0, String::new()));
+        let at = now_rfc3339();
+        let line = CheckpointLine {
+            at: at.clone(),
+            table: table.name().to_string(),
+            row_id,
+            row_hash: row_hash.clone(),
+            db: Some(chain.clone()),
+            reseal: Some(reseal_id.clone()),
+            by: Some(by.username.to_string()),
+            note: Some(by.note.to_string()),
+        };
+        if let Some(path) = db.audit.anchors_file() {
+            write_line(&path, &line).await?;
+        }
+        let record = ResealRecord {
+            reseal_id: reseal_id.clone(),
+            at,
+            table: table.name().to_string(),
+            row_id,
+            rehashed: walk.rows as i64,
+            from_row: walk.from_row,
+            retired,
+            problem: problem.clone(),
+            user_id: by.user_id,
+            username: by.username.to_string(),
+            note: by.note.to_string(),
+        };
+        sqlx::query(
+            "INSERT INTO telepy_audit_reseal (reseal_id, at, table_name, row_id, row_hash, rehashed, from_row, retired, problem, user_id, username, note) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&record.reseal_id)
+        .bind(&record.at)
+        .bind(&record.table)
+        .bind(record.row_id)
+        .bind((!row_hash.is_empty()).then_some(&row_hash))
+        .bind(record.rehashed)
+        .bind(record.from_row)
+        .bind(record.retired)
+        .bind(&record.problem)
+        .bind(record.user_id)
+        .bind(&record.username)
+        .bind(&record.note)
+        .execute(&mut *tx)
+        .await?;
+        let head = load_head(&mut tx, table).await?;
+        tx.commit().await?;
+        *guard = Some(head);
+        out.push(record);
+    }
+    Ok(out)
 }
 
 /// 依 id 順序分批走一張表（一個讀 transaction，快照一致），重算每列 hash、檢查 prev_hash 連結與外部 checkpoint。
@@ -457,6 +725,8 @@ pub async fn verify_table(db: &Db, table: Table, checkpoints: &[&CheckpointLine]
         checkpoint_broken_at: None,
         checkpoint_reason: None,
         checkpoints_foreign: 0,
+        checkpoints_retired: 0,
+        last_reseal: None,
     };
     let mut chain_issue: Option<(i64, &'static str)> = None;
     let mut cp_issue: Option<(i64, &'static str)> = None;
@@ -681,7 +951,123 @@ mod tests {
     }
 
     fn line(row_id: i64, row_hash: &str, db: Option<&str>) -> CheckpointLine {
-        CheckpointLine { at: "2026-10-30T00:00:00Z".into(), table: Table::Gateway.name().into(), row_id, row_hash: row_hash.into(), db: db.map(str::to_string) }
+        CheckpointLine {
+            at: "2026-10-30T00:00:00Z".into(),
+            table: Table::Gateway.name().into(),
+            row_id,
+            row_hash: row_hash.into(),
+            db: db.map(str::to_string),
+            reseal: None,
+            by: None,
+            note: None,
+        }
+    }
+
+    fn by() -> ResealBy<'static> {
+        ResealBy { user_id: Some(1), username: "admin", note: "restored from the 28 Oct backup" }
+    }
+
+    async fn problem_of(db: &Db) -> Vec<(Table, String)> {
+        verify(db).await.unwrap().tables.iter().filter(|t| !t.ok).map(|t| (Table::from_name(&t.table).unwrap(), format!("{:?}", t.reason))).collect()
+    }
+
+    /// 改過一列：重新封存後鏈完好、計數對；之後再改任何一列（舊的或新的）照樣抓得到。
+    /// An edited row: after a re-seal the chain is intact with the right counts, and any later edit is caught again.
+    #[tokio::test]
+    async fn reseal_rebuilds_the_chain_and_later_edits_still_show() {
+        let (_d, db) = db().await;
+        for i in 0..10 {
+            gw(&db, &format!("m{i}")).await;
+        }
+        checkpoint(&db, Table::Gateway).await.unwrap();
+        exec(&db, "UPDATE telepy_gateway_event SET message = 'edited' WHERE id = 4").await;
+        assert!(!verify(&db).await.unwrap().ok);
+        let plan = reseal_plan(&db, &[Table::Gateway]).await.unwrap();
+        // 第 4 列起每一列都要重算（鏈是串起來的）；那一行 checkpoint 作廢。/ Row 4 onwards (the chain links them); the one line goes.
+        assert_eq!(plan, vec![ResealPlan { table: Table::Gateway.name().into(), rehash: 7, from_row: Some(4), retire: 1 }]);
+        let targets = problem_of(&db).await;
+        let done = reseal(&db, &targets, &by()).await.unwrap();
+        assert_eq!((done.len(), done[0].rehashed, done[0].from_row, done[0].retired, done[0].row_id), (1, 7, Some(4), 1, 10));
+        assert_eq!(done[0].username, "admin");
+        let r = report(&db, Table::Gateway).await;
+        assert!(r.ok, "{r:?}");
+        // reseal 行本身也是新的 checkpoint；之前那行不再比。/ The reseal line is the new checkpoint; the older one is set aside.
+        assert_eq!((r.checkpoints_checked, r.checkpoints_mismatched, r.checkpoints_retired), (1, 0, 1), "{r:?}");
+        assert_eq!(r.last_reseal.as_ref().map(|x| x.note.as_str()), Some("restored from the 28 Oct backup"));
+        // 錨點檔多了一行 reseal（誰、為什麼）。/ The anchors file gained a reseal line saying who and why.
+        let lines = read_checkpoints(&db).await.unwrap();
+        let last = lines.last().unwrap();
+        assert_eq!((last.reseal.as_deref(), last.by.as_deref(), last.row_id), (Some(done[0].reseal_id.as_str()), Some("admin"), 10));
+        // 記憶體裡的鏈頭跟著換：接著寫的列接得上。/ The cached head follows: new rows link on.
+        gw(&db, "after").await;
+        checkpoint(&db, Table::Gateway).await.unwrap();
+        assert!(report(&db, Table::Gateway).await.ok);
+        // 封存前的列再被改：抓得到。/ Editing a row from before the re-seal is caught.
+        exec(&db, "UPDATE telepy_gateway_event SET message = 'again' WHERE id = 2").await;
+        let r = report(&db, Table::Gateway).await;
+        assert_eq!((r.ok, r.chain_broken_at), (false, Some(2)), "{r:?}");
+        // 沒問題的表不重算。/ Nothing to do on an intact table.
+        let plan = reseal_plan(&db, &[Table::SignIn]).await.unwrap();
+        assert_eq!((plan[0].rehash, plan[0].from_row), (0, None));
+    }
+
+    /// 換掉 / 還原過的資料庫：舊的錨點行（沒有 `db`）對不上，鏈本身沒事——重新封存不必重算任何一列，只把舊行作廢。
+    /// A replaced database: legacy anchors lines don't match, the chain itself is fine — re-sealing re-hashes nothing
+    /// and only sets the old lines aside.
+    #[tokio::test]
+    async fn reseal_of_a_replaced_database_only_sets_old_lines_aside() {
+        let (_d, db) = db().await;
+        for i in 0..10 {
+            gw(&db, &format!("m{i}")).await;
+        }
+        append_line(&db, &line(6, &"0".repeat(64), None)).await;
+        append_line(&db, &line(40, &"1".repeat(64), None)).await;
+        let r = report(&db, Table::Gateway).await;
+        assert_eq!((r.ok, r.checkpoint_reason.as_deref(), r.chain_issues), (false, Some("checkpoint_mismatch"), 0), "{r:?}");
+        let done = reseal(&db, &problem_of(&db).await, &by()).await.unwrap();
+        assert_eq!((done[0].rehashed, done[0].from_row, done[0].retired), (0, None, 2));
+        let r = report(&db, Table::Gateway).await;
+        assert!(r.ok, "{r:?}");
+        assert_eq!(r.checkpoints_retired, 2);
+        // 鏈 hash 一列都沒動。/ Not a single row hash changed.
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_gateway_event WHERE prev_hash IS NULL").fetch_one(&db.read).await.unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// 只在檔案裡、資料庫沒有的 reseal 行不算數（別人自己加的、或資料庫那步失敗）。
+    /// A reseal line the database doesn't know is ignored (added by hand, or the database step failed).
+    #[tokio::test]
+    async fn a_reseal_line_without_a_database_record_counts_for_nothing() {
+        let (_d, db) = db().await;
+        for i in 0..5 {
+            gw(&db, &format!("m{i}")).await;
+        }
+        append_line(&db, &line(3, &"0".repeat(64), None)).await;
+        let mut forged = line(5, "x", None);
+        forged.reseal = Some("feedfeedfeedfeed".into());
+        append_line(&db, &forged).await;
+        let r = report(&db, Table::Gateway).await;
+        assert_eq!((r.ok, r.checkpoints_retired, r.checkpoint_broken_at), (false, 0, Some(3)), "{r:?}");
+    }
+
+    #[test]
+    fn split_retired_keeps_lines_from_the_last_known_reseal() {
+        let a = line(1, "a", None);
+        let mut r1 = line(2, "b", Some("db"));
+        r1.reseal = Some("r1".into());
+        let c = line(3, "c", Some("db"));
+        let mut r2 = line(4, "d", Some("db"));
+        r2.reseal = Some("r2".into());
+        let e = line(5, "e", Some("db"));
+        let all = [&a, &r1, &c, &r2, &e];
+        let none = HashSet::new();
+        assert_eq!(split_retired(&all, &none).0, 0);
+        let (n, rest) = split_retired(&all, &HashSet::from(["r1"]));
+        assert_eq!((n, rest.len(), rest[0].row_id), (1, 4, 2));
+        let (n, rest) = split_retired(&all, &HashSet::from(["r1", "r2"]));
+        assert_eq!((n, rest.len(), rest[0].row_id), (3, 2, 4));
+        // 只認得 r2：一樣從 r2 起。/ Only r2 known: still from r2.
+        assert_eq!(split_retired(&all, &HashSet::from(["r2"])).0, 3);
     }
 
     /// 另一個資料庫寫的行略過、計數；沒有 `db` 的舊行照樣比對。/ Another database's lines are skipped and counted; legacy ones are compared.
@@ -838,14 +1224,12 @@ mod tests {
         assert_eq!(rep.tables[2].checked, 32);
     }
 
-    /// 100k 列要在幾秒內驗完（直接批次寫入，省掉 100k 個 transaction）。/ 100k rows verify in seconds.
-    #[tokio::test]
-    async fn verifies_100k_rows_quickly() {
-        let (_d, db) = db().await;
+    /// 直接批次寫入 n 列完好的鏈（省掉 n 個 transaction）。/ Bulk-insert an intact chain of n rows.
+    async fn bulk(db: &Db, n: i64) {
         let mut tx = db.write.begin().await.unwrap();
         let mut prev: Option<String> = None;
         let at = now_db();
-        for id in 1..=100_000i64 {
+        for id in 1..=n {
             let msg = format!("Accepted publickey for telepy from 203.0.113.7 port {id} ssh2: ED25519 SHA256:abcdefghijklmnopqrstuvwxyz");
             let h = row_hash(prev.as_deref(), id, &[Some(&at), Some("accepted"), Some("203.0.113.7:5000"), Some("40001"), Some("3"), Some(&msg)]);
             sqlx::query("INSERT INTO telepy_gateway_event (id, at, event, peer, port, tunnel_id, message, prev_hash, hash) VALUES (?, ?, 'accepted', '203.0.113.7:5000', 40001, 3, ?, ?, ?)")
@@ -860,6 +1244,13 @@ mod tests {
             prev = Some(h);
         }
         tx.commit().await.unwrap();
+    }
+
+    /// 100k 列要在幾秒內驗完。/ 100k rows verify in seconds.
+    #[tokio::test]
+    async fn verifies_100k_rows_quickly() {
+        let (_d, db) = db().await;
+        bulk(&db, 100_000).await;
         let t0 = std::time::Instant::now();
         let r = report(&db, Table::Gateway).await;
         let took = t0.elapsed();
@@ -867,5 +1258,23 @@ mod tests {
         assert_eq!(r.checked, 100_000);
         assert!(took < Duration::from_secs(10), "verify took {took:?}");
         eprintln!("verified 100k rows in {took:?}");
+    }
+
+    /// 100k 列、第 2 列被改：重新封存要重算幾乎每一列，也要在合理時間內做完。
+    /// 100k rows with row 2 edited: re-sealing rewrites almost every row and still finishes in reasonable time.
+    #[tokio::test]
+    async fn reseals_100k_rows_quickly() {
+        let (_d, db) = db().await;
+        bulk(&db, 100_000).await;
+        exec(&db, "UPDATE telepy_gateway_event SET message = 'edited' WHERE id = 2").await;
+        let t0 = std::time::Instant::now();
+        let done = reseal(&db, &problem_of(&db).await, &by()).await.unwrap();
+        let took = t0.elapsed();
+        assert_eq!((done[0].rehashed, done[0].from_row), (99_999, Some(2)));
+        // 單跑約 5 秒（debug）；上限放寬給滿載的機器（和其他測試一起跑），只抓得到失控的慢。
+        // About 5 s alone on a debug build; the bound leaves room for a loaded machine and only catches a runaway.
+        assert!(took < Duration::from_secs(60), "re-seal took {took:?}");
+        eprintln!("re-sealed 100k rows in {took:?}");
+        assert!(report(&db, Table::Gateway).await.ok);
     }
 }

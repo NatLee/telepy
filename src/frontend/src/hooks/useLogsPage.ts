@@ -67,6 +67,10 @@ export interface AuditTableReport {
     reason: string | null;
     checkpoints_checked: number;
     checkpoints_mismatched: number;
+    /** 被重新封存作廢的錨點檔行（較舊的後端沒有）。/ Anchors-file lines set aside by a re-seal (absent from older backends). */
+    checkpoints_retired?: number;
+    /** 最近一次重新封存。/ The latest re-seal. */
+    last_reseal?: { at: string; username: string; note: string } | null;
 }
 
 export interface AuditVerifyReport {

@@ -338,32 +338,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
 
     // 審計鏈。/ Audit chain.
     if let Some(db) = &db {
-        out.push(match db::audit_chain::verify(db).await {
-            Ok(r) if r.ok => {
-                let rows: u64 = r.tables.iter().map(|t| t.checked).sum();
-                let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
-                let extra = if foreign > 0 { format!("; {foreign} checkpoints from another database skipped") } else { String::new() };
-                check("audit_log", "audit log", Status::Ok, format!("hash chain intact ({rows} rows checked{extra})"))
-            }
-            Ok(r) => {
-                let failing: Vec<&db::audit_chain::TableReport> = r.tables.iter().filter(|t| !t.ok).collect();
-                // 鏈本身的問題與外部錨點的問題分開列：只列最早的一個時，後來的竄改會躲在舊的錨點不符後面。
-                // Chain and checkpoint problems are listed separately: naming only the earliest one let a later edit hide
-                // behind an old checkpoint mismatch.
-                let broken: Vec<String> = failing.iter().map(|t| audit_problem(t)).collect();
-                let mut detail = format!("changed after it was written: {}", broken.join("; "));
-                let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
-                if foreign > 0 {
-                    detail.push_str(&format!(". {foreign} checkpoints from another database skipped"));
-                }
-                if failing.iter().any(|t| matches!(t.reason.as_deref(), Some("checkpoint_mismatch" | "checkpoint_missing"))) {
-                    detail.push_str(". If this database was restored or replaced, older lines in audit-anchors.log belong to the previous one.");
-                }
-                let fp = db::audit_chain::fingerprint(&r);
-                check("audit_log", "audit log", Status::Fail, detail).fp(&[&fp])
-            }
-            Err(e) => check("audit_log", "audit log", Status::Warn, format!("cannot verify: {e:#}")),
-        });
+        out.push(audit_log_check(db).await.0);
     }
     // 確認（只讀；表不在的舊資料庫 = 沒有）。/ Acknowledgements (read only; an older database without the table = none).
     if let Some(db) = &db {
@@ -373,9 +348,46 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     out
 }
 
+/// 審計鏈這一項（伺服器狀態頁的重新封存也用它拿指紋與驗證結果；驗證失敗 = 沒有結果）。
+/// The audit-log check, also used by the Server health page's re-seal for the fingerprint and the report (None
+/// when verification itself failed).
+pub async fn audit_log_check(db: &Db) -> (Check, Option<db::audit_chain::Report>) {
+    match db::audit_chain::verify(db).await {
+        Ok(r) if r.ok => {
+            let rows: u64 = r.tables.iter().map(|t| t.checked).sum();
+            let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
+            let mut extra = if foreign > 0 { format!("; {foreign} checkpoints from another database skipped") } else { String::new() };
+            // 最近一次重新封存（時間是 RFC 3339，同一格式可直接比大小）。/ The latest re-seal (RFC 3339 sorts as text).
+            if let Some(last) = r.tables.iter().filter_map(|t| t.last_reseal.as_ref()).max_by(|a, b| a.at.cmp(&b.at)) {
+                extra.push_str(&format!("; re-sealed {} by {}", last.at.get(..10).unwrap_or(&last.at), last.username));
+            }
+            (check("audit_log", "audit log", Status::Ok, format!("hash chain intact ({rows} rows checked{extra})")), Some(r))
+        }
+        Ok(r) => {
+            let failing: Vec<&db::audit_chain::TableReport> = r.tables.iter().filter(|t| !t.ok).collect();
+            // 鏈本身的問題與外部錨點的問題分開列：只列最早的一個時，後來的竄改會躲在舊的錨點不符後面。
+            // Chain and checkpoint problems are listed separately: naming only the earliest one let a later edit hide
+            // behind an old checkpoint mismatch.
+            let broken: Vec<String> = failing.iter().map(|t| audit_problem(t)).collect();
+            let mut detail = format!("changed after it was written: {}", broken.join("; "));
+            let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
+            if foreign > 0 {
+                detail.push_str(&format!(". {foreign} checkpoints from another database skipped"));
+            }
+            if failing.iter().any(|t| matches!(t.reason.as_deref(), Some("checkpoint_mismatch" | "checkpoint_missing"))) {
+                detail.push_str(". If this database was restored or replaced, older lines in audit-anchors.log belong to the previous one.");
+            }
+            detail.push_str(" Once the cause is known, an admin can re-seal the chain on the Server health page.");
+            let fp = db::audit_chain::fingerprint(&r);
+            (check("audit_log", "audit log", Status::Fail, detail).fp(&[&fp]), Some(r))
+        }
+        Err(e) => (check("audit_log", "audit log", Status::Warn, format!("cannot verify: {e:#}")), None),
+    }
+}
+
 /// 一張表的問題，人看的：鏈本身（某列被改、順序被換）與外部錨點（不符 / 不見了）各一句。
 /// One table's problem in words: the chain itself and the external checkpoints, one clause each.
-fn audit_problem(t: &db::audit_chain::TableReport) -> String {
+pub fn audit_problem(t: &db::audit_chain::TableReport) -> String {
     let mut parts = Vec::new();
     if let (Some(id), Some(reason)) = (t.chain_broken_at, t.chain_reason.as_deref()) {
         let more = if t.chain_issues > 1 { format!(", {} rows in all", t.chain_issues) } else { String::new() };
@@ -523,6 +535,8 @@ mod tests {
             checkpoint_broken_at: Some(1),
             checkpoint_reason: Some("checkpoint_mismatch".into()),
             checkpoints_foreign: 0,
+            checkpoints_retired: 0,
+            last_reseal: None,
         };
         assert_eq!(audit_problem(&t), "telepy_gateway_event: row 4 (hash_mismatch), checkpoint at row 1 (checkpoint_mismatch, 2 checkpoints)");
         let only_cp = db::audit_chain::TableReport { chain_broken_at: None, chain_reason: None, chain_issues: 0, checkpoints_mismatched: 1, ..t.clone() };
