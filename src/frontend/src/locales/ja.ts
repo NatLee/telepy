@@ -5640,6 +5640,7 @@ export const ja: Record<TranslationKey, string> = {
     "deviceInstall.block.needs_root": "システムサービスです。root をログインアカウントに加えるか、パスワードなしの sudo を許可して、再確認してください。",
     "deviceInstall.block.unknown_owner": "トンネルを実行しているアカウントが、このトンネルのログインアカウントにありません。追加してから再確認してください。",
     "deviceInstall.block.odd_command": "コマンドが相対的な鍵パスや特殊な文字を使っています。手動で変更するか、Telepy のスクリプトで入れ直してください。",
+    "deviceInstall.block.unsupported": "この種類のサービス（OpenWrt の init スクリプト）は Telepy が自動では置き換えません。手動で名前を変えるか、ワンコマンド参加をもう一度実行してください。非公開の名前で入れ直されます。",
     "deviceInstall.fail.survey_failed": "Telepy はデバイスを確認できませんでした。",
     "deviceInstall.fail.login_failed": "新しいサービスを入れるアカウントで Telepy がログインできませんでした。",
     "deviceInstall.fail.install_failed": "新しいサービスの書き込みか起動に失敗したため、削除しました。",

@@ -272,6 +272,10 @@ Windows 的腳本只會移除，盤點還沒做（只回平台）。
 （程序的擁有者；unit 的 `User=`、plist 的 `UserName`，系統層沒寫 = root；其他 = 登入帳號）的預設金鑰比對。預設金鑰是那個人自己的
 檔案，刪除時不會刪。
 
+**plist 與 OpenWrt**：launchd 的 plist 把每個參數放在自己的 `<string>`，比對前先接成一行（`text_of`），否則 `-p` / `-i` 都讀不到；
+OpenWrt 的 procd 腳本（`/etc/init.d/*`，有 `/etc/rc.common` 才看）與 `/etc/rc.local` 的行也照同樣規則認——刪除時 init 腳本
+`disable` 後由停止腳本 `stop` + 刪掉，rc.local 只拿掉那一行。init 腳本不會自動改名（`unsupported`）：重跑一行指令加入就會用私人名稱。
+
 **指令長度**：OpenWrt 路由器常用 dropbear，它不收超過 9000 字的 exec 指令，而這支腳本有 25KB。超過 6000 字的腳本改成先分段
 `printf >> <暫存檔>`、最後一個 exec 跑它並刪掉（`exec::script_commands` / `run_script`），任何 sshd 都收得下；也在 BusyBox ash
 （Alpine）跑過。

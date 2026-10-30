@@ -328,3 +328,37 @@ async fn a_service_without_a_key_file_is_found_by_the_default_key() {
     }
     assert!(ssh.join("id_ed25519").exists() && other.exists(), "the person's own key and the unrelated script stay");
 }
+
+/// launchd 的 plist 把每個參數放在自己的 `<string>` 裡：盤點要把它讀成一行指令（hdre 遷移腳本在 Mac 上裝的 LaunchAgent
+/// 沒寫 `-i`，靠預設金鑰認）。只盤點，不碰真的 launchctl。/ A plist's arguments are read as one command line (survey only).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_launch_agent_plist_is_read_as_a_command_line() {
+    if !cfg!(target_os = "macos") {
+        return; // 只有 macOS 有 launchctl，那一段才會跑。/ The launchd part only runs where launchctl exists.
+    }
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    std::fs::write(home.join(".ssh/id_ed25519"), "private\n").unwrap();
+    std::fs::write(home.join(".ssh/id_ed25519.pub"), format!("{}\n", dev.key.public)).unwrap();
+    let args = ["/usr/bin/ssh", "-N", "-o", "BatchMode=yes", "-o", &format!("UserKnownHostsFile={}/.ssh/telepy_natlee_known_hosts", home.display()), "-p", &lab.gw_port.to_string(), "-R", "*:0:localhost:22", "telepy@127.0.0.1"];
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>info.natlee.telepy</string>\n<key>ProgramArguments</key><array>\n{}</array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
+        args.iter().map(|a| format!("<string>{a}</string>\n")).collect::<String>()
+    );
+    std::fs::write(home.join("Library/LaunchAgents/info.natlee.telepy.plist"), plist).unwrap();
+    std::fs::write(home.join(".ssh/telepy_natlee_known_hosts"), "x\n").unwrap();
+
+    let r = lab.app.post(&format!("/api/reverse/server/{}/device-install/survey", dev.tunnel_id), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(names(&r.json, "older"), vec!["info.natlee.telepy".to_string()], "{}", r.json);
+    let parts = r.json["parts"].as_array().unwrap();
+    assert!(parts.iter().any(|p| p["what"] == "known_hosts" && p["name"].as_str().unwrap_or("").ends_with("telepy_natlee_known_hosts")), "the plist's known_hosts is read too: {}", r.json);
+}

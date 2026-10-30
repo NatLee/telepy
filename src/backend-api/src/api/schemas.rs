@@ -4228,7 +4228,7 @@ pub struct DeviceInstallOther {
 #[derive(ToSchema)]
 pub struct DeviceInstallRenamePlan {
     pub possible: bool,
-    /// not_surveyed | windows | nothing_to_rename | no_process | unparsed | needs_root | unknown_owner | odd_command (null when possible)
+    /// not_surveyed | windows | nothing_to_rename | no_process | unparsed | needs_root | unknown_owner | odd_command | unsupported (null when possible)
     pub blocker: Option<String>,
     /// systemd | systemd_user | launchd_daemon | launchd_agent | loop
     pub method: Option<String>,

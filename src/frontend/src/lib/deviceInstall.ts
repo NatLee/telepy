@@ -12,7 +12,7 @@ import type { TranslationKey } from "@/locales/en";
 
 export type InstallMethod = "systemd" | "systemd_user" | "launchd_daemon" | "launchd_agent" | "loop";
 
-export type RenameBlocker = "not_surveyed" | "windows" | "nothing_to_rename" | "no_process" | "unparsed" | "needs_root" | "unknown_owner" | "odd_command";
+export type RenameBlocker = "not_surveyed" | "windows" | "nothing_to_rename" | "no_process" | "unparsed" | "needs_root" | "unknown_owner" | "odd_command" | "unsupported";
 
 export interface InstallPart {
     kind: "service" | "process" | "cron" | "container" | "script" | "file";
@@ -162,6 +162,7 @@ export const BLOCKER_KEY: Record<RenameBlocker, TranslationKey> = {
     needs_root: "deviceInstall.block.needs_root",
     unknown_owner: "deviceInstall.block.unknown_owner",
     odd_command: "deviceInstall.block.odd_command",
+    unsupported: "deviceInstall.block.unsupported",
 };
 
 const FAILURE_KEY: Record<string, TranslationKey> = {
