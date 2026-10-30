@@ -30,7 +30,7 @@ REST 版：`/api/ai/sessions*`（指令）與 `/api/browser/sessions*`（遠端�
 （見 [cli.md](cli.md)）。
 
 網頁左側 **AI → MCP**（`/tunnels/mcp`）顯示實際要填的端點網址（取自 discovery 的 `resource`，所以會反映
-`PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的應用程式。
+`PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的 MCP 應用程式。
 右上的「app 碰得到哪裡？」打開一張圖：MCP app ─ Telepy ─ 裝置 ─ 區網 / 網際網路，依選到的已連接 app 的權限亮起對應的
 分支（`lib/aiAccess.ts` `reachFor`）。
 
@@ -63,11 +63,15 @@ MCP client ── POST /mcp ─────────────────�
   使用者可以取消勾選任何一項，也可以把 app 限制在部分通道。
 - access token 是 `token_type: "mcp_access"` 的 JWT，網頁的 token 不能打 `/mcp`。REST API 只在 token 白名單
   （`auth::api_tokens::ROUTES`，見 [cli.md](cli.md)）內接受它，`telepy` 命令列的瀏覽器登入就是這樣用的。
-- 每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁**、**偏好設定 → 已連接的應用程式**、或 AI 活動頁的
-  「你已連接的 app」撤銷後立即失效，該 app 開著的 SSH session、shell 與瀏覽器也會馬上關閉（管理員可以在「管理使用者」對話框
+- 每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁**、**偏好設定 → MCP 應用程式**、或 AI 活動頁的
+  「你的 MCP 應用程式」撤銷後立即失效，該 app 開著的 SSH session、shell 與瀏覽器也會馬上關閉（管理員可以在「管理使用者」對話框
   撤銷任何人的）。
 - 帳號被停用時，grant 與個人 API token **暫停而不撤銷**：`/mcp` 立刻拒絕、開著的 session 關閉，重新啟用後照常可用。
   管理員替這個人關掉「MCP app」功能時，app 全部拿到 401（像被撤銷）、開著的 agent session 也會結束；功能打開就恢復。
+- **`telepy login` 不算 MCP 應用程式。** 命令列的瀏覽器登入也走這套 OAuth（同意頁會說是 CLI 在要求），每次登入註冊成
+  `telepy CLI (<電腦名稱>)`。這些 grant 列在 API 頁的「CLI 登入」分頁（`/tunnels/api?tab=cli`），MCP 頁、偏好設定與
+  AI 活動頁的 MCP 應用程式清單都不列。同一台電腦再登入一次會提議取代先前那個；每人最多保留 10 個 CLI 登入，第 11 個會
+  登出最久沒用的。CLI 登入一樣跟著「MCP app」功能開關（見 [cli.md](cli.md)）。名稱是客戶端自己報的，只用來分類顯示。
 
 ## 工具
 
@@ -99,7 +103,7 @@ MCP client ── POST /mcp ─────────────────�
 權限完全照網頁規則：要有該通道的 VIEW 權限，而且目標 username 必須在允許清單內（被分享的通道只能用分享時允許的
 username，與 web terminal 相同）。另外：
 
-- **功能權限**（網站設定 → 存取權限）一樣適用：管理員替這個人關掉的功能，對應的工具回錯誤（`isError`）說明——
+- **功能權限**（管理 → 使用者與權限 → 功能權限，`/tunnels/admin/access`）一樣適用：管理員替這個人關掉的功能，對應的工具回錯誤（`isError`）說明——
   `ssh:exec` 的工具要「網頁終端機」、`ssh:files` 要「檔案管理」、`lan_hosts` 與 `lan_scan` 要「區網探索」、`browser:use`
   要「遠端瀏覽器」。scope 本身沒給時，錯誤會告訴 agent 請使用者重新連接並核准那個 scope。
 - **需要 step-up 的通道**（每次 session 前都要使用者用第二道驗證確認）拒絕 agent 開 SSH session、瀏覽器與 `lan_scan`；
@@ -107,19 +111,31 @@ username，與 web terminal 相同）。另外：
 
 ### 指令規則（`ssh_exec`）
 
-管理員的全站規則與通道擁有者 / ADMIN 設的通道規則（網頁的「指令規則」頁，`/tunnels/commands`）也管 agent 的指令：
+網頁「指令規則」頁（`/tunnels/commands`）上的規則也管 agent 的指令。規則有兩種：
+
+- **個人規則**：每個人自己寫。對象選「所有人」或「只限被分享的人」時，只在作者**目前**是 owner 或 ADMIN 的通道上生效；
+  選「只有我」就只管作者自己的指令，在他用的任何通道上都算——例如替自己在別人通道上跑的 MCP agent 加一道防護。
+  「只有我」的規則別人看不到。
+- **全站規則**：管理員寫（管理區「規則與通知 → 指令規則」）。預設可以覆寫：通道的 owner / ADMIN 可以在自己管的通道上關掉它；
+  管理員關掉「允許使用者覆寫」就是強制，誰都關不掉。
+
+規則可以只管 MCP agent（`via: agents`）。一條指令符合好幾條規則時，擋下 > 需要核准 > 提醒。各動作對 agent 的效果：
 
 - **擋下**：不執行，tool 回錯誤（`isError`），內容寫出是哪條規則與規則的說明。
-- **需要核准**：Telepy 送出核准申請（核准人——規則指定的人，沒指定就是通道擁有者與 ADMIN——會在網頁右下角看到，
-  也可在指令規則頁處理），這次 tool call
+- **需要核准**：Telepy 送出核准申請（核准人——規則指定的人；沒指定就是通道擁有者與 ADMIN；「只有我」的規則是作者自己——
+  會在網頁右下角看到，也可在指令規則頁處理），這次 tool call
   最多等 45 秒；核准就照常執行並回結果，拒絕或逾時回錯誤。還沒有人決定時回錯誤「還在等」——請 agent 告訴使用者，
   核准後**用一模一樣的指令**再呼叫一次；核准在 10 分鐘內可用一次（同一個 app、通道、帳號與指令）。
-- agent 用通道擁有者的身分跑時，一樣要擁有者按核准（human in the loop）；規則可以只管 MCP agent（`via: agents`）。
+- **提醒**：照常執行，`ssh_exec` 的結果多一個 `reminder`（規則的說明，沒寫說明就是比對式），請 agent 轉告使用者；
+  REST 版 `POST /api/ai/sessions/{id}/exec` 也一樣。不等人，也不進指令規則頁的「紀錄」。不是強制的提醒，每個人可以替自己靜音。
+- **允許（例外）**：讓符合的指令不受**同一個作者**的擋下 / 需要核准規則管（全站的例外豁免全站規則，個人的例外豁免同一個人的規則；
+  另外，通道 owner / ADMIN 的例外在他管的通道上也豁免可覆寫的全站規則，強制的不行）。別人的例外蓋不掉你的規則。
+- agent 用通道擁有者的身分跑時，一樣要擁有者按核准（human in the loop）。
 - 被擋下 / 等待 / 拒絕都會在 AI 稽核裡記成失敗的 `ssh_exec`，申請與結果也列在指令規則頁的「紀錄」。
 - **互動 shell 也一樣**：`shell_send` 裡每個在 shell 提示字元按下的 Enter，用跟網頁終端機同一套讀畫面的方式（`TerminalGuard`）
   讀出那一行再比對。擋下 → 改送 Ctrl+C、tool 回錯誤；要核准 → 跟 `ssh_exec` 一樣最多等 45 秒，核准就送 Enter；還在等時那一行
   留在提示字元上，核准後 agent 送 `input: ""`、`press_enter: true` 就會跑（同樣 10 分鐘內用一次）。Enter 之後沒送出的輸入會被丟掉
-  （tool 會說幾個 bytes）。全螢幕程式（vim、less）裡的 Enter 不檢查。
+  （tool 會說幾個 bytes）。符合提醒規則的行照送，`shell_send` 的結果帶 `reminders`（每條一句）。全螢幕程式（vim、less）裡的 Enter 不檢查。
 
 ## 互動 shell
 
@@ -184,7 +200,7 @@ username，與 web terminal 相同）。另外：
   請勿讓 agent 在指令列帶密碼。
 - `GET /api/ai/activity` 與 `GET /api/ai/sessions` 預設 `?scope=mine`（管理員也一樣）：自己的，加上自己擁有的通道上的；
   `scope=all` = 全部，只有管理員（其他人 403 `admin_only`）。`activity` 另外可用 `tunnel_id`、`user_id`、`grant_id` 篩選。
-- 網頁：**AI 活動**（`/tunnels/activity`）是自己的（含開著的 session、你已連接的 app）；管理員的全站版在管理區的
+- 網頁：**AI 活動**（`/tunnels/activity`）是自己的（含開著的 session、你的 MCP 應用程式）；管理員的全站版在管理區的
   **全站 AI 活動**（`/tunnels/admin/activity`）。
 
 ## 手動驗證
