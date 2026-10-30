@@ -102,8 +102,8 @@ the five targets are built from that tag with `TELEPY_VERSION` = the tag without
 (`telepy --version` must print it) and attached to the release with their `.sha256` files and `SHA256SUMS`. Run it
 by hand from the Actions tab with a tag to (re)attach to an existing release, or without one for a trial build whose
 files stay as the run's artifacts. A tag from before version stamping (such as `v2.8.0`) can be given builds the same way; its
-CLI reports Cargo.toml's `0.1.0`. The first CLI build was published once on its own as `cli-v0.1.0` (archives
-`telepy-v0.1.0-<target>.tar.gz`), before builds moved to the Telepy releases.
+CLI reports Cargo.toml's `0.1.0`. Every Telepy release from `v2.8.0` on carries the CLI built from it; there are no
+separate CLI tags.
 
 ### Updating
 
