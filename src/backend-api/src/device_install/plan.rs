@@ -26,6 +26,8 @@ pub enum Method {
     LaunchdAgent,
     /// 重連迴圈 + `@reboot` crontab。/ A reconnect loop plus an @reboot crontab line.
     Loop,
+    /// OpenWrt 的 procd：`/etc/init.d/telepy-<id>`（一鍵加入在路由器上裝的就是這種）。/ OpenWrt's procd init script.
+    Procd,
 }
 
 impl Method {
@@ -36,15 +38,16 @@ impl Method {
             Method::LaunchdDaemon => "launchd daemon",
             Method::LaunchdAgent => "launchd agent",
             Method::Loop => "reconnect loop",
+            Method::Procd => "procd",
         }
     }
     /// 要 root 才裝得了。/ Needs root to install.
     pub fn system(self) -> bool {
-        matches!(self, Method::Systemd | Method::LaunchdDaemon)
+        matches!(self, Method::Systemd | Method::LaunchdDaemon | Method::Procd)
     }
     fn rank(self) -> u8 {
         match self {
-            Method::Systemd | Method::LaunchdDaemon => 3,
+            Method::Systemd | Method::LaunchdDaemon | Method::Procd => 3,
             Method::SystemdUser | Method::LaunchdAgent => 2,
             Method::Loop => 1,
         }
@@ -470,14 +473,16 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
                 "launchd" if i.detail.starts_with("/Library/") => Method::LaunchdDaemon,
                 "launchd" => Method::LaunchdAgent,
                 "loop" => Method::Loop,
+                // procd：`/etc/init.d/<name>`（rc.local 那種一行的不算服務，換不了）。/ procd: `/etc/init.d/<name>` only.
+                "initd" if i.detail.starts_with("/etc/init.d/") => Method::Procd,
                 _ => continue,
             };
             services.push((m, a, i));
         }
     }
     if services.is_empty() {
-        // 有舊名稱、但只在 Telepy 不會自動換的地方（init.d）。/ Older names only where Telepy does not replace them.
-        let older = accounts.iter().flat_map(|a| a.items.iter()).any(|i| i.kind == "found" && i.what == "initd" && !names.owns(&i.detail) && !earlier_name(base_name(&i.detail)));
+        // 有舊名稱、但只在 Telepy 不會自動換的地方（rc.local 裡的一行）。/ Older names only where Telepy does not replace them.
+        let older = accounts.iter().flat_map(|a| a.items.iter()).any(|i| i.kind == "found" && i.what == "rc.local" && !names.owns(&i.detail));
         return Err(if older { Blocker::Unsupported } else { Blocker::NothingToRename });
     }
     let mut old: Vec<String> = services
@@ -636,6 +641,20 @@ pub fn service_file(plan: &Plan, names: &Names, args: &[String]) -> (String, Str
             s.push_str(&format!("    <key>StandardErrorPath</key><string>{}/Library/Logs/{}</string>\n</dict>\n</plist>\n", xml(&plan.home), names.log()));
             (path, s)
         }
+        // 跟一鍵加入裝的一樣：procd 管重啟（每次結束 10 秒後再起，永不放棄），stdout / stderr 進 logread。
+        // The same shape the join installs: procd respawns 10 s after every exit, forever; output goes to logread.
+        Method::Procd => {
+            let cmd = std::iter::once(program.clone()).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
+            let user = if plan.run_user == "root" { String::new() } else { format!("    procd_set_param user {}\n", sh_quote(&plan.run_user)) };
+            (
+                format!("/etc/init.d/{}", names.base()),
+                format!(
+                    "#!/bin/sh /etc/rc.common\n# {}\nUSE_PROCD=1\nSTART=99\nSTOP=10\n\nstart_service() {{\n    procd_open_instance\n    procd_set_param command {cmd}\n    procd_set_param respawn 3600 10 0\n    procd_set_param stdout 1\n    procd_set_param stderr 1\n    procd_set_param env HOME={}\n{user}    procd_close_instance\n}}\n",
+                    names.description(),
+                    sh_quote(&plan.home)
+                ),
+            )
+        }
         Method::Loop => {
             let line = std::iter::once(plan.spec.program.clone()).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
             (
@@ -648,7 +667,10 @@ pub fn service_file(plan: &Plan, names: &Names, args: &[String]) -> (String, Str
 
 /// 安裝腳本：寫 known_hosts（與 WebSocket 載具）、寫服務檔、啟動。每個結果一行 `TELEPY|…`。
 /// The install script: known_hosts (and the WebSocket carrier), the service file, start it.
-pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: &str) -> String {
+/// `plain` = 沒有小程式的參數（換成自動、裝置卻沒有 python3 時裝這個，只走 SSH 的 port，回報 `note no_python`）；None = 沒有
+/// 小程式就停下來。/ `plain` = the arguments without the carrier: installed instead when the device has no python3 (the SSH
+/// port only, reported as `note no_python`); None = stop without python3.
+pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: &str, plain: Option<&[String]>) -> String {
     let (path, content) = service_file(plan, names, args);
     let ssh_dir = format!("{}/.ssh", plan.home);
     let kh = format!("{ssh_dir}/{}", names.known_hosts());
@@ -667,15 +689,34 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
         // python3's path (a service's PATH may be short).
         let to_sh = format!("{ssh_dir}/{}", names.ws_sh());
         let to_py = format!("{ssh_dir}/{}", names.ws_py());
-        s.push_str("PY=$(command -v python3 2>/dev/null) || PY=''\n[ -n \"$PY\" ] || { out failed python3 'python3 is not installed on the device'; exit 0; }\n");
-        s.push_str(&format!("put {} {} 700\n", sh_quote(&to_py), sh_quote(&c.program)));
-        s.push_str(&format!(
-            "put {ts} \"$(printf '#!/bin/sh\\n# %s: the way to Telepy (the SSH port first when --tcp is given).\\nexec %s %s %s\\n' {desc} \"$PY\" {tp} {args})\" 700\n",
+        s.push_str("PY=$(command -v python3 2>/dev/null) || PY=''\n");
+        let carrier_files = format!(
+            "put {} {} 700\nput {ts} \"$(printf '#!/bin/sh\\n# %s: the way to Telepy (the SSH port first when --tcp is given).\\nexec %s %s %s\\n' {desc} \"$PY\" {tp} {args})\" 700\n",
+            sh_quote(&to_py),
+            sh_quote(&c.program),
             ts = sh_quote(&to_sh),
             desc = sh_quote(&names.description()),
             tp = sh_quote(&to_py),
             args = sh_quote(&c.args),
-        ));
+        );
+        match plain {
+            // 沒有 python3：裝沒有小程式的版本，只走 SSH 的 port。/ No python3: the carrier-less service, the SSH port only.
+            Some(plain_args) => {
+                let (_, plain_content) = service_file(plan, names, plain_args);
+                let mode = if matches!(plan.method, Method::Loop | Method::Procd) { "755" } else { "644" };
+                s.push_str(&format!(
+                    "if [ -n \"$PY\" ]; then\n{carrier_files}put {p} {c} {mode}\nelse\nout note no_python 'python3 is not installed: the SSH port only'\nput {p} {pc} {mode}\nfi\n",
+                    p = sh_quote(&path),
+                    c = sh_quote(&content),
+                    pc = sh_quote(&plain_content),
+                ));
+                return finish_install(plan, names, s, &path, &kh, &owner);
+            }
+            None => {
+                s.push_str("[ -n \"$PY\" ] || { out failed python3 'python3 is not installed on the device'; exit 0; }\n");
+                s.push_str(&carrier_files);
+            }
+        }
     } else if let Some((from_sh, from_py)) = carrier(plan).filter(|_| plan.route.is_none()) {
         let to_sh = format!("{ssh_dir}/{}", names.ws_sh());
         let to_py = format!("{ssh_dir}/{}", names.ws_py());
@@ -689,11 +730,22 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
             tpe = to_py.replace('#', ""),
         ));
     }
-    let mode = if plan.method == Method::Loop { "700" } else { "644" };
+    let mode = match plan.method {
+        Method::Loop => "700",
+        Method::Procd => "755",
+        _ => "644",
+    };
     s.push_str(&format!("put {} {} {mode}\n", sh_quote(&path), sh_quote(&content)));
+    finish_install(plan, names, s, &path, &kh, &owner)
+}
+
+/// 安裝腳本的後半：檔案歸屬、啟動服務。/ The install script's second half: ownership, then start the service.
+fn finish_install(plan: &Plan, names: &Names, mut s: String, path: &str, kh: &str, owner: &str) -> String {
+    let ssh_dir = format!("{}/.ssh", plan.home);
+    let path = path.to_string();
     // 家目錄裡的檔案歸隧道的帳號。/ Files in the home belong to the tunnel's account.
     if plan.sudo || plan.account == "root" {
-        let mut owned = vec![kh.clone()];
+        let mut owned = vec![kh.to_string()];
         if plan.has_carrier() {
             owned.push(format!("{ssh_dir}/{}", names.ws_sh()));
             owned.push(format!("{ssh_dir}/{}", names.ws_py()));
@@ -714,6 +766,8 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
             "D=gui/$(id -u); launchctl print \"$D\" >/dev/null 2>&1 || D=user/$(id -u); launchctl bootout \"$D/{label}\" >/dev/null 2>&1; launchctl bootstrap \"$D\" {p} && out started launchd {label} || out failed start {label}\n",
             p = sh_quote(&path)
         ),
+        // 新服務用 start（procd 對還沒跑過的服務下 restart 會印誤導的 Not found）。/ `start` for a fresh service.
+        Method::Procd => format!("$S chmod 755 {p} && $S {p} enable >/dev/null 2>&1; if $S {p} running >/dev/null 2>&1; then $S {p} restart; else $S {p} start; fi && out started procd {b} || out failed start {b}\n", p = sh_quote(&path), b = names.base()),
         Method::Loop => format!(
             "R={r}\nif command -v crontab >/dev/null 2>&1; then {{ crontab -l 2>/dev/null | grep -vF \"$R\"; printf '@reboot sh %s >/dev/null 2>&1\\n' \"$R\"; }} | crontab - && out wrote cron \"@reboot sh $R\"; fi\n\
              if command -v setsid >/dev/null 2>&1; then setsid sh \"$R\" </dev/null >/dev/null 2>&1 & else nohup sh \"$R\" </dev/null >/dev/null 2>&1 & fi\nout started loop \"$R\"\n",
@@ -737,6 +791,7 @@ pub fn undo_script(plan: &Plan, names: &Names) -> String {
         Method::SystemdUser => format!("systemctl --user disable --now {unit} >/dev/null 2>&1\n"),
         Method::LaunchdDaemon => format!("$S launchctl bootout system/{label} >/dev/null 2>&1\n"),
         Method::LaunchdAgent => format!("launchctl bootout gui/$(id -u)/{label} >/dev/null 2>&1 || launchctl bootout user/$(id -u)/{label} >/dev/null 2>&1\n"),
+        Method::Procd => format!("$S {p} stop >/dev/null 2>&1; $S {p} disable >/dev/null 2>&1\n", p = sh_quote(&path)),
         Method::Loop => format!(
             "R={r}\npkill -f \"[s]h $R\" 2>/dev/null; pkill -f '[t]elepy-{id}.known_hosts' 2>/dev/null\nif command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -qF \"$R\"; then crontab -l 2>/dev/null | grep -vF \"$R\" | crontab -; fi\n",
             r = sh_quote(&path),
@@ -924,7 +979,7 @@ mod tests {
         let (path, unit) = service_file(&p, &names, &args);
         assert_eq!(path, "/etc/systemd/system/telepy-k7m2q9xd.service");
         assert!(unit.contains("Description=Telepy reverse tunnel k7m2q9xd\n") && unit.contains("User=pi\nExecStart=/usr/bin/ssh -NT "), "{unit}");
-        let script = install_script(&p, &names, &args, "telepy-x ssh-ed25519 AAAA\n");
+        let script = install_script(&p, &names, &args, "telepy-x ssh-ed25519 AAAA\n", None);
         assert!(script.contains("put '/home/pi/.ssh/telepy-k7m2q9xd.known_hosts' 'telepy-x ssh-ed25519 AAAA\n' 644"), "{script}");
         assert!(script.contains("systemctl restart telepy-k7m2q9xd.service"), "{script}");
         assert!(script.contains("chown pi:$(id -gn 'pi'"), "root writes into pi's home and hands the files over: {script}");
@@ -957,7 +1012,7 @@ mod tests {
         let (path, runner) = service_file(&p, &names, &args);
         assert_eq!(path, "/home/pi/.ssh/telepy-k7m2q9xd.sh");
         assert!(runner.contains("'/usr/bin/ssh' '-NT'") && runner.contains(">> '/home/pi/.ssh/telepy-k7m2q9xd.log' 2>&1"), "{runner}");
-        let script = install_script(&p, &names, &args, "");
+        let script = install_script(&p, &names, &args, "", None);
         assert!(script.contains("@reboot sh %s") && !script.contains("chown"), "{script}");
     }
 
@@ -969,7 +1024,7 @@ mod tests {
         let p = plan(&s, &names).unwrap();
         let args = ssh_args(&p, &names, "a", true);
         assert!(args.contains(&"ProxyCommand=/home/pi/.ssh/telepy-k7m2q9xd-ws.sh".to_string()), "{args:?}");
-        let script = install_script(&p, &names, &args, "");
+        let script = install_script(&p, &names, &args, "", None);
         assert!(script.contains("sed 's#/home/pi/.ssh/telepy-ws-12.py#/home/pi/.ssh/telepy-k7m2q9xd-ws.py#g'"), "{script}");
         assert!(undo_script(&p, &names).contains("telepy-k7m2q9xd-ws.py"));
     }
@@ -1007,7 +1062,8 @@ mod tests {
         let p = parts(&s, &names);
         assert_eq!(p.iter().map(|p| (p.kind, p.name.as_str())).collect::<Vec<_>>(), vec![("service", "telepy-natlee"), ("cron", "ssh -N -p 56767 -R *:0:localhost:22 telepy@h &")]);
         assert_eq!(older_services(&p), vec!["telepy-natlee".to_string()]);
-        assert_eq!(plan(&s, &names), Err(Blocker::Unsupported), "an init script is listed but not replaced automatically");
+        // 沒有正在跑的 ssh 可以照抄：init 腳本本身現在換得了，但要有程序。/ The init script is replaceable now, but it needs the running ssh.
+        assert_eq!(plan(&s, &names), Err(Blocker::NoProcess), "{:?}", plan(&s, &names));
         let ours = vec![account("root", true, vec![item("found", "initd", "/etc/init.d/telepy-k7m2q9xd")])];
         assert_eq!(plan(&ours, &names), Err(Blocker::NothingToRename));
     }
@@ -1029,7 +1085,7 @@ mod tests {
         let s = vec![account("pi", true, vec![item("found", "systemd", "/etc/systemd/system/telepy-natlee.service"), item("found", "process", HDRE), item("found", "owner", "4242 pi /home/pi")])];
         let p = plan(&s, &names).unwrap();
         assert_eq!((p.account.as_str(), p.sudo), ("pi", true));
-        assert!(install_script(&p, &names, &[], "").starts_with("# telepy-install-tunnel") && install_script(&p, &names, &[], "").contains("S='sudo -n '"));
+        assert!(install_script(&p, &names, &[], "", None).starts_with("# telepy-install-tunnel") && install_script(&p, &names, &[], "", None).contains("S='sudo -n '"));
         // 沒找到程序 / 讀不懂 / 不知道擁有者 / 怪路徑。/ No process, unreadable, unknown owner, odd path.
         let s = vec![account("root", true, vec![item("found", "systemd", "/etc/systemd/system/telepy-tunnel.service")])];
         assert_eq!(plan(&s, &names), Err(Blocker::NoProcess));
@@ -1040,5 +1096,66 @@ mod tests {
         let odd = HDRE.replace("/home/pi/.ssh/id_ed25519", "id_ed25519");
         let s = vec![account("root", true, vec![item("found", "systemd", "/etc/systemd/system/x.service"), item("found", "process", &odd), item("found", "owner", "4242 pi /home/pi")])];
         assert_eq!(plan(&s, &names), Err(Blocker::OddCommand), "a relative key path cannot be resolved");
+    }
+}
+
+#[cfg(test)]
+mod procd_tests {
+    use super::*;
+
+    fn item(kind: &str, what: &str, detail: &str) -> Item {
+        Item { kind: kind.into(), what: what.into(), detail: detail.into() }
+    }
+
+    /// GL-AR750S 在正式環境的盤點（一鍵加入裝的 procd 服務、OpenSSH client、root）。/ The GL-AR750S's real survey.
+    fn router() -> Vec<AccountResult> {
+        vec![AccountResult {
+            account: "root".into(),
+            platform: Some(Platform::Posix),
+            os: Some("Linux".into()),
+            error: None,
+            items: vec![
+                item("platform", "Linux", "root root=1"),
+                item("found", "process", "12574 /usr/bin/ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=0 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/telepy-47xzwr2e.known_hosts -o HostKeyAlias=telepy-telepy.natlee.info-56767 -i /root/.ssh/telepy_tunnel_ed25519 -p 56767 -R 0:127.0.0.1:22 telepy@telepy.natlee.info"),
+                item("found", "owner", "12574 root /root"),
+                item("found", "initd", "/etc/init.d/telepy-47xzwr2e"),
+                item("found", "key", "/root/.ssh/telepy_tunnel_ed25519"),
+                item("found", "known_hosts", "/root/.ssh/telepy-47xzwr2e.known_hosts"),
+            ],
+        }]
+    }
+
+    /// 換連線方式：新代號看現在的 procd 服務是「舊的」，計畫出 procd 方法；init 腳本、安裝與復原腳本都照 OpenWrt 的做法。
+    /// A switch plans a procd service from the router's current one; the init script and the install / undo scripts follow OpenWrt.
+    #[test]
+    fn an_openwrt_router_gets_a_procd_service() {
+        let names = Names::new("q7h3m2ka");
+        let mut p = plan(&router(), &names).unwrap();
+        assert_eq!((p.method, p.account.as_str(), p.sudo, p.run_user.as_str()), (Method::Procd, "root", false, "root"));
+        assert_eq!(p.old, vec!["telepy-47xzwr2e".to_string()]);
+        p.route = Some(Route { dest: "telepy@telepy-ssh.natlee.info".into(), port: 56767, carrier: Some(RouteCarrier { args: "--tcp telepy-ssh.natlee.info:56767 wss://telepy.natlee.info/ws/gateway/".into(), program: "#!/usr/bin/env python3\n".into() }) });
+        let args = ssh_args(&p, &names, "telepy-telepy.natlee.info-56767", true);
+        assert!(args.contains(&"telepy@telepy-ssh.natlee.info".to_string()) && args.contains(&"ProxyCommand=/root/.ssh/telepy-q7h3m2ka-ws.sh".to_string()), "{args:?}");
+        let (path, init) = service_file(&p, &names, &args);
+        assert_eq!(path, "/etc/init.d/telepy-q7h3m2ka");
+        assert!(init.starts_with("#!/bin/sh /etc/rc.common\n") && init.contains("USE_PROCD=1\nSTART=99") && init.contains("procd_set_param respawn 3600 10 0") && init.contains("procd_set_param env HOME='/root'") && !init.contains("procd_set_param user"), "{init}");
+        assert!(init.contains("procd_set_param command '/usr/bin/ssh' '-NT'") && init.contains("'-R' '0:127.0.0.1:22' 'telepy@telepy-ssh.natlee.info'"), "{init}");
+        // 沒有 python3（路由器常見）：裝沒有小程式的版本、回報 no_python。/ No python3 (routers): the carrier-less one, reported.
+        let mut q = p.clone();
+        q.route.as_mut().unwrap().carrier = None;
+        let plain = ssh_args(&q, &names, "telepy-telepy.natlee.info-56767", true);
+        assert!(!plain.iter().any(|a| a.contains("ProxyCommand")), "{plain:?}");
+        let script = install_script(&p, &names, &args, "telepy-telepy.natlee.info-56767 ssh-ed25519 AAAA\n", Some(&plain));
+        assert!(script.contains("if [ -n \"$PY\" ]; then") && script.contains("out note no_python") && script.contains("put '/etc/init.d/telepy-q7h3m2ka'"), "{script}");
+        assert!(!script.contains("out failed python3"), "with a plain version there is nothing to fail: {script}");
+        assert!(script.contains("'/etc/init.d/telepy-q7h3m2ka' enable") && script.contains("running >/dev/null 2>&1; then $S '/etc/init.d/telepy-q7h3m2ka' restart; else $S '/etc/init.d/telepy-q7h3m2ka' start; fi"), "{script}");
+        assert!(script.contains("put '/root/.ssh/telepy-q7h3m2ka.known_hosts'"), "{script}");
+        let undo = undo_script(&p, &names);
+        assert!(undo.contains("'/etc/init.d/telepy-q7h3m2ka' stop") && undo.contains("disable") && undo.contains("rm -f '/etc/init.d/telepy-q7h3m2ka'"), "{undo}");
+        // 沒給純版本：沒有 python3 就停。/ Without a plain version it stops.
+        let strict = install_script(&p, &names, &args, "", None);
+        assert!(strict.contains("out failed python3"), "{strict}");
+        // 盤點的呈現：init 腳本是一個服務。/ In the view the init script is a service.
+        assert!(parts(&router(), &names).iter().any(|x| x.kind == "service" && x.name == "telepy-47xzwr2e" && !x.private));
     }
 }

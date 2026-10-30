@@ -228,6 +228,7 @@ fn new_name(method: plan::Method, names: &Names) -> String {
         plan::Method::Systemd | plan::Method::SystemdUser => names.unit(),
         plan::Method::LaunchdDaemon | plan::Method::LaunchdAgent => names.launchd_label(),
         plan::Method::Loop => names.runner(),
+        plan::Method::Procd => names.base(),
     }
 }
 
@@ -268,6 +269,9 @@ pub struct Report {
     /// 換連線方式時：換成哪種（`auto` / `websocket` / `ssh`）。/ When switching: the new way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<String>,
+    /// 要自動、裝置卻沒有 python3：裝成只走 SSH 的 port（新主機）。/ Automatic asked, no python3: the SSH port only (new host).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_python: bool,
 }
 
 /// 換連線方式：新服務怎麼連 Telepy。`ws_url` = 網頁的 `/ws/gateway/`（auto / websocket 用）。
@@ -365,9 +369,13 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
     if switch.is_some() {
         if let Some(host) = state.config.ssh_host().or_else(|| state.config.server_host().filter(|h| !h.is_empty())) {
             let l = crate::ssh_host::lookup(&host).await;
+            // 伺服器解析不到不算錯：名稱可能只在裝置那邊的網路解析得到（內部 DNS、host.docker.internal）；備援連不上自然會
+            // 復原。只有確定落在 Cloudflare 代理上的才擋。/ Unresolved here is not a verdict: the name may only resolve on the
+            // devices' network (split DNS, host.docker.internal); the standby wait undoes a bad one anyway. Only a name
+            // that provably sits on Cloudflare's proxy is refused.
             match crate::ssh_host::verdict(&l, &host, false) {
-                crate::ssh_host::Verdict::Unresolved => return Ok(run.fail("survey", "ssh_host_unresolved", format!("the SSH host {host} does not resolve: {}", l.error.as_deref().unwrap_or("no address"))).await),
                 crate::ssh_host::Verdict::SshProxied => return Ok(run.fail("survey", "ssh_host_proxied", format!("the SSH host {host} resolves to Cloudflare's proxy, which does not carry the SSH port; set a name that goes straight to this server first")).await),
+                crate::ssh_host::Verdict::Unresolved => tracing::info!(tunnel = tunnel.id, %host, "the SSH host does not resolve from the server; trying anyway"),
                 _ => {}
             }
         }
@@ -421,7 +429,16 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
             return Ok(run.fail("install", "login_failed", format!("{e:#}")).await);
         }
     };
-    let script = plan::install_script(&p, &names, &args, if host_keys.is_empty() { "" } else { &known });
+    // 自動但沒有 python3：裝沒有小程式的版本（只走 SSH 的 port），不是失敗。/ Automatic without python3: the carrier-less
+    // service (the SSH port only) instead of a failure.
+    let plain_args = switch.as_ref().filter(|s| s.transport == "auto").map(|_| {
+        let mut q = p.clone();
+        if let Some(r) = q.route.as_mut() {
+            r.carrier = None;
+        }
+        plan::ssh_args(&q, &names, &alias, !host_keys.is_empty())
+    });
+    let script = plan::install_script(&p, &names, &args, if host_keys.is_empty() { "" } else { &known }, plain_args.as_deref());
     let installed = exec::run_script(&conn.device, &script, INSTALL_TIMEOUT, MAX_OUTPUT).await;
     let items = match installed {
         Ok(r) => {
@@ -434,6 +451,10 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         Err(e) => vec![Item { kind: "failed".into(), what: "exec".into(), detail: format!("{e:#}") }],
     };
     run.report.install = items.clone();
+    if items.iter().any(|i| i.kind == "note" && i.what == "no_python") {
+        run.report.no_python = true;
+        run.report.transport = Some("ssh".into());
+    }
     if let Some(f) = items.iter().find(|i| i.kind == "failed").or(if items.iter().any(|i| i.kind == "done") { None } else { items.last() }) {
         let detail = format!("{} {}", f.what, f.detail);
         let code = if f.kind == "failed" && f.what == "python3" { "no_python" } else { "install_failed" };
@@ -488,14 +509,15 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         if let Err(e) = db::device_install::adopt(&state.db, tunnel.id, &id, &tunnel.host_friendly_name, tunnel.user_id).await {
             tracing::warn!(tunnel = tunnel.id, error = %e, "cannot adopt the new install id");
         }
-        if let Err(e) = db::tunnels::set_way_in(&state.db, tunnel.id, sw.transport).await {
+        let way = if run.report.no_python { "ssh" } else { sw.transport };
+        if let Err(e) = db::tunnels::set_way_in(&state.db, tunnel.id, way).await {
             tracing::warn!(tunnel = tunnel.id, error = %e, "cannot record the new way in");
         }
     }
     run.step("switch", "done", None).await;
 
     // 6. 經新連線移除舊服務（留下金鑰與新服務）。/ Remove the older service over the new connection.
-    let ctx = tunnel_service::Context { install_id: Some(id.clone()), gateway_port: tunnel_service::Context::load(state, tunnel).await.gateway_port };
+    let ctx = tunnel_service::Context { install_id: Some(id.clone()), gateway_port: tunnel_service::Context::load(state, tunnel).await.gateway_port, old_install: switch.as_ref().map(|_| current.clone()) };
     let prepared = tunnel_service::prepare_with(state, tunnel, &accounts, Mode::Relabel, &ctx).await;
     let removal = tunnel_service::finish_relabel(state, tunnel, prepared, old_conn).await;
     let removed_ok = removal.stopped && removal.handed_over == Some(true) && !removal.came_back;
@@ -516,7 +538,7 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         run.report.code = Some(if removal.came_back { "old_came_back" } else { "old_left" }.into());
     }
     let (kind, verb) = match &switch {
-        Some(sw) => ("service_switched", format!("switched to {}, now", if sw.transport == "auto" { "automatic (the SSH port first, the web port when it is blocked)" } else if sw.transport == "websocket" { "the web port only" } else { "the SSH port only" })),
+        Some(sw) => ("service_switched", format!("switched to {}, now", if run.report.no_python { "the SSH port only (no python3 on the device for the automatic way)" } else if sw.transport == "auto" { "automatic (the SSH port first, the web port when it is blocked)" } else if sw.transport == "websocket" { "the web port only" } else { "the SSH port only" })),
         None => ("service_renamed", "renamed to".to_string()),
     };
     state
@@ -588,7 +610,7 @@ pub async fn tidy(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Report,
     let Some(keep_conn) = state.gateway.forward_conn(port) else {
         return Ok(run.fail("remove", "device_offline", "the device went offline".into()).await);
     };
-    let ctx = tunnel_service::Context { install_id: Some(id.clone()), gateway_port: tunnel_service::Context::load(state, tunnel).await.gateway_port };
+    let ctx = tunnel_service::Context { install_id: Some(id.clone()), gateway_port: tunnel_service::Context::load(state, tunnel).await.gateway_port, old_install: None };
     let prepared = tunnel_service::prepare_with(state, tunnel, &accounts, Mode::Relabel, &ctx).await;
     let removal = tunnel_service::finish_tidy(state, tunnel, prepared, keep_conn).await;
     let needs_root: Vec<String> = removal.accounts.iter().flat_map(|a| a.items.iter().filter(|i| i.kind == "needs_root").map(|i| i.detail.clone())).collect();
@@ -643,6 +665,7 @@ async fn service_log(conn: &device::DeviceConn, p: &plan::Plan, names: &Names) -
         plan::Method::SystemdUser => format!("journalctl --user -u {} -n 15 --no-pager 2>&1", names.unit()),
         plan::Method::LaunchdDaemon | plan::Method::LaunchdAgent => format!("tail -n 15 {} 2>&1", sh_quote(&format!("{}/Library/Logs/{}", p.home, names.log()))),
         plan::Method::Loop => format!("tail -n 15 {} 2>&1", sh_quote(&format!("{}/.ssh/{}", p.home, names.log()))),
+        plan::Method::Procd => format!("{sudo}logread -e {} 2>&1 | tail -n 15", names.base()),
     };
     let r = exec::run(&conn.device, &cmd, Duration::from_secs(15), 16 * 1024).await.ok()?;
     let text = r.stdout.text.trim().to_string();

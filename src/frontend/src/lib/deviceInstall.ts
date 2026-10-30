@@ -11,7 +11,7 @@ import type { SpotState } from "@/lib/flow";
 import type { JoinFacts } from "@/lib/joinScript";
 import type { TranslationKey } from "@/locales/en";
 
-export type InstallMethod = "systemd" | "systemd_user" | "launchd_daemon" | "launchd_agent" | "loop";
+export type InstallMethod = "systemd" | "systemd_user" | "launchd_daemon" | "launchd_agent" | "loop" | "procd";
 
 export type RenameBlocker = "not_surveyed" | "windows" | "nothing_to_rename" | "no_process" | "unparsed" | "needs_root" | "unknown_owner" | "odd_command" | "unsupported" | "extra" | "nothing_extra";
 
@@ -139,6 +139,8 @@ export interface RenameReport {
     ok: boolean;
     /** 換連線方式時：換成哪種。/ When switching: the new way. */
     transport?: WayInSetup;
+    /** 要自動、裝置卻沒有 python3：裝成只走 SSH 的 port（新主機）。/ Automatic asked, no python3: the SSH port only. */
+    no_python?: boolean;
     steps: ReportedStep[];
     code?: string;
     error?: string;
@@ -254,6 +256,7 @@ export const METHOD_KEY: Record<InstallMethod, TranslationKey> = {
     launchd_daemon: "deviceInstall.method.launchd_daemon",
     launchd_agent: "deviceInstall.method.launchd_agent",
     loop: "deviceInstall.method.loop",
+    procd: "deviceInstall.method.procd",
 };
 
 /** 盤點結果裡要 root 才清得掉的指令（改名後回報）。/ Commands that still need root after a rename. */

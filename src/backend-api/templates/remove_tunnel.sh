@@ -14,6 +14,8 @@ T_KEY=${t_key}
 T_MODE=${t_mode}
 T_INSTALL=${t_install}
 T_GW_PORT=${t_gw_port}
+# The install id a switch replaced (relabel only): its leftover files go, named after it.
+T_OLD_INSTALL=${t_old_install}
 SURVEY=0
 [ "$T_MODE" = survey ] && SURVEY=1
 KEEP_ID=""
@@ -535,6 +537,13 @@ for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh" ${T_INSTALL
     kept_new "$f" && continue
     [ -f "$f" ] && rmf "$f" file
 done
+# A switch replaced an earlier install id: the files that id left behind (record, uninstall script, known_hosts,
+# carrier). Its service is matched by the key like any other; these are only the bookkeeping files.
+if [ "$T_MODE" = relabel ] && [ -n "$T_OLD_INSTALL" ] && [ "$T_OLD_INSTALL" != "$T_INSTALL" ]; then
+    for f in "$SSH_DIR/telepy-$T_OLD_INSTALL.install" "$SSH_DIR/telepy-$T_OLD_INSTALL-uninstall.sh" "$SSH_DIR/telepy-$T_OLD_INSTALL.known_hosts" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.py" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.sh"; do
+        [ -f "$f" ] && rmf "$f" file
+    done
+fi
 # The install record the join script wrote (what it installed, where, as whom; no secrets). A survey reports it.
 # dbclient has no UserKnownHostsFile: the join pinned the gateway in the account's ~/.ssh/known_hosts and listed the
 # exact lines it added in the record (KNOWN_HOSTS_LINE=…). Only those lines go; the account's other known hosts stay.

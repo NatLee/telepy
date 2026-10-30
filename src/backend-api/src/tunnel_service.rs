@@ -8,7 +8,7 @@
 //! 兩段式（停掉隧道也會切斷我們跑指令的 SSH session）：
 //! 1. 對每個登入帳號（root 優先）跑 `templates/remove_tunnel.sh`（Windows：`remove_tunnel.ps1`）：找出並刪掉
 //!    檔案（unit、plist、crontab 行、迴圈腳本、金鑰、解除安裝腳本、known_hosts…），把「停止」寫進一次性的停止腳本。
-//! 2. 金鑰清理做完後才在背景啟動每個停止腳本（systemd-run / setsid / nohup；Windows 用 WMI 建立行程，
+//! 2. 金鑰清理做完後才在背景啟動每個停止腳本（systemd-run / setsid / start-stop-daemon / nohup / 背景子 shell；Windows 用 WMI 建立行程，
 //!    不受 session 結束影響），它停掉服務 / 容器 / 程序、最後刪 log 和自己。
 //! 驗證：等隧道的 forward **自己**消失（裝置真的停了），再觀察一下會不會又連回來（還有東西在重啟它）。
 //!
@@ -147,13 +147,16 @@ fn key_body(key: &str) -> String {
 pub struct Context {
     pub install_id: Option<String>,
     pub gateway_port: String,
+    /// 換連線方式換掉的舊安裝代號：它留下的紀錄、uninstall 腳本、known_hosts、小程式一起拿掉（服務本身照金鑰認）。
+    /// The install id a switch replaced: its record, uninstall script, known_hosts and carrier go too (the service itself is matched by key).
+    pub old_install: Option<String>,
 }
 
 impl Context {
     pub async fn load(state: &AppState, tunnel: &Tunnel) -> Self {
         let install_id = crate::db::device_install::get(&state.db, tunnel.id).await.ok().flatten().map(|r| r.install_id);
         let gateway_port = state.config.reverse_server_ssh_port.trim().to_string();
-        Self { install_id, gateway_port: if gateway_port.bytes().all(|b| b.is_ascii_digit()) { gateway_port } else { String::new() } }
+        Self { install_id, gateway_port: if gateway_port.bytes().all(|b| b.is_ascii_digit()) { gateway_port } else { String::new() }, old_install: None }
     }
 }
 
@@ -170,6 +173,7 @@ pub fn render(platform: Platform, tunnel: &Tunnel, mode: Mode, ctx: &Context) ->
             let id = ctx.install_id.as_deref().filter(|i| crate::device_install::names::is_id(i)).unwrap_or("");
             m.insert("t_install", id.to_string());
             m.insert("t_gw_port", ctx.gateway_port.clone());
+            m.insert("t_old_install", ctx.old_install.clone().unwrap_or_default());
             safe_substitute(POSIX, &m)
         }
         Platform::Windows => {
@@ -198,7 +202,9 @@ pub fn launch_command(platform: Platform, path: &str) -> String {
             format!(
                 "P={p}; if [ \"$(id -u)\" = 0 ] && command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --no-block sh \"$P\" >/dev/null 2>&1; then echo 'TELEPY|launched|systemd-run|'; \
                  elif command -v setsid >/dev/null 2>&1; then setsid sh \"$P\" </dev/null >/dev/null 2>&1 & echo 'TELEPY|launched|setsid|'; \
-                 else nohup sh \"$P\" </dev/null >/dev/null 2>&1 & echo 'TELEPY|launched|nohup|'; fi"
+                 elif command -v start-stop-daemon >/dev/null 2>&1 && start-stop-daemon -b -S -x /bin/sh -- \"$P\" >/dev/null 2>&1; then echo 'TELEPY|launched|start-stop-daemon|'; \
+                 elif command -v nohup >/dev/null 2>&1; then nohup sh \"$P\" </dev/null >/dev/null 2>&1 & echo 'TELEPY|launched|nohup|'; \
+                 else ( sh \"$P\" </dev/null >/dev/null 2>&1 & ); echo 'TELEPY|launched|subshell|'; fi"
             )
         }
         Platform::Windows => {
@@ -449,10 +455,10 @@ mod tests {
 
     #[test]
     fn templates_are_filled_without_touching_shell_syntax() {
-        let ctx = Context { install_id: Some("k7m2q9xd".into()), gateway_port: "24242".into() };
+        let ctx = Context { install_id: Some("k7m2q9xd".into()), gateway_port: "24242".into(), old_install: Some("xa6r6xpj".into()) };
         let sh = render(Platform::Posix, &tunnel(), Mode::Delete, &ctx);
         assert!(sh.contains("T_ID=7\nT_PORT=40001\nT_NAME='pi'\\''s lab'\nT_KEY='AAAAC3Nza+/='\nT_MODE=delete\nT_INSTALL=k7m2q9xd\nT_GW_PORT=24242\n"), "{sh}");
-        let survey = render(Platform::Posix, &tunnel(), Mode::Survey, &Context { install_id: Some("bad id;".into()), gateway_port: String::new() });
+        let survey = render(Platform::Posix, &tunnel(), Mode::Survey, &Context { install_id: Some("bad id;".into()), gateway_port: String::new(), old_install: None });
         assert!(survey.contains("T_MODE=survey\nT_INSTALL=\nT_GW_PORT=\n"), "an odd id never reaches the shell: {survey}");
         assert!(!sh.contains("${t_"), "every key is filled");
         for kept in ["${TMPDIR:-/tmp}", "${r%.sh}", "\"$0\"", "$((STOPS + 1))", "${d#/proc/}"] {
@@ -477,6 +483,8 @@ mod tests {
         let posix = launch_command(Platform::Posix, "/tmp/telepy-stop-7.ab'c");
         assert!(posix.starts_with("P='/tmp/telepy-stop-7.ab'\\''c';"), "{posix}");
         assert!(posix.contains("setsid") && posix.contains("nohup") && posix.contains("systemd-run"));
+        // BusyBox（OpenWrt）沒有 setsid / nohup：start-stop-daemon，再不然背景子 shell。/ BusyBox: start-stop-daemon, else a background subshell.
+        assert!(posix.contains("start-stop-daemon -b -S -x /bin/sh") && posix.contains("launched|subshell"), "{posix}");
         assert_eq!(order_accounts(&["pi".into(), "root".into(), "pi".into()]), vec!["root".to_string(), "pi".to_string()]);
     }
 }
