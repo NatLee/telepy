@@ -12,19 +12,21 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { Laptop, ListTree, SquareTerminal, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Laptop, SquareTerminal } from "lucide-react";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Chip, SectionHeading } from "@/components/ui/section";
+import { SectionHeading } from "@/components/ui/section";
 import { useToast } from "@/components/ui/Toast";
-import { SCOPE_META } from "@/components/oauth/ConnectFlow";
+import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useOAuthGrants } from "@/hooks/useOAuthGrants";
+import { useViewMode } from "@/hooks/useViewMode";
 import { useAuth } from "@/lib/auth";
 import { hasFeature } from "@/lib/features";
 import { useI18n } from "@/lib/i18n";
+import { OAUTH_SCOPES } from "@/lib/apiTokens";
 import { CLI_SIGNIN_LIMIT, grantHost, overflowOnNext } from "@/lib/cliSignIns";
 import type { OAuthGrant } from "@/types/oauth";
+import { CredentialList, type CredentialItem } from "./CredentialList";
 
 export function CliSignIns({ userId, onShowCalls, hideHeading = false }: { userId?: number; onShowCalls?: (g: OAuthGrant) => void; hideHeading?: boolean }) {
     const { t, tn, locale } = useI18n();
@@ -33,6 +35,9 @@ export function CliSignIns({ userId, onShowCalls, hideHeading = false }: { userI
     const { cli, failed, revoke } = useOAuthGrants(userId);
     const [pending, setPending] = useState<OAuthGrant | null>(null);
     const admin = userId !== undefined;
+    // 清單 / 卡片跟著帳號（偏好設定 → 外觀也能改）；管理員的視窗一律清單。/ Follows the account; the admin dialog is always a list.
+    const [chosen, setView] = useViewMode("cli_signins");
+    const view = admin ? "list" : chosen;
     // 瀏覽器登入跟著「MCP app」這個功能權限（後端的規則）；關掉時說清楚，免得以為 CLI 壞了。
     // Browser sign-in follows the MCP apps feature (the backend's rule); say so when it is off.
     const browserOff = !admin && !!user && !hasFeature(user, "mcp.connect");
@@ -59,6 +64,24 @@ export function CliSignIns({ userId, onShowCalls, hideHeading = false }: { userI
     const list = cli ?? [];
     // 滿了：下一次 `telepy login` 會登出哪一個（最久沒用的）。/ Full: the one the next sign-in would sign out.
     const nextOut = list.length >= CLI_SIGNIN_LIMIT ? new Set(overflowOnNext(list).map((g) => g.id)) : new Set<number>();
+
+    const items: CredentialItem[] = list.map((g) => ({
+        id: g.id,
+        icon: <Laptop />,
+        name: hostOf(g),
+        notes: nextOut.has(g.id) ? [{ text: t("cliSignIns.nextOut"), tone: "warning" as const }] : undefined,
+        scopes: g.scopes,
+        slots: OAUTH_SCOPES,
+        tunnels: g.tunnels === null ? t("tokens.allTunnels") : g.tunnels.map((x) => x.name).join(", ") || t("tokens.noTunnelsLeft"),
+        lastUsedAt: g.last_used_at,
+        neverUsed: t("cliSignIns.neverUsed"),
+        expiry: g.expires_at ? { text: t("cliSignIns.endsIfUnused", { date: day(g.expires_at) }), title: when(g.expires_at), tone: "muted" } : null,
+        extra: t("cliSignIns.signedInAt", { date: day(g.created_at) }),
+        calls: g.calls,
+        onCalls: onShowCalls ? () => onShowCalls(g) : undefined,
+        onRemove: () => setPending(g),
+        removeLabel: t("cliSignIns.signOut"),
+    }));
 
     return (
         <section className="space-y-3">
@@ -88,61 +111,11 @@ export function CliSignIns({ userId, onShowCalls, hideHeading = false }: { userI
                 </div>
             ) : (
                 <>
-                    <p className="text-xs leading-relaxed text-muted-foreground tabular-nums">{t("cliSignIns.limit", { count: list.length, limit: CLI_SIGNIN_LIMIT })}</p>
-                    <ul className="divide-y divide-border rounded-xl border border-border">
-                        {list.map((g) => (
-                            <li key={g.id} className="flex items-start gap-3 px-4 py-3">
-                                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-md border border-border bg-surface text-foreground/70" aria-hidden>
-                                    <Laptop size={16} />
-                                </span>
-                                <div className="min-w-0 flex-1 space-y-1">
-                                    <span className="flex flex-wrap items-center gap-2">
-                                        <span className="min-w-0 text-foreground [overflow-wrap:anywhere]">{hostOf(g)}</span>
-                                        {nextOut.has(g.id) && <Chip tone="warning">{t("cliSignIns.nextOut")}</Chip>}
-                                    </span>
-                                    <span className="flex flex-wrap gap-1">
-                                        {g.scopes.map((s) => (
-                                            <Chip key={s}>{SCOPE_META[s] ? t(SCOPE_META[s].label) : s}</Chip>
-                                        ))}
-                                    </span>
-                                    <span className="block text-xs text-muted-foreground">
-                                        {g.tunnels === null ? t("tokens.allTunnels") : g.tunnels.map((x) => x.name).join(", ") || t("tokens.noTunnelsLeft")}
-                                        {" · "}
-                                        {t("cliSignIns.signedInAt", { date: day(g.created_at) })}
-                                        {g.expires_at && (
-                                            <>
-                                                {" · "}
-                                                {t("cliSignIns.endsIfUnused", { date: day(g.expires_at) })}
-                                            </>
-                                        )}
-                                    </span>
-                                    <span className="block text-xs text-muted-foreground">{g.last_used_at ? t("cliSignIns.lastUsed", { time: when(g.last_used_at) }) : t("cliSignIns.neverUsed")}</span>
-                                    {g.calls && g.calls.calls_7d > 0 && (
-                                        <span className="block text-xs text-muted-foreground tabular-nums">
-                                            {t("cliSignIns.callSummary", { day: g.calls.calls_24h, week: g.calls.calls_7d })}
-                                            {g.calls.errors_7d > 0 && <span className="text-warning"> · {t("tokens.callErrors", { count: g.calls.errors_7d })}</span>}
-                                        </span>
-                                    )}
-                                </div>
-                                {onShowCalls && (
-                                    <Button type="button" variant="outline" size="sm" className="h-7 shrink-0 gap-1" onClick={() => onShowCalls(g)}>
-                                        <ListTree size={13} /> {t("tokens.showCalls")}
-                                    </Button>
-                                )}
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    onClick={() => setPending(g)}
-                                    className="shrink-0 text-destructive hover:bg-destructive/8 hover:text-destructive"
-                                    aria-label={t("cliSignIns.signOut")}
-                                    title={t("cliSignIns.signOut")}
-                                >
-                                    <Trash2 />
-                                </Button>
-                            </li>
-                        ))}
-                    </ul>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground tabular-nums">{t("cliSignIns.limit", { count: list.length, limit: CLI_SIGNIN_LIMIT })}</p>
+                        {!admin && <ViewToggle value={view} onChange={setView} />}
+                    </div>
+                    <CredentialList items={items} view={view} nameHeader={t("cliSignIns.list.colComputer")} />
                 </>
             )}
             <ConfirmDialog
