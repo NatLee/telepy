@@ -83,7 +83,7 @@ fn unauthorized(issuer: &str, err: McpAuthError) -> Response {
 }
 
 async fn require_token(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
-    let issuer = oauth::issuer(state.config.public_url.as_deref(), req.headers());
+    let issuer = oauth::issuer(state.config.public_base().as_deref(), req.headers());
     let token = req
         .headers()
         .get(header::AUTHORIZATION)

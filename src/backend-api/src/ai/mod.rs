@@ -743,6 +743,16 @@ mod tests {
             signin_page_message: String::new(),
             signin_cli_style: "standard".into(),
             signin_consent_style: "standard".into(),
+            client_ip_hops: "auto".into(),
+            client_ip_header: String::new(),
+            client_ip_cloudflare: "auto".into(),
+            server_device_probe: true,
+            server_keep_shared_service_key: false,
+            server_gateway_proxy_protocol_from: String::new(),
+            server_log_level: String::new(),
+            server_openapi_enabled: true,
+            server_google_client_id: String::new(),
+            server_public_url: String::new(),
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

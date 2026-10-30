@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, hopsSetting, parseClientIpCheck, probeOutcome, viaCdn, type ClientIpCheck } from "./clientIp.ts";
+import { VISITOR_SETTINGS_HREF, PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, hopsSetting, parseClientIpCheck, probeOutcome, viaCdn, type ClientIpCheck } from "./clientIp.ts";
 
 const production = {
     ip: "172.19.0.1",
@@ -76,4 +76,31 @@ test("a CDN counts only when its own header arrived", () => {
     const cf = parseClientIpCheck({ ...production, headers: [...production.headers, { name: "cf-connecting-ip", value: "203.0.113.9", addresses: [{ ip: "203.0.113.9", scope: "public" }] }] })!;
     assert.equal(viaCdn(cf), true);
     assert.equal(viaCdn({ ...c, headers: [{ name: "True-Client-IP", value: "", addresses: [] }] }), true);
+});
+
+test("the Cloudflare block and the masked hint", () => {
+    const old = parseClientIpCheck(production)!;
+    assert.equal(old.cloudflare, null, "an older backend has no cloudflare block");
+    assert.equal(old.cloudflareMasked, false);
+
+    const used = parseClientIpCheck({ ...production, cloudflare: { mode: "auto", header: "198.51.100.4", edge_seen: true, used: true } })!;
+    assert.deepEqual(used.cloudflare, { mode: "auto", header: "198.51.100.4", edgeSeen: true, used: true });
+    assert.equal(used.cloudflareMasked, false);
+
+    // 自動 + 有標頭 + 沒看到 Cloudflare 的位址 = 前面的代理換掉了（就算後端沒給提示）。/ Derived even without the hint.
+    const masked = parseClientIpCheck({ ...production, cloudflare: { mode: "auto", header: "198.51.100.4", edge_seen: false, used: false } })!;
+    assert.equal(masked.cloudflareMasked, true);
+    assert.equal(parseClientIpCheck({ ...production, cloudflare_masked: true })!.cloudflareMasked, true);
+    assert.equal(parseClientIpCheck({ ...production, hints: ["cloudflare_masked"] })!.cloudflareMasked, true);
+    // hints 有給就以它為準（例如訪客位址標頭指定了 CF-Connecting-IP）。/ A hints list is authoritative.
+    assert.equal(parseClientIpCheck({ ...production, hints: [], cloudflare: { mode: "auto", header: "198.51.100.4", edge_seen: false, used: false } })!.cloudflareMasked, false);
+    // 一律採用 / 關掉時不是「被遮住」。/ Always / off are not "masked".
+    const always = parseClientIpCheck({ ...production, cloudflare: { mode: "always", header: "198.51.100.4", edge_seen: false, used: true } })!;
+    assert.equal(always.cloudflareMasked, false);
+    assert.equal(parseClientIpCheck({ ...production, cloudflare: { mode: "weird", header: "" } })!.cloudflare!.mode, "auto");
+    assert.equal(parseClientIpCheck({ ...production, cloudflare: { mode: "off", header: "" } })!.cloudflare!.header, null);
+});
+
+test("fixes point at the Server tab", () => {
+    assert.equal(VISITOR_SETTINGS_HREF, "/tunnels/settings?tab=server#visitor-addresses");
 });

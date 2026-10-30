@@ -9,13 +9,15 @@
  */
 import type { TranslationKey } from "../locales/en.ts";
 
-export type SiteTabId = "general" | "signin" | "commands" | "desktop" | "browser" | "devices" | "ai" | "notify";
-export type SiteTabGroupId = "accounts" | "features";
+export type SiteTabId = "general" | "signin" | "commands" | "desktop" | "browser" | "devices" | "ai" | "notify" | "server";
+export type SiteTabGroupId = "accounts" | "features" | "server";
 
 /** 左側欄的分組（手機上是下拉選單的 optgroup）。/ The rail's groups (optgroups of the phone select). */
 export const SITE_TAB_GROUPS: readonly { id: SiteTabGroupId; key: TranslationKey; tabs: readonly SiteTabId[] }[] = [
     { id: "accounts", key: "settings.railAccounts", tabs: ["general", "signin"] },
     { id: "features", key: "settings.railFeatures", tabs: ["commands", "desktop", "browser", "devices", "ai", "notify"] },
+    // 伺服器：訪客位址與原本只能寫在 .env 的設定（.env > 這頁 > 預設，一張說明圖）。/ Server: visitor addresses and the former .env-only settings.
+    { id: "server", key: "settings.railServer", tabs: ["server"] },
 ];
 
 export const SITE_TAB_IDS: readonly SiteTabId[] = SITE_TAB_GROUPS.flatMap((g) => g.tabs);
@@ -41,6 +43,8 @@ const PREFIX_HOMES: readonly [string, SiteTabId][] = [
     ["notify_", "notify"],
     ["command_", "commands"],
     ["terminal_", "commands"],
+    ["client_ip_", "server"],
+    ["server_", "server"],
 ];
 
 /** 這個 key 明確的家；沒寫到 = null。/ The key's declared home, or null when none is declared. */

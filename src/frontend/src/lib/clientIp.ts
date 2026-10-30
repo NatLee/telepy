@@ -25,6 +25,20 @@ export interface HeaderSeen {
 
 export type HopsMode = "auto" | "fixed";
 
+export type CloudflareMode = "auto" | "always" | "off";
+
+/**
+ * Cloudflare 的 CF-Connecting-IP 這次怎麼處理：模式、收到的值、有沒有看到 Cloudflare 自己的位址、有沒有採用。
+ * How CF-Connecting-IP was handled: the mode, the header's value, whether a Cloudflare edge address was seen,
+ * and whether the header was used.
+ */
+export interface CloudflareInfo {
+    mode: CloudflareMode;
+    header: string | null;
+    edgeSeen: boolean;
+    used: boolean;
+}
+
 export interface ClientIpCheck {
     ip: string | null;
     scope: string | null;
@@ -43,7 +57,17 @@ export interface ClientIpCheck {
     suggestHeader: string | null;
     shortChain: boolean;
     headerAbsent: boolean;
+    /** 舊後端沒有。/ Absent from older backends. */
+    cloudflare: CloudflareInfo | null;
+    /**
+     * 有 Cloudflare 標頭卻看不到 Cloudflare 的位址（自動模式）：前面的代理把它換掉了，自動模式不敢信。
+     * The Cloudflare header arrived but no Cloudflare address is visible (auto mode): a proxy in front replaced it.
+     */
+    cloudflareMasked: boolean;
 }
+
+/** 設定頁上改這些的地方。/ Where these are changed on the settings page. */
+export const VISITOR_SETTINGS_HREF = "/tunnels/settings?tab=server#visitor-addresses";
 
 const VERDICTS: Verdict[] = ["ok", "hops_too_low", "hops_too_high", "use_header", "header_private", "all_private", "unknown"];
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -73,6 +97,14 @@ export function parseClientIpCheck(raw: unknown): ClientIpCheck | null {
         return [{ name, value: typeof o.value === "string" ? o.value : "", addresses }];
     });
     const suggest = (r.suggest ?? {}) as Record<string, unknown>;
+    const cloudflare = parseCloudflare(r.cloudflare);
+    // 後端在 hints 裡說；沒有 hints 的回應（較舊 / 別的形狀）就從 cloudflare 區塊推（自動 + 有標頭 + 沒看到 Cloudflare）。
+    // The backend says so in hints; without a hints list, derive it from the cloudflare block (auto + header + no edge).
+    const cloudflareMasked =
+        r.cloudflare_masked === true ||
+        (Array.isArray(r.hints)
+            ? r.hints.includes("cloudflare_masked")
+            : !!cloudflare && cloudflare.mode === "auto" && !!cloudflare.header && !cloudflare.edgeSeen);
     const verdict = VERDICTS.includes(r.verdict as Verdict) ? (r.verdict as Verdict) : "unknown";
     return {
         ip: str(r.ip),
@@ -90,7 +122,16 @@ export function parseClientIpCheck(raw: unknown): ClientIpCheck | null {
         suggestHeader: str(suggest.client_ip_header),
         shortChain: r.short_chain === true,
         headerAbsent: r.header_absent === true,
+        cloudflare,
+        cloudflareMasked,
     };
+}
+
+function parseCloudflare(raw: unknown): CloudflareInfo | null {
+    if (!raw || typeof raw !== "object") return null;
+    const o = raw as Record<string, unknown>;
+    const mode: CloudflareMode = o.mode === "always" || o.mode === "off" ? o.mode : "auto";
+    return { mode, header: str(o.header), edgeSeen: o.edge_seen === true, used: o.used === true };
 }
 
 export const isPublicScope = (scope: string | null | undefined) => scope === "public";

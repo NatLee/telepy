@@ -1,6 +1,7 @@
 //! Router 組裝與中介層。/ Router assembly and middleware.
 
 use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::compression::CompressionLayer;
@@ -83,11 +84,11 @@ pub fn build(state: AppState) -> Router {
 
     let (mut rest, openapi) = api_router().split_for_parts();
     rest = rest.route("/healthz", get(healthz));
-    if state.config.openapi_enabled {
-        // Swagger UI 沿用 Django 時代的路徑；spec 在 /api/openapi.json。兩者都要登入（見 api/doc.rs），
-        // OPENAPI_ENABLED=false 可整組關掉。/ Login-gated Swagger UI + spec (see api/doc.rs); OPENAPI_ENABLED=false removes both.
-        rest = rest.merge(api::doc::router(&openapi));
-    }
+    // Swagger UI 沿用 Django 時代的路徑；spec 在 /api/openapi.json。兩者都要登入（見 api/doc.rs）。開關
+    // （OPENAPI_ENABLED / 網站設定）每個請求讀，關掉時整組回 404。
+    // Login-gated Swagger UI + spec (see api/doc.rs); the switch (OPENAPI_ENABLED / the site setting) is read per
+    // request and answers 404 for both while off.
+    rest = rest.merge(api::doc::router(&openapi).route_layer(axum::middleware::from_fn_with_state(state.clone(), openapi_gate)));
     let rest = rest.layer(CompressionLayer::new()).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls));
 
     // WebSocket 與 MCP 路由不掛壓縮層（升級回應沒有 body；MCP 可能回 SSE 串流）。
@@ -139,6 +140,14 @@ async fn token_calls(axum::extract::State(state): axum::extract::State<AppState>
         }
     }
     resp
+}
+
+/// API 文件關掉時回 404（跟沒有這條路由一樣）。/ 404 while the API docs are off, as if the route didn't exist.
+async fn openapi_gate(axum::extract::State(state): axum::extract::State<AppState>, req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    if !state.config.openapi_on() {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(req).await
 }
 
 async fn healthz() -> Json<serde_json::Value> {

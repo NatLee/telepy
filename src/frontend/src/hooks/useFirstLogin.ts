@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useGoogleClientId } from "@/hooks/useSignInLook";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
@@ -32,7 +33,8 @@ export function useFirstLogin() {
     const { t } = useI18n();
     const router = useRouter();
 
-    const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    // 執行時從公開端點拿（.env > 網站設定）。/ Read at runtime from the public endpoint (.env > site setting).
+    const googleClientId = useGoogleClientId();
 
     // 已登入 → tunnels；已經有帳號（不是首次設定）→ 登入頁，這頁只給第一位管理員用。
     // Signed in → tunnels; setup already done → the sign-in page (this page is only for the first admin).

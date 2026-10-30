@@ -377,7 +377,7 @@ async fn catalogue(State(state): State<AppState>, headers: HeaderMap, AuthUser(_
     web_only(&d)?;
     let routes: Vec<Value> = openapi_ops().iter().map(|(m, p, t, s)| catalogue_entry(m, p, t, s)).collect();
     Ok(Json(json!({
-        "base_url": crate::oauth::issuer(state.config.public_url.as_deref(), &headers),
+        "base_url": crate::oauth::issuer(state.config.public_base().as_deref(), &headers),
         "scopes": api_tokens::all_scopes(),
         "routes": routes,
     })))

@@ -52,6 +52,9 @@ async fn sign_in_page(State(state): State<AppState>) -> ApiResult<Json<Value>> {
         "cli_style": s.signin_cli_style,
         "consent_style": s.signin_consent_style,
         "message": s.signin_page_message,
+        // Google 登入按鈕要用的 client ID（SOCIAL_GOOGLE_CLIENT_ID → 網站設定 → 空字串）；不是祕密，每個登入頁本來就有。
+        // The client ID for the Google button (env → site setting → empty); not a secret, every sign-in page carries it.
+        "google_client_id": state.config.google_client().unwrap_or_default(),
     })))
 }
 
@@ -295,7 +298,7 @@ async fn google_login(State(state): State<AppState>, meta: ClientMeta, AppJson(b
         return Err(e);
     }
     let credential = json_str(&body, "credential").unwrap_or_default();
-    let claims = state.google.verify(&credential, state.config.google_client_id.as_deref()).await.map_err(|e| {
+    let claims = state.google.verify(&credential, state.config.google_client().as_deref()).await.map_err(|e| {
         tracing::error!(error = %e, "[AUTH][GOOGLE] id_token verification failed");
         google_verify_error(&e)
     })?;

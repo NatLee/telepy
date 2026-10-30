@@ -363,7 +363,7 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
     let platform = state.device_keys.cached_platform(t.reverse_port).map(|p| json!({ "windows": p.windows, "error": p.error }));
     Ok(json!({
         "tunnel": { "id": t.id, "host_friendly_name": t.host_friendly_name, "online": dk::online(state, t.reverse_port), "role": eff.label() },
-        "view": { "accounts": view, "keep_shared": state.config.keep_shared_service_key },
+        "view": { "accounts": view, "keep_shared": state.config.keep_shared_key() },
         "platform": platform,
         "can_manage": manager,
         "accounts": accounts,

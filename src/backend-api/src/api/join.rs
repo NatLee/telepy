@@ -88,7 +88,7 @@ fn join_error(status: StatusCode, code: &str, msg: &str) -> ApiError {
 
 /// 網頁看到的 Telepy 位址（PUBLIC_URL，否則 X-Forwarded-*）。/ The public base URL.
 fn base_url(state: &AppState, headers: &HeaderMap) -> String {
-    crate::oauth::issuer(state.config.public_url.as_deref(), headers)
+    crate::oauth::issuer(state.config.public_base().as_deref(), headers)
 }
 
 pub fn install_command(base: &str, token: &str, sudo: bool, via_web: bool) -> String {

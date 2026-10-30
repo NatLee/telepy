@@ -123,6 +123,9 @@ pub struct SignInPage {
     /// The discreet page's lines, one per line, typed in turn; blank = the built-in ones
     #[schema(example = "")]
     pub message: String,
+    /// Google sign-in 的 client ID（SOCIAL_GOOGLE_CLIENT_ID → 網站設定 → 空字串）。/ Google's client ID in effect (env → site setting → empty)
+    #[schema(example = "376808175534-example.apps.googleusercontent.com")]
+    pub google_client_id: String,
 }
 
 /// 呼叫用的委派 token。/ The delegated token the call came with.
@@ -502,7 +505,7 @@ pub struct ClientIpCheck {
     #[schema(example = "198.51.100.7")]
     pub ip: Option<String>,
     pub scope: Option<String>,
-    /// chain（X-Forwarded-For + socket 對端）/ header（`CLIENT_IP_HEADER`）
+    /// chain（X-Forwarded-For + socket 對端）/ header（`CLIENT_IP_HEADER`）/ cloudflare（`CF-Connecting-IP`）
     pub from: Option<String>,
     pub geo: Option<IpGeo>,
     /// `auto`（內部位址都算代理）/ `fixed`（`TRUSTED_PROXY_HOPS` 是數字）。/ `auto` or `fixed`.
@@ -524,6 +527,35 @@ pub struct ClientIpCheck {
     pub short_chain: bool,
     /// 設了 `CLIENT_IP_HEADER` 但請求沒有它。/ The configured header was missing.
     pub header_absent: bool,
+    /// 每個值由誰決定。/ Which layer decides each value.
+    pub sources: ClientIpSources,
+    pub cloudflare: ClientIpCloudflare,
+    /// 提示碼：`cloudflare_masked`（有 CF-Connecting-IP 但看不到 Cloudflare 的位址：前面的代理換掉了它）。
+    /// Hint codes: `cloudflare_masked` (the header is there but no Cloudflare address: a proxy in front replaced it).
+    pub hints: Vec<String>,
+}
+
+/// `env` / `setting` / `default` per key.
+#[derive(ToSchema)]
+pub struct ClientIpSources {
+    #[schema(example = "env")]
+    pub client_ip_hops: String,
+    pub client_ip_header: String,
+    pub client_ip_cloudflare: String,
+}
+
+/// Cloudflare 那一段。/ How `CF-Connecting-IP` was judged.
+#[derive(ToSchema)]
+pub struct ClientIpCloudflare {
+    /// auto / always / off
+    #[schema(example = "auto")]
+    pub mode: String,
+    /// `CF-Connecting-IP` 的原文。/ The header as sent.
+    pub header: Option<String>,
+    /// 鏈上有 Cloudflare 的位址。/ A Cloudflare address is on the chain.
+    pub edge_seen: bool,
+    /// 位址取自 `CF-Connecting-IP`。/ The address came from `CF-Connecting-IP`.
+    pub used: bool,
 }
 
 /// `telepy-server doctor` 的一項檢查。/ One `telepy-server doctor` check.
@@ -1370,9 +1402,15 @@ pub struct SiteSettingsResponse {
     /// Current values keyed by setting name (empty for non-admins)
     #[schema(value_type = Object)]
     pub values: serde_json::Value,
-    /// `{field: {label, description, type}}`
+    /// `{field: {label, description, type}}`（`choice` 另有 `choices`）/ `choice` fields also carry `choices`
     #[schema(value_type = Object)]
     pub meta: serde_json::Value,
+    /// 可被環境變數蓋過的鍵 → `{var, set, value}`；`set` = 環境變數有設（它說了算，欄位鎖住），`value` = 它的值（沒設 = null）。
+    /// `values` 是存的值；生效的值 = `set` 時的 `value`，否則 `values`。
+    /// Env-backed keys → `{var, set, value}`: `set` = the variable is present and non-blank (it wins; the field is
+    /// locked), `value` = its value (null when unset). `values` holds the saved value; in effect = `value` when `set`.
+    #[schema(value_type = Object, example = json!({"client_ip_hops": {"var": "TRUSTED_PROXY_HOPS", "set": true, "value": "auto"}, "server_public_url": {"var": "PUBLIC_URL", "set": false, "value": null}}))]
+    pub env: serde_json::Value,
 }
 
 // ---------------------------------------------------------------- logs / sftp / remote browser

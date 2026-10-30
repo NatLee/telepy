@@ -163,7 +163,7 @@ async fn swagger_ui_page_is_served_behind_the_web_login() {
 async fn openapi_can_be_disabled() {
     let mut app = common::spawn().await;
     let mut config = app.state.config.clone();
-    config.openapi_enabled = false;
+    config.openapi_enabled = Some(false);
     app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
     app.router = telepy_server::app::build(app.state.clone());
     let token = app.login("admin", "pw").await;

@@ -15,6 +15,7 @@ import { AuthDivider, AuthHeading, AuthSpinner } from "@/components/auth/AuthShe
 import { GoogleSignIn } from "@/components/auth/GoogleSignIn";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { useLoginPage } from "@/hooks/useLoginPage";
+import { useGoogleClientId } from "@/hooks/useSignInLook";
 import { useI18n } from "@/lib/i18n";
 import { passkeySupported } from "@/lib/webauthn";
 import { cn } from "@/lib/utils";
@@ -42,13 +43,15 @@ const noop = () => {};
  * the Google button is drawn instead of loaded.
  */
 export function LoginFormPreview(props: LoginFormProps) {
+    // 預覽也照生效中的 client ID 決定畫不畫 Google 按鈕。/ The preview follows the client ID in effect too.
+    const googleClientId = useGoogleClientId();
     const state: LoginPage["state"] = {
         username: "",
         setUsername: noop,
         password: "",
         setPassword: noop,
         isSubmitting: false,
-        googleClientId: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+        googleClientId,
         passkeyAvailable: passkeySupported(),
         mfa: null,
         mfaMethod: "totp",

@@ -4,6 +4,7 @@
  * passkey sign-in (button and autofill) and redirect.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useGoogleClientId } from "@/hooks/useSignInLook";
 import { useRouter } from "next/navigation";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -62,7 +63,8 @@ export function useLoginPage() {
     const { t } = useI18n();
     const router = useRouter();
 
-    const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    // 執行時從公開端點拿（.env > 網站設定）。/ Read at runtime from the public endpoint (.env > site setting).
+    const googleClientId = useGoogleClientId();
 
     const stopAutofill = useCallback(() => {
         conditional.current?.abort();

@@ -4,21 +4,29 @@
  *
  * API 回傳 { values, meta }：values 是各設定的值,meta 是每個設定的說明
  * (label / description / type),讓頁面顯示「這個設定是做什麼的」並選對編輯器。
+ * 新一點的後端另有 env:可用環境變數設定的 key → {var, set, value};.env 有設的 key 被鎖住,這裡不會送出。
+ * Newer backends add `env` (env-backed key → {var, set, value}); keys set in .env are locked and never sent.
  */
 import { useState, useEffect } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
+import { isLocked, parseEnvMap, type EnvMap } from "@/lib/settingSource";
 
 export interface SettingMeta {
     label: string;
     description: string;
-    type: "boolean" | "integer" | "string" | "url";
+    type: "boolean" | "integer" | "string" | "url" | "choice";
+    /** 內建預設(後端有給時)。/ The built-in default, when the backend sends it. */
+    default?: unknown;
+    /** type = choice 時可選的值。/ The allowed values when type = choice. */
+    choices?: string[];
 }
 
 export function useSettingsPage() {
     const [settingsObj, setSettingsObj] = useState<Record<string, unknown>>({});
     const [meta, setMeta] = useState<Record<string, SettingMeta>>({});
+    const [env, setEnv] = useState<EnvMap>({});
     const [loading, setLoading] = useState(true);
     const { showSuccess, showError } = useToast();
     const { t } = useI18n();
@@ -32,6 +40,7 @@ export function useSettingsPage() {
                 const obj = (data && typeof data === "object") ? data as Record<string, unknown> : {};
                 setSettingsObj((obj.values && typeof obj.values === "object") ? obj.values as Record<string, unknown> : {});
                 setMeta((obj.meta && typeof obj.meta === "object") ? obj.meta as Record<string, SettingMeta> : {});
+                setEnv(parseEnvMap(obj.env));
             } else {
                 showError(t("settings.fetchFailed"));
             }
@@ -48,6 +57,8 @@ export function useSettingsPage() {
 
     // 送出單一設定的更新;失敗時把畫面上的值還原。/ Persist one setting; roll back the UI on failure.
     const saveSetting = async (keyName: string, newValue: unknown, previous: unknown) => {
+        // .env 有設的值頁面改不了,後端也會拒絕;不送。/ A key set in .env can't be edited here; don't send it.
+        if (isLocked(env, keyName)) return;
         setSettingsObj((prev) => ({ ...prev, [keyName]: newValue }));
         try {
             const res = await apiFetch("/api/site/settings", {
@@ -74,7 +85,7 @@ export function useSettingsPage() {
         saveSetting(keyName, newValue, settingsObj[keyName]);
 
     return {
-        state: { settingsObj, meta, loading },
+        state: { settingsObj, meta, env, loading },
         actions: { fetchSettings, handleToggle, handleUpdate },
     };
 }

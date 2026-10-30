@@ -27,6 +27,10 @@ enum Kind {
     Text(usize),
     /// 逗號分隔的 email 網域清單，可以空白（= 系統預設）。/ Comma-separated email domains; may be blank (= the system default).
     Domains(usize),
+    /// 可以空白的字串（空白 = 沒設 / 預設）。/ A string that may be blank (= unset / the default).
+    Opt(usize),
+    /// 固定幾個值之一。/ One of a fixed set of values.
+    Choice(&'static [&'static str]),
 }
 
 struct FieldMeta {
@@ -73,6 +77,16 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
     FieldMeta { name: "signin_cli_style", kind: Kind::Str(16), label: "CLI sign-in page look", description: "在終端機打 telepy login、瀏覽器還沒登入時看到的那一頁:standard = 跟應用程式連接頁一樣的流程與權限;discreet = 同樣的低調畫面,只寫 telepy CLI 與它從哪台電腦登入(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
     FieldMeta { name: "signin_consent_style", kind: Kind::Str(16), label: "Approval page look", description: "登入後允許 MCP 應用程式或 telepy login 的授權頁(/oauth/authorize):standard = 連接流程面板與步驟;discreet = 只寫 Telepy 的低調外框。兩種都列出應用程式、導回哪裡、權限與通道。telepy login 登入完成後顯示的那一頁也跟著它。變更後立即生效。" },
+    FieldMeta { name: "client_ip_hops", kind: Kind::Str(8), label: "Trusted proxy hops", description: "How Telepy finds a visitor's address in X-Forwarded-For. auto = every internal address at the right end is a proxy (Traefik, a Nginx Proxy Manager in front) and the first public one is the visitor; a number from 0 to 10 = skip exactly that many entries from the right, Traefik included (1 = Traefik only, 2 = plus a TLS proxy or load balancer with a public address). Too high a number lets visitors choose their own address. Applies at once. TRUSTED_PROXY_HOPS in .env takes over." },
+    FieldMeta { name: "client_ip_header", kind: Kind::Opt(64), label: "Client address header", description: "Take the visitor's address from this header instead (for example CF-Connecting-IP or X-Real-IP). Only set it when the proxy in front always overwrites the header, otherwise visitors can choose their own address. Blank = not used. Applies at once. CLIENT_IP_HEADER in .env takes over." },
+    FieldMeta { name: "client_ip_cloudflare", kind: Kind::Choice(&crate::server_settings::Cloudflare::VALUES), label: "Cloudflare", description: "How Cloudflare's CF-Connecting-IP header is used. auto = only when the request reached Telepy from a Cloudflare address (nobody can fake that without going through Cloudflare); always = whenever the header is there (only when Cloudflare is always in front); off = ignored. Applies at once." },
+    FieldMeta { name: "server_device_probe", kind: Kind::Bool, label: "Ask devices for their addresses", description: "Once per connection (and daily), log in to each connected device to read its host name, LAN addresses, public address and health facts. Off = no background logins; the lists then show only what the gateway sees. Applies from the next round (within 30 seconds). DEVICE_PROBE in .env takes over." },
+    FieldMeta { name: "server_keep_shared_service_key", kind: Kind::Bool, label: "Keep the shared service key on devices", description: "Never remove the shared service key from devices, also not by hand. Turn it on while another Telepy server (an old one running in parallel) still logs in to the same devices with that key. Applies at once. KEEP_SHARED_SERVICE_KEY in .env takes over." },
+    FieldMeta { name: "server_gateway_proxy_protocol_from", kind: Kind::Opt(512), label: "PROXY protocol from", description: "IP addresses or CIDRs of a TCP (L4) proxy in front of the SSH gateway that sends a PROXY protocol header, comma or space separated. Connections from these addresses may carry the header and their real source is used; nobody else is ever trusted. Blank = off. Applies to new connections. GATEWAY_PROXY_PROTOCOL_FROM in .env takes over." },
+    FieldMeta { name: "server_log_level", kind: Kind::Opt(256), label: "Log level", description: "error, warn, info, debug or trace, or a full filter such as info,telepy_server=debug. Blank = info (debug when DEBUG=true). Applies at once. LOG_LEVEL in .env takes over." },
+    FieldMeta { name: "server_openapi_enabled", kind: Kind::Bool, label: "API reference (Swagger)", description: "Serve the API reference page and /api/openapi.json to signed-in people. Off = both answer 404. Applies at once. OPENAPI_ENABLED in .env takes over." },
+    FieldMeta { name: "server_google_client_id", kind: Kind::Opt(256), label: "Google client ID", description: "The OAuth client ID of Google sign-in: the sign-in button uses it and Google sign-ins are checked against it. Blank = no Google sign-in. Applies at once. SOCIAL_GOOGLE_CLIENT_ID in .env takes over." },
+    FieldMeta { name: "server_public_url", kind: Kind::Url(512), label: "Public address", description: "The address people open Telepy at, like https://telepy.example.com (no path). Used for the OAuth issuer, links in scripts and webhooks, the passkey domain and devices' address lookups. Blank = taken from each request's X-Forwarded-* headers. Changing it makes passkeys registered under another domain stop working. Applies at once. PUBLIC_URL in .env takes over." },
     FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
@@ -115,6 +129,16 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("signin_cli_style".into(), json!(s.signin_cli_style));
     m.insert("signin_consent_style".into(), json!(s.signin_consent_style));
     m.insert("signin_page_message".into(), json!(s.signin_page_message));
+    m.insert("client_ip_hops".into(), json!(s.client_ip_hops));
+    m.insert("client_ip_header".into(), json!(s.client_ip_header));
+    m.insert("client_ip_cloudflare".into(), json!(s.client_ip_cloudflare));
+    m.insert("server_device_probe".into(), json!(s.server_device_probe));
+    m.insert("server_keep_shared_service_key".into(), json!(s.server_keep_shared_service_key));
+    m.insert("server_gateway_proxy_protocol_from".into(), json!(s.server_gateway_proxy_protocol_from));
+    m.insert("server_log_level".into(), json!(s.server_log_level));
+    m.insert("server_openapi_enabled".into(), json!(s.server_openapi_enabled));
+    m.insert("server_google_client_id".into(), json!(s.server_google_client_id));
+    m.insert("server_public_url".into(), json!(s.server_public_url));
     Value::Object(m)
 }
 
@@ -128,8 +152,14 @@ fn meta_json() -> Value {
             Kind::Url(_) => "url",
             Kind::Text(_) => "text",
             Kind::Domains(_) => "string",
+            Kind::Opt(_) => "string",
+            Kind::Choice(_) => "choice",
         };
-        m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
+        let mut entry = json!({ "label": f.label, "description": f.description, "type": kind });
+        if let Kind::Choice(choices) = f.kind {
+            entry["choices"] = json!(choices);
+        }
+        m.insert(f.name.into(), entry);
     }
     Value::Object(m)
 }
@@ -140,7 +170,7 @@ async fn get_settings(State(state): State<AppState>, AuthUser(me): AuthUser) -> 
         return Ok(Json(json!({ "values": {}, "meta": {} })));
     }
     let s = db::settings::get_solo(&state.db).await?;
-    Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+    Ok(Json(json!({ "values": values_json(&s), "meta": meta_json(), "env": state.config.env_json() })))
 }
 
 /// DRF 欄位驗證（BooleanField / IntegerField / CharField max_length、不可空白）。
@@ -184,6 +214,16 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             Value::String(s) => normalize_domains(s, max).map(SettingValue::Str).map_err(|msg| ApiError::field(f.name, msg)),
             Value::Null => Ok(SettingValue::Str(String::new())),
             _ => Err(ApiError::field(f.name, "Not a valid string.")),
+        },
+        Kind::Opt(max) => match v {
+            Value::String(s) if s.trim().chars().count() > max => Err(ApiError::field(f.name, format!("Ensure this field has no more than {max} characters."))),
+            Value::String(s) => Ok(SettingValue::Str(s.trim().to_string())),
+            Value::Null => Ok(SettingValue::Str(String::new())),
+            _ => Err(ApiError::field(f.name, "Not a valid string.")),
+        },
+        Kind::Choice(choices) => match v {
+            Value::String(s) if choices.contains(&s.trim().to_ascii_lowercase().as_str()) => Ok(SettingValue::Str(s.trim().to_ascii_lowercase())),
+            _ => Err(ApiError::field(f.name, format!("Must be one of: {}.", choices.join(", ")))),
         },
     }
 }
@@ -298,7 +338,11 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     let mut updates = Vec::new();
     for f in META {
         if let Some(v) = body.get(f.name) {
-            let value = parse_value(f, v)?;
+            // 環境變數有設的鍵鎖住：它說了算，存了也不會生效。/ A key whose variable is set is locked: it wins anyway.
+            if let (Some(var), Some(_)) = (crate::server_settings::env_var(f.name), state.config.env_value(f.name)) {
+                return Err(ApiError::field(f.name, crate::server_settings::locked_message(var)));
+            }
+            let value = normalize(f.name, parse_value(f, v)?)?;
             validate(f.name, &value)?;
             updates.push((f.name, value));
         }
@@ -327,8 +371,26 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
         state.mfa.requirement.invalidate_all();
     }
     state.webhooks.invalidate();
+    // 伺服器設定的記憶體快照（log 等級也在這裡換）。/ The server settings snapshot (the log level switches here too).
+    state.config.reload_saved(&state.db).await?;
     let s = db::settings::get_solo(&state.db).await?;
-    Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+    Ok(Json(json!({ "values": values_json(&s), "meta": meta_json(), "env": state.config.env_json() })))
+}
+
+/// 伺服器設定存檔前的整理與檢查（`server_settings` 的純函式）。/ Server settings, normalised and checked before saving.
+fn normalize(name: &str, value: SettingValue) -> Result<SettingValue, ApiError> {
+    use crate::server_settings as ss;
+    let SettingValue::Str(s) = &value else { return Ok(value) };
+    let checked = match name {
+        "client_ip_hops" => ss::check_hops(s),
+        "client_ip_header" => ss::check_header_name(s),
+        "server_gateway_proxy_protocol_from" => ss::check_cidr_list(s),
+        "server_log_level" => ss::check_log_level(s),
+        "server_google_client_id" => ss::check_google_client_id(s),
+        "server_public_url" => ss::check_public_url(s),
+        _ => return Ok(value),
+    };
+    checked.map(SettingValue::Str).map_err(|msg| ApiError::field(name, msg))
 }
 
 /// 個別欄位的值域（型別檢查之外）。/ Per-field value constraints beyond the type check.

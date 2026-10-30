@@ -292,7 +292,8 @@ pub struct Webhooks {
     db: Db,
     hub: Arc<Hub>,
     vault: Vault,
-    base_url: Option<String>,
+    /// 用的當下算 base URL（PUBLIC_URL / 網站設定可能改過）。/ Read at use time: PUBLIC_URL or the site setting may change.
+    config: Config,
     /// 只連公網位址（個人 webhook）。/ Public addresses only (personal webhooks).
     strict: reqwest::Client,
     /// 什麼都能連（全站 webhook、或管理員放行內網時）。/ Anything (site webhooks, or when private targets are allowed).
@@ -339,12 +340,11 @@ fn clip_body(body: &[u8]) -> String {
 
 impl Webhooks {
     pub fn new(config: &Config, db: Db, hub: Arc<Hub>) -> Self {
-        let base_url = config.public_url.clone().or_else(|| config.server_domain.as_ref().filter(|d| !d.is_empty() && *d != "localhost").map(|d| format!("https://{d}")));
         Self {
             db,
             hub,
             vault: Vault::new(&config.secret_key),
-            base_url: base_url.map(|u| u.trim_end_matches('/').to_string()),
+            config: config.clone(),
             strict: client(true),
             open: client(false),
             cache: Mutex::new(None),
@@ -400,11 +400,16 @@ impl Webhooks {
 
     /// 訊息裡的連結。/ A link for messages.
     pub fn link(&self, path: &str) -> Option<String> {
-        self.base_url.as_ref().map(|b| format!("{b}{path}"))
+        self.base_url().map(|b| format!("{b}{path}"))
     }
 
-    pub fn base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
+    /// PUBLIC_URL（環境變數或網站設定），否則 `https://SERVER_DOMAIN`。/ The public URL, else https://SERVER_DOMAIN.
+    pub fn base_url(&self) -> Option<String> {
+        let config = &self.config;
+        config
+            .public_base()
+            .or_else(|| config.server_domain.as_ref().filter(|d| !d.is_empty() && *d != "localhost").map(|d| format!("https://{d}")))
+            .map(|u| u.trim_end_matches('/').to_string())
     }
 
     /// 發一件事：背景挑出要收的 webhook 送出。/ Emit an event; matching webhooks get it in the background.
@@ -595,13 +600,14 @@ impl Webhooks {
         let title = text::title(event.kind, hook.lang);
         let sentence = text::sentence(event.kind, hook.lang, event.tunnel.as_ref(), &event.data);
         let link = event.link.as_deref().and_then(|p| self.link(p));
+        let server = self.base_url();
         let msg = format::Message {
             id: msg_id,
             kind: event.kind,
             at: &at,
             title: &title,
             text: &sentence,
-            server: self.base_url.as_deref(),
+            server: server.as_deref(),
             link: link.as_deref(),
             link_label: hook.lang.open_label(),
             tunnel: event.tunnel.as_ref(),

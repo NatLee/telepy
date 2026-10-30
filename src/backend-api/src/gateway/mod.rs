@@ -126,8 +126,6 @@ pub struct Gateway {
     step_ups: Arc<crate::step_up::StepUps>,
     /// 功能權限（網頁與 gateway 共用；筆電的 SSH 要有「個人 SSH 金鑰」）。/ Feature permissions, shared with the web side.
     features: Arc<crate::features::Features>,
-    /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
-    proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
     /// 改名交接開著的 port（到期時間）：這段時間同一條隧道的第二條連線先當備援，不被拒絕。
     /// Ports with a handover open (until when): a second connection of the same tunnel waits as a standby meanwhile.
@@ -211,15 +209,6 @@ impl Gateway {
     pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>, hub: Arc<Hub>) -> Self {
         let keys = config.gateway_host_keys_dir.as_deref().map(load_host_keys).unwrap_or_default();
         let host_keys_loaded = keys.len();
-        let proxy_from = match proxy_protocol::Trusted::parse(&config.gateway_proxy_protocol_from) {
-            Ok(t) => t,
-            Err(e) => {
-                // 設錯就不啟用：代理送來的 header 會讓 SSH 握手失敗（看得出來），而不是讓人冒用 IP。
-                // Disabled on a bad value: the proxy's connections then fail visibly instead of trusting anyone.
-                tracing::error!(error = %e, "GATEWAY_PROXY_PROTOCOL_FROM is invalid; PROXY protocol disabled");
-                proxy_protocol::Trusted::default()
-            }
-        };
         let webhooks = Arc::new(crate::webhooks::Webhooks::new(&config, db.clone(), hub.clone()));
         let features = Arc::new(crate::features::Features::new(db.clone()));
         Self {
@@ -232,7 +221,6 @@ impl Gateway {
             webhooks,
             step_ups: Arc::new(crate::step_up::StepUps::default()),
             features,
-            proxy_from,
             forwards: DashMap::new(),
             handovers: DashMap::new(),
             standby: DashMap::new(),
@@ -645,7 +633,7 @@ impl Gateway {
             }
         }
         names.sort_by_key(|n| n.to_lowercase());
-        Ok(greeting::text(greeting::Lang::from_setting(language.as_deref()), &username, &names, tty, self.config.public_url.as_deref(), clip))
+        Ok(greeting::text(greeting::Lang::from_setting(language.as_deref()), &username, &names, tty, self.config.public_base().as_deref(), clip))
     }
 
     async fn may_connect(&self, id: &Identity, port: u16) -> anyhow::Result<bool> {
@@ -1161,7 +1149,9 @@ async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: Socket
     // Behind an L4 proxy the real source is in its PROXY header; only listed proxies send one (and are read).
     // 列出的來源：先偷看第一個 byte（不消耗），是 header 才讀；沒有 header 就是直連。
     // Listed sources: peek at the first byte (not consumed); read a header only if one starts there.
-    let peer = if gw.proxy_from.contains(peer.ip()) {
+    // 會先送 PROXY header 的 L4 代理（GATEWAY_PROXY_PROTOCOL_FROM / 網站設定），每條連線讀一次，存檔不必重啟。
+    // The proxies that send a PROXY header (env / site setting), read per connection so a save needs no restart.
+    let peer = if gw.config.proxy_protocol_from().contains(peer.ip()) {
         let mut first = [0u8; 1];
         match tokio::time::timeout(PROXY_HEADER_TIMEOUT, stream.peek(&mut first)).await {
             Ok(Ok(0)) | Ok(Err(_)) => {

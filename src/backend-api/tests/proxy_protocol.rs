@@ -39,7 +39,7 @@ async fn events(lab: &Lab, kind: &str) -> Vec<(Option<String>, String)> {
 
 #[tokio::test]
 async fn proxied_devices_get_the_address_from_the_header() {
-    let Some(lab) = Lab::start_with(|c| c.gateway_proxy_protocol_from = "127.0.0.1".into()).await else { return };
+    let Some(lab) = Lab::start_with(|c| c.gateway_proxy_protocol_from = Some("127.0.0.1".into())).await else { return };
     let alice = lab.user("alice").await;
     let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
     let key = lab.keygen("box-tunnel");

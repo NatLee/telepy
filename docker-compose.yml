@@ -30,10 +30,10 @@ services:
       context: ./src/frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${SOCIAL_GOOGLE_CLIENT_ID}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${SOCIAL_GOOGLE_CLIENT_ID:-}
     environment:
       - NEXT_PUBLIC_API_BASE=
-      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
+      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID:-}
 
   # 後端：單一 Rust 程序 = REST + WebSocket + 內建 SSH gateway（裝置的反向隧道直接接到這裡）+
   # 狀態/延遲監控 + remote-browser session。沒有 supervisor、redis、ssh 容器。
@@ -49,23 +49,31 @@ services:
     container_name: telepy-web-${PROJECT_NAME:-main}
     environment:
       - DEBUG=${DEBUG}
+      # 下面標 [Server] 的變數都是選用的：沒設（空）= 用「網站設定 → 伺服器」存的值；有設就以這裡為準並鎖住那一格。
+      # 所以預設一律留空，不要寫 `:-true` 之類的預設值。
+      # Variables marked [Server] are optional: unset (empty) = the value saved under Site settings → Server; a value
+      # here wins and locks that field. So they default to empty here — never `:-true` or similar.
+      # [Server] log level.
       - LOG_LEVEL=${LOG_LEVEL:-}
-      # Swagger UI (/api/__hidden_swagger) + OpenAPI spec (/api/openapi.json), logged-in users only; false removes both.
-      - OPENAPI_ENABLED=${OPENAPI_ENABLED:-true}
+      # [Server] Swagger UI (/api/__hidden_swagger) + OpenAPI spec (/api/openapi.json), logged-in users only.
+      - OPENAPI_ENABLED=${OPENAPI_ENABLED:-}
       # JWT 簽章金鑰；留空沿用舊版 Django 的預設（啟動時會警告）。正式環境請設定。
       # JWT signing key; empty keeps the legacy default (warned at startup). Set it in production.
       - SECRET_KEY=${SECRET_KEY:-}
       - REVERSE_SERVER_SSH_PORT=${REVERSE_SERVER_SSH_PORT}
       - WEB_SERVER_PORT=${WEB_SERVER_PORT}
-      - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
+      # [Server]
+      - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID:-}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
-      # 對外 base URL（MCP 連接器的 OAuth issuer）；留空依 X-Forwarded-* 推導。/ OAuth issuer; empty = from the request.
+      # [Server] 對外 base URL（MCP 連接器的 OAuth issuer）；留空依網站設定，再沒有就依 X-Forwarded-* 推導。
+      # [Server] Public base URL (the OAuth issuer); empty = the site setting, else from the request.
       - PUBLIC_URL=${PUBLIC_URL:-}
       # 使用者來源 IP（登入紀錄 / 誰在用通道）：auto = X-Forwarded-For 右邊的內部位址都算代理（Traefik、前面的
       # Nginx Proxy Manager），不必數層數；數字 = 固定跳過幾層（含 Traefik）。
       # Client IP: auto = every internal address at the right of X-Forwarded-For is a proxy (Traefik, an upstream
       # Nginx Proxy Manager), nothing to count; a number = skip exactly that many, Traefik included.
-      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-auto}
+      # [Server] 空 = 網站設定（預設 auto）。/ Empty = the site setting (default auto).
+      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-}
       - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       - KASM_BROWSER_API=http://kasm-browser:7000
@@ -81,12 +89,12 @@ services:
       # In-process SSH gateway; reuses the existing host keys so devices see the same host identity.
       - GATEWAY_HOST_KEYS_DIR=/config/ssh_host_keys
       # gateway 前面有 L4 代理（nginx stream / HAProxy / NLB）時填它的 IP / CIDR，讓它送 PROXY protocol header 帶出裝置真正的 IP。
-      # IPs / CIDRs of an L4 proxy in front of the gateway that sends a PROXY protocol header (the device's real IP).
+      # [Server] IPs / CIDRs of an L4 proxy in front of the gateway that sends a PROXY protocol header (the device's real IP).
       - GATEWAY_PROXY_PROTOCOL_FROM=${GATEWAY_PROXY_PROTOCOL_FROM:-}
-      # 裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（false 關閉）。/ Ask each device for its addresses once per connection.
-      - DEVICE_PROBE=${DEVICE_PROBE:-true}
-      # 共用服務金鑰留在裝置上（另一台 Telepy 還用它登入時，例如並行的舊站）。/ Keep the shared service key on devices.
-      - KEEP_SHARED_SERVICE_KEY=${KEEP_SHARED_SERVICE_KEY:-false}
+      # [Server] 裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（false 關閉）。/ Ask each device for its addresses once per connection.
+      - DEVICE_PROBE=${DEVICE_PROBE:-}
+      # [Server] 共用服務金鑰留在裝置上（另一台 Telepy 還用它登入時，例如並行的舊站）。/ Keep the shared service key on devices.
+      - KEEP_SHARED_SERVICE_KEY=${KEEP_SHARED_SERVICE_KEY:-}
       # 離線 IP 地理資料庫 / 網卡廠商表放在容器裡的哪裡（空 = /data/geoip、/data/oui，./telepy.sh geoip / oui 會填）。
       # Where the backend reads the IP geolocation databases / NIC vendor list (container paths; empty = /data/geoip,
       # /data/oui, which ./telepy.sh geoip / oui fill).
