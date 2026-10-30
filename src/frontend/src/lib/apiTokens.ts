@@ -69,6 +69,26 @@ export function sortTokens(list: ApiToken[], now: number = Date.now()): ApiToken
     return [...list].sort((a, b) => live(a) - live(b) || b.id - a.id);
 }
 
+/** 會改東西的 scope（其餘只讀）；跟 `SCOPE_META.changes` 一樣。/ Scopes that change things (the rest only read); as `SCOPE_META.changes`. */
+export const CHANGING_SCOPES: readonly string[] = ["ssh:exec", "ssh:files", "browser:use", "tunnels:manage"];
+
+/** CLI 登入（OAuth）能拿到的 scope：沒有 tunnels:manage。/ What a CLI sign-in (OAuth) can hold: no tunnels:manage. */
+export const OAUTH_SCOPES: readonly string[] = TOKEN_SCOPES.filter((s) => s !== "tunnels:manage");
+
+export type ScopeSummary = { kind: "all" } | { kind: "readOnly" } | { kind: "some"; count: number; total: number };
+
+/**
+ * 清單上一句話講完權限：全部 / 只讀 / 幾項中的幾項。`slots` = 這種憑證可能有的全部 scope（不認得的 scope 不算）。
+ * One phrase for a credential's scopes in a list: everything / read only / n of total. `slots` = every scope this
+ * kind of credential can hold (unknown scopes don't count).
+ */
+export function scopeSummary(scopes: readonly string[], slots: readonly string[]): ScopeSummary {
+    const held = slots.filter((s) => scopes.includes(s));
+    if (held.length === slots.length) return { kind: "all" };
+    if (held.length > 0 && held.every((s) => !CHANGING_SCOPES.includes(s))) return { kind: "readOnly" };
+    return { kind: "some", count: held.length, total: slots.length };
+}
+
 // ---------------------------------------------------------------- explainer lanes
 
 export type LaneId = "token" | "web" | "apps";

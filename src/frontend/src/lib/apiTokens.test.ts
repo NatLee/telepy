@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeAbilities, sortTokens, tokenExamples, tokenExpiryValue, tokenLanes, tokenState, type ApiToken } from "./apiTokens.ts";
+import { OAUTH_SCOPES, TOKEN_SCOPES, scopeAbilities, scopeSummary, sortTokens, tokenExamples, tokenExpiryValue, tokenLanes, tokenState, type ApiToken } from "./apiTokens.ts";
 
 const NOW = new Date(2026, 9, 27, 10, 0, 0); // local 2026-10-27 10:00
 
@@ -42,4 +42,14 @@ test("abilities keep the canonical order; examples", () => {
     assert.equal(ex.cli, "telepy login https://t.example --token tpt_abc");
     assert.ok(ex.curl.includes("Bearer tpt_abc") && ex.curl.endsWith("/api/reverse/server/dashboard"));
     assert.equal(JSON.parse(ex.mcp).mcpServers.telepy.url, "https://t.example/mcp");
+});
+
+test("scope summary: everything, read only, n of total", () => {
+    assert.deepEqual(scopeSummary([...TOKEN_SCOPES], TOKEN_SCOPES), { kind: "all" });
+    assert.deepEqual(scopeSummary(["tunnels:read"], TOKEN_SCOPES), { kind: "readOnly" });
+    assert.deepEqual(scopeSummary(["tunnels:read", "network:scan"], TOKEN_SCOPES), { kind: "readOnly" });
+    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec"], TOKEN_SCOPES), { kind: "some", count: 2, total: 6 });
+    // CLI 登入沒有 tunnels:manage：五項都有就是全部。/ A CLI sign-in can't hold tunnels:manage: all five = everything.
+    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use"], OAUTH_SCOPES), { kind: "all" });
+    assert.deepEqual(scopeSummary(["mystery"], OAUTH_SCOPES), { kind: "some", count: 0, total: 5 });
 });

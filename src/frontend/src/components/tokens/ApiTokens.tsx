@@ -9,24 +9,29 @@
  * secret prefix, scopes, tunnels, last use, expiry state, open sessions, recent calls.
  */
 import React, { useState } from "react";
-import { Info, KeyRound, ListTree, Plus, Trash2 } from "lucide-react";
+import { Info, KeyRound, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Chip, SectionHeading } from "@/components/ui/section";
+import { SectionHeading } from "@/components/ui/section";
 import { useToast } from "@/components/ui/Toast";
-import { SCOPE_META } from "@/components/oauth/ConnectFlow";
+import { Pagination } from "@/components/ui/pagination";
+import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useApiTokens } from "@/hooks/useApiTokens";
+import { usePagination } from "@/hooks/usePagination";
+import { useViewMode } from "@/hooks/useViewMode";
+import { CARD_PAGE_SIZES } from "@/lib/pagination";
 import { useI18n } from "@/lib/i18n";
-import { tokenState, type ApiToken, type TokenState } from "@/lib/apiTokens";
+import { TOKEN_SCOPES, tokenState, type ApiToken, type TokenState } from "@/lib/apiTokens";
 import type { TranslationKey } from "@/locales/en";
 import { ApiTokenCreateDialog } from "./ApiTokenCreateDialog";
 import { ApiTokenInfoDialog } from "./ApiTokenFlow";
+import { CredentialList, type CredentialItem } from "./CredentialList";
 
-const STATE: Record<TokenState, { key: TranslationKey; tone: "success" | "warning" | "neutral" | "danger" }> = {
+const STATE: Record<TokenState, { key: TranslationKey; tone: "success" | "warning" | "muted" }> = {
     active: { key: "tokens.state.active", tone: "success" },
     soon: { key: "tokens.state.soon", tone: "warning" },
-    expired: { key: "tokens.state.expired", tone: "neutral" },
-    revoked: { key: "tokens.state.revoked", tone: "neutral" },
+    expired: { key: "tokens.state.expired", tone: "muted" },
+    revoked: { key: "tokens.state.revoked", tone: "muted" },
 };
 
 export function ApiTokens({
@@ -56,6 +61,15 @@ export function ApiTokens({
     const [info, setInfo] = useState<{ token: ApiToken | null } | null>(null);
     const [pending, setPending] = useState<ApiToken | null>(null);
     const admin = userId !== undefined;
+    // 清單 / 卡片跟著帳號（偏好設定 → 外觀也能改）；管理員的「管理使用者」視窗一律清單。
+    // List / cards follow the account (also in Preferences → Appearance); the admin's Manage-user dialog is always a list.
+    const [chosen, setView] = useViewMode("api_tokens");
+    const view = admin ? "list" : chosen;
+    const pager = usePagination(tokens?.length ?? 0, {
+        storageKey: view === "card" ? "telepy.apiTokenCardsPageSize" : "telepy.apiTokensPageSize",
+        resetKey: view,
+        sizes: view === "card" ? CARD_PAGE_SIZES : undefined,
+    });
 
     const when = (iso: string | null) => {
         if (!iso) return "";
@@ -73,8 +87,42 @@ export function ApiTokens({
         else showError(t("tokens.revokeFailed"));
     };
 
+    const items: CredentialItem[] = (tokens ?? []).slice(pager.from - 1, pager.to).map((tok) => {
+        const state = tokenState(tok);
+        const live = state === "active" || state === "soon";
+        return {
+            id: tok.id,
+            icon: <KeyRound />,
+            name: tok.name,
+            onOpen: () => setInfo({ token: tok }),
+            openLabel: t("tokens.showPath", { name: tok.name }),
+            prefix: `${tok.prefix}…`,
+            prefixTitle: t("tokens.list.prefixTitle"),
+            status: { text: t(STATE[state].key), tone: STATE[state].tone },
+            notes: tok.sessions > 0 ? [{ text: t("tokens.sessions", { count: tok.sessions }), tone: "primary" as const }] : undefined,
+            dim: !live,
+            scopes: tok.scopes,
+            slots: TOKEN_SCOPES,
+            tunnels: tok.tunnels === null ? t("tokens.allTunnels") : tok.tunnels.map((x) => x.name ?? `#${x.id}`).join(", ") || t("tokens.noTunnelsLeft"),
+            lastUsedAt: tok.last_used_at,
+            lastUsedIp: tok.last_used_ip,
+            neverUsed: t("tokens.neverUsed"),
+            expiry:
+                state === "revoked" && tok.revoked_at
+                    ? { text: t("tokens.revokedAt", { date: day(tok.revoked_at) }), tone: "muted" }
+                    : state === "expired"
+                      ? { text: t("tokens.expired", { date: day(tok.expires_at) }), tone: "muted" }
+                      : { text: t("tokens.expires", { date: day(tok.expires_at) }), title: when(tok.expires_at), tone: state === "soon" ? "warning" : undefined },
+            calls: tok.calls,
+            onCalls: onShowCalls ? () => onShowCalls(tok) : undefined,
+            onRemove: live ? () => setPending(tok) : undefined,
+            removeLabel: t("tokens.revoke"),
+        };
+    });
+
     const headingActions = (
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+            {!admin && tokens !== null && tokens.length > 0 && <ViewToggle value={view} onChange={setView} />}
             <Button type="button" variant="ghost" size="sm" onClick={() => setInfo({ token: null })}>
                 <Info />
                 {t("tokens.howItWorks")}
@@ -113,66 +161,10 @@ export function ApiTokens({
             ) : tokens.length === 0 ? (
                 <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{admin ? t("tokens.adminEmpty") : t("tokens.empty")}</p>
             ) : (
-                <ul className="divide-y divide-border rounded-xl border border-border">
-                    {tokens.map((tok) => {
-                        const state = tokenState(tok);
-                        const live = state === "active" || state === "soon";
-                        return (
-                            <li key={tok.id} className="flex items-start gap-3 px-4 py-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setInfo({ token: tok })}
-                                    className="min-w-0 flex-1 space-y-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded-sm"
-                                    aria-label={t("tokens.showPath", { name: tok.name })}
-                                >
-                                    <span className="flex flex-wrap items-center gap-2">
-                                        <span className={live ? "text-foreground" : "text-muted-foreground"}>{tok.name}</span>
-                                        <Chip mono>{tok.prefix}…</Chip>
-                                        <Chip tone={STATE[state].tone}>{t(STATE[state].key)}</Chip>
-                                        {tok.sessions > 0 && <Chip tone="primary">{t("tokens.sessions", { count: tok.sessions })}</Chip>}
-                                    </span>
-                                    <span className="flex flex-wrap gap-1">
-                                        {tok.scopes.map((s) => (
-                                            <Chip key={s}>{SCOPE_META[s] ? t(SCOPE_META[s].label) : s}</Chip>
-                                        ))}
-                                    </span>
-                                    <span className="block text-xs text-muted-foreground">
-                                        {tok.tunnels === null ? t("tokens.allTunnels") : tok.tunnels.map((x) => x.name ?? `#${x.id}`).join(", ") || t("tokens.noTunnelsLeft")}
-                                        {" · "}
-                                        {state === "revoked" && tok.revoked_at ? t("tokens.revokedAt", { date: day(tok.revoked_at) }) : state === "expired" ? t("tokens.expired", { date: day(tok.expires_at) }) : t("tokens.expires", { date: day(tok.expires_at) })}
-                                    </span>
-                                    <span className="block text-xs text-muted-foreground">
-                                        {tok.last_used_at ? (tok.last_used_ip ? t("tokens.lastUsedFrom", { time: when(tok.last_used_at), ip: tok.last_used_ip }) : t("tokens.lastUsed", { time: when(tok.last_used_at) })) : t("tokens.neverUsed")}
-                                    </span>
-                                    {tok.calls && (tok.call_count ?? 0) > 0 && (
-                                        <span className="block text-xs text-muted-foreground tabular-nums">
-                                            {t("tokens.callSummary", { day: tok.calls.calls_24h, week: tok.calls.calls_7d, total: tok.call_count ?? 0 })}
-                                            {tok.calls.errors_7d > 0 && <span className="text-warning"> · {t("tokens.callErrors", { count: tok.calls.errors_7d })}</span>}
-                                        </span>
-                                    )}
-                                </button>
-                                {onShowCalls && (
-                                    <Button type="button" variant="outline" size="sm" className="h-7 shrink-0 gap-1" onClick={() => onShowCalls(tok)}>
-                                        <ListTree size={13} /> {t("tokens.showCalls")}
-                                    </Button>
-                                )}
-                                {live && (
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-sm"
-                                        onClick={() => setPending(tok)}
-                                        className="shrink-0 text-destructive hover:bg-destructive/8 hover:text-destructive"
-                                        aria-label={t("tokens.revoke")}
-                                        title={t("tokens.revoke")}
-                                    >
-                                        <Trash2 />
-                                    </Button>
-                                )}
-                            </li>
-                        );
-                    })}
-                </ul>
+                <>
+                    <CredentialList items={items} view={view} nameHeader={t("tokens.list.colToken")} />
+                    <Pagination pager={pager} className="mt-3" />
+                </>
             )}
             {!admin && <ApiTokenCreateDialog key={createKey} isOpen={creating} onClose={() => setCreating(false)} onCreate={create} />}
             <ApiTokenInfoDialog isOpen={info !== null} onClose={() => setInfo(null)} token={info?.token} />
