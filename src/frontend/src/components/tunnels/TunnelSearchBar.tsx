@@ -34,6 +34,8 @@ const EXAMPLES: { term: string; key: TranslationKey }[] = [
     { term: "pinned:yes", key: "tunnels.q.pinned" },
     { term: "group:prod", key: "tunnels.q.group" },
     { term: "warn:any", key: "tunnels.q.warn" },
+    { term: "os:linux", key: "tunnels.q.os" },
+    { term: "via:http", key: "tunnels.q.via" },
     { term: "-status:never", key: "tunnels.q.negate" },
 ];
 

@@ -10,6 +10,7 @@ import { useCreateTunnelWizard, type WizardStep } from "@/hooks/useCreateTunnelW
 import { useDeviceJoin } from "@/hooks/useDeviceJoin";
 import { JoinPanel, JoinWhy } from "@/components/tunnels/JoinPanel";
 import { Segmented } from "@/components/ui/segmented";
+import { SupportedDevices } from "@/components/tunnels/SupportedDevices";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { WizardStepper } from "@/components/tunnels/CreateWizardSteps/WizardStepper";
 import { SetupDiagram } from "@/components/tunnels/CreateWizardSteps/SetupDiagram";
@@ -80,6 +81,8 @@ export default function CreateTunnelWizard() {
                     />
                 </div>
             )}
+            {/* 哪些機器可以用目前的方式加入；一列，不擠到表單。/ Which machines fit the chosen mode; one row. */}
+            {showModes && <SupportedDevices mode={mode} onMode={setMode} />}
 
             {mode === "command" ? (
                 <>

@@ -464,7 +464,7 @@ impl Gateway {
     /// Record where the tunnel connected from; a public peer is also the device's public IP (alerting on change).
     async fn remember_endpoint(&self, conn_id: u64, port: u16) {
         let Some((ep, peer)) = self.conns.get(&conn_id).map(|c| (c.endpoint(), c.peer)) else { return };
-        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
+        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since, ep.transport).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
         }
         // 連線歷史每次都記（不管 IP 有沒有換）。/ The connection history records every connect.

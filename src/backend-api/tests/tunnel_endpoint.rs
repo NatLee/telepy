@@ -97,6 +97,8 @@ async fn device_ip_on_the_tunnel_list() {
     })
     .await;
     assert_eq!(last["ip"], "127.0.0.1", "{last}");
+    // 離線也記得最後是怎麼連的（列表的 SSH / HTTP 標籤）。/ Offline still says how it last connected.
+    assert_eq!(last["transport"], "tcp", "{last}");
     assert!(last["last_seen_at"].as_str().unwrap() >= last["connected_at"].as_str().unwrap(), "{last}");
     assert_eq!(endpoint(&lab, &carol.token, t.id).await, Value::Null);
 
