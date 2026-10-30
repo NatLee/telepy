@@ -43,6 +43,60 @@ async fn endpoint(lab: &Lab, token: &str, tunnel_id: i64) -> Value {
     t["endpoint"].clone()
 }
 
+/// 列表裡某條隧道的 `way_in`。/ One tunnel's `way_in` from the list.
+async fn way_in(lab: &Lab, token: &str, tunnel_id: i64) -> Value {
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(token)).await;
+    r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == tunnel_id).unwrap()["way_in"].clone()
+}
+
+/// 升級前的隧道從現有的證據補上「怎麼加進來的」：最早的 Accepted 事件、最後一次連線、網頁 port 的載體之前建立的；
+/// 已經知道的不動，什麼都沒有的留 NULL。
+/// Older tunnels learn how they were added from the evidence there is: the earliest Accepted event, the last
+/// connection, being created before the web-port carrier existed; known values stay, no evidence stays NULL.
+#[tokio::test]
+async fn older_tunnels_learn_how_they_were_added() {
+    let app = common::spawn().await;
+    app.login("alice", "pw").await;
+    let db = &app.state.db;
+    let uid = db::users::by_username(db, "alice").await.unwrap().unwrap().id;
+    let mk = |name: &'static str, port: i64| async move {
+        let key = format!("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5{name}");
+        db::tunnels::create(db, db::tunnels::NewTunnel { user_id: uid, host_friendly_name: name, key: &key, reverse_port: port, description: None, default_username_id: None }).await.unwrap().id
+    };
+    let event = |tunnel: i64, msg: &'static str| async move {
+        sqlx::query("INSERT INTO telepy_gateway_event (at, event, peer, port, tunnel_id, message) VALUES (?, 'accepted', '127.0.0.1', 0, ?, ?)")
+            .bind(telepy_server::util::now_db())
+            .bind(tunnel)
+            .bind(msg)
+            .execute(&db.write)
+            .await
+            .unwrap();
+    };
+    let web = mk("web", 41001).await;
+    event(web, "Accepted publickey for telepy from 1.2.3.4 port 0 ssh2: ED25519 SHA256:x (over websocket)").await;
+    event(web, "Accepted publickey for telepy from 1.2.3.4 port 51000 ssh2: ED25519 SHA256:x").await;
+    let tcp = mk("tcp", 41002).await;
+    db::tunnel_endpoints::record_connected(db, 41002, "127.0.0.1", &telepy_server::util::now_db(), "tcp", None).await.unwrap();
+    let old = mk("old", 41003).await;
+    sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET created_at = '2026-10-01 08:00:00.000000' WHERE id = ?").bind(old).execute(&db.write).await.unwrap();
+    let unknown = mk("unknown", 41004).await;
+    let known = mk("known", 41005).await;
+    db::tunnel_endpoints::record_connected(db, 41005, "127.0.0.1", &telepy_server::util::now_db(), "tcp", None).await.unwrap();
+
+    sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET way_in = NULL").execute(&db.write).await.unwrap();
+    db::tunnels::set_way_in(db, known, "websocket").await.unwrap();
+    sqlx::query("DELETE FROM telepy_data_migration WHERE name = ?").bind(db::schema::TUNNEL_WAY_IN).execute(&db.write).await.unwrap();
+    db::schema::ensure_schema(&db.write).await.unwrap();
+    db::schema::ensure_schema(&db.write).await.unwrap();
+
+    let way = |id: i64| async move { db::tunnels::by_id(db, id).await.unwrap().unwrap().way_in };
+    assert_eq!(way(web).await.as_deref(), Some("websocket"), "the earliest Accepted event decides");
+    assert_eq!(way(tcp).await.as_deref(), Some("ssh"), "the last connection");
+    assert_eq!(way(old).await.as_deref(), Some("ssh"), "created before the web-port carrier");
+    assert_eq!(way(unknown).await, None, "no evidence");
+    assert_eq!(way(known).await.as_deref(), Some("websocket"), "a known value stays");
+}
+
 #[tokio::test]
 async fn device_ip_on_the_tunnel_list() {
     let Some(lab) = Lab::start().await else { return };
@@ -67,6 +121,7 @@ async fn device_ip_on_the_tunnel_list() {
 
     // 從沒連過：沒有資料。/ Never connected.
     assert_eq!(endpoint(&lab, &alice.token, t.id).await, Value::Null);
+    assert_eq!(way_in(&lab, &alice.token, t.id).await, serde_json::json!({"setup": null, "last": null, "live": false, "tls": null}));
 
     let mut ssh = tunnel_ssh(&lab, &dev.key, port, &boxm);
     let status = lab.app.state.status.clone();
@@ -83,6 +138,11 @@ async fn device_ip_on_the_tunnel_list() {
     assert!(e["previous_ip"].is_null() && e["changed_at"].is_null(), "{e}");
     assert_eq!(endpoint(&lab, &bob.token, t.id).await["ip"], "127.0.0.1");
     assert_eq!(endpoint(&lab, &carol.token, t.id).await, Value::Null);
+    // 怎麼連進來的沒有位址：只看狀態的 sharee 也看得到；手動接上的隧道，第一次連線就是它加進來的方式。
+    // The way in holds no address, so a status-only sharee sees it too; a hand-connected tunnel is set up as it first came in.
+    let ssh_live = serde_json::json!({"setup": "ssh", "last": "ssh", "live": true, "tls": null});
+    assert_eq!(way_in(&lab, &alice.token, t.id).await, ssh_live);
+    assert_eq!(way_in(&lab, &carol.token, t.id).await, ssh_live);
     // `/keys` 列表也帶；單筆 retrieve 不帶。/ The plain list carries it too.
     let r = lab.app.get("/api/reverse/server/keys", Some(&alice.token)).await;
     assert_eq!(r.json.as_array().unwrap().iter().find(|x| x["id"] == t.id).unwrap()["endpoint"]["ip"], "127.0.0.1");
@@ -99,6 +159,7 @@ async fn device_ip_on_the_tunnel_list() {
     assert_eq!(last["ip"], "127.0.0.1", "{last}");
     // 離線也記得最後是怎麼連的（列表的 SSH / HTTP 標籤）。/ Offline still says how it last connected.
     assert_eq!(last["transport"], "tcp", "{last}");
+    assert_eq!(way_in(&lab, &carol.token, t.id).await, serde_json::json!({"setup": "ssh", "last": "ssh", "live": false, "tls": null}));
     assert!(last["last_seen_at"].as_str().unwrap() >= last["connected_at"].as_str().unwrap(), "{last}");
     assert_eq!(endpoint(&lab, &carol.token, t.id).await, Value::Null);
 

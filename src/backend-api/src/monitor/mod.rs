@@ -75,6 +75,8 @@ pub struct Endpoint {
     pub since: String,
     /// `tcp`（24242）或 `websocket`（/ws/gateway/）。/ How the device reached the gateway.
     pub transport: &'static str,
+    /// websocket 有沒有 TLS（wss）；tcp = None。/ Whether the WebSocket had TLS (wss); None for tcp.
+    pub tls: Option<bool>,
 }
 
 pub struct StatusState {

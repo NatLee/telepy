@@ -1,20 +1,22 @@
 "use client";
 
 /**
- * 裝置平台的小圖示、卡片上的 OS 標籤與「SSH / HTTP」連線方式標籤。圖示是 `lib/platformArt.ts` 的像素圖，
+ * 裝置平台的小圖示、卡片上的 OS 標籤與「SSH / SSH over WSS」連線方式標籤。圖示是 `lib/platformArt.ts` 的像素圖，
  * 畫在固定的淺色小磚上（深色主題也一樣，黑色的企鵝才看得到）。
- * The platform pixel icon, the card's OS chip and the SSH / HTTP way-in badge. Icons sit on a fixed light tile in
+ * The platform pixel icon, the card's OS chip and the "SSH / SSH over WSS" way-in badge. Icons sit on a fixed light tile in
  * both themes so dark pixels (the penguin) stay visible.
  */
-import React from "react";
-import { Globe, KeyRound } from "lucide-react";
+import React, { useState } from "react";
+import { ArrowRightLeft, Globe, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
-import { platformOf, shortOs, viaOf, type PlatformId } from "@/lib/devicePlatforms";
+import { platformOf, shortOs, wayInOf, type PlatformId, type Via, type WayInState } from "@/lib/devicePlatforms";
 import { PLATFORM_ART, pixelRuns } from "@/lib/platformArt";
 import type { TranslationKey } from "@/locales/en";
-import type { TunnelEndpoint } from "@/types/tunnel";
+import type { Tunnel, TunnelEndpoint } from "@/types/tunnel";
+import { useHttps } from "@/components/tunnels/TransportVisibility";
 
 export const PLATFORM_NAME: Record<PlatformId, TranslationKey> = {
     linux: "platforms.name.linux",
@@ -79,30 +81,61 @@ export function DeviceOsChip({ endpoint, onOpen, className }: { endpoint?: Tunne
     );
 }
 
+const VIA_LABEL: Record<Via, TranslationKey> = { ssh: "platforms.via.ssh", wss: "platforms.via.wss", ws: "platforms.via.ws" };
+const VIA_TITLE: Record<Via, TranslationKey> = { ssh: "platforms.via.sshTitle", wss: "platforms.via.wssTitle", ws: "platforms.via.wsTitle" };
+const STATE_TEXT: Record<WayInState, TranslationKey> = { live: "platforms.via.stateLive", last: "platforms.via.stateLast", setup: "platforms.via.stateSetup" };
+
 /**
- * 裝置怎麼連 Telepy：SSH（直接連 SSH port）或 HTTP（網頁 port，SSH 包在 WebSocket 裡）。離線時是最後一次的方式。
- * How the device reaches Telepy: SSH (the SSH port) or HTTP (the web port, SSH inside a WebSocket); offline = the last time.
+ * 裝置怎麼連 Telepy：「SSH」（SSH port）或「SSH over WSS」（網頁 port，SSH 包在 WebSocket 裡；Telepy 走 http 時是 WS）。
+ * 連著 = 實心；離線（最後一次的方式）或還沒連過（加進來時設定的方式）= 虛線。實際走的跟設定的不同時多一個 ⇄。
+ * How the device reaches Telepy: "SSH" (the SSH port) or "SSH over WSS" (the web port, SSH inside a WebSocket; WS when
+ * Telepy is on http). Solid while connected; dashed when offline (the last way) or not connected yet (how it was set
+ * up). A ⇄ marks a device that came in another way than it was set up for.
  */
-export function TransportBadge({ endpoint, className }: { endpoint?: TunnelEndpoint | null; className?: string }) {
+export function TransportBadge({ tunnel, className }: { tunnel: Pick<Tunnel, "way_in" | "endpoint">; className?: string }) {
     const { t } = useI18n();
-    const via = viaOf(endpoint);
-    if (!endpoint || !via) return null;
-    const explain = t(via === "ssh" ? "platforms.via.sshTitle" : "platforms.via.httpTitle");
-    const title = endpoint.live ? explain : t("platforms.via.last", { text: explain });
-    const Icon = via === "ssh" ? KeyRound : Globe;
+    const https = useHttps();
+    const [open, setOpen] = useState(false);
+    const way = wayInOf(tunnel, https);
+    if (!way) return null;
+    const label = t(VIA_LABEL[way.via]);
+    const lines = [t(VIA_TITLE[way.via]), t(STATE_TEXT[way.state]), way.setup ? t("platforms.via.setupDiffers", { way: t(VIA_LABEL[way.setup]) }) : null].filter((l): l is string => !!l);
+    const Icon = way.via === "ssh" ? KeyRound : Globe;
+    // 滑鼠停著看 title；點一下（觸控也行）開一個小說明。/ Hover shows the title; a click (touch too) opens a short note.
     return (
-        <span
-            title={title}
-            aria-label={title}
-            className={cn(
-                CHIP,
-                "font-mono [&>svg]:size-3 [&>svg]:shrink-0",
-                endpoint.live ? (via === "http" ? "border-info/40 bg-info/10 text-info" : "border-border bg-muted text-foreground/80") : "border-dashed border-border/70 text-muted-foreground",
-                className
-            )}
-        >
-            <Icon aria-hidden />
-            {t(via === "ssh" ? "platforms.via.ssh" : "platforms.via.http")}
-        </span>
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    title={open ? undefined : lines.join("\n")}
+                    aria-label={t("platforms.via.aria", { way: label })}
+                    className={cn(
+                        CHIP,
+                        "font-mono [&>svg]:size-3 [&>svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        way.state === "live"
+                            ? way.via !== "ssh"
+                                ? "border-info/40 bg-info/10 text-info hover:border-info/70"
+                                : "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground"
+                            : "border-dashed border-border/70 text-muted-foreground hover:text-foreground",
+                        className
+                    )}
+                >
+                    <Icon aria-hidden />
+                    {label}
+                    {way.setup && <ArrowRightLeft aria-hidden />}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-72 space-y-1.5 p-3 text-xs leading-relaxed">
+                <p className="flex items-center gap-1.5 font-mono text-sm text-foreground [&>svg]:size-3.5">
+                    <Icon aria-hidden />
+                    {label}
+                </p>
+                {lines.map((l) => (
+                    <p key={l} className="text-muted-foreground">
+                        {l}
+                    </p>
+                ))}
+            </PopoverContent>
+        </Popover>
     );
 }

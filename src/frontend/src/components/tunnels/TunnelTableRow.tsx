@@ -69,10 +69,9 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex flex-col items-start gap-1">
-                    <span className="inline-flex items-center gap-1">
-                        <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
-                        <TransportBadge endpoint={tunnel.endpoint} />
-                    </span>
+                    <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                    {/* 自己一行：「SSH over WSS」比較長，放在 port 旁邊會把這欄撐寬。/ Own line: beside the port it widened the column. */}
+                    <TransportBadge tunnel={tunnel} />
                     <DeviceOsChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                     <TunnelEndpointChip endpoint={tunnel.endpoint} />
                     <TunnelLanChip endpoint={tunnel.endpoint} />

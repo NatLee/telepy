@@ -1075,6 +1075,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_endpoint", "facts_at", "datetime NULL"),
     // 最後一次怎麼連上 gateway（tcp / websocket）。/ How the device last reached the gateway.
     ("telepy_tunnel_endpoint", "transport", "varchar(16) NULL"),
+    // websocket 那次外面有沒有 TLS（wss）；SSH port 與升級前的列為 NULL。/ Whether that WebSocket had TLS (wss); NULL for the SSH port.
+    ("telepy_tunnel_endpoint", "transport_tls", "bool NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     // 稽核雜湊鏈（升級前的列為 NULL）。/ Audit hash chain (NULL on rows written before the upgrade).
     ("telepy_gateway_event", "prev_hash", "varchar(64) NULL"),
@@ -1105,6 +1107,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("tunnels_tunnelsharing", "permission_until", "datetime NULL"),
     // 敏感隧道：開 session 前要再確認一次是你（step-up）。/ Sensitive tunnel: step-up before opening a session.
     ("authorized_keys_reverseserverauthorizedkeys", "require_step_up", "bool NOT NULL DEFAULT 0"),
+    // 裝置設定成怎麼連 Telepy：ssh（SSH port）/ websocket（網頁 port）；加入時記下，第一次連上時補上。
+    // How the device is set up to reach Telepy: ssh (SSH port) / websocket (web port); set when it is added.
+    ("authorized_keys_reverseserverauthorizedkeys", "way_in", "varchar(16) NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),
@@ -1313,6 +1318,17 @@ pub const DROP_RUSTDESK_SERVER: &str = "2026-10-26-drop-rustdesk-server-devices"
 /// The CLI sign-in got its own look setting: start from the OAuth page's current look, so upgrades look the same.
 pub const CLI_SIGNIN_STYLE: &str = "2026-10-28-cli-signin-style-from-oauth";
 
+/// 每條隧道記下「怎麼加進來的」（`way_in`）：升級前的隧道從現有的證據補上 —— 最早一次「Accepted」事件有沒有
+/// `(over websocket)`、最後一次連線的 `transport`；網頁 port 的載體（#189，2026-10-24 19:18 UTC）之前建立的隧道只可能是 SSH。
+/// Every tunnel records how it was added (`way_in`); older tunnels get it from the evidence there is: whether their
+/// earliest "Accepted" event says `(over websocket)`, the last connection's `transport`, and tunnels created before the
+/// web-port carrier existed (#189, 2026-10-24 19:18 UTC) can only have come in over SSH.
+pub const TUNNEL_WAY_IN: &str = "2026-10-30-tunnel-way-in";
+
+/// 網頁 port 的載體（SSH over WebSocket）出貨的時間；在那之前建立的隧道只會走 SSH port。
+/// When the web-port carrier shipped; tunnels created before it can only use the SSH port.
+const WS_CARRIER_SHIPPED: &str = "2026-10-24 19:18:11";
+
 /// 指令規則改成「個人 + 全站」：舊的隧道規則變成建立者的個人規則（只套用那條隧道；建立者已經不是 owner / ADMIN 就給隧道
 /// owner），舊的全站規則照舊套用所有隧道。隧道已經不在的規則刪掉。
 /// Command rules became personal + site-wide: a tunnel's rule becomes its creator's personal rule limited to that
@@ -1331,7 +1347,32 @@ pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     site_webhook_from_settings(pool).await?;
     drop_rustdesk_server(pool).await?;
     cli_signin_style(pool).await?;
-    personal_command_rules(pool).await
+    personal_command_rules(pool).await?;
+    tunnel_way_in(pool).await
+}
+
+async fn tunnel_way_in(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, TUNNEL_WAY_IN).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let filled = sqlx::query(
+        "UPDATE authorized_keys_reverseserverauthorizedkeys SET way_in = COALESCE( \
+             (SELECT CASE WHEN e.message LIKE '%(over websocket)' THEN 'websocket' ELSE 'ssh' END FROM telepy_gateway_event e \
+              WHERE e.tunnel_id = authorized_keys_reverseserverauthorizedkeys.id AND e.event = 'accepted' ORDER BY e.id LIMIT 1), \
+             (SELECT CASE p.transport WHEN 'websocket' THEN 'websocket' WHEN 'tcp' THEN 'ssh' END FROM telepy_tunnel_endpoint p \
+              WHERE p.tunnel_id = authorized_keys_reverseserverauthorizedkeys.id), \
+             CASE WHEN created_at < ? THEN 'ssh' END) \
+         WHERE way_in IS NULL",
+    )
+    .bind(WS_CARRIER_SHIPPED)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(TUNNEL_WAY_IN).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    tracing::debug!(filled, "data migration: tunnels know how they were added");
+    Ok(())
 }
 
 async fn personal_command_rules(pool: &SqlitePool) -> anyhow::Result<()> {

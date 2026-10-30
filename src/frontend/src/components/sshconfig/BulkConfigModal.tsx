@@ -34,6 +34,7 @@ import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
 import { countAccess, deviceAccess, initialSelection, keyPlan, pickStanzas, planIsEmpty, reachOnDevice, toggleAccount, untouchedAccounts, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
 import { useI18n } from "@/lib/i18n";
+import { liveTransport } from "@/lib/devicePlatforms";
 import type { TranslationKey } from "@/locales/en";
 import type { TunnelGroup } from "@/types/groups";
 import type { Tunnel, TunnelHealth } from "@/types/tunnel";
@@ -493,7 +494,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                 wsUrl={data?.ws_url ?? null}
                 devices={chosen.map((r) => {
                     const tun = byId.get(r.id);
-                    return { online: isUp(r.id), transport: tun?.endpoint?.live ? tun.endpoint.transport : null };
+                    return { online: isUp(r.id), transport: liveTransport(tun) };
                 })}
             />
         </Modal>

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::notify;
-use super::serialize::{endpoint_json, presence_json, tunnel_json};
+use super::serialize::{endpoint_json, presence_json, tunnel_json, way_in_json};
 use super::AppJson;
 use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
@@ -95,6 +95,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             } else {
                 Value::Null
             };
+            // 怎麼連進來（SSH / SSH over WSS）：沒有位址，給每個看得到的人。/ The way in: no address, so for every viewer.
+            v["way_in"] = way_in_json(t.way_in.as_deref(), u16::try_from(t.reverse_port).ok().and_then(|p| live.get(&p)), last.get(&t.id));
             let entries = using.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
             v["presence"] = presence_json(entries, permissions::can_see_presence_details(eff, is_superuser), &state.geoip);
             let port = u16::try_from(t.reverse_port).ok();
@@ -142,6 +144,8 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
     v["labels"] = json!(db::tunnel_tags::labels_of(&state.db, t.id).await?);
     v["pinned"] = json!(db::tunnel_tags::pinned_by(&state.db, user_id).await?.contains(&t.id));
     v["group_id"] = json!(db::groups::tunnel_group_of(&state.db, user_id).await?.get(&t.id));
+    let live = u16::try_from(t.reverse_port).ok().and_then(|p| state.status.endpoints().get(&p).cloned());
+    v["way_in"] = way_in_json(t.way_in.as_deref(), live.as_ref(), db::tunnel_endpoints::of_tunnel(&state.db, t.id).await?.as_ref());
     // 這條隧道自己的服務金鑰（裝置要授權的那把）：裝置維運的材料，只給 owner / ADMIN。
     // The tunnel's own service key (the one the device authorizes): upkeep material, owner / ADMIN only.
     v["service_key"] = if eff.is_some_and(|e| e.satisfies(Permission::Admin)) {

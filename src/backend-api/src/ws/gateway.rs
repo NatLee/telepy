@@ -19,7 +19,20 @@ use crate::client_ip::ClientMeta;
 use crate::gateway::{self, Transport};
 use crate::state::AppState;
 
-pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
+/// 最前面那個代理說的協定：https（Traefik 對 WebSocket 會寫成 wss）= 裝置那頭有 TLS。只影響標籤（WSS / WS），
+/// 所以客戶端自己帶的值也無妨。
+/// The protocol the outermost proxy reports: https (Traefik writes wss for WebSockets) = TLS on the device's side.
+/// It only labels the connection (WSS / WS), so a client-supplied value does no harm.
+pub fn forwarded_tls(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "https" | "wss"))
+        .unwrap_or(false)
+}
+
+pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta, tls: bool) {
     let ip = meta.ip.as_deref().and_then(|s| s.parse::<IpAddr>().ok()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
     let peer = SocketAddr::new(ip, 0);
     if state.gateway.at_capacity() {
@@ -27,7 +40,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         let _ = socket.close().await;
         return;
     }
-    gateway::serve(state.gateway.clone(), WsStream::new(socket), peer, Transport::WebSocket).await;
+    gateway::serve(state.gateway.clone(), WsStream::new(socket), peer, Transport::WebSocket { tls }).await;
 }
 
 /// 把 WebSocket 當成位元組串流：收到的二進位（或文字）frame 是讀入的資料，寫出的資料一律是二進位 frame。
@@ -88,5 +101,27 @@ impl AsyncWrite for WsStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.get_mut().ws).poll_close(cx).map_err(io_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forwarded_tls;
+    use axum::http::HeaderMap;
+
+    fn with(v: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-proto", v.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn the_outermost_proxys_protocol_decides() {
+        assert!(forwarded_tls(&with("https")));
+        assert!(forwarded_tls(&with("wss")));
+        assert!(forwarded_tls(&with("HTTPS, http")));
+        assert!(!forwarded_tls(&with("http, https")));
+        assert!(!forwarded_tls(&with("ws")));
+        assert!(!forwarded_tls(&HeaderMap::new()));
     }
 }

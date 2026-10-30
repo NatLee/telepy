@@ -431,6 +431,7 @@ mod tests {
             require_step_up: false,
             record_sessions: false,
             terminal_detach_policy: "user".into(),
+            way_in: None,
         }
     }
 

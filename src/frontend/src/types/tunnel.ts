@@ -23,6 +23,8 @@ export interface Tunnel {
     shared_with?: TunnelSharee[] | null;
     /** 裝置的公網 IP（只在列表裡；看不到或從沒連過時 null）。/ Device public IP (list only; null when hidden or never connected). */
     endpoint?: TunnelEndpoint | null;
+    /** 裝置怎麼連 Telepy（沒有位址，看得到通道的人都有）。/ How the device reaches Telepy (no address, so every viewer gets it). */
+    way_in?: TunnelWayIn | null;
     /** 誰在用（只在列表裡）。/ Who is using the tunnel (list only). */
     presence?: TunnelPresence | null;
     /** 健康狀態（只在列表裡；抓取當下的值，即時狀態看 portsMap，見 lib/tunnelHealth）。/ Health at fetch time (list only). */
@@ -84,6 +86,19 @@ export interface PresenceSession {
     since: string;
     /** AI session 的 app。/ The app behind an AI session. */
     client: string | null;
+}
+
+/**
+ * 裝置怎麼連 Telepy：`setup` = 加進來時設定的方式，`last` = 現在連著的、否則最後一次實際用的方式，`tls` = 那次
+ * websocket 外面有沒有 TLS（wss）。兩個不一樣 = 實際走的跟設定的不同。
+ * How the device reaches Telepy: `setup` = how it was set up, `last` = the way it is connected now (else the way it
+ * last came in), `tls` = whether that WebSocket had TLS (wss). When they differ, it came in another way.
+ */
+export interface TunnelWayIn {
+    setup: "ssh" | "websocket" | null;
+    last: "ssh" | "websocket" | null;
+    live: boolean;
+    tls: boolean | null;
 }
 
 /** gateway 看到的裝置連線來源。/ The device's source address as the gateway sees it. */

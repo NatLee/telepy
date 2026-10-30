@@ -389,6 +389,8 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     if let Some(f) = &facts {
         let _ = db::device_install::record_join_facts(&state.db, tunnel.id, &f.to_string()).await;
     }
+    // 怎麼加進來的：這張票選的方式（重新加入就覆蓋）。/ How it was added: this ticket's way (a rejoin overwrites it).
+    db::tunnels::set_way_in(&state.db, tunnel.id, &t.transport).await.map_err(internal)?;
     config_lines(state, headers, &tunnel, &username, same_machine_as.as_ref()).await
 }
 

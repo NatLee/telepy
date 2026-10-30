@@ -26,6 +26,7 @@ import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSettin
 import { ShellHistorySetting } from "@/components/tunnels/ShellHistorySetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
 import { DeviceInstallSection } from "@/components/tunnels/DeviceInstall";
+import { TransportBadge } from "@/components/tunnels/DevicePlatform";
 import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { sshSafeName, suggestTunnelName } from "@/lib/tunnelName";
 import { Activity, Cpu, Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag, UserCheck } from "lucide-react";
@@ -162,6 +163,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     <span className="flex flex-wrap items-center gap-1.5">
                         <Chip mono><Hash /> {details.id}</Chip>
                         <Chip tone="primary" mono><Network /> :{details.reverse_port}</Chip>
+                        <TransportBadge tunnel={details} />
                         <Chip tone={role === "view" ? "neutral" : "success"}><ShieldCheck /> {t(ROLE_LABEL[role] ?? "keys.role.view")}</Chip>
                     </span>
                 ) : undefined

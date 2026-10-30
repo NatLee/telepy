@@ -439,8 +439,15 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
         Ok(ws) => ws,
         Err(e) => return plain(StatusCode::BAD_REQUEST, format!("{:?}", e.body)),
     };
+    let way = if ws.is_some() { "websocket" } else { "ssh" };
     match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain, ws).await {
-        Ok((script, _)) => plain(StatusCode::OK, script),
+        Ok((script, _)) => {
+            // 裝置拿走了腳本：它就是這樣加進來的（重新安裝就覆蓋）。/ The device took the script: this is how it is added.
+            if let Err(e) = db::tunnels::set_way_in(&state.db, t.id, way).await {
+                tracing::warn!(tunnel = t.id, error = %e, "cannot record how the tunnel was added");
+            }
+            plain(StatusCode::OK, script)
+        }
         Err(e) => {
             let msg = e.body.get("error").and_then(|v| v.as_str()).unwrap_or("error").to_string();
             plain(e.status, msg)

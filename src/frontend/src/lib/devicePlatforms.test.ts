@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { matchesOs, platformOf, PLATFORMS, shortOs, viaOf } from "./devicePlatforms.ts";
+import { liveTransport, matchesOs, matchesVia, platformOf, PLATFORMS, shortOs, wayInOf } from "./devicePlatforms.ts";
 
 test("platformOf reads the device facts", () => {
     assert.equal(platformOf(null), null);
@@ -29,12 +29,39 @@ test("shortOs keeps the name and major.minor", () => {
     assert.ok(shortOs("A very long distribution name that goes on and on")!.length <= 28);
 });
 
-test("viaOf maps the gateway transport", () => {
-    assert.equal(viaOf(null), null);
-    const base = { ip: "1.2.3.4", live: false, connected_at: "x", last_seen_at: null };
-    assert.equal(viaOf({ ...base, transport: "tcp" }), "ssh");
-    assert.equal(viaOf({ ...base, transport: "websocket" }), "http");
-    assert.equal(viaOf({ ...base, transport: null }), null, "connected before the upgrade");
+test("wayInOf: the actual way first, then how it was set up", () => {
+    const w = (setup: "ssh" | "websocket" | null, last: "ssh" | "websocket" | null, live = false, tls: boolean | null = null) => ({ way_in: { setup, last, live, tls } });
+    assert.equal(wayInOf(null), null);
+    assert.equal(wayInOf({}), null, "nothing known");
+    assert.equal(wayInOf(w(null, null)), null);
+    assert.deepEqual(wayInOf(w("ssh", "ssh", true)), { via: "ssh", state: "live", setup: null });
+    assert.deepEqual(wayInOf(w("websocket", "websocket", true, true)), { via: "wss", state: "live", setup: null });
+    assert.deepEqual(wayInOf(w("websocket", "websocket", false, false)), { via: "ws", state: "last", setup: null }, "Telepy over http");
+    assert.deepEqual(wayInOf(w("websocket", null)), { via: "wss", state: "setup", setup: null }, "added, not connected yet");
+    assert.deepEqual(wayInOf(w("websocket", null), false), { via: "ws", state: "setup", setup: null }, "TLS unknown: Telepy's own scheme");
+    assert.deepEqual(wayInOf(w("ssh", "websocket", true, true)), { via: "wss", state: "live", setup: "ssh" }, "came in another way than set up");
+    assert.deepEqual(wayInOf(w(null, "ssh")), { via: "ssh", state: "last", setup: null }, "setup unknown");
+    assert.equal(wayInOf(w("pigeon" as never, null)), null, "unknown values are ignored");
+});
+
+test("wayInOf falls back to endpoint.transport (older backend)", () => {
+    const base = { ip: "1.2.3.4", connected_at: "x", last_seen_at: null };
+    assert.deepEqual(wayInOf({ endpoint: { ...base, live: true, transport: "tcp" } }), { via: "ssh", state: "live", setup: null });
+    assert.deepEqual(wayInOf({ endpoint: { ...base, live: false, transport: "websocket" } }), { via: "wss", state: "last", setup: null });
+    assert.equal(wayInOf({ endpoint: { ...base, live: false, transport: null } }), null, "connected before the upgrade");
+});
+
+test("liveTransport and matchesVia", () => {
+    assert.equal(liveTransport({ way_in: { setup: "ssh", last: "ssh", live: true, tls: null } }), "tcp");
+    assert.equal(liveTransport({ way_in: { setup: "ssh", last: "websocket", live: true, tls: true } }), "websocket");
+    assert.equal(liveTransport({ way_in: { setup: "ssh", last: "ssh", live: false, tls: null } }), null, "offline");
+    assert.equal(liveTransport({ way_in: { setup: "websocket", last: null, live: false, tls: null } }), null, "never connected");
+    const wss = { via: "wss" as const, state: "live" as const, setup: null };
+    const ws = { via: "ws" as const, state: "live" as const, setup: null };
+    const ssh = { via: "ssh" as const, state: "live" as const, setup: null };
+    assert.ok(matchesVia("ssh", ssh) && !matchesVia("ssh", wss));
+    for (const q of ["wss", "ws", "http", "websocket", "web"]) assert.ok(matchesVia(q, wss) && matchesVia(q, ws) && !matchesVia(q, ssh), q);
+    assert.ok(!matchesVia("ssh", null));
 });
 
 test("os:linux includes a Raspberry Pi", () => {

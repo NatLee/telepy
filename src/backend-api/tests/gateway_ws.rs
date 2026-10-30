@@ -13,12 +13,14 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use common::lab::{Hop, Lab};
 
-/// 本機 TCP port → `/ws/gateway/` 的橋（每條 TCP 連線一條 WebSocket）。/ A local TCP port bridged to /ws/gateway/.
-async fn ws_bridge(ws_base: String) -> u16 {
+/// 本機 TCP port → `/ws/gateway/` 的橋（每條 TCP 連線一條 WebSocket）；`proto` 像 TLS 代理一樣帶 `X-Forwarded-Proto`
+/// （`https` = 裝置那頭是 wss）。/ A local TCP port bridged to /ws/gateway/; `proto` = the TLS proxy's forwarded proto.
+async fn ws_bridge(ws_base: String, proto: Option<&'static str>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -26,7 +28,11 @@ async fn ws_bridge(ws_base: String) -> u16 {
             let Ok((mut tcp, _)) = listener.accept().await else { break };
             let url = format!("{ws_base}/ws/gateway/");
             tokio::spawn(async move {
-                let (ws, _) = tokio_tungstenite::connect_async(&url).await.expect("websocket upgrade");
+                let mut req = url.as_str().into_client_request().unwrap();
+                if let Some(p) = proto {
+                    req.headers_mut().insert("x-forwarded-proto", p.parse().unwrap());
+                }
+                let (ws, _) = tokio_tungstenite::connect_async(req).await.expect("websocket upgrade");
                 let (mut tx, mut rx) = ws.split();
                 let (mut rd, mut wr) = tcp.split();
                 let up = async {
@@ -59,6 +65,19 @@ async fn ws_bridge(ws_base: String) -> u16 {
     port
 }
 
+/// 單筆 retrieve 的 `way_in`。/ The single retrieve's `way_in`.
+async fn way_in(app: &common::TestApp, token: &str, id: i64) -> serde_json::Value {
+    app.get(&format!("/api/reverse/server/keys/{id}"), Some(token)).await.json["way_in"].clone()
+}
+
+/// 發一次性腳本網址，再像裝置一樣（不帶登入）把它拿走。/ Mint a one-time script URL and take it like a device would.
+async fn take_one_time_script(app: &common::TestApp, token: &str, body: serde_json::Value) {
+    let r = app.post("/tunnels/server/script/one-time/token", Some(token), body).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app.get(&format!("/tunnels/server/script/one-time/{}", r.json["token"].as_str().unwrap()), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+}
+
 async fn wait_forward(lab: &Lab, port: u16) -> bool {
     for _ in 0..200 {
         if lab.app.state.status.listen_ports().is_some_and(|p| p.contains(&port)) {
@@ -74,7 +93,7 @@ async fn a_device_can_dial_the_gateway_through_the_websocket() {
     let Some(lab) = Lab::start().await else { return };
     let app = &lab.app;
     let alice = lab.user("alice").await;
-    let bridge = ws_bridge(lab.ws_base().await).await;
+    let bridge = ws_bridge(lab.ws_base().await, Some("https")).await;
     let boxm = lab.machine("box", &[("ubuntu", &[&lab.service, &alice.key])], false).await;
     let dev = lab.device_via_port(&alice, "box", &boxm, bridge, &[]).await;
     lab.username(&alice, &dev, "ubuntu").await;
@@ -88,6 +107,9 @@ async fn a_device_can_dial_the_gateway_through_the_websocket() {
     let r = app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
     let item = r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == dev.tunnel_id).unwrap();
     assert_eq!((item["endpoint"]["live"].as_bool(), item["endpoint"]["transport"].as_str()), (Some(true), Some("websocket")), "{item}");
+    // 卡片的「SSH over WSS」：手動接上的隧道，第一次連線就是它加進來的方式；代理說 https = wss。
+    // The badge: a tunnel connected by hand is set up the way it first came in; the proxy said https = wss.
+    assert_eq!(item["way_in"], json!({"setup": "websocket", "last": "websocket", "live": true, "tls": true}), "{item}");
     let r = app.get(&format!("/api/log/ssh/events?tunnel_id={}", dev.tunnel_id), Some(&alice.token)).await;
     let accepted = r.json.as_array().unwrap().iter().find(|e| e["event"] == "accepted").unwrap();
     assert!(accepted["message"].as_str().unwrap().ends_with("(over websocket)"), "{}", accepted["message"]);
@@ -104,6 +126,14 @@ async fn a_device_can_dial_the_gateway_through_the_websocket() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!((last["live"].as_bool(), last["transport"].as_str()), (Some(false), Some("websocket")), "{last}");
+    assert_eq!(way_in(app, &alice.token, dev.tunnel_id).await, json!({"setup": "websocket", "last": "websocket", "live": false, "tls": true}));
+
+    // 裝置拿走 SSH port 版的一次性腳本 = 重新設定成 SSH port；最後一次還是 WSS，兩個不同（卡片多一個 ⇄）。
+    // The device takes the SSH-port one-time script = set up for the SSH port again; it last came in over WSS.
+    take_one_time_script(app, &alice.token, json!({"server_id": dev.tunnel_id, "ssh_port": 22, "script_type": "ssh"})).await;
+    assert_eq!(way_in(app, &alice.token, dev.tunnel_id).await, json!({"setup": "ssh", "last": "websocket", "live": false, "tls": true}));
+    take_one_time_script(app, &alice.token, json!({"server_id": dev.tunnel_id, "ssh_port": 22, "script_type": "autossh", "transport": "websocket"})).await;
+    assert_eq!(way_in(app, &alice.token, dev.tunnel_id).await["setup"], "websocket");
 
     // 一鍵加入：票可以選 websocket，指令多 --via-web，註冊回答帶 WS_URL。/ Join: the ticket carries the transport.
     let r = app.post("/api/reverse/join", Some(&alice.token), json!({"transport": "websocket"})).await;

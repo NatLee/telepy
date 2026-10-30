@@ -117,6 +117,8 @@ async fn one_command_join() {
     assert_eq!(r.json["default_username_id"], r.json["usernames"][0]["id"]);
     let t = telepy_server::db::tunnels::by_id(&app.state.db, tunnel_id).await.unwrap().unwrap();
     assert_eq!(t.description.as_deref(), Some("Joined from raspberrypi (Linux aarch64)"));
+    // 這張票走 SSH port：還沒連上就知道它是怎麼加進來的。/ The ticket chose the SSH port: known before it connects.
+    assert_eq!(t.way_in.as_deref(), Some("ssh"));
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_device_key WHERE tunnel_id = ?").bind(tunnel_id).fetch_one(&app.state.db.read).await.unwrap();
     assert!(n >= 1, "key list seeded with alice's key");
     assert_eq!(wait_phase(app, &token, "registered").await.get("TUNNEL_ID").unwrap()[0], tunnel_id.to_string());
