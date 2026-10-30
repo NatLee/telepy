@@ -19,7 +19,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare, History } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare, History, HeartPulse } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -48,7 +48,6 @@ import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
-import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
 import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
 
 function titleize(key: string) {
@@ -359,7 +358,16 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
             {tab === "general" && !loading && <RegisterDomainsPanel values={settingsObj} onSave={handleUpdate} />}
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
-            {tab === "signin" && <ClientIpCheckPanel />}
+            {/* 位址檢查搬到管理區的「伺服器狀態」頁（那是診斷，不是設定）；這裡只留一個指路。
+                The address check lives on the admin "Server health" page now (a diagnostic, not a setting); only a pointer here. */}
+            {tab === "signin" && (
+                <Callout tone="info" icon={<HeartPulse size={17} className="mt-0.5 shrink-0" aria-hidden />}>
+                    {t("health.fromSignin")}{" "}
+                    <Link href="/tunnels/admin/health#client-ip" prefetch={false} className="inline-flex items-center gap-1 text-foreground underline underline-offset-2">
+                        {t("nav.adminHealth")} <ArrowRight size={12} className="opacity-60" />
+                    </Link>
+                </Callout>
+            )}
         </div>
     );
 }

@@ -501,7 +501,13 @@ pub struct ClientIpCheck {
     /// chain（X-Forwarded-For + socket 對端）/ header（`CLIENT_IP_HEADER`）
     pub from: Option<String>,
     pub geo: Option<IpGeo>,
-    pub trusted_proxy_hops: i64,
+    /// `auto`（內部位址都算代理）/ `fixed`（`TRUSTED_PROXY_HOPS` 是數字）。/ `auto` or `fixed`.
+    #[schema(example = "auto")]
+    pub hops_mode: String,
+    /// 固定層數；自動模式是 null。/ The fixed count; null in auto mode.
+    pub trusted_proxy_hops: Option<i64>,
+    /// 這個請求實際被當成代理跳過的段數。/ Entries skipped as proxies on this request.
+    pub skipped_hops: i64,
     pub client_ip_header: Option<String>,
     /// 左（離瀏覽器近）到右（離 Telepy 近），最後一段是 socket 對端。/ Left (browser side) to right; the last one is the socket peer.
     pub chain: Vec<ClientIpHop>,
@@ -514,6 +520,29 @@ pub struct ClientIpCheck {
     pub short_chain: bool,
     /// 設了 `CLIENT_IP_HEADER` 但請求沒有它。/ The configured header was missing.
     pub header_absent: bool,
+}
+
+/// `telepy-server doctor` 的一項檢查。/ One `telepy-server doctor` check.
+#[derive(ToSchema)]
+pub struct HealthCheck {
+    #[schema(example = "database")]
+    pub name: String,
+    /// ok / info / warn / fail
+    #[schema(example = "ok")]
+    pub status: String,
+    pub detail: String,
+}
+
+/// `GET /api/site/health`：伺服器狀態（管理員）。/ The server's health (superusers).
+#[derive(ToSchema)]
+pub struct ServerHealth {
+    pub checks: Vec<HealthCheck>,
+    pub ok: i64,
+    pub info: i64,
+    pub warnings: i64,
+    pub failures: i64,
+    #[schema(example = "2026-10-30T01:02:03Z")]
+    pub ran_at: String,
 }
 
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.

@@ -23,11 +23,18 @@ export interface HeaderSeen {
     addresses: { ip: string; scope: string }[];
 }
 
+export type HopsMode = "auto" | "fixed";
+
 export interface ClientIpCheck {
     ip: string | null;
     scope: string | null;
     from: "chain" | "header" | null;
-    trustedProxyHops: number;
+    /** `auto` = 內部位址都算代理；`fixed` = `TRUSTED_PROXY_HOPS` 是數字。/ Automatic, or a fixed count. */
+    hopsMode: HopsMode;
+    /** 固定層數；自動模式是 null。/ The fixed count; null in auto mode. */
+    trustedProxyHops: number | null;
+    /** 這個請求實際被當成代理跳過的段數。/ Entries skipped as proxies on this request. */
+    skippedHops: number;
     clientIpHeader: string | null;
     chain: ChainHop[];
     headers: HeaderSeen[];
@@ -71,7 +78,10 @@ export function parseClientIpCheck(raw: unknown): ClientIpCheck | null {
         ip: str(r.ip),
         scope: str(r.scope),
         from: r.from === "chain" || r.from === "header" ? r.from : null,
-        trustedProxyHops: int(r.trusted_proxy_hops) ?? 0,
+        // 舊後端沒有 hops_mode：有數字就是固定。/ An older backend has no hops_mode: a number means fixed.
+        hopsMode: r.hops_mode === "auto" || (r.hops_mode === undefined && int(r.trusted_proxy_hops) === null) ? "auto" : "fixed",
+        trustedProxyHops: int(r.trusted_proxy_hops),
+        skippedHops: int(r.skipped_hops) ?? 0,
         clientIpHeader: str(r.client_ip_header),
         chain,
         headers,
@@ -84,6 +94,9 @@ export function parseClientIpCheck(raw: unknown): ClientIpCheck | null {
 }
 
 export const isPublicScope = (scope: string | null | undefined) => scope === "public";
+
+/** 設定值的寫法：`auto` 或層數。/ The setting as written: `auto` or the count. */
+export const hopsSetting = (c: ClientIpCheck) => (c.hopsMode === "auto" ? "auto" : String(c.trustedProxyHops ?? 0));
 
 /**
  * CDN 自己設定的來源標頭。一個都沒收到 = 這個請求沒經過 CDN（例如 Cloudflare 的記錄是「僅 DNS」灰雲），這時設
@@ -113,17 +126,20 @@ export const PROBE_REAL_IP = "203.0.113.78";
 
 export const probeHeaders = (): Record<string, string> => ({ "X-Forwarded-For": PROBE_FORWARDED_FOR, "X-Real-IP": PROBE_REAL_IP });
 
-export type ProbeOutcome = "safe" | "forwarded_for" | "real_ip";
+export type ProbeOutcome = "safe" | "forwarded_for" | "auto_internal" | "real_ip";
 
 /**
  * 帶著假標頭的那次檢查：Telepy 記下的若是假位址 = 訪客能自己選要被記成什麼位址。X-Real-IP 被採用 = 前面的代理
- * （nginx real_ip / Nginx Proxy Manager）信任了訪客送的標頭；X-Forwarded-For 被採用 = TRUSTED_PROXY_HOPS 算多了。
+ * （nginx real_ip / Nginx Proxy Manager）信任了訪客送的標頭；X-Forwarded-For 被採用 = 固定層數算多了，或自動模式下
+ * 你自己就在內網（內部位址都算代理，所以越過了你的位址）——只有內網的訪客能這樣，而且只能改自己被記成什麼。
  * Reading the check sent with made-up headers: if Telepy took a made-up address, a visitor can choose the address
  * that gets recorded. X-Real-IP taken = the proxy in front trusts the visitor's header; X-Forwarded-For taken =
- * TRUSTED_PROXY_HOPS counts more proxies than there are.
+ * a fixed count counts more proxies than there are, or, in auto mode, you are on an internal address yourself
+ * (every internal address counts as a proxy, so yours was skipped) — only internal visitors can, and only for
+ * their own record.
  */
 export function probeOutcome(c: ClientIpCheck): ProbeOutcome {
     if (c.ip === PROBE_REAL_IP) return "real_ip";
-    if (c.ip === PROBE_FORWARDED_FOR) return "forwarded_for";
+    if (c.ip === PROBE_FORWARDED_FOR) return c.hopsMode === "auto" ? "auto_internal" : "forwarded_for";
     return "safe";
 }

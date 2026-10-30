@@ -149,8 +149,10 @@ Docker と Compose プラグインが必要です。
 > **最初のアカウント**が管理者になります——Google でサインインした場合も、`./telepy.sh create-superuser` で作成した場合も
 > 同じです。
 
-本番環境では Traefik の前に HTTPS プロキシを置き、`PUBLIC_URL` と `TRUSTED_PROXY_HOPS=2` を設定し、デバイスから
-ゲートウェイのポート（`REVERSE_SERVER_SSH_PORT`）に届くようにしてください。
+本番環境では Traefik の前に HTTPS プロキシを置き、`PUBLIC_URL` を設定し、デバイスからゲートウェイのポート
+（`REVERSE_SERVER_SSH_PORT`）に届くようにしてください。訪問者のアドレス（サインイン履歴、ライブセッション）は
+X-Forwarded-For から取り、既定ではバックエンドの前にある内部プロキシを自動的にスキップします。**管理 → サーバーの状態**
+で自分のリクエストのアドレスがどう求められたかを確認できます。
 
 ### デバイスをつなぐ
 
@@ -176,7 +178,7 @@ Docker と Compose プラグインが必要です。
 | `SECRET_KEY`                  | —           | サインインの署名と保存する秘密情報の暗号化；本番前に長いランダム値を設定  |
 | `INTERNAL_API_TOKEN`          | —           | バックエンドと kasm-browser コンテナの間の秘密値                           |
 | `SOCIAL_GOOGLE_CLIENT_ID`     | —           | Google サインイン（フロントエンドのビルド時に埋め込み）                    |
-| `TRUSTED_PROXY_HOPS`          | `1`         | バックエンドの前にある信頼できるプロキシの段数（Traefik を含む）           |
+| `TRUSTED_PROXY_HOPS`          | `auto`      | バックエンドの前のプロキシ: `auto` = 内部アドレスはすべて、または段数      |
 | `CLIENT_IP_HEADER`            | —           | クライアント IP をこのヘッダーから取る（例：`CF-Connecting-IP`）           |
 | `GATEWAY_PROXY_PROTOCOL_FROM` | —           | ゲートウェイの前で PROXY protocol を送る L4 プロキシの IP / CIDR           |
 | `DEVICE_PROBE`                | `true`      | 1 日 1 回、読み取り専用でデバイスにログインしてアドレスと情報を取得        |

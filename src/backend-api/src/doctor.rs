@@ -64,8 +64,21 @@ async fn tcp_reachable(addr: &str, timeout: Duration) -> Result<(), String> {
     }
 }
 
-/// 跑全部檢查。/ Run every check.
+/// 跑全部檢查（CLI 用：自己開資料庫，沒有檔案就不開，免得建出一個空的）。
+/// Run every check, opening the database itself (the CLI; a missing file is not created).
 pub async fn run(config: &Config) -> Vec<Check> {
+    let db = if !config.db_path.exists() {
+        Err(format!("{} does not exist; start the backend once (it creates and reconciles the schema)", config.db_path.display()))
+    } else {
+        Db::open(&config.db_path).await.map_err(|e| format!("cannot open {}: {e}", config.db_path.display()))
+    };
+    run_with(config, db).await
+}
+
+/// 跑全部檢查，資料庫由呼叫端給（管理區的「伺服器狀態」頁用後端自己開著的那個）；`Err` = 開不了的原因。
+/// Run every check on a database the caller opened (the admin "Server health" page passes the backend's own);
+/// `Err` = why it could not be opened.
+pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     let mut out = Vec::new();
 
     out.push(if config.secret_key_is_default {
@@ -90,12 +103,9 @@ pub async fn run(config: &Config) -> Vec<Check> {
         });
     }
 
-    // 資料庫（沒有檔案就不開，免得建出一個空的）。/ Database (not created when missing).
-    let db = if !config.db_path.exists() {
-        out.push(check("database", Status::Fail, format!("{} does not exist; start the backend once (it creates and reconciles the schema)", config.db_path.display())));
-        None
-    } else {
-        match Db::open(&config.db_path).await {
+    // 資料庫：核心表都在才算好。/ Database: every key table must exist.
+    let db = {
+        match db {
             Ok(db) => {
                 let mut missing = Vec::new();
                 for t in KEY_TABLES {
@@ -116,8 +126,8 @@ pub async fn run(config: &Config) -> Vec<Check> {
                 }
                 Some(db)
             }
-            Err(e) => {
-                out.push(check("database", Status::Fail, format!("cannot open {}: {e}", config.db_path.display())));
+            Err(why) => {
+                out.push(check("database", Status::Fail, why));
                 None
             }
         }
@@ -244,7 +254,8 @@ pub async fn run(config: &Config) -> Vec<Check> {
 }
 
 /// 純函式：最近登入的來源 IP 有幾個是公網位址。/ How many recent sign-in addresses are public.
-fn client_addresses(ips: &[String], hops: usize, header: Option<&str>) -> (Status, String) {
+fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option<&str>) -> (Status, String) {
+    let hops = hops.setting();
     let setting = match header {
         Some(h) => format!("CLIENT_IP_HEADER={h}, TRUSTED_PROXY_HOPS={hops}"),
         None => format!("TRUSTED_PROXY_HOPS={hops}"),
@@ -263,7 +274,7 @@ fn client_addresses(ips: &[String], hops: usize, header: Option<&str>) -> (Statu
     (
         Status::Warn,
         format!(
-            "all of the last {} sign-ins came from internal addresses ({}; {setting}): a proxy in front of Telepy replaces the visitor's address. As an admin, open Site settings → Sign-in → \"How Telepy sees your address\"",
+            "all of the last {} sign-ins came from internal addresses ({}; {setting}): a proxy in front of Telepy replaces the visitor's address. As an admin, open Admin → Server health → \"How Telepy sees your address\"",
             parsed.len(),
             distinct.into_iter().take(3).collect::<Vec<_>>().join(", ")
         ),
@@ -293,12 +304,15 @@ mod tests {
 
     #[test]
     fn client_addresses_warn_when_every_sign_in_is_internal() {
+        use crate::client_ip::Hops;
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(client_addresses(&v(&[]), 2, None).0, Status::Info);
-        assert_eq!(client_addresses(&v(&["172.19.0.1", "198.51.100.7"]), 2, None).0, Status::Ok);
-        let (s, d) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), 2, None);
+        assert_eq!(client_addresses(&v(&[]), Hops::Fixed(2), None).0, Status::Info);
+        assert_eq!(client_addresses(&v(&["172.19.0.1", "198.51.100.7"]), Hops::Fixed(2), None).0, Status::Ok);
+        let (s, d) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), Hops::Fixed(2), None);
         assert_eq!(s, Status::Warn);
-        assert!(d.contains("172.19.0.1;") && d.contains("TRUSTED_PROXY_HOPS=2"), "{d}");
+        assert!(d.contains("172.19.0.1;") && d.contains("TRUSTED_PROXY_HOPS=2") && d.contains("Server health"), "{d}");
+        let (_, d) = client_addresses(&v(&["10.0.0.9"]), Hops::Auto, Some("CF-Connecting-IP"));
+        assert!(d.contains("CLIENT_IP_HEADER=CF-Connecting-IP, TRUSTED_PROXY_HOPS=auto"), "{d}");
     }
 
     #[test]

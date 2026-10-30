@@ -22,10 +22,17 @@ pub struct TestApp {
 }
 
 pub async fn spawn() -> TestApp {
+    spawn_with(|_| {}).await
+}
+
+/// 同 `spawn`，但先讓測試改 Config（例如固定的 `TRUSTED_PROXY_HOPS`）。/ `spawn` with a Config hook.
+#[allow(dead_code)]
+pub async fn spawn_with(customize: impl FnOnce(&mut Config)) -> TestApp {
     // 不用環境變數（測試並行時會互相覆蓋），直接改 Config 欄位。
     // Avoid env vars (parallel tests race on them); set the Config fields directly.
     let dir = tempfile::tempdir().unwrap();
     let mut config = Config::from_env();
+    customize(&mut config);
     config.data_dir = dir.path().to_path_buf();
     config.db_path = dir.path().join("db.sqlite3");
     config.log_root = dir.path().join("logs");

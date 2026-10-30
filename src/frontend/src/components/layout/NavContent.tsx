@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal, BellRing } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal, BellRing, HeartPulse } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -87,6 +87,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         admin: true,
         links: [
             { key: "nav.settings", href: "/tunnels/settings", icon: <Settings size={18} /> },
+            { key: "nav.adminHealth", href: "/tunnels/admin/health", icon: <HeartPulse size={18} /> },
             { key: "nav.adminLogs", href: "/tunnels/admin/logs", icon: <ScrollText size={18} /> },
             { key: "nav.adminSessions", href: "/tunnels/admin/sessions", icon: <RadioReceiver size={18} /> },
             { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },

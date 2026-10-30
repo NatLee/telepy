@@ -46,7 +46,10 @@ async fn client_ip_check(State(state): State<AppState>, AuthUser(me): AuthUser, 
         "scope": d.scope,
         "from": d.from,
         "geo": d.ip.as_deref().map(|ip| state.geoip.json(Some(ip))),
-        "trusted_proxy_hops": cfg.trusted_proxy_hops,
+        // auto = 內部位址都算代理（trusted_proxy_hops 為 null）；fixed = 固定層數。/ auto (hops null) or fixed.
+        "hops_mode": if cfg.trusted_proxy_hops.fixed().is_some() { "fixed" } else { "auto" },
+        "trusted_proxy_hops": cfg.trusted_proxy_hops.fixed(),
+        "skipped_hops": d.skipped_hops,
         "client_ip_header": cfg.client_ip_header,
         "chain": d.chain,
         "headers": d.headers.iter().map(|h| json!({
