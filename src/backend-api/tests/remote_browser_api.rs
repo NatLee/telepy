@@ -85,6 +85,19 @@ async fn setup(app: &mut common::TestApp, kasm_base: &str) -> (String, i64) {
     (token, tunnel_id)
 }
 
+/// 開始的進度：(step, state) 依收到的順序，只看 progress id 對得上的。/ Start progress for the "tab-1" id, in order.
+fn progress(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        let v: Value = serde_json::from_str(&msg).unwrap();
+        let m = &v["message"];
+        if m["action"] == "REMOTE-BROWSER-PROGRESS" && m["progress_id"] == "tab-1" {
+            out.push((m["step"].as_str().unwrap().to_string(), m["state"].as_str().unwrap().to_string()));
+        }
+    }
+    out
+}
+
 #[tokio::test]
 async fn start_relay_and_stop() {
     let Some(mut lab) = common::lab::Lab::start().await else { return };
@@ -111,9 +124,12 @@ async fn start_relay_and_stop() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert_eq!(r.json["error"], "Username not authorized");
 
-    // start (default username resolution)
-    let r = app.post(&format!("/api/reverse/server/{tunnel_id}/remote-browser/start"), Some(&token), json!({})).await;
+    // start (default username resolution); with a progress id each step is pushed to the caller only
+    let mut rx = app.state.hub.subscribe_user(alice.id);
+    let r = app.post(&format!("/api/reverse/server/{tunnel_id}/remote-browser/start"), Some(&token), json!({"progress_id": "tab-1"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let steps = progress(&mut rx);
+    assert_eq!(steps, vec![("proxy".into(), "active".into()), ("proxy".into(), "done".into()), ("browser".into(), "active".into()), ("browser".into(), "done".into())]);
     let sid = r.json["session_id"].as_str().unwrap().to_string();
     assert_eq!(r.json["ws_path"], format!("/ws/remote-browser/{sid}/"));
     assert!(log.0.lock().unwrap()[0].starts_with("create proxy=socks5://127.0.0.1:"), "{:?}", log.0.lock().unwrap());
@@ -164,9 +180,13 @@ async fn offline_device_reports_device_offline() {
     let log = KasmLog::default();
     let kasm = mock_kasm(log.clone(), 1).await;
     let (token, tunnel_id) = setup(&mut app, &kasm).await;
-    let r = app.post(&format!("/api/reverse/server/{tunnel_id}/remote-browser/start"), Some(&token), json!({"username": "ubuntu"})).await;
+    let me: i64 = sqlx::query_scalar("SELECT id FROM auth_user WHERE username = 'admin'").fetch_one(&app.state.db.read).await.unwrap();
+    let mut rx = app.state.hub.subscribe_user(me);
+    let r = app.post(&format!("/api/reverse/server/{tunnel_id}/remote-browser/start"), Some(&token), json!({"username": "ubuntu", "progress_id": "tab-1"})).await;
     assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", r.text);
     assert_eq!(r.json["code"], "device_offline");
+    // 代理那一步失敗（試過一次、逾時），沒有走到開瀏覽器。/ The proxy step failed; the browser step never started.
+    assert_eq!(progress(&mut rx), vec![("proxy".into(), "active".into()), ("proxy".into(), "failed".into())]);
     assert!(r.json["error"].as_str().unwrap().contains("is the device online?"));
     assert!(log.0.lock().unwrap().is_empty(), "kasm must not be called when the proxy never came up");
     let r = app.post(&format!("/api/reverse/server/remote-browser/whatever/ping"), Some(&token), json!({})).await;

@@ -1,7 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Loader2, Languages } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Languages } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
+import { ProgressSteps } from "@/components/flow/ProgressSteps";
+import { afterStart, browserLine, browserSteps, BROWSER_STEPS, type BrowserStepEvent } from "@/lib/browserStart";
+import type { RunPhase } from "@/lib/progressSteps";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import { getWsOrigin } from "@/lib/wsCommon";
 import KasmUI from "@/vendor/kasm-novnc/app/ui.js";
 import { useI18n } from "@/lib/i18n";
@@ -78,6 +83,9 @@ export function RemoteBrowserPanel({
     const [phase, setPhase] = useState<"idle" | "connecting" | "connected">("idle");
     const [error, setError] = useState<string | null>(null);
     const [imeEnabled, setImeEnabled] = useState(true);   // 中文輸入預設開啟
+    // 開起來的三步（後端報前兩步，第三步這裡自己知道）與這次開始的 id。/ The three start steps and this start's id.
+    const [events, setEvents] = useState<BrowserStepEvent[]>([]);
+    const progressIdRef = useRef<string | null>(null);
     const imeEnabledRef = useRef(true);
 
     const screenRef = useRef<HTMLDivElement | null>(null);
@@ -171,6 +179,7 @@ export function RemoteBrowserPanel({
         });
         rfb.addEventListener("connect", () => {
             connectedRef.current = true;
+            setEvents((prev) => [...prev, { step: "stream", state: "done", at: Date.now() }]);
             setPhase("connected");
             onActiveChange?.(true);
             try { rfb.focus(); } catch { /* noop */ }
@@ -190,6 +199,9 @@ export function RemoteBrowserPanel({
     const startSession = useCallback(async () => {
         setError(null);
         setPhase("connecting");
+        setEvents([]);
+        const progressId = `rb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        progressIdRef.current = progressId;
         cleaningRef.current = false;
         userStoppedRef.current = false;
         connectedRef.current = false;
@@ -197,7 +209,7 @@ export function RemoteBrowserPanel({
         try {
             const res = await apiFetch(
                 `/api/reverse/server/${serverId}/remote-browser/start`,
-                { method: "POST", body: JSON.stringify({ username }) },
+                { method: "POST", body: JSON.stringify({ username, progress_id: progressId }) },
             );
             if (!res.ok) {
                 const data = await readJson(res);
@@ -210,6 +222,7 @@ export function RemoteBrowserPanel({
             }
             const data = await res.json();
             sessionIdRef.current = data.session_id;
+            setEvents((prev) => afterStart(prev, Date.now()));
 
             const ws = new WebSocket(`${getWsOrigin()}${data.ws_path}`);
             ws.binaryType = "arraybuffer";
@@ -225,7 +238,7 @@ export function RemoteBrowserPanel({
             // setup 階段:等後端 {type:"ready"} 再把 socket 交給 KasmVNC client。
             ws.onmessage = (ev) => {
                 if (typeof ev.data !== "string") return;
-                let msg: any;
+                let msg: { type?: string };
                 try { msg = JSON.parse(ev.data); } catch { return; }
                 if (msg.type === "ready") {
                     ws.onmessage = null;      // 交棒給 KasmVNC client
@@ -238,16 +251,30 @@ export function RemoteBrowserPanel({
             ws.onclose = (ev) => {
                 const wasConnected = connectedRef.current;
                 if (!userStoppedRef.current && !wasConnected) {
+                    setEvents((prev) => [...prev, { step: "stream", state: "failed", at: Date.now() }]);
                     const closeKey = CLOSE_MESSAGES[ev.code];
                     setError((e) => e || (closeKey ? t(closeKey) : t("browser.connectionClosed")));
                 }
                 cleanup(false);
             };
-        } catch (err: any) {
-            setError(err.message || t("browser.unknownError"));
+        } catch (err) {
+            setError((err instanceof Error && err.message) || t("browser.unknownError"));
             cleanup(true);
         }
     }, [serverId, username, attachKasmClient, cleanup, t]);
+
+    // 後端報的前兩步（只收這次開始的）。/ The backend's two steps, for this start only.
+    const progressHandlers = useMemo(
+        () => ({
+            [NOTIFICATION_ACTIONS.REMOTE_BROWSER_PROGRESS]: (msg: NotificationPayload) => {
+                if (!progressIdRef.current || msg.progress_id !== progressIdRef.current) return;
+                if (!(BROWSER_STEPS as readonly string[]).includes(msg.step)) return;
+                setEvents((prev) => [...prev, { ...(msg as unknown as BrowserStepEvent), at: Date.now() }]);
+            },
+        }),
+        [],
+    );
+    useNotificationHandlers(progressHandlers);
 
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
@@ -300,6 +327,17 @@ export function RemoteBrowserPanel({
 
     const active = phase === "connected";
     const busy = phase !== "idle";
+    const run: RunPhase = phase === "connected" ? "done" : phase === "connecting" ? "running" : error ? "failed" : "idle";
+    const stepList = (
+        <ProgressSteps
+            planning={run === "idle"}
+            aria-label={t("browser.step.title")}
+            steps={browserSteps(run === "idle" ? [] : events, run).map((v) => {
+                const line = browserLine(v);
+                return { id: v.id, state: v.state, event: v.event, title: t(`browser.step.${v.id}` as TranslationKey, { username }), line: t(line.key, { username, ...line.vars }) };
+            })}
+        />
+    );
 
     return (
         <div className="flex flex-col h-full w-full bg-card overflow-hidden relative shadow-xl">
@@ -338,15 +376,22 @@ export function RemoteBrowserPanel({
                 </div>
             )}
 
-            {/* Idle info */}
-            {phase === "idle" && !error && (
-                <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-4 text-center">
-                    <MonitorPlay size={48} className="mb-4 opacity-20" />
-                    <h3 className="text-lg font-medium mb-2 text-foreground">{t("browser.idleTitle")}</h3>
-                    <p className="text-sm max-w-sm mb-4">
-                        {t("browser.idleBody", { username })}
-                    </p>
-                    <Button onClick={startSession}>{t("browser.clickToInitialize")}</Button>
+            {/* 還沒開始 / 開始失敗：會做的三步（失敗時停在哪一步），加上開始 / 再試一次。
+                Idle or failed: the three steps (where it stopped, after a failure) and start / try again. */}
+            {phase === "idle" && (
+                <div className="flex-1 overflow-auto p-4">
+                    <div className="mx-auto max-w-md space-y-4">
+                        {!error && (
+                            <div className="space-y-1 text-center">
+                                <h3 className="text-lg text-foreground">{t("browser.idleTitle")}</h3>
+                                <p className="text-sm text-muted-foreground">{t("browser.idleBody", { username })}</p>
+                            </div>
+                        )}
+                        {stepList}
+                        <div className="text-center">
+                            <Button onClick={startSession}>{error ? t("browser.tryAgain") : t("browser.clickToInitialize")}</Button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -368,9 +413,11 @@ export function RemoteBrowserPanel({
                         />
                     </div>
                     {!active && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-black/80">
-                            <Loader2 size={48} className="mb-4 animate-spin text-primary" />
-                            <p className="text-sm">{t("browser.starting")}</p>
+                        <div className="absolute inset-0 overflow-auto bg-black/80 p-4">
+                            <div className="mx-auto mt-[8vh] max-w-md space-y-3 rounded-xl border border-border bg-card p-4 shadow-dialog" role="status">
+                                <p className="text-sm text-foreground">{t("browser.starting")}</p>
+                                {stepList}
+                            </div>
                         </div>
                     )}
                 </div>

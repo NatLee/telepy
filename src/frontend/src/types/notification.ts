@@ -35,6 +35,8 @@ export const NOTIFICATION_ACTIONS = {
     DEVICE_INSTALL_UPDATED: "DEVICE-INSTALL-UPDATED",
     // 刪除隧道的進度：{tunnel_id, step, state, …}（只送給按刪除的人；請求還在跑）。/ Tunnel delete progress (to the person deleting).
     TUNNEL_DELETE_PROGRESS: "TUNNEL-DELETE-PROGRESS",
+    // 遠端瀏覽器開起來的進度：{tunnel_id, progress_id, step, state, …}（只送給按開始的人）。/ Remote browser start progress.
+    REMOTE_BROWSER_PROGRESS: "REMOTE-BROWSER-PROGRESS",
     // 裝置需要注意（磁碟 / 記憶體 / 負載 / 重開機）：{tunnel_id, tunnel_name, warnings}（送給擁有者與 ADMIN）。
     // A device needs attention (disk / memory / load / reboot): owner + ADMIN sharees.
     DEVICE_WARNING: "DEVICE-WARNING",

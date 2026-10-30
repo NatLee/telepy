@@ -45,11 +45,11 @@ const ENDED: readonly StepState[] = ["done", "warn", "failed", "skipped"];
  * - running：有結束事件就照它；有開始事件 = 進行中；都沒有時，計畫略過的 = 略過，其他待命——但如果沒有任何一步在進行中，
  *   第一個還沒結束的就算進行中（通知掉了也不會整排停在待命）。
  * - done：照結束事件；沒有的（舊後端沒回報）計畫要做 = 做完。
- * - failed：結束的照舊；進行中（或第一個還沒結束的）那步失敗；其餘待命。
+ * - failed：結束的照舊；沒有哪一步自己報失敗時，進行中（或第一個還沒結束的）那步算失敗；其餘待命。
  * Each step's state. idle: planned = waiting, not planned = skipped. running: an end event wins, a start = active,
  * otherwise skipped / waiting — and when nothing is active the first unfinished step is (a lost notification never
- * freezes the list). done: the end events; missing ones count as done when planned. failed: the step in progress (or
- * the first unfinished one) failed, the rest waits.
+ * freezes the list). done: the end events; missing ones count as done when planned. failed: unless a step reported its
+ * own failure, the step in progress (or the first unfinished one) failed; the rest waits.
  */
 export function stepViews<Id extends string>(order: readonly Id[], plan: readonly PlannedStep<Id>[], events: readonly StepEvent<Id>[], phase: RunPhase): StepView<Id>[] {
     const planned = new Map(plan.map((p) => [p.id, p]));
@@ -72,7 +72,8 @@ export function stepViews<Id extends string>(order: readonly Id[], plan: readonl
         const next = views.find((v) => v.state === "waiting");
         if (next) next.state = "active";
     }
-    if (phase === "failed") {
+    // 已經有一步報了失敗就是它，不再多標一步。/ A step that reported its own failure is the one; don't mark another.
+    if (phase === "failed" && !views.some((v) => v.state === "failed")) {
         const at = views.find((v) => v.state === "active") ?? views.find((v) => v.state === "waiting");
         if (at) at.state = "failed";
     }
