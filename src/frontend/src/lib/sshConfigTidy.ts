@@ -170,7 +170,8 @@ function argvSplit(s: string): string[] | null {
     return out;
 }
 
-function line(n: number, raw: string): CfgLine {
+/** 一行文字 → CfgLine（關鍵字、引號、`Key=value` 照 OpenSSH）。/ One line of text → CfgLine, tokenised like OpenSSH. */
+export function parseLine(n: number, raw: string): CfgLine {
     const base = { n, raw, key: "", slot: "", args: [] as string[], rest: "" };
     const s = raw.replace(/[ \t\r]+$/, "").replace(/^[ \t]+/, "");
     if (!s) return { ...base, kind: "blank" };
@@ -183,11 +184,15 @@ function line(n: number, raw: string): CfgLine {
     return { ...base, kind: "option", key: m[1], slot: SLOT_ALIASES[lower] ?? lower, args, rest: m[2] };
 }
 
-const isWild = (p: string) => /[*?!]/.test(p);
+export const isWild = (p: string) => /[*?!]/.test(p);
+/** 會累加的選項（IdentityFile…）。/ Whether an option adds up (IdentityFile …). */
+export const stacks = (slot: string) => ACCUMULATE.has(slot);
+/** 小寫、別名歸一的選項名。/ An option's setting name: lower case, aliases folded. */
+export const slotOf = (key: string) => SLOT_ALIASES[key.toLowerCase()] ?? key.toLowerCase();
 /** 能原樣寫回 Host 行的名稱（沒有空白、引號、跳脫、萬用字元）。/ A name that can go back on a Host line as is. */
-const plainName = (p: string) => /^[^\s"'\\#*?!]+$/.test(p);
+export const plainName = (p: string) => /^[^\s"'\\#*?!]+$/.test(p);
 
-function newBlock(kind: CfgBlock["kind"], header: CfgLine | null, lead: CfgLine[]): CfgBlock {
+export function newBlock(kind: CfgBlock["kind"], header: CfgLine | null, lead: CfgLine[]): CfgBlock {
     const patterns = kind === "host" && header ? header.args : [];
     return {
         kind,
@@ -230,7 +235,7 @@ export function parseConfig(text: string): ParsedConfig {
     const blocks: CfgBlock[] = [newBlock("global", null, [])];
     let cur = blocks[0];
     rawLines.forEach((raw, i) => {
-        const l = line(i + 1, raw);
+        const l = parseLine(i + 1, raw);
         if (l.kind === "option" && (l.slot === "host" || l.slot === "match")) {
             const lead = closeBlock(cur);
             cur = newBlock(l.slot === "host" ? "host" : "match", l, lead);
@@ -305,14 +310,14 @@ export function hostMatches(patterns: string[], host: string): boolean {
     return active;
 }
 
-function applies(b: CfgBlock, host: string, matchAll = false): boolean {
+export function applies(b: CfgBlock, host: string, matchAll = false): boolean {
     if (b.dropped) return false;
     if (b.kind === "match") return matchAll;
     return b.kind === "global" || hostMatches(b.patterns, host);
 }
 
 /** 比較用的值：HostName 把 `%h` 展開（只有它取決於打進去的名稱）。/ The value compared; HostName expands `%h`. */
-function valueText(l: CfgLine, host: string): string {
+export function valueText(l: CfgLine, host: string): string {
     if (VERBATIM.has(l.slot)) return l.rest.trim();
     if (l.slot === "hostname") return (l.args[0] ?? "").replace(/%([%h])/g, (_, c) => (c === "%" ? "%" : host));
     return l.args.join("\u0000");
@@ -353,7 +358,7 @@ export function resolve(blocks: CfgBlock[], host: string, matchAll = false): Eff
     return { first, lists };
 }
 
-function sameEffect(a: Effect, b: Effect): boolean {
+export function sameEffect(a: Effect, b: Effect): boolean {
     if (a.first.size !== b.first.size || a.lists.size !== b.lists.size) return false;
     for (const [k, v] of a.first) if (b.first.get(k)?.text !== v.text) return false;
     for (const [k, v] of a.lists) {
@@ -439,7 +444,7 @@ interface Feature {
 const idText = (l: CfgLine) => valueText(l, "\u0003");
 const ownerKey = (o: Owner) => (o.kind === "telepy" ? `telepy:${o.server}` : o.kind);
 const editable = (b: CfgBlock) => !b.barrier && !b.made && !b.dropped && b.literal && (b.owner.kind === "user" || b.owner.kind === "telepy");
-const options = (b: CfgBlock) => b.body.filter((l) => l.kind === "option");
+export const options = (b: CfgBlock) => b.body.filter((l) => l.kind === "option");
 
 /** `HostName <前綴><名稱><後綴>` → `<前綴>%h<後綴>`（區塊只有一個名稱、值裡沒有 `%`）。/ HostName as a `%h` template. */
 function hostnameTemplate(b: CfgBlock, l: CfgLine): string | null {

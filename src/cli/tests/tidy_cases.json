@@ -1,0 +1,1519 @@
+[
+ {
+  "name": "sample",
+  "wildcards": false,
+  "input": "# my servers\nHost *\n    ServerAliveInterval 60\n\nHost web1\n    HostName web1.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n    User deploy\n\nHost web2\n    HostName web2.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n\nHost db\n    HostName 10.0.0.5\n    User deploy\n    IdentityFile ~/.ssh/work\n    Port 2222\n    ServerAliveInterval 30\n",
+  "output": "# my servers\nHost *\n    ServerAliveInterval 60\n\nHost db\n    HostName 10.0.0.5\n    Port 2222\n    ServerAliveInterval 30\n\nHost web1 web2 db\n    HostName %h.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n",
+  "notes": [
+   [
+    "shadowed",
+    21
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "sample",
+  "wildcards": true,
+  "input": "# my servers\nHost *\n    ServerAliveInterval 60\n\nHost web1\n    HostName web1.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n    User deploy\n\nHost web2\n    HostName web2.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n\nHost db\n    HostName 10.0.0.5\n    User deploy\n    IdentityFile ~/.ssh/work\n    Port 2222\n    ServerAliveInterval 30\n",
+  "output": "# my servers\nHost *\n    ServerAliveInterval 60\n\nHost db\n    HostName 10.0.0.5\n    Port 2222\n    ServerAliveInterval 30\n\nHost web1 web2 db\n    HostName %h.example.com\n    User deploy\n    IdentityFile ~/.ssh/work\n",
+  "notes": [
+   [
+    "shadowed",
+    21
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "example",
+  "wildcards": false,
+  "input": "# Work servers\nHost bastion\n    HostName bastion.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n\nHost web-1\n    HostName web-1.internal.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost web-2\n    HostName web-2.internal.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n    User deploy\n\nHost db\n    HostName 10.20.0.5\n    User postgres\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost *\n    AddKeysToAgent yes\n    ServerAliveInterval 60\n\nHost lab-pi\n    HostName 192.168.1.40\n    ServerAliveInterval 15\n",
+  "output": "# Work servers\nHost bastion\n    HostName bastion.example.com\n\nHost web-1 web-2\n    HostName %h.internal.example.com\n\nHost db\n    HostName 10.20.0.5\n    User postgres\n\nHost web-1 web-2 db\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost bastion web-1 web-2 db\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n\nHost *\n    AddKeysToAgent yes\n    ServerAliveInterval 60\n\nHost lab-pi\n    HostName 192.168.1.40\n    ServerAliveInterval 15\n",
+  "notes": [
+   [
+    "shadowed",
+    35
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "shared",
+   "shared",
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "example",
+  "wildcards": true,
+  "input": "# Work servers\nHost bastion\n    HostName bastion.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n\nHost web-1\n    HostName web-1.internal.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost web-2\n    HostName web-2.internal.example.com\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n    User deploy\n\nHost db\n    HostName 10.20.0.5\n    User postgres\n    IdentityFile ~/.ssh/work_ed25519\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost *\n    AddKeysToAgent yes\n    ServerAliveInterval 60\n\nHost lab-pi\n    HostName 192.168.1.40\n    ServerAliveInterval 15\n",
+  "output": "# Work servers\nHost bastion\n    HostName bastion.example.com\n\nHost web-*\n    HostName %h.internal.example.com\n\nHost db\n    HostName 10.20.0.5\n    User postgres\n\nHost web-1 web-2 db\n    ProxyJump bastion\n    ServerAliveInterval 30\n\nHost bastion web-1 web-2 db\n    User deploy\n    IdentityFile ~/.ssh/work_ed25519\n\nHost *\n    AddKeysToAgent yes\n    ServerAliveInterval 60\n\nHost lab-pi\n    HostName 192.168.1.40\n    ServerAliveInterval 15\n",
+  "notes": [
+   [
+    "shadowed",
+    35
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "shared",
+   "shared",
+   "shared",
+   "wildcard"
+  ],
+  "failed": []
+ },
+ {
+  "name": "telepy-fleet",
+  "wildcards": false,
+  "input": "# >>> telepy telepy-telepy.example-24242 >>>\nHost telepy-telepy.example-24242\n    HostName telepy.example\n    Port 24242\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242\n    User telepy\n# <<< telepy telepy-telepy.example-24242 <<<\n# >>> telepy pi >>>\nHost pi\n    HostName pi\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User pi\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy nas-root >>>\nHost nas-root\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-root <<<\n# >>> telepy nas-admin >>>\nHost nas-admin\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User admin\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-admin <<<\n# >>> telepy cam >>>\nHost cam\n    HostName cam\n    Port 22\n    Compression yes\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy router >>>\nHost router\n    HostName router\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-4\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy router <<<\n",
+  "output": "# >>> telepy telepy-telepy.example-24242 >>>\nHost telepy-telepy.example-24242\n    HostName telepy.example\n    Port 24242\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242\n    User telepy\n# <<< telepy telepy-telepy.example-24242 <<<\n# >>> telepy pi >>>\nHost pi\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User pi\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy nas-root >>>\nHost nas-root\n    HostName nas\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-root <<<\n# >>> telepy nas-admin >>>\nHost nas-admin\n    HostName nas\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User admin\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-admin <<<\n# >>> telepy cam >>>\nHost cam\n    StrictHostKeyChecking accept-new\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy router >>>\nHost router\n    HostKeyAlias telepy-telepy.example-24242-device-4\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy router <<<\n# >>> telepy shared telepy-telepy.example-24242 >>>\nHost pi nas-root nas-admin cam router\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-telepy.example-24242 <<<\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "telepy-fleet",
+  "wildcards": true,
+  "input": "# >>> telepy telepy-telepy.example-24242 >>>\nHost telepy-telepy.example-24242\n    HostName telepy.example\n    Port 24242\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242\n    User telepy\n# <<< telepy telepy-telepy.example-24242 <<<\n# >>> telepy pi >>>\nHost pi\n    HostName pi\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User pi\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy nas-root >>>\nHost nas-root\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-root <<<\n# >>> telepy nas-admin >>>\nHost nas-admin\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User admin\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-admin <<<\n# >>> telepy cam >>>\nHost cam\n    HostName cam\n    Port 22\n    Compression yes\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy router >>>\nHost router\n    HostName router\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-4\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy router <<<\n",
+  "output": "# >>> telepy telepy-telepy.example-24242 >>>\nHost telepy-telepy.example-24242\n    HostName telepy.example\n    Port 24242\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242\n    User telepy\n# <<< telepy telepy-telepy.example-24242 <<<\n# >>> telepy pi >>>\nHost pi\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User pi\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy nas-root >>>\nHost nas-root\n    HostName nas\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-root <<<\n# >>> telepy nas-admin >>>\nHost nas-admin\n    HostName nas\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User admin\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas-admin <<<\n# >>> telepy cam >>>\nHost cam\n    StrictHostKeyChecking accept-new\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy router >>>\nHost router\n    HostKeyAlias telepy-telepy.example-24242-device-4\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy router <<<\n# >>> telepy shared telepy-telepy.example-24242 >>>\nHost pi nas-root nas-admin cam router\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-telepy.example-24242 <<<\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "two-servers",
+  "wildcards": false,
+  "input": "# >>> telepy pi >>>\nHost pi\n    HostName pi\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy cam >>>\nHost cam\n    HostName cam\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy nas >>>\nHost nas\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas <<<\n# >>> telepy a >>>\nHost a\n    HostName a\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-other.example-22-device-1\n    User root\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy a <<<\n# >>> telepy b >>>\nHost b\n    HostName b\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-other.example-22-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy b <<<\nHost mine\n    Port 22\n",
+  "output": "# >>> telepy pi >>>\nHost pi\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy cam >>>\nHost cam\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy nas >>>\nHost nas\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas <<<\n# >>> telepy shared telepy-telepy.example-24242 >>>\nHost pi cam nas\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-telepy.example-24242 <<<\n# >>> telepy a >>>\nHost a\n    HostKeyAlias telepy-other.example-22-device-1\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy a <<<\n# >>> telepy b >>>\nHost b\n    HostKeyAlias telepy-other.example-22-device-2\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy b <<<\n# >>> telepy shared telepy-other.example-22 >>>\nHost a b\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-other.example-22 <<<\nHost mine\n    Port 22\n",
+  "notes": [],
+  "changes": [
+   "shared",
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "two-servers",
+  "wildcards": true,
+  "input": "# >>> telepy pi >>>\nHost pi\n    HostName pi\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy cam >>>\nHost cam\n    HostName cam\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy nas >>>\nHost nas\n    HostName nas\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    User root\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas <<<\n# >>> telepy a >>>\nHost a\n    HostName a\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-other.example-22-device-1\n    User root\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy a <<<\n# >>> telepy b >>>\nHost b\n    HostName b\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-other.example-22-device-2\n    User root\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy b <<<\nHost mine\n    Port 22\n",
+  "output": "# >>> telepy pi >>>\nHost pi\n    HostKeyAlias telepy-telepy.example-24242-device-1\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy pi <<<\n# >>> telepy cam >>>\nHost cam\n    HostKeyAlias telepy-telepy.example-24242-device-2\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy cam <<<\n# >>> telepy nas >>>\nHost nas\n    HostKeyAlias telepy-telepy.example-24242-device-3\n    ProxyCommand ssh -W %h:%p telepy-telepy.example-24242\n# <<< telepy nas <<<\n# >>> telepy shared telepy-telepy.example-24242 >>>\nHost pi cam nas\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-telepy.example-24242 <<<\n# >>> telepy a >>>\nHost a\n    HostKeyAlias telepy-other.example-22-device-1\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy a <<<\n# >>> telepy b >>>\nHost b\n    HostKeyAlias telepy-other.example-22-device-2\n    ProxyCommand ssh -W %h:%p telepy-other.example-22\n# <<< telepy b <<<\n# >>> telepy shared telepy-other.example-22 >>>\nHost a b\n    HostName %h\n    Port 22\n    Compression yes\n    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    User root\n# <<< telepy shared telepy-other.example-22 <<<\nHost mine\n    Port 22\n",
+  "notes": [],
+  "changes": [
+   "shared",
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "crlf",
+  "wildcards": false,
+  "input": "Host a\r\n  User x\r\n  Port 2200\r\n\r\nHost b\r\n  User x\r\n  Port 2200\r\n",
+  "output": "Host a b\r\n  User x\r\n  Port 2200\r\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "crlf",
+  "wildcards": true,
+  "input": "Host a\r\n  User x\r\n  Port 2200\r\n\r\nHost b\r\n  User x\r\n  Port 2200\r\n",
+  "output": "Host a b\r\n  User x\r\n  Port 2200\r\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "walls",
+  "wildcards": false,
+  "input": "Host a\n  User x\n  Port 2200\nMatch exec \"true\"\n  User z\nHost b\n  User x\n  Port 2200\nHost c\n  Include other.conf\n",
+  "output": "Host a\n  User x\n  Port 2200\nMatch exec \"true\"\n  User z\nHost b\n  User x\n  Port 2200\nHost c\n  Include other.conf\n",
+  "notes": [
+   [
+    "wall",
+    4
+   ],
+   [
+    "wall",
+    10
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "walls",
+  "wildcards": true,
+  "input": "Host a\n  User x\n  Port 2200\nMatch exec \"true\"\n  User z\nHost b\n  User x\n  Port 2200\nHost c\n  Include other.conf\n",
+  "output": "Host a\n  User x\n  Port 2200\nMatch exec \"true\"\n  User z\nHost b\n  User x\n  Port 2200\nHost c\n  Include other.conf\n",
+  "notes": [
+   [
+    "wall",
+    4
+   ],
+   [
+    "wall",
+    10
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "notes",
+  "wildcards": false,
+  "input": "Host a\n  Usr x\n  Protocol 2\n  User one\n  User two\n  Hostname a.example\n  Bad \"quote\n",
+  "output": "Host a\n  Usr x\n  Protocol 2\n  User one\n  User two\n  Hostname a.example\n  Bad \"quote\n",
+  "notes": [
+   [
+    "unknown",
+    2
+   ],
+   [
+    "ignored",
+    3
+   ],
+   [
+    "invalid",
+    7
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "notes",
+  "wildcards": true,
+  "input": "Host a\n  Usr x\n  Protocol 2\n  User one\n  User two\n  Hostname a.example\n  Bad \"quote\n",
+  "output": "Host a\n  Usr x\n  Protocol 2\n  User one\n  User two\n  Hostname a.example\n  Bad \"quote\n",
+  "notes": [
+   [
+    "unknown",
+    2
+   ],
+   [
+    "ignored",
+    3
+   ],
+   [
+    "invalid",
+    7
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "quotes",
+  "wildcards": false,
+  "input": "Host a\n  User=bob\n  IdentityFile \"~/My Keys/id\"\nHost b\n  User = bob\n  IdentityFile \"~/My Keys/id\"\n",
+  "output": "Host a b\n  User=bob\n  IdentityFile \"~/My Keys/id\"\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "quotes",
+  "wildcards": true,
+  "input": "Host a\n  User=bob\n  IdentityFile \"~/My Keys/id\"\nHost b\n  User = bob\n  IdentityFile \"~/My Keys/id\"\n",
+  "output": "Host a b\n  User=bob\n  IdentityFile \"~/My Keys/id\"\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "stacks",
+  "wildcards": false,
+  "input": "Host a\n  IdentityFile k0\n  IdentityFile k1\nHost b\n  IdentityFile k1\nHost *\n  IdentityFile k9\n",
+  "output": "Host a\n  IdentityFile k0\n  IdentityFile k1\nHost b\n  IdentityFile k1\nHost *\n  IdentityFile k9\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "stacks",
+  "wildcards": true,
+  "input": "Host a\n  IdentityFile k0\n  IdentityFile k1\nHost b\n  IdentityFile k1\nHost *\n  IdentityFile k9\n",
+  "output": "Host a\n  IdentityFile k0\n  IdentityFile k1\nHost b\n  IdentityFile k1\nHost *\n  IdentityFile k9\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "long",
+  "wildcards": false,
+  "input": "Host device-number-0.lab.example\n    User admin\n    Port 2222\nHost device-number-1.lab.example\n    User admin\n    Port 2222\nHost device-number-2.lab.example\n    User admin\n    Port 2222\nHost device-number-3.lab.example\n    User admin\n    Port 2222\nHost device-number-4.lab.example\n    User admin\n    Port 2222\nHost device-number-5.lab.example\n    User admin\n    Port 2222\nHost device-number-6.lab.example\n    User admin\n    Port 2222\nHost device-number-7.lab.example\n    User admin\n    Port 2222\nHost device-number-8.lab.example\n    User admin\n    Port 2222\nHost device-number-9.lab.example\n    User admin\n    Port 2222\nHost device-number-10.lab.example\n    User admin\n    Port 2222\nHost device-number-11.lab.example\n    User admin\n    Port 2222\nHost device-number-12.lab.example\n    User admin\n    Port 2222\nHost device-number-13.lab.example\n    User admin\n    Port 2222\nHost device-number-14.lab.example\n    User admin\n    Port 2222\nHost device-number-15.lab.example\n    User admin\n    Port 2222\nHost device-number-16.lab.example\n    User admin\n    Port 2222\nHost device-number-17.lab.example\n    User admin\n    Port 2222\nHost device-number-18.lab.example\n    User admin\n    Port 2222\nHost device-number-19.lab.example\n    User admin\n    Port 2222\nHost device-number-20.lab.example\n    User admin\n    Port 2222\nHost device-number-21.lab.example\n    User admin\n    Port 2222\nHost device-number-22.lab.example\n    User admin\n    Port 2222\nHost device-number-23.lab.example\n    User admin\n    Port 2222\nHost device-number-24.lab.example\n    User admin\n    Port 2222\nHost device-number-25.lab.example\n    User admin\n    Port 2222\nHost device-number-26.lab.example\n    User admin\n    Port 2222\nHost device-number-27.lab.example\n    User admin\n    Port 2222\nHost device-number-28.lab.example\n    User admin\n    Port 2222\nHost device-number-29.lab.example\n    User admin\n    Port 2222\nHost device-number-30.lab.example\n    User admin\n    Port 2222\nHost device-number-31.lab.example\n    User admin\n    Port 2222\nHost device-number-32.lab.example\n    User admin\n    Port 2222\nHost device-number-33.lab.example\n    User admin\n    Port 2222\nHost device-number-34.lab.example\n    User admin\n    Port 2222\nHost device-number-35.lab.example\n    User admin\n    Port 2222\nHost device-number-36.lab.example\n    User admin\n    Port 2222\nHost device-number-37.lab.example\n    User admin\n    Port 2222\nHost device-number-38.lab.example\n    User admin\n    Port 2222\nHost device-number-39.lab.example\n    User admin\n    Port 2222\nHost device-number-40.lab.example\n    User admin\n    Port 2222\nHost device-number-41.lab.example\n    User admin\n    Port 2222\nHost device-number-42.lab.example\n    User admin\n    Port 2222\nHost device-number-43.lab.example\n    User admin\n    Port 2222\nHost device-number-44.lab.example\n    User admin\n    Port 2222\nHost device-number-45.lab.example\n    User admin\n    Port 2222\nHost device-number-46.lab.example\n    User admin\n    Port 2222\nHost device-number-47.lab.example\n    User admin\n    Port 2222\nHost device-number-48.lab.example\n    User admin\n    Port 2222\nHost device-number-49.lab.example\n    User admin\n    Port 2222\nHost device-number-50.lab.example\n    User admin\n    Port 2222\nHost device-number-51.lab.example\n    User admin\n    Port 2222\nHost device-number-52.lab.example\n    User admin\n    Port 2222\nHost device-number-53.lab.example\n    User admin\n    Port 2222\nHost device-number-54.lab.example\n    User admin\n    Port 2222\nHost device-number-55.lab.example\n    User admin\n    Port 2222\nHost device-number-56.lab.example\n    User admin\n    Port 2222\nHost device-number-57.lab.example\n    User admin\n    Port 2222\nHost device-number-58.lab.example\n    User admin\n    Port 2222\nHost device-number-59.lab.example\n    User admin\n    Port 2222\nHost device-number-60.lab.example\n    User admin\n    Port 2222\nHost device-number-61.lab.example\n    User admin\n    Port 2222\nHost device-number-62.lab.example\n    User admin\n    Port 2222\nHost device-number-63.lab.example\n    User admin\n    Port 2222\nHost device-number-64.lab.example\n    User admin\n    Port 2222\nHost device-number-65.lab.example\n    User admin\n    Port 2222\nHost device-number-66.lab.example\n    User admin\n    Port 2222\nHost device-number-67.lab.example\n    User admin\n    Port 2222\nHost device-number-68.lab.example\n    User admin\n    Port 2222\nHost device-number-69.lab.example\n    User admin\n    Port 2222\nHost device-number-70.lab.example\n    User admin\n    Port 2222\nHost device-number-71.lab.example\n    User admin\n    Port 2222\nHost device-number-72.lab.example\n    User admin\n    Port 2222\nHost device-number-73.lab.example\n    User admin\n    Port 2222\nHost device-number-74.lab.example\n    User admin\n    Port 2222\nHost device-number-75.lab.example\n    User admin\n    Port 2222\nHost device-number-76.lab.example\n    User admin\n    Port 2222\nHost device-number-77.lab.example\n    User admin\n    Port 2222\nHost device-number-78.lab.example\n    User admin\n    Port 2222\nHost device-number-79.lab.example\n    User admin\n    Port 2222\nHost device-number-80.lab.example\n    User admin\n    Port 2222\nHost device-number-81.lab.example\n    User admin\n    Port 2222\nHost device-number-82.lab.example\n    User admin\n    Port 2222\nHost device-number-83.lab.example\n    User admin\n    Port 2222\nHost device-number-84.lab.example\n    User admin\n    Port 2222\nHost device-number-85.lab.example\n    User admin\n    Port 2222\nHost device-number-86.lab.example\n    User admin\n    Port 2222\nHost device-number-87.lab.example\n    User admin\n    Port 2222\nHost device-number-88.lab.example\n    User admin\n    Port 2222\nHost device-number-89.lab.example\n    User admin\n    Port 2222\nHost device-number-90.lab.example\n    User admin\n    Port 2222\nHost device-number-91.lab.example\n    User admin\n    Port 2222\nHost device-number-92.lab.example\n    User admin\n    Port 2222\nHost device-number-93.lab.example\n    User admin\n    Port 2222\nHost device-number-94.lab.example\n    User admin\n    Port 2222\nHost device-number-95.lab.example\n    User admin\n    Port 2222\nHost device-number-96.lab.example\n    User admin\n    Port 2222\nHost device-number-97.lab.example\n    User admin\n    Port 2222\nHost device-number-98.lab.example\n    User admin\n    Port 2222\nHost device-number-99.lab.example\n    User admin\n    Port 2222\nHost device-number-100.lab.example\n    User admin\n    Port 2222\nHost device-number-101.lab.example\n    User admin\n    Port 2222\nHost device-number-102.lab.example\n    User admin\n    Port 2222\nHost device-number-103.lab.example\n    User admin\n    Port 2222\nHost device-number-104.lab.example\n    User admin\n    Port 2222\nHost device-number-105.lab.example\n    User admin\n    Port 2222\nHost device-number-106.lab.example\n    User admin\n    Port 2222\nHost device-number-107.lab.example\n    User admin\n    Port 2222\nHost device-number-108.lab.example\n    User admin\n    Port 2222\nHost device-number-109.lab.example\n    User admin\n    Port 2222\nHost device-number-110.lab.example\n    User admin\n    Port 2222\nHost device-number-111.lab.example\n    User admin\n    Port 2222\nHost device-number-112.lab.example\n    User admin\n    Port 2222\nHost device-number-113.lab.example\n    User admin\n    Port 2222\nHost device-number-114.lab.example\n    User admin\n    Port 2222\nHost device-number-115.lab.example\n    User admin\n    Port 2222\nHost device-number-116.lab.example\n    User admin\n    Port 2222\nHost device-number-117.lab.example\n    User admin\n    Port 2222\nHost device-number-118.lab.example\n    User admin\n    Port 2222\nHost device-number-119.lab.example\n    User admin\n    Port 2222\n",
+  "output": "Host device-number-0.lab.example device-number-1.lab.example device-number-2.lab.example device-number-3.lab.example device-number-4.lab.example device-number-5.lab.example device-number-6.lab.example device-number-7.lab.example device-number-8.lab.example device-number-9.lab.example device-number-10.lab.example device-number-11.lab.example device-number-12.lab.example device-number-13.lab.example device-number-14.lab.example device-number-15.lab.example device-number-16.lab.example device-number-17.lab.example device-number-18.lab.example device-number-19.lab.example device-number-20.lab.example device-number-21.lab.example device-number-22.lab.example device-number-23.lab.example device-number-24.lab.example device-number-25.lab.example device-number-26.lab.example device-number-27.lab.example device-number-28.lab.example device-number-29.lab.example device-number-30.lab.example device-number-31.lab.example device-number-32.lab.example device-number-33.lab.example\n    User admin\n    Port 2222\nHost device-number-34.lab.example device-number-35.lab.example device-number-36.lab.example device-number-37.lab.example device-number-38.lab.example device-number-39.lab.example device-number-40.lab.example device-number-41.lab.example device-number-42.lab.example device-number-43.lab.example device-number-44.lab.example device-number-45.lab.example device-number-46.lab.example device-number-47.lab.example device-number-48.lab.example device-number-49.lab.example device-number-50.lab.example device-number-51.lab.example device-number-52.lab.example device-number-53.lab.example device-number-54.lab.example device-number-55.lab.example device-number-56.lab.example device-number-57.lab.example device-number-58.lab.example device-number-59.lab.example device-number-60.lab.example device-number-61.lab.example device-number-62.lab.example device-number-63.lab.example device-number-64.lab.example device-number-65.lab.example device-number-66.lab.example device-number-67.lab.example\n    User admin\n    Port 2222\nHost device-number-68.lab.example device-number-69.lab.example device-number-70.lab.example device-number-71.lab.example device-number-72.lab.example device-number-73.lab.example device-number-74.lab.example device-number-75.lab.example device-number-76.lab.example device-number-77.lab.example device-number-78.lab.example device-number-79.lab.example device-number-80.lab.example device-number-81.lab.example device-number-82.lab.example device-number-83.lab.example device-number-84.lab.example device-number-85.lab.example device-number-86.lab.example device-number-87.lab.example device-number-88.lab.example device-number-89.lab.example device-number-90.lab.example device-number-91.lab.example device-number-92.lab.example device-number-93.lab.example device-number-94.lab.example device-number-95.lab.example device-number-96.lab.example device-number-97.lab.example device-number-98.lab.example device-number-99.lab.example device-number-100.lab.example device-number-101.lab.example\n    User admin\n    Port 2222\nHost device-number-102.lab.example device-number-103.lab.example device-number-104.lab.example device-number-105.lab.example device-number-106.lab.example device-number-107.lab.example device-number-108.lab.example device-number-109.lab.example device-number-110.lab.example device-number-111.lab.example device-number-112.lab.example device-number-113.lab.example device-number-114.lab.example device-number-115.lab.example device-number-116.lab.example device-number-117.lab.example device-number-118.lab.example device-number-119.lab.example\n    User admin\n    Port 2222\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "long",
+  "wildcards": true,
+  "input": "Host device-number-0.lab.example\n    User admin\n    Port 2222\nHost device-number-1.lab.example\n    User admin\n    Port 2222\nHost device-number-2.lab.example\n    User admin\n    Port 2222\nHost device-number-3.lab.example\n    User admin\n    Port 2222\nHost device-number-4.lab.example\n    User admin\n    Port 2222\nHost device-number-5.lab.example\n    User admin\n    Port 2222\nHost device-number-6.lab.example\n    User admin\n    Port 2222\nHost device-number-7.lab.example\n    User admin\n    Port 2222\nHost device-number-8.lab.example\n    User admin\n    Port 2222\nHost device-number-9.lab.example\n    User admin\n    Port 2222\nHost device-number-10.lab.example\n    User admin\n    Port 2222\nHost device-number-11.lab.example\n    User admin\n    Port 2222\nHost device-number-12.lab.example\n    User admin\n    Port 2222\nHost device-number-13.lab.example\n    User admin\n    Port 2222\nHost device-number-14.lab.example\n    User admin\n    Port 2222\nHost device-number-15.lab.example\n    User admin\n    Port 2222\nHost device-number-16.lab.example\n    User admin\n    Port 2222\nHost device-number-17.lab.example\n    User admin\n    Port 2222\nHost device-number-18.lab.example\n    User admin\n    Port 2222\nHost device-number-19.lab.example\n    User admin\n    Port 2222\nHost device-number-20.lab.example\n    User admin\n    Port 2222\nHost device-number-21.lab.example\n    User admin\n    Port 2222\nHost device-number-22.lab.example\n    User admin\n    Port 2222\nHost device-number-23.lab.example\n    User admin\n    Port 2222\nHost device-number-24.lab.example\n    User admin\n    Port 2222\nHost device-number-25.lab.example\n    User admin\n    Port 2222\nHost device-number-26.lab.example\n    User admin\n    Port 2222\nHost device-number-27.lab.example\n    User admin\n    Port 2222\nHost device-number-28.lab.example\n    User admin\n    Port 2222\nHost device-number-29.lab.example\n    User admin\n    Port 2222\nHost device-number-30.lab.example\n    User admin\n    Port 2222\nHost device-number-31.lab.example\n    User admin\n    Port 2222\nHost device-number-32.lab.example\n    User admin\n    Port 2222\nHost device-number-33.lab.example\n    User admin\n    Port 2222\nHost device-number-34.lab.example\n    User admin\n    Port 2222\nHost device-number-35.lab.example\n    User admin\n    Port 2222\nHost device-number-36.lab.example\n    User admin\n    Port 2222\nHost device-number-37.lab.example\n    User admin\n    Port 2222\nHost device-number-38.lab.example\n    User admin\n    Port 2222\nHost device-number-39.lab.example\n    User admin\n    Port 2222\nHost device-number-40.lab.example\n    User admin\n    Port 2222\nHost device-number-41.lab.example\n    User admin\n    Port 2222\nHost device-number-42.lab.example\n    User admin\n    Port 2222\nHost device-number-43.lab.example\n    User admin\n    Port 2222\nHost device-number-44.lab.example\n    User admin\n    Port 2222\nHost device-number-45.lab.example\n    User admin\n    Port 2222\nHost device-number-46.lab.example\n    User admin\n    Port 2222\nHost device-number-47.lab.example\n    User admin\n    Port 2222\nHost device-number-48.lab.example\n    User admin\n    Port 2222\nHost device-number-49.lab.example\n    User admin\n    Port 2222\nHost device-number-50.lab.example\n    User admin\n    Port 2222\nHost device-number-51.lab.example\n    User admin\n    Port 2222\nHost device-number-52.lab.example\n    User admin\n    Port 2222\nHost device-number-53.lab.example\n    User admin\n    Port 2222\nHost device-number-54.lab.example\n    User admin\n    Port 2222\nHost device-number-55.lab.example\n    User admin\n    Port 2222\nHost device-number-56.lab.example\n    User admin\n    Port 2222\nHost device-number-57.lab.example\n    User admin\n    Port 2222\nHost device-number-58.lab.example\n    User admin\n    Port 2222\nHost device-number-59.lab.example\n    User admin\n    Port 2222\nHost device-number-60.lab.example\n    User admin\n    Port 2222\nHost device-number-61.lab.example\n    User admin\n    Port 2222\nHost device-number-62.lab.example\n    User admin\n    Port 2222\nHost device-number-63.lab.example\n    User admin\n    Port 2222\nHost device-number-64.lab.example\n    User admin\n    Port 2222\nHost device-number-65.lab.example\n    User admin\n    Port 2222\nHost device-number-66.lab.example\n    User admin\n    Port 2222\nHost device-number-67.lab.example\n    User admin\n    Port 2222\nHost device-number-68.lab.example\n    User admin\n    Port 2222\nHost device-number-69.lab.example\n    User admin\n    Port 2222\nHost device-number-70.lab.example\n    User admin\n    Port 2222\nHost device-number-71.lab.example\n    User admin\n    Port 2222\nHost device-number-72.lab.example\n    User admin\n    Port 2222\nHost device-number-73.lab.example\n    User admin\n    Port 2222\nHost device-number-74.lab.example\n    User admin\n    Port 2222\nHost device-number-75.lab.example\n    User admin\n    Port 2222\nHost device-number-76.lab.example\n    User admin\n    Port 2222\nHost device-number-77.lab.example\n    User admin\n    Port 2222\nHost device-number-78.lab.example\n    User admin\n    Port 2222\nHost device-number-79.lab.example\n    User admin\n    Port 2222\nHost device-number-80.lab.example\n    User admin\n    Port 2222\nHost device-number-81.lab.example\n    User admin\n    Port 2222\nHost device-number-82.lab.example\n    User admin\n    Port 2222\nHost device-number-83.lab.example\n    User admin\n    Port 2222\nHost device-number-84.lab.example\n    User admin\n    Port 2222\nHost device-number-85.lab.example\n    User admin\n    Port 2222\nHost device-number-86.lab.example\n    User admin\n    Port 2222\nHost device-number-87.lab.example\n    User admin\n    Port 2222\nHost device-number-88.lab.example\n    User admin\n    Port 2222\nHost device-number-89.lab.example\n    User admin\n    Port 2222\nHost device-number-90.lab.example\n    User admin\n    Port 2222\nHost device-number-91.lab.example\n    User admin\n    Port 2222\nHost device-number-92.lab.example\n    User admin\n    Port 2222\nHost device-number-93.lab.example\n    User admin\n    Port 2222\nHost device-number-94.lab.example\n    User admin\n    Port 2222\nHost device-number-95.lab.example\n    User admin\n    Port 2222\nHost device-number-96.lab.example\n    User admin\n    Port 2222\nHost device-number-97.lab.example\n    User admin\n    Port 2222\nHost device-number-98.lab.example\n    User admin\n    Port 2222\nHost device-number-99.lab.example\n    User admin\n    Port 2222\nHost device-number-100.lab.example\n    User admin\n    Port 2222\nHost device-number-101.lab.example\n    User admin\n    Port 2222\nHost device-number-102.lab.example\n    User admin\n    Port 2222\nHost device-number-103.lab.example\n    User admin\n    Port 2222\nHost device-number-104.lab.example\n    User admin\n    Port 2222\nHost device-number-105.lab.example\n    User admin\n    Port 2222\nHost device-number-106.lab.example\n    User admin\n    Port 2222\nHost device-number-107.lab.example\n    User admin\n    Port 2222\nHost device-number-108.lab.example\n    User admin\n    Port 2222\nHost device-number-109.lab.example\n    User admin\n    Port 2222\nHost device-number-110.lab.example\n    User admin\n    Port 2222\nHost device-number-111.lab.example\n    User admin\n    Port 2222\nHost device-number-112.lab.example\n    User admin\n    Port 2222\nHost device-number-113.lab.example\n    User admin\n    Port 2222\nHost device-number-114.lab.example\n    User admin\n    Port 2222\nHost device-number-115.lab.example\n    User admin\n    Port 2222\nHost device-number-116.lab.example\n    User admin\n    Port 2222\nHost device-number-117.lab.example\n    User admin\n    Port 2222\nHost device-number-118.lab.example\n    User admin\n    Port 2222\nHost device-number-119.lab.example\n    User admin\n    Port 2222\n",
+  "output": "Host device-number-0.lab.example device-number-1.lab.example device-number-2.lab.example device-number-3.lab.example device-number-4.lab.example device-number-5.lab.example device-number-6.lab.example device-number-7.lab.example device-number-8.lab.example device-number-9.lab.example device-number-10.lab.example device-number-11.lab.example device-number-12.lab.example device-number-13.lab.example device-number-14.lab.example device-number-15.lab.example device-number-16.lab.example device-number-17.lab.example device-number-18.lab.example device-number-19.lab.example device-number-20.lab.example device-number-21.lab.example device-number-22.lab.example device-number-23.lab.example device-number-24.lab.example device-number-25.lab.example device-number-26.lab.example device-number-27.lab.example device-number-28.lab.example device-number-29.lab.example device-number-30.lab.example device-number-31.lab.example device-number-32.lab.example device-number-33.lab.example\n    User admin\n    Port 2222\nHost device-number-34.lab.example device-number-35.lab.example device-number-36.lab.example device-number-37.lab.example device-number-38.lab.example device-number-39.lab.example device-number-40.lab.example device-number-41.lab.example device-number-42.lab.example device-number-43.lab.example device-number-44.lab.example device-number-45.lab.example device-number-46.lab.example device-number-47.lab.example device-number-48.lab.example device-number-49.lab.example device-number-50.lab.example device-number-51.lab.example device-number-52.lab.example device-number-53.lab.example device-number-54.lab.example device-number-55.lab.example device-number-56.lab.example device-number-57.lab.example device-number-58.lab.example device-number-59.lab.example device-number-60.lab.example device-number-61.lab.example device-number-62.lab.example device-number-63.lab.example device-number-64.lab.example device-number-65.lab.example device-number-66.lab.example device-number-67.lab.example\n    User admin\n    Port 2222\nHost device-number-68.lab.example device-number-69.lab.example device-number-70.lab.example device-number-71.lab.example device-number-72.lab.example device-number-73.lab.example device-number-74.lab.example device-number-75.lab.example device-number-76.lab.example device-number-77.lab.example device-number-78.lab.example device-number-79.lab.example device-number-80.lab.example device-number-81.lab.example device-number-82.lab.example device-number-83.lab.example device-number-84.lab.example device-number-85.lab.example device-number-86.lab.example device-number-87.lab.example device-number-88.lab.example device-number-89.lab.example device-number-90.lab.example device-number-91.lab.example device-number-92.lab.example device-number-93.lab.example device-number-94.lab.example device-number-95.lab.example device-number-96.lab.example device-number-97.lab.example device-number-98.lab.example device-number-99.lab.example device-number-100.lab.example device-number-101.lab.example\n    User admin\n    Port 2222\nHost device-number-102.lab.example device-number-103.lab.example device-number-104.lab.example device-number-105.lab.example device-number-106.lab.example device-number-107.lab.example device-number-108.lab.example device-number-109.lab.example device-number-110.lab.example device-number-111.lab.example device-number-112.lab.example device-number-113.lab.example device-number-114.lab.example device-number-115.lab.example device-number-116.lab.example device-number-117.lab.example device-number-118.lab.example device-number-119.lab.example\n    User admin\n    Port 2222\n",
+  "notes": [],
+  "changes": [
+   "shared"
+  ],
+  "failed": []
+ },
+ {
+  "name": "wild",
+  "wildcards": false,
+  "input": "Host web-1\n  HostName 10.0.0.1\nHost web-2\n  HostName 10.0.0.2\nHost web-1 web-2\n  User deploy\n  Port 2200\n",
+  "output": "Host web-1\n  HostName 10.0.0.1\nHost web-2\n  HostName 10.0.0.2\nHost web-1 web-2\n  User deploy\n  Port 2200\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "wild",
+  "wildcards": true,
+  "input": "Host web-1\n  HostName 10.0.0.1\nHost web-2\n  HostName 10.0.0.2\nHost web-1 web-2\n  User deploy\n  Port 2200\n",
+  "output": "Host web-1\n  HostName 10.0.0.1\nHost web-2\n  HostName 10.0.0.2\nHost web-*\n  User deploy\n  Port 2200\n",
+  "notes": [],
+  "changes": [
+   "wildcard"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-1",
+  "wildcards": false,
+  "input": "Host *\n    Port 22\n    HostName z\n    IdentityFile ~/.ssh/b\n    StrictHostKeyChecking yes\n\nHost c\n    Port 2222\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\nHost x-2\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\n    ServerAliveInterval 60\n\nMatch all\n    User m3\n",
+  "output": "Host *\n    Port 22\n    HostName z\n    IdentityFile ~/.ssh/b\n    StrictHostKeyChecking yes\n\nHost c\n    Port 2222\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\nHost x-2\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\n    ServerAliveInterval 60\n\nMatch all\n    User m3\n",
+  "notes": [
+   [
+    "shadowed",
+    8
+   ],
+   [
+    "shadowed",
+    12
+   ],
+   [
+    "shadowed",
+    14
+   ],
+   [
+    "wall",
+    16
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-1",
+  "wildcards": true,
+  "input": "Host *\n    Port 22\n    HostName z\n    IdentityFile ~/.ssh/b\n    StrictHostKeyChecking yes\n\nHost c\n    Port 2222\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\nHost x-2\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\n    ServerAliveInterval 60\n\nMatch all\n    User m3\n",
+  "output": "Host *\n    Port 22\n    HostName z\n    IdentityFile ~/.ssh/b\n    StrictHostKeyChecking yes\n\nHost c\n    Port 2222\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\nHost x-2\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\n    ServerAliveInterval 60\n\nMatch all\n    User m3\n",
+  "notes": [
+   [
+    "shadowed",
+    8
+   ],
+   [
+    "shadowed",
+    12
+   ],
+   [
+    "shadowed",
+    14
+   ],
+   [
+    "wall",
+    16
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-2",
+  "wildcards": false,
+  "input": "ServerAliveInterval 30\nHost b x-?\nHost db.lab\n    IdentityFile ~/.ssh/b\n\nHost x-?\n    User u1\n    ProxyJump j1\nHost x-?\n    ServerAliveInterval 60\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\nHost web1\nHost !web2 x-2\nHost c\n    HostName 10.0.0.1\n    Compression yes\nHost web2 db2.lab\n    Port 2222\n    ServerAliveInterval 30\nHost web1\n    ServerAliveInterval 60\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\n    ProxyJump j2\n",
+  "output": "ServerAliveInterval 30\nHost b x-?\nHost db.lab\n    IdentityFile ~/.ssh/b\n\nHost x-?\n    User u1\n    ProxyJump j1\nHost x-?\n    ServerAliveInterval 60\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\nHost web1\nHost !web2 x-2\nHost c\n    HostName 10.0.0.1\n    Compression yes\nHost web2 db2.lab\n    Port 2222\nHost web1\n    ServerAliveInterval 60\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    13
+   ],
+   [
+    "shadowed",
+    23
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-2",
+  "wildcards": true,
+  "input": "ServerAliveInterval 30\nHost b x-?\nHost db.lab\n    IdentityFile ~/.ssh/b\n\nHost x-?\n    User u1\n    ProxyJump j1\nHost x-?\n    ServerAliveInterval 60\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\nHost web1\nHost !web2 x-2\nHost c\n    HostName 10.0.0.1\n    Compression yes\nHost web2 db2.lab\n    Port 2222\n    ServerAliveInterval 30\nHost web1\n    ServerAliveInterval 60\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\n    ProxyJump j2\n",
+  "output": "ServerAliveInterval 30\nHost b x-?\nHost db.lab\n    IdentityFile ~/.ssh/b\n\nHost x-?\n    User u1\n    ProxyJump j1\nHost x-?\n    ServerAliveInterval 60\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 30\nHost web1\nHost !web2 x-2\nHost c\n    HostName 10.0.0.1\n    Compression yes\nHost web2 db2.lab\n    Port 2222\nHost web1\n    ServerAliveInterval 60\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    13
+   ],
+   [
+    "shadowed",
+    23
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-3",
+  "wildcards": false,
+  "input": "Host c\n    ServerAliveInterval 60\n    HostName 10.0.0.1\nHost web1\n    LocalForward 9090 localhost:90\n    HostName web1\n    Port 2222\nMatch all\n    User m2\nHost db.lab\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "output": "Host c\n    ServerAliveInterval 60\n    HostName 10.0.0.1\nHost web1\n    LocalForward 9090 localhost:90\n    HostName web1\n    Port 2222\nMatch all\n    User m2\nHost db.lab\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "notes": [
+   [
+    "wall",
+    8
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-3",
+  "wildcards": true,
+  "input": "Host c\n    ServerAliveInterval 60\n    HostName 10.0.0.1\nHost web1\n    LocalForward 9090 localhost:90\n    HostName web1\n    Port 2222\nMatch all\n    User m2\nHost db.lab\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "output": "Host c\n    ServerAliveInterval 60\n    HostName 10.0.0.1\nHost web1\n    LocalForward 9090 localhost:90\n    HostName web1\n    Port 2222\nMatch all\n    User m2\nHost db.lab\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "notes": [
+   [
+    "wall",
+    8
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-4",
+  "wildcards": false,
+  "input": "ProxyJump j2\nHost * db2.lab\nHost db2.lab\nHost * db2.lab\n\nHost c\n    Port 22\nHost db.lab web1\n    User u2\n    StrictHostKeyChecking accept-new\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/a\n\nHost web2\n    StrictHostKeyChecking accept-new\n    Port 22\n    ServerAliveInterval 60\n",
+  "output": "ProxyJump j2\nHost * db2.lab\nHost db2.lab\nHost * db2.lab\n\nHost c\n    Port 22\nHost db.lab web1\n    User u2\n    StrictHostKeyChecking accept-new\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/a\n\nHost web2\n    StrictHostKeyChecking accept-new\n    Port 22\n    ServerAliveInterval 60\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-4",
+  "wildcards": true,
+  "input": "ProxyJump j2\nHost * db2.lab\nHost db2.lab\nHost * db2.lab\n\nHost c\n    Port 22\nHost db.lab web1\n    User u2\n    StrictHostKeyChecking accept-new\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/a\n\nHost web2\n    StrictHostKeyChecking accept-new\n    Port 22\n    ServerAliveInterval 60\n",
+  "output": "ProxyJump j2\nHost * db2.lab\nHost db2.lab\nHost * db2.lab\n\nHost c\n    Port 22\nHost db.lab web1\n    User u2\n    StrictHostKeyChecking accept-new\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/a\n\nHost web2\n    StrictHostKeyChecking accept-new\n    Port 22\n    ServerAliveInterval 60\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-5",
+  "wildcards": false,
+  "input": "Host web2 web1\n    HostName 10.0.0.1\nHost a web2\n    User u1\nHost a\n    SendEnv LANG\n    LocalForward 9090 localhost:90\n    SendEnv LC_X\n    ProxyJump j2\n\nHost *.lab db2.lab\n    LocalForward 8080 localhost:80\n    Port 2222\n    HostName 10.0.0.1\n",
+  "output": "Host web2 web1\n    HostName 10.0.0.1\nHost a web2\n    User u1\nHost a\n    SendEnv LANG\n    LocalForward 9090 localhost:90\n    SendEnv LC_X\n    ProxyJump j2\n\nHost *.lab db2.lab\n    LocalForward 8080 localhost:80\n    Port 2222\n    HostName 10.0.0.1\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-5",
+  "wildcards": true,
+  "input": "Host web2 web1\n    HostName 10.0.0.1\nHost a web2\n    User u1\nHost a\n    SendEnv LANG\n    LocalForward 9090 localhost:90\n    SendEnv LC_X\n    ProxyJump j2\n\nHost *.lab db2.lab\n    LocalForward 8080 localhost:80\n    Port 2222\n    HostName 10.0.0.1\n",
+  "output": "Host web2 web1\n    HostName 10.0.0.1\nHost a web2\n    User u1\nHost a\n    SendEnv LANG\n    LocalForward 9090 localhost:90\n    SendEnv LC_X\n    ProxyJump j2\n\nHost *.lab db2.lab\n    LocalForward 8080 localhost:80\n    Port 2222\n    HostName 10.0.0.1\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-6",
+  "wildcards": false,
+  "input": "ProxyJump j1\nHost b db2.lab\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\nHost db2.lab b\nMatch all\n    User m2\nHost !web2 c\nHost db2.lab x-?\n    Compression no\n    ServerAliveInterval 60\n    Compression yes\n    LocalForward 8080 localhost:80\nHost x-1\nHost !db.lab a\nHost !db.lab *\n    IdentityFile ~/.ssh/a\n",
+  "output": "ProxyJump j1\nHost b db2.lab\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\nHost db2.lab b\nMatch all\n    User m2\nHost !web2 c\nHost db2.lab x-?\n    Compression no\n    ServerAliveInterval 60\n    Compression yes\n    LocalForward 8080 localhost:80\nHost x-1\nHost !db.lab a\nHost !db.lab *\n    IdentityFile ~/.ssh/a\n",
+  "notes": [
+   [
+    "wall",
+    7
+   ],
+   [
+    "shadowed",
+    13
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-6",
+  "wildcards": true,
+  "input": "ProxyJump j1\nHost b db2.lab\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\nHost db2.lab b\nMatch all\n    User m2\nHost !web2 c\nHost db2.lab x-?\n    Compression no\n    ServerAliveInterval 60\n    Compression yes\n    LocalForward 8080 localhost:80\nHost x-1\nHost !db.lab a\nHost !db.lab *\n    IdentityFile ~/.ssh/a\n",
+  "output": "ProxyJump j1\nHost b db2.lab\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\nHost db2.lab b\nMatch all\n    User m2\nHost !web2 c\nHost db2.lab x-?\n    Compression no\n    ServerAliveInterval 60\n    Compression yes\n    LocalForward 8080 localhost:80\nHost x-1\nHost !db.lab a\nHost !db.lab *\n    IdentityFile ~/.ssh/a\n",
+  "notes": [
+   [
+    "wall",
+    7
+   ],
+   [
+    "shadowed",
+    13
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-7",
+  "wildcards": false,
+  "input": "Host web2\n    StrictHostKeyChecking yes\n    StrictHostKeyChecking yes\n    Port 2222\n    User u1\n\nHost !web2 db.lab\n    HostName db.lab\n    User u2\n\nMatch all\n    User m2\nHost !db.lab a\n    Port 2222\nHost x-1\n    HostName 10.0.0.1\n    LocalForward 8080 localhost:80\n\n",
+  "output": "Host web2\n    StrictHostKeyChecking yes\n    Port 2222\n    User u1\n\nHost !web2 db.lab\n    HostName db.lab\n    User u2\n\nMatch all\n    User m2\nHost !db.lab a\n    Port 2222\nHost x-1\n    HostName 10.0.0.1\n    LocalForward 8080 localhost:80\n\n",
+  "notes": [
+   [
+    "wall",
+    11
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-7",
+  "wildcards": true,
+  "input": "Host web2\n    StrictHostKeyChecking yes\n    StrictHostKeyChecking yes\n    Port 2222\n    User u1\n\nHost !web2 db.lab\n    HostName db.lab\n    User u2\n\nMatch all\n    User m2\nHost !db.lab a\n    Port 2222\nHost x-1\n    HostName 10.0.0.1\n    LocalForward 8080 localhost:80\n\n",
+  "output": "Host web2\n    StrictHostKeyChecking yes\n    Port 2222\n    User u1\n\nHost !web2 db.lab\n    HostName db.lab\n    User u2\n\nMatch all\n    User m2\nHost !db.lab a\n    Port 2222\nHost x-1\n    HostName 10.0.0.1\n    LocalForward 8080 localhost:80\n\n",
+  "notes": [
+   [
+    "wall",
+    11
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-8",
+  "wildcards": false,
+  "input": "SendEnv LANG\nHost x-1 *.lab\n    User u1\n    Port 2222\n    Compression no\n    User u1\nHost a\n    Compression yes\n    HostName a\nHost x-1\n    User u1\n    ServerAliveInterval 60\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 60\n",
+  "output": "SendEnv LANG\nHost x-1 *.lab\n    User u1\n    Port 2222\n    Compression no\nHost a\n    Compression yes\n    HostName a\nHost x-1\n    ServerAliveInterval 60\n    IdentityFile ~/.ssh/a\n",
+  "notes": [],
+  "changes": [
+   "duplicate",
+   "repeat",
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-8",
+  "wildcards": true,
+  "input": "SendEnv LANG\nHost x-1 *.lab\n    User u1\n    Port 2222\n    Compression no\n    User u1\nHost a\n    Compression yes\n    HostName a\nHost x-1\n    User u1\n    ServerAliveInterval 60\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 60\n",
+  "output": "SendEnv LANG\nHost x-1 *.lab\n    User u1\n    Port 2222\n    Compression no\nHost a\n    Compression yes\n    HostName a\nHost x-1\n    ServerAliveInterval 60\n    IdentityFile ~/.ssh/a\n",
+  "notes": [],
+  "changes": [
+   "duplicate",
+   "repeat",
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-9",
+  "wildcards": false,
+  "input": "Host db.lab\nHost c\n    Port 2222\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\n\nHost a\n    ProxyJump j1\n    Port 22\nHost db.lab\n    IdentityFile ~/.ssh/b\n    HostName 10.0.0.1\n    SendEnv LANG\n    Compression no\nHost web*\n    ServerAliveInterval 60\n    User u1\n    IdentityFile ~/.ssh/b\n",
+  "output": "Host db.lab\nHost c\n    Port 2222\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\n\nHost a\n    ProxyJump j1\n    Port 22\nHost db.lab\n    IdentityFile ~/.ssh/b\n    HostName 10.0.0.1\n    SendEnv LANG\n    Compression no\nHost web*\n    ServerAliveInterval 60\n    User u1\n    IdentityFile ~/.ssh/b\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-9",
+  "wildcards": true,
+  "input": "Host db.lab\nHost c\n    Port 2222\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\n\nHost a\n    ProxyJump j1\n    Port 22\nHost db.lab\n    IdentityFile ~/.ssh/b\n    HostName 10.0.0.1\n    SendEnv LANG\n    Compression no\nHost web*\n    ServerAliveInterval 60\n    User u1\n    IdentityFile ~/.ssh/b\n",
+  "output": "Host db.lab\nHost c\n    Port 2222\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\n    LocalForward 8080 localhost:80\n\nHost a\n    ProxyJump j1\n    Port 22\nHost db.lab\n    IdentityFile ~/.ssh/b\n    HostName 10.0.0.1\n    SendEnv LANG\n    Compression no\nHost web*\n    ServerAliveInterval 60\n    User u1\n    IdentityFile ~/.ssh/b\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-10",
+  "wildcards": false,
+  "input": "SendEnv LANG\nHost db2.lab\n    LocalForward 9090 localhost:90\n    HostName %h.example.com\nHost x-2\n    IdentityFile ~/.ssh/a\n    Port 2222\n    ServerAliveInterval 60\nHost x-2\nMatch all\n    User m3\nHost db.lab b\nHost c a\n    HostName 10.0.0.1\n    HostName c\n    IdentityFile ~/.ssh/a\nHost web2\n    ProxyJump j2\n",
+  "output": "SendEnv LANG\nHost db2.lab\n    LocalForward 9090 localhost:90\n    HostName %h.example.com\nHost x-2\n    IdentityFile ~/.ssh/a\n    Port 2222\n    ServerAliveInterval 60\nHost x-2\nMatch all\n    User m3\nHost db.lab b\nHost c a\n    HostName 10.0.0.1\n    HostName c\n    IdentityFile ~/.ssh/a\nHost web2\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "wall",
+    10
+   ],
+   [
+    "shadowed",
+    15
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-10",
+  "wildcards": true,
+  "input": "SendEnv LANG\nHost db2.lab\n    LocalForward 9090 localhost:90\n    HostName %h.example.com\nHost x-2\n    IdentityFile ~/.ssh/a\n    Port 2222\n    ServerAliveInterval 60\nHost x-2\nMatch all\n    User m3\nHost db.lab b\nHost c a\n    HostName 10.0.0.1\n    HostName c\n    IdentityFile ~/.ssh/a\nHost web2\n    ProxyJump j2\n",
+  "output": "SendEnv LANG\nHost db2.lab\n    LocalForward 9090 localhost:90\n    HostName %h.example.com\nHost x-2\n    IdentityFile ~/.ssh/a\n    Port 2222\n    ServerAliveInterval 60\nHost x-2\nMatch all\n    User m3\nHost db.lab b\nHost c a\n    HostName 10.0.0.1\n    HostName c\n    IdentityFile ~/.ssh/a\nHost web2\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "wall",
+    10
+   ],
+   [
+    "shadowed",
+    15
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-11",
+  "wildcards": false,
+  "input": "Host x-1\n    User u2\n    SendEnv LANG\n    SendEnv LANG\nHost x-2 x-?\n    LocalForward 9090 localhost:90\nHost *.lab\n\nHost web*\n\nHost a\n    Compression yes\n    Port 2222\n",
+  "output": "Host x-1\n    User u2\n    SendEnv LANG\n    SendEnv LANG\nHost x-2 x-?\n    LocalForward 9090 localhost:90\nHost *.lab\n\nHost web*\n\nHost a\n    Compression yes\n    Port 2222\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-11",
+  "wildcards": true,
+  "input": "Host x-1\n    User u2\n    SendEnv LANG\n    SendEnv LANG\nHost x-2 x-?\n    LocalForward 9090 localhost:90\nHost *.lab\n\nHost web*\n\nHost a\n    Compression yes\n    Port 2222\n",
+  "output": "Host x-1\n    User u2\n    SendEnv LANG\n    SendEnv LANG\nHost x-2 x-?\n    LocalForward 9090 localhost:90\nHost *.lab\n\nHost web*\n\nHost a\n    Compression yes\n    Port 2222\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-12",
+  "wildcards": false,
+  "input": "StrictHostKeyChecking accept-new\nHost x-2\n    User u1\n    ServerAliveInterval 30\n    Port 22\n    StrictHostKeyChecking accept-new\n\nHost b web1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\nHost x-2 db2.lab\nHost db2.lab\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ProxyJump j1\n    ServerAliveInterval 30\nHost *.lab b\n    LocalForward 8080 localhost:80\nHost web1\n    HostName web1\n    Compression yes\n    StrictHostKeyChecking accept-new\n    User u2\nHost db.lab x-1\n    ProxyJump j1\nHost web1 x-1\nHost x-2 !web2\n",
+  "output": "StrictHostKeyChecking accept-new\nHost x-2\n    User u1\n    ServerAliveInterval 30\n    Port 22\n\nHost b web1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\nHost x-2 db2.lab\nHost db2.lab\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ProxyJump j1\n    ServerAliveInterval 30\nHost *.lab b\n    LocalForward 8080 localhost:80\nHost web1\n    HostName web1\n    Compression yes\nHost db.lab x-1\n    ProxyJump j1\nHost web1 x-1\nHost x-2 !web2\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ],
+   [
+    "shadowed",
+    17
+   ],
+   [
+    "shadowed",
+    22
+   ]
+  ],
+  "changes": [
+   "repeat",
+   "repeat",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-12",
+  "wildcards": true,
+  "input": "StrictHostKeyChecking accept-new\nHost x-2\n    User u1\n    ServerAliveInterval 30\n    Port 22\n    StrictHostKeyChecking accept-new\n\nHost b web1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\nHost x-2 db2.lab\nHost db2.lab\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ProxyJump j1\n    ServerAliveInterval 30\nHost *.lab b\n    LocalForward 8080 localhost:80\nHost web1\n    HostName web1\n    Compression yes\n    StrictHostKeyChecking accept-new\n    User u2\nHost db.lab x-1\n    ProxyJump j1\nHost web1 x-1\nHost x-2 !web2\n",
+  "output": "StrictHostKeyChecking accept-new\nHost x-2\n    User u1\n    ServerAliveInterval 30\n    Port 22\n\nHost b web1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\nHost x-2 db2.lab\nHost db2.lab\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ProxyJump j1\n    ServerAliveInterval 30\nHost *.lab b\n    LocalForward 8080 localhost:80\nHost web1\n    HostName web1\n    Compression yes\nHost db.lab x-1\n    ProxyJump j1\nHost web1 x-1\nHost x-2 !web2\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ],
+   [
+    "shadowed",
+    17
+   ],
+   [
+    "shadowed",
+    22
+   ]
+  ],
+  "changes": [
+   "repeat",
+   "repeat",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-13",
+  "wildcards": false,
+  "input": "Host web2\n    User u1\n    StrictHostKeyChecking yes\n    Compression no\n    ProxyJump j1\nHost x-? x-1\nHost a c\n    SendEnv LANG\nHost web*\n    IdentityFile ~/.ssh/b\n\nHost db.lab\n    ServerAliveInterval 60\n    Port 22\n\n",
+  "output": "Host web2\n    User u1\n    StrictHostKeyChecking yes\n    Compression no\n    ProxyJump j1\nHost x-? x-1\nHost a c\n    SendEnv LANG\nHost web*\n    IdentityFile ~/.ssh/b\n\nHost db.lab\n    ServerAliveInterval 60\n    Port 22\n\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-13",
+  "wildcards": true,
+  "input": "Host web2\n    User u1\n    StrictHostKeyChecking yes\n    Compression no\n    ProxyJump j1\nHost x-? x-1\nHost a c\n    SendEnv LANG\nHost web*\n    IdentityFile ~/.ssh/b\n\nHost db.lab\n    ServerAliveInterval 60\n    Port 22\n\n",
+  "output": "Host web2\n    User u1\n    StrictHostKeyChecking yes\n    Compression no\n    ProxyJump j1\nHost x-? x-1\nHost a c\n    SendEnv LANG\nHost web*\n    IdentityFile ~/.ssh/b\n\nHost db.lab\n    ServerAliveInterval 60\n    Port 22\n\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-14",
+  "wildcards": false,
+  "input": "StrictHostKeyChecking yes\nHost db.lab b\n    SendEnv LANG\n    IdentityFile ~/.ssh/b\n    User u1\n    ServerAliveInterval 60\nHost web*\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n    ServerAliveInterval 30\n    ServerAliveInterval 30\nHost web1\n    ServerAliveInterval 30\nHost b !web2\n    User u1\n    Compression no\nMatch all\n    User m4\nHost b web1\n    ServerAliveInterval 30\n    ProxyJump j1\nHost b\n    StrictHostKeyChecking yes\n    SendEnv LANG\n    IdentityFile ~/.ssh/a\n\n",
+  "output": "StrictHostKeyChecking yes\nHost db.lab b\n    SendEnv LANG\n    IdentityFile ~/.ssh/b\n    User u1\n    ServerAliveInterval 60\nHost web*\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n    ServerAliveInterval 30\nHost b !web2\n    User u1\n    Compression no\nMatch all\n    User m4\nHost b web1\n    ServerAliveInterval 30\n    ProxyJump j1\nHost b\n    SendEnv LANG\n    IdentityFile ~/.ssh/a\n\n",
+  "notes": [
+   [
+    "wall",
+    17
+   ],
+   [
+    "shadowed",
+    20
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "repeat",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-14",
+  "wildcards": true,
+  "input": "StrictHostKeyChecking yes\nHost db.lab b\n    SendEnv LANG\n    IdentityFile ~/.ssh/b\n    User u1\n    ServerAliveInterval 60\nHost web*\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n    ServerAliveInterval 30\n    ServerAliveInterval 30\nHost web1\n    ServerAliveInterval 30\nHost b !web2\n    User u1\n    Compression no\nMatch all\n    User m4\nHost b web1\n    ServerAliveInterval 30\n    ProxyJump j1\nHost b\n    StrictHostKeyChecking yes\n    SendEnv LANG\n    IdentityFile ~/.ssh/a\n\n",
+  "output": "StrictHostKeyChecking yes\nHost db.lab b\n    SendEnv LANG\n    IdentityFile ~/.ssh/b\n    User u1\n    ServerAliveInterval 60\nHost web*\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n    ServerAliveInterval 30\nHost b !web2\n    User u1\n    Compression no\nMatch all\n    User m4\nHost b web1\n    ServerAliveInterval 30\n    ProxyJump j1\nHost b\n    SendEnv LANG\n    IdentityFile ~/.ssh/a\n\n",
+  "notes": [
+   [
+    "wall",
+    17
+   ],
+   [
+    "shadowed",
+    20
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "repeat",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-15",
+  "wildcards": false,
+  "input": "Host db.lab\nHost c b\n    Compression no\n    IdentityFile ~/.ssh/b\n    User u2\n    StrictHostKeyChecking accept-new\nHost !db.lab web1\nHost web*\n    ProxyJump j1\n    ProxyJump j1\n    IdentityFile ~/.ssh/b\nHost db.lab\nHost x-2\n    StrictHostKeyChecking accept-new\n",
+  "output": "Host db.lab\nHost c b\n    Compression no\n    IdentityFile ~/.ssh/b\n    User u2\n    StrictHostKeyChecking accept-new\nHost !db.lab web1\nHost web*\n    ProxyJump j1\n    IdentityFile ~/.ssh/b\nHost db.lab\nHost x-2\n    StrictHostKeyChecking accept-new\n",
+  "notes": [],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-15",
+  "wildcards": true,
+  "input": "Host db.lab\nHost c b\n    Compression no\n    IdentityFile ~/.ssh/b\n    User u2\n    StrictHostKeyChecking accept-new\nHost !db.lab web1\nHost web*\n    ProxyJump j1\n    ProxyJump j1\n    IdentityFile ~/.ssh/b\nHost db.lab\nHost x-2\n    StrictHostKeyChecking accept-new\n",
+  "output": "Host db.lab\nHost c b\n    Compression no\n    IdentityFile ~/.ssh/b\n    User u2\n    StrictHostKeyChecking accept-new\nHost !db.lab web1\nHost web*\n    ProxyJump j1\n    IdentityFile ~/.ssh/b\nHost db.lab\nHost x-2\n    StrictHostKeyChecking accept-new\n",
+  "notes": [],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-16",
+  "wildcards": false,
+  "input": "Host db2.lab\nHost b\n    ServerAliveInterval 60\nHost c\n    Compression no\n\nHost b\n    LocalForward 9090 localhost:90\n    Port 2222\n    HostName 10.0.0.1\n\nHost x-1 !web2\n    LocalForward 8080 localhost:80\nHost * c\n\nHost a\n    HostName 10.0.0.1\n    SendEnv LANG\n    HostName %h.example.com\nHost a *\n\nHost c x-2\n    Compression yes\n",
+  "output": "Host db2.lab\nHost b\n    ServerAliveInterval 60\nHost c\n    Compression no\n\nHost b\n    LocalForward 9090 localhost:90\n    Port 2222\n    HostName 10.0.0.1\n\nHost x-1 !web2\n    LocalForward 8080 localhost:80\nHost * c\n\nHost a\n    HostName 10.0.0.1\n    SendEnv LANG\n    HostName %h.example.com\nHost a *\n\nHost c x-2\n    Compression yes\n",
+  "notes": [
+   [
+    "shadowed",
+    19
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-16",
+  "wildcards": true,
+  "input": "Host db2.lab\nHost b\n    ServerAliveInterval 60\nHost c\n    Compression no\n\nHost b\n    LocalForward 9090 localhost:90\n    Port 2222\n    HostName 10.0.0.1\n\nHost x-1 !web2\n    LocalForward 8080 localhost:80\nHost * c\n\nHost a\n    HostName 10.0.0.1\n    SendEnv LANG\n    HostName %h.example.com\nHost a *\n\nHost c x-2\n    Compression yes\n",
+  "output": "Host db2.lab\nHost b\n    ServerAliveInterval 60\nHost c\n    Compression no\n\nHost b\n    LocalForward 9090 localhost:90\n    Port 2222\n    HostName 10.0.0.1\n\nHost x-1 !web2\n    LocalForward 8080 localhost:80\nHost * c\n\nHost a\n    HostName 10.0.0.1\n    SendEnv LANG\n    HostName %h.example.com\nHost a *\n\nHost c x-2\n    Compression yes\n",
+  "notes": [
+   [
+    "shadowed",
+    19
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-17",
+  "wildcards": false,
+  "input": "Host db.lab *\n    HostName db.lab\n    IdentityFile ~/.ssh/a\n    ProxyJump j1\n    LocalForward 8080 localhost:80\nHost x-?\nHost !db.lab db.lab\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ProxyJump j2\nHost web2\n    SendEnv LANG\n    ProxyJump j1\n    HostName 10.0.0.1\nHost !db.lab web1\nHost c\n    SendEnv LC_X\n",
+  "output": "Host db.lab *\n    HostName db.lab\n    IdentityFile ~/.ssh/a\n    ProxyJump j1\n    LocalForward 8080 localhost:80\nHost x-?\nHost !db.lab db.lab\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ProxyJump j2\nHost web2\n    SendEnv LANG\n    HostName 10.0.0.1\nHost !db.lab web1\nHost c\n    SendEnv LC_X\n",
+  "notes": [
+   [
+    "shadowed",
+    14
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-17",
+  "wildcards": true,
+  "input": "Host db.lab *\n    HostName db.lab\n    IdentityFile ~/.ssh/a\n    ProxyJump j1\n    LocalForward 8080 localhost:80\nHost x-?\nHost !db.lab db.lab\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ProxyJump j2\nHost web2\n    SendEnv LANG\n    ProxyJump j1\n    HostName 10.0.0.1\nHost !db.lab web1\nHost c\n    SendEnv LC_X\n",
+  "output": "Host db.lab *\n    HostName db.lab\n    IdentityFile ~/.ssh/a\n    ProxyJump j1\n    LocalForward 8080 localhost:80\nHost x-?\nHost !db.lab db.lab\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\n    ProxyJump j2\nHost web2\n    SendEnv LANG\n    HostName 10.0.0.1\nHost !db.lab web1\nHost c\n    SendEnv LC_X\n",
+  "notes": [
+   [
+    "shadowed",
+    14
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-18",
+  "wildcards": false,
+  "input": "Match all\n    User m0\nHost b web2\n    ServerAliveInterval 60\n    User u2\n    LocalForward 9090 localhost:90\nHost x-?\n    StrictHostKeyChecking accept-new\n\n",
+  "output": "Match all\n    User m0\nHost b web2\n    ServerAliveInterval 60\n    User u2\n    LocalForward 9090 localhost:90\nHost x-?\n    StrictHostKeyChecking accept-new\n\n",
+  "notes": [
+   [
+    "wall",
+    1
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-18",
+  "wildcards": true,
+  "input": "Match all\n    User m0\nHost b web2\n    ServerAliveInterval 60\n    User u2\n    LocalForward 9090 localhost:90\nHost x-?\n    StrictHostKeyChecking accept-new\n\n",
+  "output": "Match all\n    User m0\nHost b web2\n    ServerAliveInterval 60\n    User u2\n    LocalForward 9090 localhost:90\nHost x-?\n    StrictHostKeyChecking accept-new\n\n",
+  "notes": [
+   [
+    "wall",
+    1
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-19",
+  "wildcards": false,
+  "input": "Host x-2 b\n    HostName %h.example.com\n    ServerAliveInterval 60\nHost db2.lab b\nHost x-1\n    ProxyJump j1\n    SendEnv LC_X\nHost db2.lab\n    HostName db2.lab\n    StrictHostKeyChecking yes\n    ServerAliveInterval 60\nHost web2 db.lab\n    HostName web2\n    Compression no\n    Port 22\n    ServerAliveInterval 30\nHost b\n    Compression no\n    Port 22\n    LocalForward 9090 localhost:90\n",
+  "output": "Host x-2 b\n    HostName %h.example.com\n    ServerAliveInterval 60\nHost db2.lab b\nHost x-1\n    ProxyJump j1\n    SendEnv LC_X\nHost db2.lab\n    HostName db2.lab\n    StrictHostKeyChecking yes\n    ServerAliveInterval 60\nHost web2 db.lab\n    HostName web2\n    Compression no\n    Port 22\n    ServerAliveInterval 30\nHost b\n    Compression no\n    Port 22\n    LocalForward 9090 localhost:90\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-19",
+  "wildcards": true,
+  "input": "Host x-2 b\n    HostName %h.example.com\n    ServerAliveInterval 60\nHost db2.lab b\nHost x-1\n    ProxyJump j1\n    SendEnv LC_X\nHost db2.lab\n    HostName db2.lab\n    StrictHostKeyChecking yes\n    ServerAliveInterval 60\nHost web2 db.lab\n    HostName web2\n    Compression no\n    Port 22\n    ServerAliveInterval 30\nHost b\n    Compression no\n    Port 22\n    LocalForward 9090 localhost:90\n",
+  "output": "Host x-2 b\n    HostName %h.example.com\n    ServerAliveInterval 60\nHost db2.lab b\nHost x-1\n    ProxyJump j1\n    SendEnv LC_X\nHost db2.lab\n    HostName db2.lab\n    StrictHostKeyChecking yes\n    ServerAliveInterval 60\nHost web2 db.lab\n    HostName web2\n    Compression no\n    Port 22\n    ServerAliveInterval 30\nHost b\n    Compression no\n    Port 22\n    LocalForward 9090 localhost:90\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-20",
+  "wildcards": false,
+  "input": "Host x-1 web*\n    StrictHostKeyChecking yes\n    SendEnv LANG\nHost c db2.lab\n    User u1\n    ProxyJump j1\nHost a *.lab\n",
+  "output": "Host x-1 web*\n    StrictHostKeyChecking yes\n    SendEnv LANG\nHost c db2.lab\n    User u1\n    ProxyJump j1\nHost a *.lab\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-20",
+  "wildcards": true,
+  "input": "Host x-1 web*\n    StrictHostKeyChecking yes\n    SendEnv LANG\nHost c db2.lab\n    User u1\n    ProxyJump j1\nHost a *.lab\n",
+  "output": "Host x-1 web*\n    StrictHostKeyChecking yes\n    SendEnv LANG\nHost c db2.lab\n    User u1\n    ProxyJump j1\nHost a *.lab\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-21",
+  "wildcards": false,
+  "input": "Host * !web2\n    ProxyJump j2\n    HostName 10.0.0.1\nHost web2\n    IdentityFile ~/.ssh/a\n    HostName web2\n    Compression yes\n    HostName %h.example.com\nHost web2 b\n    HostName web2\n    ServerAliveInterval 30\nHost * !web2\n    SendEnv LANG\n    Port 2222\nHost x-2\nHost db2.lab\n    SendEnv LC_X\n    ProxyJump j1\n    ServerAliveInterval 30\n\nHost db.lab\n\n",
+  "output": "Host * !web2\n    ProxyJump j2\n    HostName 10.0.0.1\nHost web2\n    IdentityFile ~/.ssh/a\n    HostName web2\n    Compression yes\n    HostName %h.example.com\nHost web2 b\n    HostName web2\n    ServerAliveInterval 30\nHost * !web2\n    SendEnv LANG\n    Port 2222\nHost x-2\nHost db2.lab\n    SendEnv LC_X\n    ProxyJump j1\n    ServerAliveInterval 30\n\nHost db.lab\n\n",
+  "notes": [
+   [
+    "shadowed",
+    8
+   ],
+   [
+    "shadowed",
+    10
+   ],
+   [
+    "shadowed",
+    18
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-21",
+  "wildcards": true,
+  "input": "Host * !web2\n    ProxyJump j2\n    HostName 10.0.0.1\nHost web2\n    IdentityFile ~/.ssh/a\n    HostName web2\n    Compression yes\n    HostName %h.example.com\nHost web2 b\n    HostName web2\n    ServerAliveInterval 30\nHost * !web2\n    SendEnv LANG\n    Port 2222\nHost x-2\nHost db2.lab\n    SendEnv LC_X\n    ProxyJump j1\n    ServerAliveInterval 30\n\nHost db.lab\n\n",
+  "output": "Host * !web2\n    ProxyJump j2\n    HostName 10.0.0.1\nHost web2\n    IdentityFile ~/.ssh/a\n    HostName web2\n    Compression yes\n    HostName %h.example.com\nHost web2 b\n    HostName web2\n    ServerAliveInterval 30\nHost * !web2\n    SendEnv LANG\n    Port 2222\nHost x-2\nHost db2.lab\n    SendEnv LC_X\n    ProxyJump j1\n    ServerAliveInterval 30\n\nHost db.lab\n\n",
+  "notes": [
+   [
+    "shadowed",
+    8
+   ],
+   [
+    "shadowed",
+    10
+   ],
+   [
+    "shadowed",
+    18
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-22",
+  "wildcards": false,
+  "input": "Host web* c\n    User u1\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/b\nHost web*\n    ProxyJump j2\nHost a\n    Compression yes\n",
+  "output": "Host web* c\n    User u1\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/b\nHost web*\n    ProxyJump j2\nHost a\n    Compression yes\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-22",
+  "wildcards": true,
+  "input": "Host web* c\n    User u1\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/b\nHost web*\n    ProxyJump j2\nHost a\n    Compression yes\n",
+  "output": "Host web* c\n    User u1\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/b\nHost web*\n    ProxyJump j2\nHost a\n    Compression yes\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-23",
+  "wildcards": false,
+  "input": "Host !web2 c\n    ProxyJump j1\n\nHost *.lab\nHost db2.lab\nHost web*\n    ProxyJump j2\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\nHost db2.lab\n    SendEnv LC_X\n    ServerAliveInterval 60\n    Port 2222\n    LocalForward 9090 localhost:90\n\nHost x-?\nHost a\n    LocalForward 9090 localhost:90\n",
+  "output": "Host !web2 c\n    ProxyJump j1\n\nHost *.lab\nHost db2.lab\nHost web*\n    ProxyJump j2\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\nHost db2.lab\n    SendEnv LC_X\n    ServerAliveInterval 60\n    Port 2222\n    LocalForward 9090 localhost:90\n\nHost x-?\nHost a\n    LocalForward 9090 localhost:90\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-23",
+  "wildcards": true,
+  "input": "Host !web2 c\n    ProxyJump j1\n\nHost *.lab\nHost db2.lab\nHost web*\n    ProxyJump j2\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\nHost db2.lab\n    SendEnv LC_X\n    ServerAliveInterval 60\n    Port 2222\n    LocalForward 9090 localhost:90\n\nHost x-?\nHost a\n    LocalForward 9090 localhost:90\n",
+  "output": "Host !web2 c\n    ProxyJump j1\n\nHost *.lab\nHost db2.lab\nHost web*\n    ProxyJump j2\n    ServerAliveInterval 60\n    StrictHostKeyChecking yes\nHost db2.lab\n    SendEnv LC_X\n    ServerAliveInterval 60\n    Port 2222\n    LocalForward 9090 localhost:90\n\nHost x-?\nHost a\n    LocalForward 9090 localhost:90\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-24",
+  "wildcards": false,
+  "input": "Host db.lab\n    ServerAliveInterval 30\n    SendEnv LC_X\nHost x-2 db2.lab\n    ProxyJump j2\n    ProxyJump j2\n    StrictHostKeyChecking accept-new\nHost db.lab\nHost x-2 b\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n",
+  "output": "Host db.lab\n    ServerAliveInterval 30\n    SendEnv LC_X\nHost x-2 db2.lab\n    ProxyJump j2\n    StrictHostKeyChecking accept-new\nHost db.lab\nHost x-2 b\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n",
+  "notes": [],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-24",
+  "wildcards": true,
+  "input": "Host db.lab\n    ServerAliveInterval 30\n    SendEnv LC_X\nHost x-2 db2.lab\n    ProxyJump j2\n    ProxyJump j2\n    StrictHostKeyChecking accept-new\nHost db.lab\nHost x-2 b\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n",
+  "output": "Host db.lab\n    ServerAliveInterval 30\n    SendEnv LC_X\nHost x-2 db2.lab\n    ProxyJump j2\n    StrictHostKeyChecking accept-new\nHost db.lab\nHost x-2 b\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n",
+  "notes": [],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-25",
+  "wildcards": false,
+  "input": "Host c\n    SendEnv LC_X\n    User u1\n    User u2\n\nHost b web2\n    HostName b\nHost web1\n    User u1\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n\nHost a x-1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\n\nHost web1 !db.lab\n    Compression yes\n    User u1\n    ServerAliveInterval 60\n    Port 22\nHost b db2.lab\n\nHost web2\n    ProxyJump j2\n    Compression yes\n    StrictHostKeyChecking yes\n",
+  "output": "Host c\n    SendEnv LC_X\n    User u1\n    User u2\n\nHost b web2\n    HostName b\nHost web1\n    User u1\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n\nHost a x-1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\n\nHost web1 !db.lab\n    Compression yes\n    User u1\n    ServerAliveInterval 60\n    Port 22\nHost b db2.lab\n\nHost web2\n    ProxyJump j2\n    Compression yes\n    StrictHostKeyChecking yes\n",
+  "notes": [
+   [
+    "shadowed",
+    4
+   ],
+   [
+    "shadowed",
+    11
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-25",
+  "wildcards": true,
+  "input": "Host c\n    SendEnv LC_X\n    User u1\n    User u2\n\nHost b web2\n    HostName b\nHost web1\n    User u1\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n\nHost a x-1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\n\nHost web1 !db.lab\n    Compression yes\n    User u1\n    ServerAliveInterval 60\n    Port 22\nHost b db2.lab\n\nHost web2\n    ProxyJump j2\n    Compression yes\n    StrictHostKeyChecking yes\n",
+  "output": "Host c\n    SendEnv LC_X\n    User u1\n    User u2\n\nHost b web2\n    HostName b\nHost web1\n    User u1\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n\nHost a x-1\n    StrictHostKeyChecking yes\n    Compression no\n    User u2\n\nHost web1 !db.lab\n    Compression yes\n    User u1\n    ServerAliveInterval 60\n    Port 22\nHost b db2.lab\n\nHost web2\n    ProxyJump j2\n    Compression yes\n    StrictHostKeyChecking yes\n",
+  "notes": [
+   [
+    "shadowed",
+    4
+   ],
+   [
+    "shadowed",
+    11
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-26",
+  "wildcards": false,
+  "input": "Host x-2\n    Compression no\n    StrictHostKeyChecking yes\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\nHost x-2 a\n    IdentityFile ~/.ssh/b\n    HostName %h.example.com\n    Port 2222\nHost db2.lab x-1\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n    ServerAliveInterval 30\n    HostName db2.lab\n\nHost x-1\n    Port 22\n",
+  "output": "Host x-2\n    Compression no\n    StrictHostKeyChecking yes\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\nHost x-2 a\n    IdentityFile ~/.ssh/b\n    HostName %h.example.com\n    Port 2222\nHost db2.lab x-1\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n    ServerAliveInterval 30\n\nHost x-1\n    Port 22\n",
+  "notes": [
+   [
+    "shadowed",
+    5
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-26",
+  "wildcards": true,
+  "input": "Host x-2\n    Compression no\n    StrictHostKeyChecking yes\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\nHost x-2 a\n    IdentityFile ~/.ssh/b\n    HostName %h.example.com\n    Port 2222\nHost db2.lab x-1\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n    ServerAliveInterval 30\n    HostName db2.lab\n\nHost x-1\n    Port 22\n",
+  "output": "Host x-2\n    Compression no\n    StrictHostKeyChecking yes\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking accept-new\nHost x-2 a\n    IdentityFile ~/.ssh/b\n    HostName %h.example.com\n    Port 2222\nHost db2.lab x-1\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n    ServerAliveInterval 30\n\nHost x-1\n    Port 22\n",
+  "notes": [
+   [
+    "shadowed",
+    5
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-27",
+  "wildcards": false,
+  "input": "Host db.lab\n    HostName 10.0.0.1\nMatch all\n    User m1\nHost web1\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 60\nHost db2.lab b\n    User u1\nHost b\n    SendEnv LANG\n\nHost * db.lab\n    HostName 10.0.0.1\n    Port 2222\nHost c web1\n    HostName 10.0.0.1\n",
+  "output": "Host db.lab\n    HostName 10.0.0.1\nMatch all\n    User m1\nHost web1\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 60\nHost db2.lab b\n    User u1\nHost b\n    SendEnv LANG\n\nHost * db.lab\n    HostName 10.0.0.1\n    Port 2222\n",
+  "notes": [
+   [
+    "wall",
+    3
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-27",
+  "wildcards": true,
+  "input": "Host db.lab\n    HostName 10.0.0.1\nMatch all\n    User m1\nHost web1\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 60\nHost db2.lab b\n    User u1\nHost b\n    SendEnv LANG\n\nHost * db.lab\n    HostName 10.0.0.1\n    Port 2222\nHost c web1\n    HostName 10.0.0.1\n",
+  "output": "Host db.lab\n    HostName 10.0.0.1\nMatch all\n    User m1\nHost web1\n    StrictHostKeyChecking accept-new\n    ServerAliveInterval 60\nHost db2.lab b\n    User u1\nHost b\n    SendEnv LANG\n\nHost * db.lab\n    HostName 10.0.0.1\n    Port 2222\n",
+  "notes": [
+   [
+    "wall",
+    3
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-28",
+  "wildcards": false,
+  "input": "Host !db.lab b\n    User u1\n    LocalForward 8080 localhost:80\n    Compression no\nHost !web2 x-?\n    Compression no\n    Port 22\n    SendEnv LC_X\n    IdentityFile ~/.ssh/b\nHost a web2\n    HostName a\n    User u1\n\nHost x-2 b\n\n",
+  "output": "Host !db.lab b\n    User u1\n    LocalForward 8080 localhost:80\n    Compression no\nHost !web2 x-?\n    Compression no\n    Port 22\n    SendEnv LC_X\n    IdentityFile ~/.ssh/b\nHost a web2\n    HostName a\n    User u1\n\nHost x-2 b\n\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-28",
+  "wildcards": true,
+  "input": "Host !db.lab b\n    User u1\n    LocalForward 8080 localhost:80\n    Compression no\nHost !web2 x-?\n    Compression no\n    Port 22\n    SendEnv LC_X\n    IdentityFile ~/.ssh/b\nHost a web2\n    HostName a\n    User u1\n\nHost x-2 b\n\n",
+  "output": "Host !db.lab b\n    User u1\n    LocalForward 8080 localhost:80\n    Compression no\nHost !web2 x-?\n    Compression no\n    Port 22\n    SendEnv LC_X\n    IdentityFile ~/.ssh/b\nHost a web2\n    HostName a\n    User u1\n\nHost x-2 b\n\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-29",
+  "wildcards": false,
+  "input": "Host c\nHost db.lab *.lab\n    HostName 10.0.0.1\n    User u1\nHost web1 b\n    HostName 10.0.0.1\n    ProxyJump j1\n    SendEnv LANG\nHost web1 db2.lab\n    Port 2222\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n\nHost c\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/b\nHost db.lab\n    StrictHostKeyChecking yes\nHost db2.lab\n    ProxyJump j1\nMatch all\n    User m7\n",
+  "output": "Host c\nHost db.lab *.lab\n    HostName 10.0.0.1\n    User u1\nHost web1 b\n    HostName 10.0.0.1\n    ProxyJump j1\n    SendEnv LANG\nHost web1 db2.lab\n    Port 2222\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n\nHost c\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/b\nHost db.lab\n    StrictHostKeyChecking yes\nHost db2.lab\n    ProxyJump j1\nMatch all\n    User m7\n",
+  "notes": [
+   [
+    "wall",
+    21
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-29",
+  "wildcards": true,
+  "input": "Host c\nHost db.lab *.lab\n    HostName 10.0.0.1\n    User u1\nHost web1 b\n    HostName 10.0.0.1\n    ProxyJump j1\n    SendEnv LANG\nHost web1 db2.lab\n    Port 2222\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n\nHost c\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/b\nHost db.lab\n    StrictHostKeyChecking yes\nHost db2.lab\n    ProxyJump j1\nMatch all\n    User m7\n",
+  "output": "Host c\nHost db.lab *.lab\n    HostName 10.0.0.1\n    User u1\nHost web1 b\n    HostName 10.0.0.1\n    ProxyJump j1\n    SendEnv LANG\nHost web1 db2.lab\n    Port 2222\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n\nHost c\n    StrictHostKeyChecking yes\n    IdentityFile ~/.ssh/b\nHost db.lab\n    StrictHostKeyChecking yes\nHost db2.lab\n    ProxyJump j1\nMatch all\n    User m7\n",
+  "notes": [
+   [
+    "wall",
+    21
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-30",
+  "wildcards": false,
+  "input": "Host *\n    HostName z\nHost web2\n    ServerAliveInterval 60\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n\nHost x-1\n    Port 2222\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\nHost db.lab\n    Compression yes\n    ProxyJump j2\n",
+  "output": "Host *\n    HostName z\nHost web2\n    ServerAliveInterval 60\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n\nHost x-1\n    Port 2222\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\nHost db.lab\n    Compression yes\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    5
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-30",
+  "wildcards": true,
+  "input": "Host *\n    HostName z\nHost web2\n    ServerAliveInterval 60\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n\nHost x-1\n    Port 2222\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\nHost db.lab\n    Compression yes\n    ProxyJump j2\n",
+  "output": "Host *\n    HostName z\nHost web2\n    ServerAliveInterval 60\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    ProxyJump j1\n\nHost x-1\n    Port 2222\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\nHost db.lab\n    Compression yes\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    5
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-31",
+  "wildcards": false,
+  "input": "Host c web*\n    Compression yes\n    Port 2222\n    User u1\n\nMatch all\n    User m1\nHost web2\nMatch all\n    User m3\nHost web2 db2.lab\nHost b c\n    User u1\nHost !db.lab db.lab\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    SendEnv LANG\nHost x-1\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n",
+  "output": "Host c web*\n    Compression yes\n    Port 2222\n    User u1\n\nMatch all\n    User m1\nHost web2\nMatch all\n    User m3\nHost web2 db2.lab\nHost b c\n    User u1\nHost !db.lab db.lab\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    SendEnv LANG\nHost x-1\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n",
+  "notes": [
+   [
+    "wall",
+    6
+   ],
+   [
+    "wall",
+    9
+   ],
+   [
+    "shadowed",
+    21
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-31",
+  "wildcards": true,
+  "input": "Host c web*\n    Compression yes\n    Port 2222\n    User u1\n\nMatch all\n    User m1\nHost web2\nMatch all\n    User m3\nHost web2 db2.lab\nHost b c\n    User u1\nHost !db.lab db.lab\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    SendEnv LANG\nHost x-1\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n",
+  "output": "Host c web*\n    Compression yes\n    Port 2222\n    User u1\n\nMatch all\n    User m1\nHost web2\nMatch all\n    User m3\nHost web2 db2.lab\nHost b c\n    User u1\nHost !db.lab db.lab\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    SendEnv LANG\nHost x-1\n    LocalForward 9090 localhost:90\n    ServerAliveInterval 60\n    ServerAliveInterval 30\n",
+  "notes": [
+   [
+    "wall",
+    6
+   ],
+   [
+    "wall",
+    9
+   ],
+   [
+    "shadowed",
+    21
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-32",
+  "wildcards": false,
+  "input": "Match all\n    User m0\nHost db.lab\n    User u2\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 30\n    SendEnv LANG\nHost b\n    SendEnv LANG\n    HostName %h.example.com\nHost !web2 x-2\n    ServerAliveInterval 60\n    Port 2222\nMatch all\n    User m4\n",
+  "output": "Match all\n    User m0\nHost db.lab\n    User u2\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 30\n    SendEnv LANG\nHost b\n    SendEnv LANG\n    HostName %h.example.com\nHost !web2 x-2\n    ServerAliveInterval 60\n    Port 2222\nMatch all\n    User m4\n",
+  "notes": [
+   [
+    "wall",
+    1
+   ],
+   [
+    "wall",
+    14
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-32",
+  "wildcards": true,
+  "input": "Match all\n    User m0\nHost db.lab\n    User u2\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 30\n    SendEnv LANG\nHost b\n    SendEnv LANG\n    HostName %h.example.com\nHost !web2 x-2\n    ServerAliveInterval 60\n    Port 2222\nMatch all\n    User m4\n",
+  "output": "Match all\n    User m0\nHost db.lab\n    User u2\n    IdentityFile ~/.ssh/a\n    ServerAliveInterval 30\n    SendEnv LANG\nHost b\n    SendEnv LANG\n    HostName %h.example.com\nHost !web2 x-2\n    ServerAliveInterval 60\n    Port 2222\nMatch all\n    User m4\n",
+  "notes": [
+   [
+    "wall",
+    1
+   ],
+   [
+    "wall",
+    14
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-33",
+  "wildcards": false,
+  "input": "Host !db.lab c\n    StrictHostKeyChecking accept-new\n    HostName 10.0.0.1\n    Compression yes\nHost web1\n    Compression yes\nHost a x-1\n    ProxyJump j2\n    ProxyJump j1\n    ProxyJump j2\nHost db.lab *\n    IdentityFile ~/.ssh/b\n    Port 2222\n    Port 2222\nHost web*\n    Port 2222\n    ServerAliveInterval 60\n    User u2\n    Compression no\n\nHost x-1\n    ServerAliveInterval 30\n    HostName x-1\nHost db2.lab\n    Compression yes\n    User u1\n    HostName 10.0.0.1\n    User u2\n\nHost b\n    ProxyJump j2\n    Port 2222\n    LocalForward 8080 localhost:80\n    ProxyJump j1\n\n",
+  "output": "Host !db.lab c\n    StrictHostKeyChecking accept-new\n    HostName 10.0.0.1\n    Compression yes\nHost web1\n    Compression yes\nHost a x-1\n    ProxyJump j2\n    ProxyJump j1\nHost db.lab *\n    IdentityFile ~/.ssh/b\n    Port 2222\nHost web*\n    Port 2222\n    ServerAliveInterval 60\n    User u2\n    Compression no\n\nHost x-1\n    ServerAliveInterval 30\n    HostName x-1\nHost db2.lab\n    Compression yes\n    User u1\n    HostName 10.0.0.1\n    User u2\n\nHost b\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ProxyJump j1\n\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ],
+   [
+    "shadowed",
+    28
+   ],
+   [
+    "shadowed",
+    34
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "duplicate",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-33",
+  "wildcards": true,
+  "input": "Host !db.lab c\n    StrictHostKeyChecking accept-new\n    HostName 10.0.0.1\n    Compression yes\nHost web1\n    Compression yes\nHost a x-1\n    ProxyJump j2\n    ProxyJump j1\n    ProxyJump j2\nHost db.lab *\n    IdentityFile ~/.ssh/b\n    Port 2222\n    Port 2222\nHost web*\n    Port 2222\n    ServerAliveInterval 60\n    User u2\n    Compression no\n\nHost x-1\n    ServerAliveInterval 30\n    HostName x-1\nHost db2.lab\n    Compression yes\n    User u1\n    HostName 10.0.0.1\n    User u2\n\nHost b\n    ProxyJump j2\n    Port 2222\n    LocalForward 8080 localhost:80\n    ProxyJump j1\n\n",
+  "output": "Host !db.lab c\n    StrictHostKeyChecking accept-new\n    HostName 10.0.0.1\n    Compression yes\nHost web1\n    Compression yes\nHost a x-1\n    ProxyJump j2\n    ProxyJump j1\nHost db.lab *\n    IdentityFile ~/.ssh/b\n    Port 2222\nHost web*\n    Port 2222\n    ServerAliveInterval 60\n    User u2\n    Compression no\n\nHost x-1\n    ServerAliveInterval 30\n    HostName x-1\nHost db2.lab\n    Compression yes\n    User u1\n    HostName 10.0.0.1\n    User u2\n\nHost b\n    ProxyJump j2\n    LocalForward 8080 localhost:80\n    ProxyJump j1\n\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ],
+   [
+    "shadowed",
+    28
+   ],
+   [
+    "shadowed",
+    34
+   ]
+  ],
+  "changes": [
+   "duplicate",
+   "duplicate",
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-34",
+  "wildcards": false,
+  "input": "Host web1\n    Compression yes\nHost x-2\n    Compression no\n    HostName 10.0.0.1\n    Port 22\n    ServerAliveInterval 30\nMatch all\n    User m2\nHost a web1\n    User u1\n    ServerAliveInterval 60\n    User u1\n\nHost db.lab\n    LocalForward 9090 localhost:90\n",
+  "output": "Host web1\n    Compression yes\nHost x-2\n    Compression no\n    HostName 10.0.0.1\n    Port 22\n    ServerAliveInterval 30\nMatch all\n    User m2\nHost a web1\n    User u1\n    ServerAliveInterval 60\n\nHost db.lab\n    LocalForward 9090 localhost:90\n",
+  "notes": [
+   [
+    "wall",
+    8
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-34",
+  "wildcards": true,
+  "input": "Host web1\n    Compression yes\nHost x-2\n    Compression no\n    HostName 10.0.0.1\n    Port 22\n    ServerAliveInterval 30\nMatch all\n    User m2\nHost a web1\n    User u1\n    ServerAliveInterval 60\n    User u1\n\nHost db.lab\n    LocalForward 9090 localhost:90\n",
+  "output": "Host web1\n    Compression yes\nHost x-2\n    Compression no\n    HostName 10.0.0.1\n    Port 22\n    ServerAliveInterval 30\nMatch all\n    User m2\nHost a web1\n    User u1\n    ServerAliveInterval 60\n\nHost db.lab\n    LocalForward 9090 localhost:90\n",
+  "notes": [
+   [
+    "wall",
+    8
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-35",
+  "wildcards": false,
+  "input": "Host c b\n    HostName %h.example.com\n    SendEnv LC_X\n\nHost x-2 b\n    HostName 10.0.0.1\n\nHost web1\nHost x-2\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking yes\n    HostName %h.example.com\nHost db.lab\n\nHost x-1\n    HostName %h.example.com\nHost !web2 web1\n    ServerAliveInterval 30\nHost db2.lab\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n\nHost x-1\n    StrictHostKeyChecking yes\n    StrictHostKeyChecking yes\n    ProxyJump j1\n    ProxyJump j2\n",
+  "output": "Host c b\n    HostName %h.example.com\n    SendEnv LC_X\n\nHost x-2 b\n    HostName 10.0.0.1\n\nHost web1\nHost x-2\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking yes\n    HostName %h.example.com\nHost db.lab\n\nHost x-1\n    HostName %h.example.com\nHost !web2 web1\n    ServerAliveInterval 30\nHost db2.lab\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n\nHost x-1\n    StrictHostKeyChecking yes\n    ProxyJump j1\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    11
+   ],
+   [
+    "shadowed",
+    12
+   ],
+   [
+    "shadowed",
+    28
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-35",
+  "wildcards": true,
+  "input": "Host c b\n    HostName %h.example.com\n    SendEnv LC_X\n\nHost x-2 b\n    HostName 10.0.0.1\n\nHost web1\nHost x-2\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking yes\n    HostName %h.example.com\nHost db.lab\n\nHost x-1\n    HostName %h.example.com\nHost !web2 web1\n    ServerAliveInterval 30\nHost db2.lab\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n\nHost x-1\n    StrictHostKeyChecking yes\n    StrictHostKeyChecking yes\n    ProxyJump j1\n    ProxyJump j2\n",
+  "output": "Host c b\n    HostName %h.example.com\n    SendEnv LC_X\n\nHost x-2 b\n    HostName 10.0.0.1\n\nHost web1\nHost x-2\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking yes\n    HostName %h.example.com\nHost db.lab\n\nHost x-1\n    HostName %h.example.com\nHost !web2 web1\n    ServerAliveInterval 30\nHost db2.lab\n    IdentityFile ~/.ssh/a\n    StrictHostKeyChecking accept-new\n    HostName db2.lab\n\nHost x-1\n    StrictHostKeyChecking yes\n    ProxyJump j1\n    ProxyJump j2\n",
+  "notes": [
+   [
+    "shadowed",
+    11
+   ],
+   [
+    "shadowed",
+    12
+   ],
+   [
+    "shadowed",
+    28
+   ]
+  ],
+  "changes": [
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-36",
+  "wildcards": false,
+  "input": "Host b\n    StrictHostKeyChecking accept-new\n\nHost web2\n    IdentityFile ~/.ssh/b\n    SendEnv LANG\n    ServerAliveInterval 60\n    HostName web2\nHost a\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/a\n    LocalForward 8080 localhost:80\n    IdentityFile ~/.ssh/b\nHost web1\n    StrictHostKeyChecking yes\n    Port 2222\n    IdentityFile ~/.ssh/b\n\nHost web*\n    Compression yes\n    SendEnv LC_X\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "output": "Host b\n    StrictHostKeyChecking accept-new\n\nHost web2\n    IdentityFile ~/.ssh/b\n    SendEnv LANG\n    ServerAliveInterval 60\n    HostName web2\nHost a\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/a\n    LocalForward 8080 localhost:80\n    IdentityFile ~/.ssh/b\nHost web1\n    StrictHostKeyChecking yes\n    Port 2222\n    IdentityFile ~/.ssh/b\n\nHost web*\n    Compression yes\n    SendEnv LC_X\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-36",
+  "wildcards": true,
+  "input": "Host b\n    StrictHostKeyChecking accept-new\n\nHost web2\n    IdentityFile ~/.ssh/b\n    SendEnv LANG\n    ServerAliveInterval 60\n    HostName web2\nHost a\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/a\n    LocalForward 8080 localhost:80\n    IdentityFile ~/.ssh/b\nHost web1\n    StrictHostKeyChecking yes\n    Port 2222\n    IdentityFile ~/.ssh/b\n\nHost web*\n    Compression yes\n    SendEnv LC_X\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "output": "Host b\n    StrictHostKeyChecking accept-new\n\nHost web2\n    IdentityFile ~/.ssh/b\n    SendEnv LANG\n    ServerAliveInterval 60\n    HostName web2\nHost a\n    LocalForward 9090 localhost:90\n    IdentityFile ~/.ssh/a\n    LocalForward 8080 localhost:80\n    IdentityFile ~/.ssh/b\nHost web1\n    StrictHostKeyChecking yes\n    Port 2222\n    IdentityFile ~/.ssh/b\n\nHost web*\n    Compression yes\n    SendEnv LC_X\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-37",
+  "wildcards": false,
+  "input": "StrictHostKeyChecking accept-new\nHost web2 a\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking yes\nHost x-1\nMatch all\n    User m2\nHost web1 c\n    Port 2222\n    ProxyJump j2\nHost web*\n    LocalForward 8080 localhost:80\n    User u1\n    User u2\n    User u2\n",
+  "output": "StrictHostKeyChecking accept-new\nHost web2 a\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking yes\nHost x-1\nMatch all\n    User m2\nHost web1 c\n    Port 2222\n    ProxyJump j2\nHost web*\n    LocalForward 8080 localhost:80\n    User u1\n    User u2\n    User u2\n",
+  "notes": [
+   [
+    "shadowed",
+    6
+   ],
+   [
+    "wall",
+    8
+   ],
+   [
+    "shadowed",
+    16
+   ],
+   [
+    "shadowed",
+    17
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-37",
+  "wildcards": true,
+  "input": "StrictHostKeyChecking accept-new\nHost web2 a\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking yes\nHost x-1\nMatch all\n    User m2\nHost web1 c\n    Port 2222\n    ProxyJump j2\nHost web*\n    LocalForward 8080 localhost:80\n    User u1\n    User u2\n    User u2\n",
+  "output": "StrictHostKeyChecking accept-new\nHost web2 a\n    ServerAliveInterval 30\n    LocalForward 8080 localhost:80\n    LocalForward 8080 localhost:80\n    StrictHostKeyChecking yes\nHost x-1\nMatch all\n    User m2\nHost web1 c\n    Port 2222\n    ProxyJump j2\nHost web*\n    LocalForward 8080 localhost:80\n    User u1\n    User u2\n    User u2\n",
+  "notes": [
+   [
+    "shadowed",
+    6
+   ],
+   [
+    "wall",
+    8
+   ],
+   [
+    "shadowed",
+    16
+   ],
+   [
+    "shadowed",
+    17
+   ]
+  ],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-38",
+  "wildcards": false,
+  "input": "Host web2 web*\n    HostName 10.0.0.1\n\nHost c x-2\n    User u2\n    ProxyJump j2\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\nHost !db.lab !web2 b\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\nHost *.lab\nHost b\nHost web2\n    ServerAliveInterval 30\n",
+  "output": "Host web2 web*\n    HostName 10.0.0.1\n\nHost c x-2\n    User u2\n    ProxyJump j2\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\nHost !db.lab !web2 b\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\nHost *.lab\nHost b\nHost web2\n    ServerAliveInterval 30\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-38",
+  "wildcards": true,
+  "input": "Host web2 web*\n    HostName 10.0.0.1\n\nHost c x-2\n    User u2\n    ProxyJump j2\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\nHost !db.lab !web2 b\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\nHost *.lab\nHost b\nHost web2\n    ServerAliveInterval 30\n",
+  "output": "Host web2 web*\n    HostName 10.0.0.1\n\nHost c x-2\n    User u2\n    ProxyJump j2\n    IdentityFile ~/.ssh/b\n    LocalForward 9090 localhost:90\nHost !db.lab !web2 b\n    HostName %h.example.com\n    LocalForward 9090 localhost:90\n    LocalForward 9090 localhost:90\nHost *.lab\nHost b\nHost web2\n    ServerAliveInterval 30\n",
+  "notes": [],
+  "changes": [],
+  "failed": []
+ },
+ {
+  "name": "random-39",
+  "wildcards": false,
+  "input": "StrictHostKeyChecking accept-new\nHost b\n    IdentityFile ~/.ssh/b\n    IdentityFile ~/.ssh/a\n\nHost x-2 web1\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    ProxyJump j2\n    HostName x-2\nHost db2.lab\nHost x-1 db.lab\nHost web1\n    ProxyJump j1\nHost c !web2\n    SendEnv LC_X\n\nHost *.lab b\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\n",
+  "output": "StrictHostKeyChecking accept-new\nHost b\n    IdentityFile ~/.ssh/b\n    IdentityFile ~/.ssh/a\n\nHost x-2 web1\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    ProxyJump j2\n    HostName x-2\nHost db2.lab\nHost x-1 db.lab\nHost c !web2\n    SendEnv LC_X\n\nHost *.lab b\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-39",
+  "wildcards": true,
+  "input": "StrictHostKeyChecking accept-new\nHost b\n    IdentityFile ~/.ssh/b\n    IdentityFile ~/.ssh/a\n\nHost x-2 web1\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    ProxyJump j2\n    HostName x-2\nHost db2.lab\nHost x-1 db.lab\nHost web1\n    ProxyJump j1\nHost c !web2\n    SendEnv LC_X\n\nHost *.lab b\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\n",
+  "output": "StrictHostKeyChecking accept-new\nHost b\n    IdentityFile ~/.ssh/b\n    IdentityFile ~/.ssh/a\n\nHost x-2 web1\n    ProxyJump j1\n    IdentityFile ~/.ssh/a\n    ProxyJump j2\n    HostName x-2\nHost db2.lab\nHost x-1 db.lab\nHost c !web2\n    SendEnv LC_X\n\nHost *.lab b\n    LocalForward 8080 localhost:80\n    ServerAliveInterval 60\n",
+  "notes": [
+   [
+    "shadowed",
+    9
+   ]
+  ],
+  "changes": [
+   "repeat"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-40",
+  "wildcards": false,
+  "input": "Host !web2 web1\n    SendEnv LC_X\n    User u2\n    LocalForward 9090 localhost:90\nHost !db.lab *.lab\n    SendEnv LC_X\n\nHost b\n    SendEnv LC_X\n    HostName %h.example.com\n    ServerAliveInterval 30\nHost x-2\nHost x-?\n    Port 22\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking accept-new\n    Port 22\nHost db.lab\n\n",
+  "output": "Host !web2 web1\n    SendEnv LC_X\n    User u2\n    LocalForward 9090 localhost:90\nHost !db.lab *.lab\n    SendEnv LC_X\n\nHost b\n    SendEnv LC_X\n    HostName %h.example.com\n    ServerAliveInterval 30\nHost x-2\nHost x-?\n    Port 22\n    StrictHostKeyChecking accept-new\nHost db.lab\n\n",
+  "notes": [],
+  "changes": [
+   "duplicate",
+   "duplicate"
+  ],
+  "failed": []
+ },
+ {
+  "name": "random-40",
+  "wildcards": true,
+  "input": "Host !web2 web1\n    SendEnv LC_X\n    User u2\n    LocalForward 9090 localhost:90\nHost !db.lab *.lab\n    SendEnv LC_X\n\nHost b\n    SendEnv LC_X\n    HostName %h.example.com\n    ServerAliveInterval 30\nHost x-2\nHost x-?\n    Port 22\n    StrictHostKeyChecking accept-new\n    StrictHostKeyChecking accept-new\n    Port 22\nHost db.lab\n\n",
+  "output": "Host !web2 web1\n    SendEnv LC_X\n    User u2\n    LocalForward 9090 localhost:90\nHost !db.lab *.lab\n    SendEnv LC_X\n\nHost b\n    SendEnv LC_X\n    HostName %h.example.com\n    ServerAliveInterval 30\nHost x-2\nHost x-?\n    Port 22\n    StrictHostKeyChecking accept-new\nHost db.lab\n\n",
+  "notes": [],
+  "changes": [
+   "duplicate",
+   "duplicate"
+  ],
+  "failed": []
+ }
+]

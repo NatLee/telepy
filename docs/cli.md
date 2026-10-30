@@ -176,6 +176,8 @@ telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
 telepy config install box nas              # the web dialog's install command, done for you (~/.ssh/config, marked blocks, backup)
 telepy config install --all --print        # every tunnel you can use; print the blocks instead of writing (--file <path> writes elsewhere)
+telepy config tidy                         # simplify ~/.ssh/config: shows what changes + the diff, asks, keeps config.bak
+telepy config tidy --check                 # report only; exit 1 when it could be simpler or has lines worth a look (dotfiles CI)
 
 telepy exec box -- systemctl is-active nginx
 telepy exec --label env=prod -- uptime     # every tunnel with the label, in parallel, "name | " prefixes
@@ -222,6 +224,14 @@ with `-F` (`TELEPY_SSH_DIR` moves that folder). Your own `~/.ssh/config` is unto
 `telepy config install`, which keeps a `config.bak`, saves the host keys to `~/.ssh/telepy_known_hosts` and, like the
 web dialog, leaves alone same-named devices that belong to another Telepy server (set a name prefix, `ssh_alias_prefix`,
 to have both).
+
+`config tidy` needs no sign-in and never sends the file anywhere. It applies the web's **SSH config editor** rules (same
+engine, kept identical by shared test cases): lines several hosts share are written once in a `Host a b c` block after
+them (a host that sets its own value keeps it), `HostName web1.example.com` under `Host web1` becomes
+`HostName %h.example.com`, and repeats ssh never reads are dropped. Every name the file lists is resolved again and must
+read exactly as before, nothing is moved across `Match` / `Include`, and Telepy's own blocks keep their markers. It also
+lists lines that never take effect and options ssh doesn't know. `--wildcards` allows `Host web-*` where no other name in
+the file would match; `--yes` writes without asking; `--file <path>` simplifies another file.
 
 `exec` opens a short-lived session per tunnel through the backend (`POST /api/ai/sessions`, then
 `POST /api/ai/sessions/{id}/exec`, then closes it): the same reaper, command rules and audit as MCP agents. The

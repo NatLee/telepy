@@ -209,6 +209,7 @@ export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
                 r("sshAccount", `telepy ssh ${TA} -- uname -a`, ["tunnels:read", "ssh-key"], noTunnel || !c.account),
                 r("forward", `telepy ssh ${T} -L 8080:localhost:80`, ["tunnels:read", "ssh-key"]),
                 r("configInstall", "telepy config install --all", ["tunnels:read", "ssh-key"], false),
+                r("configTidy", "telepy config tidy", [], false),
             ];
         case "many":
             return [
@@ -299,7 +300,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "ssh <tunnel>[@account] [-L …] [-D …] [-- cmd]", key: "ssh", needs: ["tunnels:read", "ssh-key"] },
     { usage: "scp [-r] <from>… <to>", key: "scp", needs: ["tunnels:read", "ssh-key"] },
     { usage: "sftp <tunnel>[@account]", key: "sftp", needs: ["tunnels:read", "ssh-key"] },
-    { usage: "config install [<tunnel>…|--all] [--print]", key: "config", needs: ["tunnels:read"] },
+    { usage: "config install [<tunnel>…|--all] [--print] | tidy [--check] [--yes]", key: "config", needs: ["tunnels:read"] },
     { usage: "exec <tunnel>… [--label …] [--group …] -- <cmd>", key: "exec", needs: ["ssh:exec"] },
     { usage: "cp <from> <to>", key: "cp", needs: ["ssh:files"] },
     { usage: "sessions [end <id>]", key: "sessions", needs: ["tunnels:read"] },
