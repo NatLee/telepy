@@ -22,6 +22,7 @@ pub mod snippets;
 pub mod sshcfg;
 pub mod table;
 pub mod target;
+pub mod tidy;
 pub mod update;
 
 use std::collections::HashMap;
@@ -233,6 +234,21 @@ pub enum ConfigAction {
         /// Write to this file instead of ~/.ssh/config
         #[arg(long)]
         file: Option<PathBuf>,
+    },
+    /// Simplify ~/.ssh/config: shared lines once, repeats ssh never reads dropped; every name checked to read the same
+    Tidy {
+        /// Simplify this file instead of ~/.ssh/config
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Also use a wildcard where names share a start or an end (it then applies to other matching names too)
+        #[arg(long)]
+        wildcards: bool,
+        /// Only report; exit 1 when the file could be simpler or has lines worth a look
+        #[arg(long)]
+        check: bool,
+        /// Write without asking (a backup is still made)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -517,6 +533,8 @@ fn run_command(cli: Cli) -> Result<i32> {
         Cmd::Doctor => doctor(server, token),
         Cmd::Update(a) => update_cmd(a),
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
+        // 只讀寫本機的檔，不用登入。/ Only touches a local file: no sign-in needed.
+        Cmd::Config(ConfigArgs { action: ConfigAction::Tidy { file, wildcards, check, yes } }) => config_tidy(file, wildcards, check, yes),
         cmd => {
             let api = Api::open(server, token)?;
             match cmd {
@@ -922,6 +940,106 @@ fn scp(api: &Api, a: &ScpArgs) -> Result<i32> {
     hand_over(cmd)
 }
 
+/// `telepy config tidy`：在這台電腦上簡化 ~/.ssh/config（規則跟網頁的 SSH config 編輯器一樣，見 `tidy.rs`）——列出改了什麼、
+/// 值得看一下的行與差異，問過才寫回去，寫之前備份成 `<檔名>.bak`。`--check` 只回報，能更短或有值得看的行就結束碼 1。
+/// `telepy config tidy`: simplify ~/.ssh/config on this computer (the web SSH config editor's rules, see `tidy.rs`) —
+/// lists what changed, lines worth a look and the diff, asks before writing and backs up to `<file>.bak` first.
+/// `--check` only reports and exits 1 when the file could be shorter or has lines worth a look.
+fn config_tidy(file: Option<PathBuf>, wildcards: bool, check: bool, yes: bool) -> Result<i32> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let target = file.unwrap_or_else(|| creds::home_dir().join(".ssh").join("config"));
+    let text = std::fs::read_to_string(&target).with_context(|| format!("reading {}", target.display()))?;
+    let r = tidy::tidy(&text, wildcards);
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let paint = |code: &str, s: &str| if color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() };
+    if !r.failed.is_empty() {
+        bail!("The final check found a difference for {}, so nothing was changed. Please report this config.", r.failed.join(", "));
+    }
+    let worth: Vec<&tidy::Note> = r.notes.iter().filter(|n| !matches!(n, tidy::Note::Wall { .. })).collect();
+    let changed = r.text != text;
+    if changed {
+        println!(
+            "{}: {} -> {} lines ({} -> {} settings). Checked {} names: ssh reads each one exactly as before.",
+            target.display(),
+            r.before.lines,
+            r.after.lines,
+            r.before.settings,
+            r.after.settings,
+            r.checked.len()
+        );
+        println!("\nWhat changed:");
+        for c in &r.changes {
+            let line = match c {
+                tidy::Change::Duplicate { n, key, host } => format!("line {n}: {key} is set again in the same block (Host {host}); removed, ssh only reads the first"),
+                tidy::Change::Repeat { n, key, host, by } => format!("line {n}: {key} repeats what line {by} already gives Host {host}; removed"),
+                tidy::Change::Shared { hosts, keys, removed, telepy } => format!(
+                    "{} written once for {} ({removed} lines moved into one {}block)",
+                    keys.join(", "),
+                    hosts.join(" "),
+                    if *telepy { "telepy shared " } else { "" }
+                ),
+                tidy::Change::Wildcard { pattern, hosts } => format!("Host {pattern} instead of {} (also applies to other names matching {pattern})", hosts.join(" ")),
+            };
+            println!("  - {line}");
+        }
+    } else {
+        println!("{}: nothing to simplify.", target.display());
+    }
+    if !worth.is_empty() {
+        println!("\nWorth a look:");
+        for n in &worth {
+            let line = match n {
+                tidy::Note::Shadowed { n, key, host, by, value, winner } => format!("line {n}: {key} {value} (Host {host}) never takes effect: line {by} already sets {winner}"),
+                tidy::Note::Unknown { n, key } => format!("line {n}: {key} is not an OpenSSH option; ssh refuses the whole file unless IgnoreUnknown lists it"),
+                tidy::Note::Ignored { n, key } => format!("line {n}: ssh ignores {key}, an option it no longer supports"),
+                tidy::Note::Invalid { n } => format!("line {n} can't be read (an unclosed quote?); its block is left alone"),
+                tidy::Note::Wall { .. } => unreachable!(),
+            };
+            println!("  {} {line}", paint("33", "!"));
+        }
+        println!("  The SSH config editor in Telepy (SSH config editor in the sidebar) offers one-click fixes for these.");
+    }
+    if changed {
+        println!();
+        println!("{}", paint("1", &format!("--- {}", target.display())));
+        println!("{}", paint("1", "+++ simplified"));
+        for h in tidy::hunks(&tidy::diff(&text, &r), 2) {
+            match h {
+                None => println!("{}", paint("36", "@@")),
+                Some(l) if l.sign == '-' => println!("{}", paint("31", &format!("-{}", l.text))),
+                Some(l) if l.sign == '+' => println!("{}", paint("32", &format!("+{}", l.text))),
+                Some(l) => println!(" {}", l.text),
+            }
+        }
+    }
+    if check {
+        return Ok(i32::from(changed || !worth.is_empty()));
+    }
+    if !changed {
+        return Ok(0);
+    }
+    let backup = PathBuf::from(format!("{}.bak", target.display()));
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            eprintln!("\nNot written. Run again with --yes to write it (the current file is kept as {}).", backup.display());
+            return Ok(0);
+        }
+        print!("\nWrite it to {}? The current file is kept as {}. [y/N] ", target.display(), backup.display());
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        std::io::stdin().lock().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Not written.");
+            return Ok(0);
+        }
+    }
+    std::fs::write(&backup, &text).with_context(|| format!("writing {}", backup.display()))?;
+    // 覆寫既有的檔：權限（例如 600）照舊。/ Overwriting the existing file keeps its permissions (e.g. 600).
+    std::fs::write(&target, &r.text).with_context(|| format!("writing {}", target.display()))?;
+    println!("Wrote {} ({} -> {} lines); the previous version is {}.", target.display(), r.before.lines, r.after.lines, backup.display());
+    Ok(0)
+}
+
 fn sftp(api: &Api, a: &SftpArgs) -> Result<i32> {
     let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
     let mut cmd = Command::new("sftp");
@@ -930,7 +1048,7 @@ fn sftp(api: &Api, a: &SftpArgs) -> Result<i32> {
 }
 
 fn config(api: &Api, a: ConfigArgs) -> Result<()> {
-    let ConfigAction::Install { tunnels, all, print, file } = a.action;
+    let ConfigAction::Install { tunnels, all, print, file } = a.action else { unreachable!("config tidy runs before signing in") };
     let d = dashboard(api)?;
     let picked: Vec<Value> = if all {
         d.tunnels.clone()

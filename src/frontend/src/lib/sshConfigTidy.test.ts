@@ -352,3 +352,44 @@ test("random configs: the model agrees with ssh -G on User, Port, HostName and I
         }
     }
 });
+
+// ── The CLI's shared cases ───────────────────────────────────────────────────
+
+// `telepy config tidy`（Rust，src/cli/src/tidy.rs）必須跟這裡逐字一樣：這些案例寫在 src/cli/tests/tidy_cases.json，
+// 兩邊的測試都比對。規則改了就用 `UPDATE_TIDY_CASES=1 npm test` 重寫檔案，再讓 Rust 那邊跟上。
+// `telepy config tidy` (Rust) must match this byte for byte: these cases live in src/cli/tests/tidy_cases.json and
+// both test suites check them. After a rule change, rewrite the file with `UPDATE_TIDY_CASES=1 npm test`.
+import { readFileSync as readCases } from "node:fs";
+import { TIDY_EXAMPLE } from "./sshConfigTidy.ts";
+
+function sharedCases() {
+    const fixed: [string, string][] = [
+        ["sample", SAMPLE],
+        ["example", TIDY_EXAMPLE],
+        ["telepy-fleet", markedBlocks([serverStanza, device("pi", "pi", 1), device("nas-root", "root", 2, "yes", "nas"), device("nas-admin", "admin", 2, "yes", "nas"), device("cam", "root", 3, "accept-new"), device("router", "root", 4)])],
+        ["two-servers", markedBlocks([device("pi", "root", 1), device("cam", "root", 2), device("nas", "root", 3)]) + markedBlocks([device("a", "root", 1, "yes", "a", "telepy-other.example-22"), device("b", "root", 2, "yes", "b", "telepy-other.example-22")]) + "Host mine\n    Port 22\n"],
+        ["crlf", "Host a\r\n  User x\r\n  Port 2200\r\n\r\nHost b\r\n  User x\r\n  Port 2200\r\n"],
+        ["walls", "Host a\n  User x\n  Port 2200\nMatch exec \"true\"\n  User z\nHost b\n  User x\n  Port 2200\nHost c\n  Include other.conf\n"],
+        ["notes", "Host a\n  Usr x\n  Protocol 2\n  User one\n  User two\n  Hostname a.example\n  Bad \"quote\n"],
+        ["quotes", 'Host a\n  User=bob\n  IdentityFile "~/My Keys/id"\nHost b\n  User = bob\n  IdentityFile "~/My Keys/id"\n'],
+        ["stacks", "Host a\n  IdentityFile k0\n  IdentityFile k1\nHost b\n  IdentityFile k1\nHost *\n  IdentityFile k9\n"],
+        ["long", Array.from({ length: 120 }, (_, i) => `Host device-number-${i}.lab.example\n    User admin\n    Port 2222\n`).join("")],
+        ["wild", "Host web-1\n  HostName 10.0.0.1\nHost web-2\n  HostName 10.0.0.2\nHost web-1 web-2\n  User deploy\n  Port 2200\n"],
+    ];
+    const inputs: [string, string][] = [...fixed, ...Array.from({ length: 40 }, (_, i) => [`random-${i + 1}`, randomConfig(i + 1)] as [string, string])];
+    return inputs.flatMap(([name, input]) =>
+        [false, true].map((wildcards) => {
+            const r = tidyConfig(input, { wildcards });
+            return { name, wildcards, input, output: r.text, notes: r.notes.map((n) => [n.kind, n.n]), changes: r.changes.map((c) => c.kind), failed: r.failed };
+        }),
+    );
+}
+
+test("the CLI's shared cases are up to date (src/cli/tests/tidy_cases.json)", () => {
+    const file = new URL("../../../cli/tests/tidy_cases.json", import.meta.url);
+    const cases = sharedCases();
+    const json = JSON.stringify(cases, null, 1) + "\n";
+    if (process.env.UPDATE_TIDY_CASES) writeFileSync(file, json);
+    assert.equal(readCases(file, "utf8"), json, "run UPDATE_TIDY_CASES=1 npm test, then make the Rust side match");
+    assert.ok(cases.every((c) => c.failed.length === 0));
+});
