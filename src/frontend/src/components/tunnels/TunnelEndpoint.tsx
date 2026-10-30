@@ -16,12 +16,16 @@ import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { devicePublicIp, flagEmoji, placeLabel } from "@/lib/geo";
 import { TunnelEndpoint } from "@/types/tunnel";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
-const chipClass = (live: boolean) =>
-    cn(
-        "inline-flex max-w-full items-center gap-1 rounded-sm border px-1.5 py-px font-mono text-[0.75rem] whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
-        live ? "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground" : "border-border/70 text-muted-foreground hover:text-foreground"
-    );
+/** 卡片是小框，表格列是安靜的等寬文字（離線時淡一點）。/ A chip on cards, quiet mono text on table rows (fainter when offline). */
+const chipClass = (live: boolean, variant: RowVariant) =>
+    variant === "text"
+        ? quiet(live ? "plain" : "muted", "font-mono")
+        : cn(
+              "inline-flex max-w-full items-center gap-1 rounded-sm border px-1.5 py-px font-mono text-[0.75rem] whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
+              live ? "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground" : "border-border/70 text-muted-foreground hover:text-foreground"
+          );
 
 function useCopy() {
     const [copied, setCopied] = useState(false);
@@ -41,7 +45,7 @@ function Tag({ children }: { children: React.ReactNode }) {
     return <span className="font-sans text-muted-foreground">{children}</span>;
 }
 
-export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelEndpoint | null; className?: string }) {
+export function TunnelEndpointChip({ endpoint, variant = "chip", className }: { endpoint?: TunnelEndpoint | null; variant?: RowVariant; className?: string }) {
     const { t, locale } = useI18n();
     const { copied, copy } = useCopy();
     if (!endpoint) return null;
@@ -61,7 +65,7 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
               : t("tunnels.endpointNotAsked");
         const details = [label, t("tunnels.endpointGatewaySaw", { ip: endpoint.ip }), why].join("\n");
         return (
-            <span title={details} aria-label={label} className={cn(chipClass(endpoint.live), "cursor-help", className)}>
+            <span title={details} aria-label={label} className={cn(chipClass(endpoint.live, variant), "cursor-help", className)}>
                 <Tag>{t("tunnels.endpointTag")}</Tag>
                 <TriangleAlert className="text-warning" />
                 <span className="truncate font-sans">{t("tunnels.endpointUnknown")}</span>
@@ -95,7 +99,7 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
         .join("\n");
 
     return (
-        <button type="button" onClick={() => copy(ip)} title={details} aria-label={label} className={cn(chipClass(endpoint.live), className)}>
+        <button type="button" onClick={() => copy(ip)} title={details} aria-label={label} className={cn(chipClass(endpoint.live, variant), className)}>
             <Tag>{t("tunnels.endpointTag")}</Tag>
             {copied ? <Check className="text-success" /> : geo?.country ? <span aria-hidden className="font-sans">{flagEmoji(geo.country)}</span> : null}
             <span className="truncate">{ip}</span>
@@ -105,7 +109,7 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
 }
 
 /** 裝置的內網 IP（自己網卡上的）。/ The device's LAN address (its own interfaces). */
-export function TunnelLanChip({ endpoint, className }: { endpoint?: TunnelEndpoint | null; className?: string }) {
+export function TunnelLanChip({ endpoint, variant = "chip", className }: { endpoint?: TunnelEndpoint | null; variant?: RowVariant; className?: string }) {
     const { t, locale } = useI18n();
     const { copied, copy } = useCopy();
     const lan = endpoint?.lan ?? [];
@@ -122,7 +126,7 @@ export function TunnelLanChip({ endpoint, className }: { endpoint?: TunnelEndpoi
         .join("\n");
 
     return (
-        <button type="button" onClick={() => copy(first)} title={details} aria-label={t("tunnels.lanAria", { ip: first })} className={cn(chipClass(endpoint.live), className)}>
+        <button type="button" onClick={() => copy(first)} title={details} aria-label={t("tunnels.lanAria", { ip: first })} className={cn(chipClass(endpoint.live, variant), className)}>
             <Tag>{t("tunnels.lanTag")}</Tag>
             {copied && <Check className="text-success" />}
             <span className="truncate">{first}</span>

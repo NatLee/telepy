@@ -44,7 +44,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { usePagination, useSectionPages } from "@/hooks/usePagination";
 import { CARD_PAGE_SIZES, pageSlice } from "@/lib/pagination";
 
-const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
+const TH = "px-3 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
 /** 依群組分段或一個列表（有群組時才有這個選擇）。/ Sections by group or one list (offered once groups exist). */
 
 export default function TunnelsPage() {
@@ -374,13 +374,14 @@ export default function TunnelsPage() {
                             </div>
                         ) : (
                             <div ref={listTop} className="scroll-mt-20 space-y-4">
-                                <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card">
+                                {/* @container：列裡的開啟按鈕依表格寬度決定要不要顯示文字。/ The rows' open buttons label themselves by the table's width. */}
+                                <div className="@container overflow-x-auto rounded-xl border border-border bg-card shadow-card">
                                     <table className="min-w-full divide-y divide-border">
                                         <thead className="bg-surface">
                                             <tr>
                                                 <th scope="col" className={TH}>{t("tunnels.thName")}</th>
                                                 <th scope="col" className={TH}>{t("tunnels.thStatus")}</th>
-                                                <th scope="col" className={TH}>{t("tunnels.thPort")}</th>
+                                                <th scope="col" className={TH}>{t("tunnels.thDevice")}</th>
                                                 <th scope="col" className={TH}>{t("tunnels.thAccess")}</th>
                                                 <th scope="col" className={`${TH} text-right`}>{t("tunnels.thActions")}</th>
                                             </tr>

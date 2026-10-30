@@ -843,7 +843,7 @@ export const ja: Record<TranslationKey, string> = {
     "tunnels.noMatch": "条件に一致するトンネルはありません。",
     "tunnels.clearFilters": "絞り込みを解除",
     "tunnels.thStatus": "状態",
-    "tunnels.thPort": "ポート",
+    "tunnels.thDevice": "デバイス",
     "tunnels.thAccess": "アクセス",
 
     // ── トンネル操作メニュー / Tunnel actions ──────────────────────

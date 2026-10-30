@@ -68,6 +68,11 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
     if (actions.length === 0) return null;
 
     if (variant === "compact") {
+        // 表格列：表格夠寬（容器 ≥ 84rem，日文的四個標籤也放得下）才顯示文字，不然只有圖示（名稱在 title / aria-label）。
+        // 四顆帶字的按鈕要 300–420px，窄一點的表格就被它們撐到要橫向捲動。
+        // Table rows: labels only where the table is wide enough (container ≥ 84rem, room for the Japanese labels too),
+        // icons alone otherwise (the name stays in title / aria-label) — four labelled buttons take 300–420px and
+        // forced narrower tables into horizontal scrolling.
         return (
             <div className="inline-flex items-center rounded-md border border-border bg-surface p-0.5">
                 {actions.map(({ view, icon: Icon, label, hint }) => (
@@ -77,15 +82,16 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                         onClick={gate(actionHref(tunnel, view))}
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
+                        aria-label={t(label)}
                         className={cn(
-                            "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-sm text-xs transition-colors",
+                            "inline-flex h-7 items-center gap-1.5 rounded-sm px-2 text-xs transition-colors @[84rem]:px-2.5",
                             online
                                 ? "text-foreground hover:bg-card hover:ring-1 hover:ring-border"
                                 : "text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground"
                         )}
                     >
                         <Icon size={14} className={online && view === "terminal" ? "text-success" : undefined} />
-                        {t(label)}
+                        <span className="hidden @[84rem]:inline">{t(label)}</span>
                     </Link>
                 ))}
             </div>

@@ -849,7 +849,7 @@ export const en = {
     "tunnels.noMatch": "No tunnels match your filters.",
     "tunnels.clearFilters": "Clear filters",
     "tunnels.thStatus": "Status",
-    "tunnels.thPort": "Port",
+    "tunnels.thDevice": "Device",
     "tunnels.thAccess": "Access",
 
     // ── Tunnel 動作選單 / Tunnel actions ───────────────────────────

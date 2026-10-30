@@ -18,6 +18,7 @@ import type { TranslationKey } from "@/locales/en";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { PresenceSession, TunnelPresence } from "@/types/tunnel";
 import { IpPlace } from "@/components/ui/IpPlace";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 /** 連線種類的圖示與名稱（即時 session 頁也用）。/ Icon and label per connection kind (also used by the live sessions page). */
 export const PRESENCE_KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
@@ -115,7 +116,7 @@ function PresenceUserRow({ group }: { group: PresenceUser }) {
     );
 }
 
-export function TunnelPresenceButton({ presence, tunnelId, className }: { presence?: TunnelPresence | null; tunnelId?: number; className?: string }) {
+export function TunnelPresenceButton({ presence, tunnelId, variant = "chip", className }: { presence?: TunnelPresence | null; tunnelId?: number; variant?: RowVariant; className?: string }) {
     const { t } = useI18n();
     const sessions = presence?.sessions;
     const groups = useMemo(() => groupSessions(sessions ?? []), [sessions]);
@@ -131,11 +132,16 @@ export function TunnelPresenceButton({ presence, tunnelId, className }: { presen
                     title={t("tunnels.presenceShow")}
                     aria-label={`${label} · ${t("tunnels.presenceShow")}`}
                     className={cn(
-                        // 狀態 = 點 + 文字（設計語言）；箭頭表示可以展開。/ Status is a dot + text; the chevron says it opens.
-                        "group inline-flex items-center gap-1.5 rounded-sm border py-px pl-1.5 pr-1 text-[0.75rem] whitespace-nowrap transition-colors",
-                        "border-success/25 bg-success/10 text-success hover:border-success/50 hover:bg-success/15",
-                        "data-[state=open]:border-success/50 data-[state=open]:bg-success/15",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        // 狀態 = 點 + 文字（設計語言）；箭頭表示可以展開。表格列是沒有框的綠字。
+                        // Status is a dot + text; the chevron says it opens. Table rows: green text without a box.
+                        variant === "text"
+                            ? quiet("success", "group gap-1.5 data-[state=open]:text-success/80")
+                            : cn(
+                                  "group inline-flex items-center gap-1.5 rounded-sm border py-px pl-1.5 pr-1 text-[0.75rem] whitespace-nowrap transition-colors",
+                                  "border-success/25 bg-success/10 text-success hover:border-success/50 hover:bg-success/15",
+                                  "data-[state=open]:border-success/50 data-[state=open]:bg-success/15",
+                                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                              ),
                         className
                     )}
                 >

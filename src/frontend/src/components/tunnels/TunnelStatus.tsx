@@ -14,6 +14,7 @@ import { ShareExpiryText } from "@/components/tunnels/ShareExpiry";
 import { SharedWithChip } from "@/components/tunnels/SharedWithChip";
 import type { TranslationKey } from "@/locales/en";
 import { Tunnel, TunnelHealth } from "@/types/tunnel";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 const DOT: Record<TunnelHealth, string> = {
     online: "bg-success",
@@ -81,58 +82,41 @@ export const HEALTH_TILE: Record<TunnelHealth, string> = {
 
 const chip = "inline-flex items-center gap-1 rounded-sm border px-1.5 py-px text-[0.75rem] whitespace-nowrap [&>svg]:size-3";
 
-/** 這條隧道和「我」的關係：我的 / 別人分享給我的，以及我分享給幾個人。/ How the tunnel relates to me. */
+/**
+ * 這條隧道和「我」的關係：我的 / 別人分享給我的，以及我分享給幾個人；還有讓用的人知道的設定（錄影、要先確認）。
+ * 卡片是小框（預設）；表格列是安靜的文字（`variant="text"`）：關係用內容色、設定用淡色、要你處理的（存取申請、
+ * 快到期的分享）用警示色——整列只有字，沒有一排灰框。
+ * How the tunnel relates to me, plus the settings people should know (recorded, confirm first). Chips on cards
+ * (default); quiet text on table rows (`variant="text"`): the relation in content tone, settings faint, what needs
+ * you (access requests, a share about to end) in the warning tone — words only, no row of grey boxes.
+ */
 export function TunnelAccessBadges({
     tunnel,
     sharedCount,
     onRequests,
     onShare,
+    variant = "chip",
 }: {
     tunnel: Tunnel;
     sharedCount: number;
     onRequests?: () => void;
     /** 打開分享視窗（「已分享給 N 人」浮層裡的「管理分享」）。/ Opens the share dialog ("Manage sharing" in the chip's panel). */
     onShare?: () => void;
+    variant?: RowVariant;
 }) {
     const { t } = useI18n();
+    const text = variant === "text";
+    const neutral = text ? quiet("muted") : cn(chip, "border-border bg-muted text-foreground/75");
+    const expiryOk = shareExpiryState(tunnel.share_expires_at) === "ok";
     return (
-        <span className="inline-flex flex-wrap items-center gap-1">
+        <span className={cn("inline-flex flex-wrap items-center", text ? "gap-x-2.5" : "gap-1")}>
             {tunnel.is_owner ? (
-                <span className={cn(chip, "border-border bg-muted text-foreground/75")}>
+                <span className={text ? quiet("plain") : cn(chip, "border-border bg-muted text-foreground/75")}>
                     <Crown /> {t("tunnels.owner")}
                 </span>
             ) : (
-                <span className={cn(chip, "border-info/25 bg-info/10 text-info")}>
+                <span className={text ? quiet("info") : cn(chip, "border-info/25 bg-info/10 text-info")}>
                     <Share2 /> {t("tunnels.sharedWithYou")}
-                </span>
-            )}
-            {/* 限時分享：還剩多久（一天內琥珀色）。/ Timed share: how long is left (amber within a day). */}
-            {!tunnel.is_owner && tunnel.share_expires_at && (
-                <span
-                    className={cn(
-                        chip,
-                        shareExpiryState(tunnel.share_expires_at) === "ok" ? "border-border bg-muted" : "border-warning/30 bg-warning/10",
-                    )}
-                >
-                    <Clock className="text-muted-foreground" /> <ShareExpiryText expiresAt={tunnel.share_expires_at} />
-                </span>
-            )}
-            {/* owner / ADMIN：有存取申請在等，點了打開分享視窗。/ Pending access requests open the share dialog. */}
-            {!!tunnel.access_requests && onRequests && (
-                <button type="button" onClick={onRequests} className={cn(chip, "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15")} title={t("share.request.chipHint")}>
-                    <Hourglass /> {t("share.request.chip", { count: tunnel.access_requests })}
-                </button>
-            )}
-            {/* 網頁終端機會錄影（讓用的人知道）。/ Web terminals are recorded (so people know). */}
-            {tunnel.record_sessions && (
-                <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("recordings.chipHint")}>
-                    <CircleDot /> {t("recordings.chip")}
-                </span>
-            )}
-            {/* 開 session 前要確認是你。/ Sessions ask for a step-up first. */}
-            {tunnel.require_step_up && (
-                <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("stepUp.chipHint")}>
-                    <ShieldCheck /> {t("stepUp.chip")}
                 </span>
             )}
             {/* hover / 聚焦 / 點一下 = 分享給誰。/ Hover, focus or tap shows who it is shared with. */}
@@ -141,8 +125,32 @@ export function TunnelAccessBadges({
                     count={sharedCount}
                     sharees={tunnel.shared_with}
                     onManage={onShare}
-                    className={cn(chip, "border-border bg-muted text-foreground/75")}
+                    className={neutral}
                 />
+            )}
+            {/* 限時分享：還剩多久（一天內琥珀色）。/ Timed share: how long is left (amber within a day). */}
+            {!tunnel.is_owner && tunnel.share_expires_at && (
+                <span className={text ? quiet(expiryOk ? "muted" : "warning") : cn(chip, expiryOk ? "border-border bg-muted" : "border-warning/30 bg-warning/10")}>
+                    <Clock className={text ? undefined : "text-muted-foreground"} /> <ShareExpiryText expiresAt={tunnel.share_expires_at} />
+                </span>
+            )}
+            {/* owner / ADMIN：有存取申請在等，點了打開分享視窗。/ Pending access requests open the share dialog. */}
+            {!!tunnel.access_requests && onRequests && (
+                <button type="button" onClick={onRequests} className={text ? quiet("warning") : cn(chip, "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15")} title={t("share.request.chipHint")}>
+                    <Hourglass /> {t("share.request.chip", { count: tunnel.access_requests })}
+                </button>
+            )}
+            {/* 網頁終端機會錄影（讓用的人知道）。/ Web terminals are recorded (so people know). */}
+            {tunnel.record_sessions && (
+                <span className={neutral} title={t("recordings.chipHint")}>
+                    <CircleDot /> {t("recordings.chip")}
+                </span>
+            )}
+            {/* 開 session 前要確認是你。/ Sessions ask for a step-up first. */}
+            {tunnel.require_step_up && (
+                <span className={neutral} title={t("stepUp.chipHint")}>
+                    <ShieldCheck /> {t("stepUp.chip")}
+                </span>
             )}
         </span>
     );

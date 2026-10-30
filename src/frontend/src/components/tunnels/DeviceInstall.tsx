@@ -24,9 +24,10 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { compatNoServerAlive, factChips } from "@/lib/joinScript";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
+import { quiet, type RowVariant } from "@/components/tunnels/quiet";
 
 /** 列表上的標記：上次盤點看到舊名稱的服務（點了開詳細資訊的裝置頁）。/ The list chip for older-named services. */
-export function DeviceNameChip({ summary, onOpen }: { summary?: DeviceInstallSummary | null; onOpen: () => void }) {
+export function DeviceNameChip({ summary, onOpen, variant = "chip" }: { summary?: DeviceInstallSummary | null; onOpen: () => void; variant?: RowVariant }) {
     const { t } = useI18n();
     const flagged = needsAttention(summary);
     if (flagged.length === 0) return null;
@@ -35,7 +36,7 @@ export function DeviceNameChip({ summary, onOpen }: { summary?: DeviceInstallSum
         <button
             type="button"
             onClick={onOpen}
-            className="inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20"
+            className={variant === "text" ? quiet("warning") : "inline-flex items-center gap-1 rounded-sm bg-warning/12 px-1.5 py-px text-xs text-warning hover:bg-warning/20"}
             title={`${flagged.join(", ")}\n${t(extra ? "deviceInstall.chipExtraHint" : "deviceInstall.chipHint")}`}
         >
             <TriangleAlert size={13} aria-hidden /> {t(extra ? "deviceInstall.chipExtra" : "deviceInstall.chip")}
