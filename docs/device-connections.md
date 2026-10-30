@@ -185,8 +185,9 @@ sharee）。
 - **遷移舊裝置**（`device_keys::sync_tunnel`）：隧道金鑰算進每個登入帳號的 wanted，同步時裝進去；下一條連線改用它；
   共用金鑰只在**同一台機器上每條列了這個帳號的隧道**都用自己的金鑰登入過之後才從那個帳號移掉
   （`tunnel_keys::shared_removable`，事件 `service_key_migrated`）。金鑰面板把共用金鑰標成 legacy；管理者可在同一條
-  規則下手動移除。`KEEP_SHARED_SERVICE_KEY=true` 時共用金鑰永遠不移（自動或手動都不行）：搬家期間舊的 Telepy 還在用
-  同一把金鑰登入同一批裝置時用（隧道金鑰照樣裝進去、照樣先用它登入）。
+  規則下手動移除。網站設定 → 伺服器的「在裝置上保留共用服務金鑰」（或 `.env` 的 `KEEP_SHARED_SERVICE_KEY=true`）打開時，
+  共用金鑰永遠不移（自動或手動都不行）：搬家期間舊的 Telepy 還在用同一把金鑰登入同一批裝置時用（隧道金鑰照樣裝進去、
+  照樣先用它登入）。
 - **刪隧道**：它的金鑰一定從裝置移掉；「移除服務金鑰」的選項現在只管共用的那把。
 - **不能撞**：隧道的服務公鑰不能登記成裝置金鑰或個人金鑰（`device_key_problem` / `checked_key`）。
 - **換 `SECRET_KEY`**：密文解不開 → 退回共用金鑰；`doctor` 的 `tunnel keys` 會指出有幾把解不開。共用金鑰已經被移掉
@@ -203,12 +204,15 @@ sharee）。
   把位元組包成二進位 frame 送到網頁 port。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，
   沒有多信任什麼，也沒有 auth 第一則訊息（認證在裡面的 SSH 做）。在精靈的連線步驟或一鍵加入時選（`transport: websocket`）。
 - **自動**（`transport: auto`，精靈與一鍵加入的預設）：小程式加上 `--tcp <SSH 主機>:<port>`，每次連線先直接連 SSH 的 port、看到 gateway 的 `SSH-` banner 才算數；連不上（防火牆、網頁名稱在只轉網頁 port 的代理後面）就改走上面的 WebSocket。成功走 WebSocket 會記 30 分鐘（暫存目錄裡一個小檔），之後再先試 SSH 的 port；走哪條會寫在 stderr（服務的 log）。裝置沒有 python3 時就只走 SSH 的 port，跟以前一樣。一鍵加入是 `--auto`，註冊時回報實際裝的方式（`facts.transport`），存成 `way_in`。
-  - 來源 IP 取自轉送 header（`X-Forwarded-For`，哪幾段是代理見 `TRUSTED_PROXY_HOPS`：預設 `auto` 把右邊的內部位址都當代理），port 記成 0；連線資訊、`accepted` 事件與
+  - 來源 IP 取自轉送 header（`X-Forwarded-For`，哪幾段是代理見網站設定 → 伺服器的「信任的代理層數」或 `TRUSTED_PROXY_HOPS`：
+    預設 `auto` 把右邊的內部位址都當代理），port 記成 0；連線資訊、`accepted` 事件與
     清單的 `endpoint.transport` 記 `websocket`。連線上限（`GATEWAY_MAX_CONNECTIONS`）兩個入口一起算。
-  - 筆電也能這樣連：SSH config 對話框的「連到 Telepy 的方式」選「只有網頁 port」，伺服器區塊就多一行 ProxyCommand
-    （先把 `telepy-ws.py` 存到 `~/.ssh/telepy-ws.py`）。
+  - 筆電也能這樣連：SSH config 對話框的「連到 Telepy 的方式」選「只有網頁 port」（或「自動」= 帶 `--tcp`，先試 SSH 的 port），
+    伺服器區塊就多一行 ProxyCommand（先把 `telepy-ws.py` 存到 `~/.ssh/telepy-ws.py`）。`telepy ssh / scp / sftp` 不用這個小程式，
+    預設就走網頁 port（見 [cli.md](cli.md)）。
 - **PROXY protocol**（`gateway/proxy_protocol.rs`）：gateway 前面有 L4 代理（nginx stream、HAProxy `mode tcp`、雲端 NLB）時，
-  gateway 看到的來源都是代理。把代理列進 `GATEWAY_PROXY_PROTOCOL_FROM`（IP / CIDR，逗號或空白分隔；空 = 關閉），它送的 v1 / v2
+  gateway 看到的來源都是代理。把代理列進網站設定 → 伺服器的「SSH 閘道的 PROXY protocol 來源」或 `.env` 的
+  `GATEWAY_PROXY_PROTOCOL_FROM`（IP / CIDR，逗號或空白分隔；空 = 關閉；`.env` 有設就以它為準、頁面上鎖住），它送的 v1 / v2
   header 裡的來源就取代 peer：事件、endpoint、誰在用、IP 變更告警都用它。
   - header **可有可無、自動判斷**：先偷看第一個 byte（SSH 一定以 `S` 開頭，header 是 `P` / `\r`），5 秒都沒送東西就當成等 banner
     的直連客戶端；讀取剛好停在 header 結尾，後面的 SSH 一個 byte 都不動。所以設錯也不會把直連的裝置擋在外面。

@@ -8,27 +8,29 @@ Source: `src/cli/` (a crate of its own; the server build does not depend on it).
 `api/api_tokens.rs`, `db/api_tokens.rs`, `db/api_calls.rs` + `api_calls.rs` (the call log), the REST exec routes in
 `api/ai.rs`, the scripted-browser routes in `api/browser.rs`.
 
-Tokens are managed on the **API** page (`/tunnels/api`, sidebar "Developers" → API): your tokens, every endpoint a token can call
-(with copy-ready `curl` and the matching `telepy` command), and the **Activity** log of what your tokens did.
+Tokens are managed on the **API** page (`/tunnels/api`, sidebar "Developers" → API), in four tabs: **CLI sign-ins** (every
+computer you ran `telepy login` on), **Your tokens**, **What a token can call** (every endpoint, with copy-ready `curl` and
+the matching `telepy` command) and **Activity** (what your tokens and CLI sign-ins did).
 
-## Three ways in, three keys
+## Four ways in, four keys
 
 ```
- your laptop / script / CI ──── API token (scopes · tunnels · expiry) ────┐
+ this browser ───────────────── web sign-in session ─────────────────────┐
                                                                          │
- this browser ───────────────── web sign-in session ─────────────────────┼──▶ Telepy ──── SSH through the tunnel ───▶ your devices
+ scripts / CI ───────────────── API token (scopes · tunnels · expiry) ───┤
+                                                                         │
+ telepy on your computer ────── CLI sign-in (OAuth, one per computer) ───├──▶ Telepy ──── SSH through the tunnel ───▶ your devices
                                                                          │
  an MCP app ─────────────────── OAuth grant (you approved this app) ─────┘
 
  Revoke the API token:
- your laptop / script / CI ──✂── (refused at once; its open exec sessions close)
- this browser ───────────────── keeps working
- an MCP app ─────────────────── keeps working
+ scripts / CI ─────────────✂── (refused at once; its open exec sessions close)
+ this browser, CLI sign-ins, MCP apps ── keep working
 ```
 
-The same picture, live, is behind the **API** page's **Three ways in** button (with a "What if I…" switch: revoking a
-token, disconnecting an app or signing out each cuts only its own lane), and per token behind **Your tokens → How it
-works**.
+The same picture, live, is behind the **API** page's **Four ways in** button (with a "What if I…" switch: revoking a
+token, signing a CLI out, disconnecting an app or signing out of the web each cuts only its own lane), and per token
+behind **Your tokens → How it works**.
 
 - A token **is you**: your tunnels, the accounts you may use on them, the feature switches an admin set for you and
   command rules all apply. It never gets more than you have.
@@ -37,9 +39,9 @@ works**.
   can call** tab is built from that same table (`GET /api/auth/tokens/routes`), so it can't disagree with the server.
 - Tunnels that ask you to confirm it's you (**step-up**) refuse tokens, exactly like MCP agents.
 - Every token expires (at most a year). Revoking takes effect at once.
-- Admins can turn the **API tokens** feature off for everyone, a user group or one person (Site settings → Access):
-  that person's tokens then stop working. Other features they turn off for you (web terminal, file manager, …) are
-  refused to your tokens too (403 `feature_disabled`).
+- Admins can turn the **API tokens** feature off for everyone, a user group or one person (Admin → Users & access →
+  Feature permissions, `/tunnels/admin/access`): that person's tokens then stop working. Other features they turn off
+  for you (web terminal, file manager, …) are refused to your tokens too (403 `feature_disabled`).
 - If an admin disables your account, your tokens and CLI sign-ins are suspended, not revoked: they are refused
   while the account is off and work again once it is enabled.
 
@@ -65,7 +67,7 @@ The web has a **CLI** page (`/tunnels/cli`, sidebar "Developers" → CLI) with t
 (picked from the browser), the sign-in command for your server, and examples filled in with your own tunnels,
 accounts, labels, groups and snippets. The same commands by hand:
 
-Every Telepy release (`v2.7.0`…) carries the CLI for macOS arm64 / x86_64, Linux x86_64 / arm64 (static, musl) and
+Every Telepy release from `v2.8.0` on carries the CLI for macOS arm64 / x86_64, Linux x86_64 / arm64 (static, musl) and
 Windows x86_64, built from the same tag and reporting the same version (`telepy --version`). The file names carry
 no version, so `releases/latest/download/…` is always the newest:
 
@@ -90,7 +92,7 @@ telepy --version
 
 Each archive has a `.sha256` next to it, and every release a `SHA256SUMS`
 (`curl -fsSL …/telepy-$TARGET.tar.gz.sha256 | sha256sum -c`; `shasum -a 256 -c` on macOS). A specific version:
-`…/releases/download/v2.7.0/telepy-$TARGET.tar.gz`. The binary is not signed or notarised: downloaded with a browser
+`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz`. The binary is not signed or notarised: downloaded with a browser
 instead of `curl`, macOS needs `xattr -d com.apple.quarantine telepy` first.
 
 Or build it yourself (Rust 1.88 or newer): `cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`
@@ -145,8 +147,8 @@ The browser sign-in uses the same OAuth approval as MCP apps — that is why the
 CLI is not an MCP app: it is listed on the **API page → CLI sign-ins** (one per computer, with its calls in the API
 activity), never among MCP apps, and you sign it out there or with `telepy logout`. Running `telepy login` again on
 the same computer offers to replace its earlier sign-in, and at most 10 CLI sign-ins are kept per person: an 11th
-signs out the least recently used one. Browser sign-in follows the **MCP apps** feature an admin can turn off (Site
-settings → Access); a token keeps working without it. The CLI stores the access + refresh tokens. Credentials live in
+signs out the least recently used one. Browser sign-in follows the **MCP apps** feature an admin can turn off (Admin →
+Users & access → Feature permissions); a token keeps working without it. The CLI stores the access + refresh tokens. Credentials live in
 the macOS Keychain or the Windows Credential Manager; on Linux (and with `TELEPY_NO_KEYRING=1`, or when the keyring
 fails) in `credentials.json` with mode 0600 in the config directory (`TELEPY_CONFIG_DIR`, else
 `$XDG_CONFIG_HOME/telepy` or `~/.config/telepy`; Windows `%APPDATA%\telepy`). `logout` forgets the sign-in and
@@ -258,7 +260,7 @@ They reach Telepy through its **web port** by default: `telepy` itself is the Pr
 carries the SSH inside a WebSocket (`/ws/gateway/`, no python3 needed). The SSH inside is the same — your key, the
 pinned host key, the device's own sshd — but Telepy now records your real address, which something in front of the
 SSH port (OrbStack's or Docker's port forwarding, a NAT) often hides. The SSH hop sends a keepalive every 30 s so a
-proxy in front of the web port (Cloudflare, a load balancer) does not close an idle session.
+proxy in front of the web port (a CDN, a load balancer) does not close an idle session.
 
 When the web port can't be reached, `telepy` only uses the SSH port with your consent:
 
@@ -268,8 +270,9 @@ When the web port can't be reached, `telepy` only uses the SSH port with your co
 | `always` | Uses the SSH port and says so on stderr. |
 | `never` | Fails with the reason. |
 
-The setting is saved per server in `<config dir>/prefs.json`; `--fallback` or `TELEPY_SSH_FALLBACK` overrides it for
-one run, and `--via ssh` / `TELEPY_SSH_VIA=ssh` skips the web port altogether. `telepy doctor` shows both.
+The setting is saved per server in `<config dir>/prefs.json` (`telepy config fallback` without a value shows it);
+`--fallback` or `TELEPY_SSH_FALLBACK` overrides it for one run, and `--via ssh` / `TELEPY_SSH_VIA=ssh` skips the web
+port altogether. `telepy doctor` shows both.
 
 ## Using a token with curl or an MCP client
 
@@ -296,9 +299,10 @@ the AI activity log). A row is: when, who, which token / app, method + **route t
 tunnel, status, duration, IP; MCP rows are `MCP <tool>` with 200 or 400 (the tool returned an error) and the start of
 the error. Refused requests (`token_route`, `token_scope`, `404` outside the token's tunnels) are logged too.
 
-- **API → Activity** shows your own calls, day by day, filtered by token (a token's **Calls** button jumps there),
+- **API → Activity** shows your own calls, day by day, filtered by token or CLI sign-in (the **Calls** button on a token
+  or a CLI sign-in jumps there),
   status (OK / 4xx / 5xx), method and search. Admins see everyone's on **Admin → All API activity** (filter by person;
-  the Manage-user dialog links there). `GET /api/auth/tokens/calls?scope=mine|all&token_id=&user_id=&username=&status=&method=&limit=&before=`.
+  the Manage-user dialog links there). `GET /api/auth/tokens/calls?scope=mine|all&token_id=&grant_id=&user_id=&username=&status=&method=&limit=&before=`.
 - **`telepy api activity`** prints the same list in the terminal (newest first: time in your local zone, token or app,
   method, route, tunnel, status, duration, IP). Filters: `--api-token <name|id|prefix>` (the global `--token` is the
   sign-in override, so the filter has its own name), `--status ok|4xx|5xx|error`, `--method GET…|MCP`,
