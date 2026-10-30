@@ -457,8 +457,15 @@ async fn delete_check(State(state): State<AppState>, AuthUser(user): AuthUser, P
             }
         }
     }
+    // 一行指令安裝留在裝置上的移除腳本（有安裝代號用代號的名字，更早的用隧道編號）。
+    // The uninstall script a one-command install leaves on the device (named after the install id, or the tunnel id before that).
+    let uninstall = match db::device_install::get(&state.db, t.id).await? {
+        Some(r) => format!("~/.ssh/{}", crate::device_install::names::Names::new(&r.install_id).uninstall()),
+        None => format!("~/.ssh/telepy-uninstall-{}.sh", t.id),
+    };
     Ok(Json(json!({
         "tunnel": { "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port },
+        "uninstall_script": uninstall,
         "online": crate::device_keys::online(&state, t.reverse_port),
         "last_on_machine": on_machine.is_empty(),
         "same_machine": same_machine,
@@ -506,6 +513,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         .filter(|(g, c)| requested.contains(&g.id) && crate::oauth::may_revoke_whole(g.user_id == user.id, user.is_superuser, *c))
         .map(|(g, _)| g.id)
         .collect();
+    let mut steps = DeleteSteps { state: &state, user: user.id, tunnel: t.id, done: Vec::new() };
     // 裝置上的金鑰要趁隧道還連著時清（之後裝置就被踢掉了）。/ Clean the device while the tunnel is still up.
     let cleanup_opts = crate::device_keys::CleanupOptions {
         device_keys: opts.remove_device_keys.unwrap_or(true),
@@ -513,16 +521,67 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     };
     // 裝置上的服務：先找出並刪檔（連線留著，等一下服務金鑰可能被移掉），金鑰清完再停它、看它有沒有真的停。
     // The device service: files first (keeping the sessions, the service key may go next), stop it after the keys.
-    let service_prep = if opts.remove_service.unwrap_or(false) && crate::device_keys::online(&state, t.reverse_port) {
-        Some(crate::tunnel_service::prepare(&state, &t, &accounts).await)
-    } else {
-        None
+    let service_wanted = opts.remove_service.unwrap_or(false);
+    let service_skip = if !service_wanted { Some("off") } else if !crate::device_keys::online(&state, t.reverse_port) { Some("offline") } else { None };
+    let service_prep = match service_skip {
+        Some(reason) => {
+            steps.end("service", "skipped", json!({ "reason": reason }));
+            None
+        }
+        None => {
+            steps.start("service", json!({}));
+            let p = crate::tunnel_service::prepare(&state, &t, &accounts).await;
+            let (found, errors, tried) = p.summary();
+            let outcome = if errors > 0 && errors == tried { "failed" } else if errors > 0 || found == 0 { "warn" } else { "done" };
+            steps.end("service", outcome, json!({ "found": found, "errors": errors }));
+            Some(p)
+        }
     };
+    let keys_online = crate::device_keys::online(&state, t.reverse_port);
+    if keys_online {
+        steps.start("keys", json!({}));
+    }
     let cleanup = crate::device_keys::forget_tunnel(&state, &t, cleanup_opts, &accounts).await;
+    if cleanup.online {
+        let removed: usize = cleanup.accounts.iter().map(|a| a.removed).sum();
+        let failed = cleanup.accounts.iter().filter(|a| a.error.is_some()).count();
+        let service_key = cleanup.accounts.iter().any(|a| a.service_key_removed);
+        let outcome = if failed > 0 && failed == cleanup.accounts.len() { "failed" } else if failed > 0 { "warn" } else { "done" };
+        steps.end("keys", outcome, json!({ "removed": removed, "failed": failed, "service_key": service_key, "keys_left": cleanup.keys_left }));
+    } else {
+        steps.end("keys", "skipped", json!({ "reason": "offline", "keys_left": cleanup.keys_left }));
+    }
     let service = match service_prep {
-        Some(p) => Some(crate::tunnel_service::finish(&state, &t, p).await),
-        None => None,
+        Some(p) => Some(
+            crate::tunnel_service::finish_observed(&state, &t, p, |phase| {
+                use crate::tunnel_service::FinishPhase;
+                match phase {
+                    FinishPhase::Stopping { secs } => steps.start("stop", json!({ "secs": secs })),
+                    FinishPhase::Stopped { stopped: true, .. } => steps.end("stop", "done", json!({})),
+                    FinishPhase::Stopped { stopped: false, launched } => {
+                        steps.end("stop", "warn", json!({ "reason": if launched { "still_connected" } else { "not_found" } }));
+                        steps.end("watch", "skipped", json!({ "reason": "not_stopped" }));
+                    }
+                    FinishPhase::Watching { secs } => steps.start("watch", json!({ "secs": secs })),
+                    FinishPhase::Watched { came_back } => {
+                        if came_back {
+                            steps.end("watch", "failed", json!({ "reason": "came_back" }));
+                        } else {
+                            steps.end("watch", "done", json!({}));
+                        }
+                    }
+                }
+            })
+            .await,
+        ),
+        None => {
+            let reason = service_skip.unwrap_or("off");
+            steps.end("stop", "skipped", json!({ "reason": reason }));
+            steps.end("watch", "skipped", json!({ "reason": reason }));
+            None
+        }
     };
+    steps.start("telepy", json!({}));
     let ai_closed = crate::ai::close_for_tunnel(&state, t.id, crate::ai::CloseReason::TunnelDeleted).await;
     // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
     crate::recording::forget_tunnel(&state, id).await;
@@ -541,7 +600,10 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.
     state.host_keys.invalidate(id);
     let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false), &revoke).await?;
+    steps.end("telepy", "done", json!({ "ai_sessions": ai_closed, "revoked": revoked, "detached": detached }));
+    steps.start("disconnect", json!({}));
     let disconnected = state.gateway.disconnect_tunnel(t.id).await;
+    steps.end("disconnect", "done", json!({ "was_connected": disconnected > 0 }));
     tracing::info!(tunnel = t.id, name = %t.host_friendly_name, keys_left = cleanup.keys_left, revoked, detached, ai_closed, disconnected, "tunnel deleted");
     state.hub.notify_users(
         audience,
@@ -551,6 +613,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
             "tunnel_id": t.id,
         }),
     );
+    let steps = steps.done;
     Ok(Json(json!({
         "deleted": true,
         "online": cleanup.online,
@@ -561,7 +624,50 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         "ai_sessions_closed": ai_closed,
         "device_disconnected": disconnected > 0,
         "service": service,
+        "steps": steps,
     })))
+}
+
+/// 刪除的進度：每一步開始（`active`）與結束（`done` / `warn` / `failed` / `skipped`）即時送給按刪除的人（請求還在跑，
+/// 停止服務那步最多等幾十秒），結束的那些也放進回應的 `steps`。步驟依序：service（找出並刪掉裝置上跑隧道的東西）→
+/// keys（authorized_keys）→ stop（停止腳本 + 等裝置自己斷線）→ watch（看它會不會回來）→ telepy（AI session、錄影、
+/// 資料列、授權）→ disconnect。前端 `lib/deleteTunnel.ts` 的 `DELETE_STEPS` 是同一份。
+/// Delete progress: each step's start (`active`) and end (`done` / `warn` / `failed` / `skipped`) goes to the person
+/// deleting while the request is still running (stopping the service waits tens of seconds), and the ends are returned
+/// as `steps`. Order: service → keys → stop → watch → telepy → disconnect (the frontend's `DELETE_STEPS`).
+struct DeleteSteps<'a> {
+    state: &'a AppState,
+    user: i64,
+    tunnel: i64,
+    done: Vec<Value>,
+}
+
+impl DeleteSteps<'_> {
+    fn message(&self, step: &str, phase: &str, extra: &Value) -> Value {
+        let mut msg = json!({ "step": step, "state": phase });
+        if let (Some(m), Some(e)) = (msg.as_object_mut(), extra.as_object()) {
+            m.extend(e.clone());
+        }
+        msg
+    }
+
+    fn send(&self, step: &Value) {
+        let mut msg = json!({ "action": "TUNNEL-DELETE-PROGRESS", "tunnel_id": self.tunnel });
+        if let (Some(m), Some(e)) = (msg.as_object_mut(), step.as_object()) {
+            m.extend(e.clone());
+        }
+        self.state.hub.notify_user(self.user, &msg);
+    }
+
+    fn start(&self, step: &str, extra: Value) {
+        self.send(&self.message(step, "active", &extra));
+    }
+
+    fn end(&mut self, step: &str, phase: &str, extra: Value) {
+        let msg = self.message(step, phase, &extra);
+        self.send(&msg);
+        self.done.push(msg);
+    }
 }
 
 /// `ReverseServerUsernamesMapServerId`：`{"usernames": [...], "default_username_id": ...}`

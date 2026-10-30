@@ -60,6 +60,28 @@ fn own(v: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
     v.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())).collect()
 }
 
+/// 刪除進度通知：(step, state) 依收到的順序。/ The live delete progress as (step, state), in order.
+fn progress(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, tunnel: i64) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        let v: Value = serde_json::from_str(&msg).unwrap();
+        let m = &v["message"];
+        if m["action"] == "TUNNEL-DELETE-PROGRESS" && m["tunnel_id"] == tunnel {
+            out.push((m["step"].as_str().unwrap().to_string(), m["state"].as_str().unwrap().to_string()));
+        }
+    }
+    out
+}
+
+/// 回應裡每一步怎麼結束。/ How each step ended, from the response.
+fn ended(report: &Value) -> Vec<(String, String)> {
+    report["steps"].as_array().unwrap().iter().map(|s| (s["step"].as_str().unwrap().to_string(), s["state"].as_str().unwrap().to_string())).collect()
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
 #[tokio::test]
 async fn delete_check_and_cleanup_on_a_live_device() {
     let Some(lab) = Lab::start().await else { return };
@@ -113,6 +135,12 @@ async fn delete_check_and_cleanup_on_a_live_device() {
     assert_eq!(c["online"], true);
     assert_eq!(c["accounts"], json!(["ubuntu", "root"]));
     assert_eq!(c["sharees"], json!([{"id": bob.id, "username": "bob", "permission": "view"}]));
+    // 移除腳本的名字：有安裝代號就用代號的，沒有就用隧道編號的舊名字。/ The uninstall script: install-id name, else the older one.
+    let script = c["uninstall_script"].as_str().unwrap();
+    match db::device_install::get(&lab.app.state.db, dev.tunnel_id).await.unwrap() {
+        Some(r) => assert_eq!(script, format!("~/.ssh/telepy-{}-uninstall.sh", r.install_id)),
+        None => assert_eq!(script, format!("~/.ssh/telepy-uninstall-{}.sh", dev.tunnel_id)),
+    }
     let keys = c["device_keys"].as_array().unwrap();
     assert_eq!(keys.len(), 1, "{c}");
     assert_eq!((keys[0]["owner"].as_str(), keys[0]["name"].as_str(), keys[0]["in_list"].as_bool()), (Some("alice"), Some("alice-laptop"), Some(true)));
@@ -128,6 +156,8 @@ async fn delete_check_and_cleanup_on_a_live_device() {
     assert_eq!(can, vec![true, true, true, false]);
 
     // --- 刪除：移除金鑰 + 服務金鑰、撤銷只限這條的授權，再加上 alice 選的整個撤銷（bob 的那個會被忽略）
+    let mut alice_rx = lab.app.state.hub.subscribe_user(alice.id);
+    let mut bob_rx = lab.app.state.hub.subscribe_user(bob.id);
     let r = lab
         .app
         .delete(&format!("/api/reverse/server/keys/{}?remove_device_keys=true&remove_service_key=true&revoke_grants=true&revoke_grant_ids={g_all},{g_bob}", dev.tunnel_id), Some(&alice.token))
@@ -140,6 +170,24 @@ async fn delete_check_and_cleanup_on_a_live_device() {
     }
     assert_eq!((rep["grants_revoked"].as_i64(), rep["grants_detached"].as_i64()), (Some(2), Some(1)), "{rep}");
     assert_eq!(rep["device_disconnected"], true);
+    // 沒要移除服務：那三步略過（off），金鑰與 Telepy 端照做；每步先 active 再結束，只送給按刪除的人。
+    // No service removal: those steps are skipped (off); every step goes active first, and only to the person deleting.
+    let want = [("service", "skipped"), ("keys", "done"), ("stop", "skipped"), ("watch", "skipped"), ("telepy", "done"), ("disconnect", "done")];
+    assert_eq!(ended(&rep), pairs(&want), "{rep}");
+    assert_eq!(rep["steps"][0]["reason"], "off");
+    assert_eq!((rep["steps"][1]["removed"].as_i64(), rep["steps"][1]["service_key"].as_bool()), (Some(2), Some(true)), "{rep}");
+    assert_eq!((rep["steps"][4]["revoked"].as_i64(), rep["steps"][4]["detached"].as_i64()), (Some(2), Some(1)));
+    assert_eq!(rep["steps"][5]["was_connected"], true);
+    let live = progress(&mut alice_rx, dev.tunnel_id);
+    let mut expect = Vec::new();
+    for (step, state) in want {
+        if state != "skipped" {
+            expect.push((step, "active"));
+        }
+        expect.push((step, state));
+    }
+    assert_eq!(live, pairs(&expect));
+    assert!(progress(&mut bob_rx, dev.tunnel_id).is_empty(), "a sharee is not sent the deleter's progress");
     for account in ["ubuntu", "root"] {
         assert_eq!(boxm.authorized_keys(account), "# by hand\n", "{account}");
     }
@@ -209,6 +257,10 @@ async fn offline_delete_keeps_grants_by_default_and_app_details() {
     assert_eq!((r.json["online"].as_bool(), r.json["keys_left"].as_i64(), r.json["accounts"].clone()), (Some(false), Some(1), json!([])), "{}", r.text);
     assert_eq!((r.json["grants_revoked"].as_i64(), r.json["grants_detached"].as_i64()), (Some(0), Some(1)));
     assert_eq!(r.json["device_disconnected"], false);
+    // 離線：裝置那幾步略過，Telepy 端照做。/ Offline: the device steps are skipped, Telepy's own are done.
+    assert_eq!(ended(&r.json), pairs(&[("service", "skipped"), ("keys", "skipped"), ("stop", "skipped"), ("watch", "skipped"), ("telepy", "done"), ("disconnect", "done")]), "{}", r.text);
+    assert_eq!((r.json["steps"][1]["reason"].as_str(), r.json["steps"][1]["keys_left"].as_i64()), (Some("offline"), Some(1)));
+    assert_eq!(r.json["steps"][5]["was_connected"], false);
     let grants = lab.app.get("/api/oauth/grants", Some(&alice.token)).await.json;
     assert_eq!(grants[0]["tunnels"], json!([]), "{grants}");
     assert!(db::device_keys::installed_for_tunnel(&lab.app.state.db, t.id).await.unwrap().is_empty());
@@ -248,8 +300,17 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
     write("other.sh", "ssh -i ~/.ssh/telepy_tunnel_other -NR '*:0:localhost:22' telepy@gw\n".into());
     write("other-old.sh", format!("ssh -NR '*:{}:localhost:22' telepy@gw\n", port as u32 + 1));
 
+    let mut rx = lab.app.state.hub.subscribe_user(alice.id);
     let r = lab.app.delete(&format!("/api/reverse/server/keys/{id}?remove_device_keys=true&remove_service=true"), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    // 每一步都做了：停止那步帶著最長等待秒數開始，裝置自己斷線、也沒回來。
+    // Every step ran: stop and watch start with their longest wait, the device dropped by itself and stayed down.
+    let want = ["service", "keys", "stop", "watch", "telepy", "disconnect"];
+    assert_eq!(ended(&r.json), want.iter().map(|s| (s.to_string(), "done".to_string())).collect::<Vec<_>>(), "{}", r.json["steps"]);
+    assert!(r.json["steps"][0]["found"].as_i64().unwrap() >= 2, "{}", r.json["steps"]);
+    assert_eq!(r.json["steps"][5]["was_connected"], false, "it had already dropped by itself");
+    let live = progress(&mut rx, id);
+    assert_eq!(live, want.iter().flat_map(|s| [(s.to_string(), "active".to_string()), (s.to_string(), "done".to_string())]).collect::<Vec<_>>());
     let svc = &r.json["service"];
     let items: Vec<(String, String, String)> = svc["accounts"][0]["items"]
         .as_array()

@@ -1,13 +1,19 @@
 /**
  * 刪除隧道對話框的邏輯:開啟時讀 `GET /api/reverse/server/{id}/delete-check`(誰失去存取、Telepy 在裝置上裝過
  * 哪些金鑰、哪些 MCP 授權 / AI session 受影響),讓使用者選要不要移除金鑰 / 服務金鑰,以及每個 app 的處理方式
- * (只拿掉這條隧道,或整個撤銷),再以 query 帶選項 DELETE;回來的報告顯示在同一個對話框。
- * Delete-tunnel dialog logic: load the delete check on open, let the user pick what to clean up, DELETE with
- * those options as query parameters and keep the returned report to show what was cleaned.
+ * (只拿掉這條隧道,或整個撤銷),再以 query 帶選項 DELETE。請求跑的時候(移除服務要幾十秒)後端每一步開始 / 結束都送
+ * `TUNNEL-DELETE-PROGRESS`,收進 `events`;回來的報告(含 `steps`)顯示在同一個對話框。
+ * Delete-tunnel dialog logic: load the delete check on open, let the user pick what to clean up, DELETE with those
+ * options as query parameters. While the request runs (tens of seconds when the service goes) every step's start / end
+ * arrives as `TUNNEL-DELETE-PROGRESS` and is kept in `events`; the returned report (with `steps`) is shown in place.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
+import { DELETE_STEPS, type DeleteStepEvent } from "@/lib/deleteTunnel";
+import type { RunPhase } from "@/lib/progressSteps";
 import type { AiSession } from "@/hooks/useAiActivityPage";
 
 export interface DeleteCheckKey {
@@ -41,6 +47,8 @@ export function defaultGrantChoice(g: DeleteCheckGrant): GrantChoice {
 
 export interface DeleteCheck {
     tunnel: { id: number; name: string; reverse_port: number };
+    /** 一行指令安裝留下的移除腳本(舊後端沒有)。/ The one-command install's uninstall script (absent on older backends). */
+    uninstall_script?: string;
     online: boolean;
     /** 這台機器上沒有別的通道了（沒有其他通道釘選同一把 host key）。/ No other tunnel pins this machine's host key. */
     last_on_machine: boolean;
@@ -84,6 +92,8 @@ export interface DeleteReport {
     device_disconnected: boolean;
     /** null = 沒要求或裝置離線。/ null = not asked for, or the device was offline. */
     service: ServiceRemoval | null;
+    /** 每一步怎麼結束(舊後端沒有)。/ How each step ended (absent on older backends). */
+    steps?: DeleteStepEvent[];
 }
 
 export interface DeleteOptions {
@@ -102,6 +112,9 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
     const [deleting, setDeleting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [report, setReport] = useState<DeleteReport | null>(null);
+    // 這次刪除收到的進度(收到的時間記在 `at`,倒數用)與開始的時間。/ Progress received for this delete, and when it started.
+    const [events, setEvents] = useState<DeleteStepEvent[]>([]);
+    const [startedAt, setStartedAt] = useState<number | null>(null);
 
     useEffect(() => {
         if (!isOpen || tunnelId === null) return;
@@ -132,10 +145,25 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
     const choiceFor = useCallback((g: DeleteCheckGrant): GrantChoice => (g.can_revoke ? (grantChoices[g.id] ?? defaultGrantChoice(g)) : "keep"), [grantChoices]);
     const setGrantChoice = useCallback((id: number, choice: GrantChoice) => setGrantChoices((c) => ({ ...c, [id]: choice })), []);
 
+    const handlers = useMemo(
+        () => ({
+            [NOTIFICATION_ACTIONS.TUNNEL_DELETE_PROGRESS]: (msg: NotificationPayload) => {
+                if (!deleting || msg.tunnel_id !== tunnelId) return;
+                const step = msg.step as DeleteStepEvent["step"] | undefined;
+                if (!step || !(DELETE_STEPS as readonly string[]).includes(step)) return;
+                setEvents((prev) => [...prev, { ...(msg as unknown as DeleteStepEvent), step, at: Date.now() }]);
+            },
+        }),
+        [deleting, tunnelId],
+    );
+    useNotificationHandlers(handlers);
+
     const submit = useCallback(async () => {
         if (tunnelId === null || !data) return;
         setDeleting(true);
         setError(null);
+        setEvents([]);
+        setStartedAt(Date.now());
         // 裝置離線時金鑰動不了,不要送出做不到的選項。/ Offline: don't ask for what cannot be done.
         const qs = new URLSearchParams({
             remove_device_keys: String(data.online && options.removeDeviceKeys),
@@ -174,5 +202,9 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         error,
         report,
         submit,
+        events,
+        startedAt,
+        /** 整件事在哪:沒開始 / 跑著 / 做完 / 請求失敗。/ Where the run is. */
+        phase: (report ? "done" : deleting ? "running" : error && startedAt ? "failed" : "idle") as RunPhase,
     };
 }

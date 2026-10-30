@@ -3141,6 +3141,9 @@ pub struct TunnelDeleteGrant {
 #[derive(ToSchema)]
 pub struct TunnelDeleteCheck {
     pub tunnel: TunnelDeleteTunnel,
+    /// The uninstall script a one-command install left on the device (`~/.ssh/telepy-<install id>-uninstall.sh`)
+    #[schema(example = "~/.ssh/telepy-k7m2q9xd-uninstall.sh")]
+    pub uninstall_script: String,
     pub online: bool,
     /// No other tunnel pins this machine's host key: removing the service key is the default, or the machine stays reachable with it and has no owner
     pub last_on_machine: bool,
@@ -3181,6 +3184,37 @@ pub struct TunnelDeleteReport {
     pub device_disconnected: bool,
     /// Removal of the tunnel's service from the device (null unless remove_service and the device was online)
     pub service: Option<TunnelServiceRemoval>,
+    /// How each step ended, in order (service, keys, stop, watch, telepy, disconnect); the same objects were pushed live as `TUNNEL-DELETE-PROGRESS` notifications to the person deleting
+    pub steps: Vec<TunnelDeleteStep>,
+}
+
+/// One step of a tunnel delete (also sent live as `TUNNEL-DELETE-PROGRESS` with `tunnel_id`, first with `state: active`)
+#[derive(ToSchema)]
+pub struct TunnelDeleteStep {
+    /// service = find and delete what runs the tunnel on the device; keys = authorized_keys; stop = start the stop scripts and wait for the device to drop; watch = check it stays down; telepy = AI sessions, recordings, rows, authorizations; disconnect = the gateway
+    #[schema(example = "keys")]
+    pub step: String,
+    /// active (only in the live notification) / done / warn / failed / skipped
+    #[schema(example = "done")]
+    pub state: String,
+    /// skipped: off / offline / not_stopped; stop warn: not_found / still_connected; watch failed: came_back
+    pub reason: Option<String>,
+    /// stop / watch while active: the longest wait in seconds
+    pub secs: Option<i64>,
+    /// service: items found / accounts that failed
+    pub found: Option<i64>,
+    pub errors: Option<i64>,
+    /// keys: user keys removed, accounts that failed, whether a service key went, keys still on the device
+    pub removed: Option<i64>,
+    pub failed: Option<i64>,
+    pub service_key: Option<bool>,
+    pub keys_left: Option<i64>,
+    /// telepy: AI sessions closed, authorizations revoked / detached
+    pub ai_sessions: Option<i64>,
+    pub revoked: Option<i64>,
+    pub detached: Option<i64>,
+    /// disconnect: the device was still connected
+    pub was_connected: Option<bool>,
 }
 
 /// One result line of the device-side removal script
