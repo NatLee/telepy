@@ -18,6 +18,9 @@ export const VIEW_PAGES = [
     // 金鑰頁原本只有列表，沒選過的人維持列表。/ The keys page used to be a list only; keep it for people who never chose.
     { id: "keys", label: "prefs.view.keys", fallback: "list" },
     { id: "key_groups", label: "prefs.view.keyGroups", fallback: "card" },
+    // API 頁的兩張清單：預設清單（一把 / 一台一列，欄位對齊好比較）。/ The API page's two lists: a list by default (rows line up for comparing).
+    { id: "api_tokens", label: "prefs.view.apiTokens", fallback: "list" },
+    { id: "cli_signins", label: "prefs.view.cliSignIns", fallback: "list" },
 ] as const satisfies readonly { id: string; label: TranslationKey; fallback: ViewMode }[];
 export type ViewPage = (typeof VIEW_PAGES)[number]["id"];
 
