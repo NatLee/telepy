@@ -142,7 +142,7 @@ ssh, kasm-browser                                └─ in-process NotificationH
 7. **Remote browser session 在記憶體。** 單 process → `ssh -D` 的 child handle 與 session 同在一個 map；reaper task 取代「Redis TTL + 孤兒掃描」那一整套。另存一張 Rust 自有的小表 `telepy_remote_browser_session`，後端重啟時據此把 kasm 側的孤兒 session 收掉。`ssh -D` 的硬化參數（BatchMode / ExitOnForwardFailure / ControlMaster=no …）照搬。
 8. **Terminal 保留 OpenSSH 客戶端。** 理由見 §3.4。
 9. **File manager 改原生 SFTP。** 理由見 §3.5。
-10. **Django admin 退役。** 使用者管理已有前端 Settings → Users；superuser 建立改 CLI；`tunnels/admin.py` 的 permission-group 頁面不保留（需確認無人在用）。
+10. **Django admin 退役。** 使用者管理已有前端（管理區 → 使用者與權限 → 使用者）；superuser 建立改 CLI；`tunnels/admin.py` 的 permission-group 頁面不保留（需確認無人在用）。
 11. **錯誤訊息字串逐字保留。** 前端 `formatApiError` 讀 `detail`/`error`；remote-browser 靠 `code`；有些狀態碼由錯誤文字推導（例如 unshare 的 `'not found' in error`）。先逐字相容，之後再整理成 error code。
 
 ### 3.4 Terminal：為什麼不用 russh 而繼續 spawn `ssh`

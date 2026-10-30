@@ -7,7 +7,7 @@ import { ChevronRight, Menu } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetHeader, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
-import { NavContent, navLinks, isNavActive, activeChild } from "./NavContent";
+import { NavContent, navLinks, isLinkActive, activeChild } from "./NavContent";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "@/lib/i18n";
 
@@ -17,8 +17,8 @@ export function Header() {
     const { t } = useI18n();
 
     // Get current page name for header title
-    const currentLink = navLinks.find(link => isNavActive(pathname, link.href));
-    // 有子頁的區（SSH 金鑰）：麵包屑多一層。/ Areas with sub-pages (SSH keys) get one more crumb.
+    const currentLink = navLinks.find((link) => isLinkActive(link, pathname));
+    // 有子頁的區（SSH 金鑰、管理區的幾區）：麵包屑多一層。/ Areas with sub-pages (SSH keys, the admin areas) get one more crumb.
     const currentChild = currentLink ? activeChild(currentLink, pathname) : undefined;
     // 不在導覽列裡的頁面:設定(管理員區)、建立通道。/ Pages outside navLinks: settings (admin section), the create wizard.
     const currentPage = currentLink
