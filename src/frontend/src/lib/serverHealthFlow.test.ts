@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CHECK_IDS, type HealthCheck, type HealthCheckId, type HealthStatus, type ServerHealth } from "./serverHealth.ts";
-import { HEALTH_SPOTS, SPOT_CHECKS, healthNow, healthSpots, spotOf, stateOf } from "./serverHealthFlow.ts";
+import { HEALTH_SPOTS, SPOT_CHECKS, effectiveStatus, healthNow, healthSpots, spotOf, stateOf } from "./serverHealthFlow.ts";
 
-const c = (id: HealthCheckId | null, status: HealthStatus, name = id ?? "new check"): HealthCheck => ({ id, name, status, detail: `${name} detail` });
+const c = (id: HealthCheckId | null, status: HealthStatus, name = id ?? "new check"): HealthCheck => ({ id, name, status, detail: `${name} detail`, fingerprint: `${name}-fp`, ack: null, staleAck: null });
+const ack = { by: "admin", at: "2026-10-30T02:00:00Z", note: "restored from a backup" };
 const health = (checks: HealthCheck[]): ServerHealth => ({ checks, ok: 0, info: 0, warnings: 0, failures: 0, ranAt: null });
 const allOk = () => CHECK_IDS.map((id) => c(id, "ok"));
 
@@ -87,4 +88,31 @@ test("a loaded answer missing a spot's checks leaves that spot waiting", () => {
     const spots = healthSpots(health(allOk().filter((x) => x.id !== "kasm")));
     assert.equal(spots.kasm.state, "waiting");
     assert.equal(spots.kasm.status, null);
+});
+
+test("an acknowledged problem does not colour its spot; it is listed as acknowledged", () => {
+    const checks = allOk().map((x) => (x.id === "audit_log" ? { ...c("audit_log", "fail"), ack } : x.id === "guacd" ? c("guacd", "warn") : x));
+    assert.equal(effectiveStatus(checks.find((x) => x.id === "audit_log")!), "info");
+    const spots = healthSpots(health(checks));
+    assert.equal(spots.disk.state, "ok");
+    assert.equal(spots.disk.status, "info");
+    assert.deepEqual(spots.disk.acked.map((x) => x.id), ["audit_log"]);
+    assert.equal(spots.guacd.state, "warn");
+    assert.deepEqual(spots.guacd.acked, []);
+    const now = healthNow(health(checks));
+    assert.equal(now.kind, "warn");
+    if (now.kind === "warn") assert.equal(now.spot, "guacd");
+});
+
+test("a stale acknowledgement keeps the spot red", () => {
+    const checks = allOk().map((x) => (x.id === "audit_log" ? { ...c("audit_log", "fail"), staleAck: ack } : x));
+    const spots = healthSpots(health(checks));
+    assert.equal(spots.disk.state, "failed");
+    assert.deepEqual(spots.disk.acked, []);
+    assert.equal(healthNow(health(checks)).kind, "fail");
+});
+
+test("only acknowledged problems everywhere = all fine", () => {
+    const checks = allOk().map((x) => (x.id === "kasm" ? { ...c("kasm", "warn"), ack } : x));
+    assert.deepEqual(healthNow(health(checks)), { kind: "ok" });
 });

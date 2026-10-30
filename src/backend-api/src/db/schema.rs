@@ -676,6 +676,21 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("event", "channel")
         )"#,
     ),
+    // Rust 自有：管理員對「伺服器狀態」某項 ⚠ / ✗ 的確認（每項一筆；指紋不同 = 問題變了，確認不再算）。見 db/health_acks.rs。
+    // An admin's acknowledgement of a Server health warning / failure (one per check; a different fingerprint =
+    // the problem changed and the acknowledgement no longer counts). See db/health_acks.rs.
+    (
+        "telepy_health_ack",
+        r#"CREATE TABLE "telepy_health_ack" (
+            "check_id" TEXT NOT NULL PRIMARY KEY,
+            "fingerprint" TEXT NOT NULL,
+            "status" TEXT NOT NULL,
+            "note" TEXT NOT NULL,
+            "user_id" INTEGER NULL,
+            "username" TEXT NOT NULL,
+            "at" TEXT NOT NULL
+        )"#,
+    ),
     (
         "telepy_notify_pref",
         r#"CREATE TABLE "telepy_notify_pref" (

@@ -78,9 +78,11 @@ function useStateText() {
         if (info.unchecked && info.status === null) return t(loaded ? "health.flow.state.notChecked" : "health.flow.state.checking");
         if (!loaded) return t("health.flow.state.checking");
         if (info.status === null) return t("health.flow.state.missing");
-        const text = t(STATUS_TEXT[info.status]);
-        const bad = info.checks.filter((c) => c.status === "fail" || c.status === "warn");
-        return bad.length ? `${text} · ${bad.map((c) => c.name).join(", ")}` : text;
+        // 確認過的 ⚠ / ✗ 不讓這站變色，只說「已確認」。/ Acknowledged problems don't colour the spot; they read "Acknowledged".
+        const bad = info.checks.filter((c) => (c.status === "fail" || c.status === "warn") && !info.acked.includes(c));
+        if (bad.length) return `${t(STATUS_TEXT[info.status])} · ${bad.map((c) => c.name).join(", ")}`;
+        if (info.acked.length) return `${t("health.ack.state")} · ${info.acked.map((c) => c.name).join(", ")}`;
+        return t(STATUS_TEXT[info.status]);
     };
 }
 

@@ -34,6 +34,31 @@ impl Status {
     }
 }
 
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Ok => "ok",
+            Status::Info => "info",
+            Status::Warn => "warn",
+            Status::Fail => "fail",
+        }
+    }
+
+    /// 只有 ⚠ / ✗ 能被確認。/ Only warnings and failures can be acknowledged.
+    pub fn is_problem(self) -> bool {
+        matches!(self, Status::Warn | Status::Fail)
+    }
+}
+
+/// 管理員對一個結果的確認（顯示用）。/ An admin's acknowledgement of a result, as shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Ack {
+    pub by: String,
+    /// RFC 3339 `…Z`
+    pub at: String,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Check {
     /// 穩定的機器 id，前端用來分組與翻譯。/ Stable machine id the frontend groups and translates by.
@@ -41,10 +66,68 @@ pub struct Check {
     pub name: &'static str,
     pub status: Status,
     pub detail: String,
+    /// 結果的指紋：問題一變就變，沒變就一樣（確認只對同一個指紋有效）。
+    /// Changes whenever the problem changes and stays put while it doesn't (an acknowledgement holds for one fingerprint).
+    pub fingerprint: String,
+    /// 對現在這個結果的確認。/ An acknowledgement of this exact result.
+    pub ack: Option<Ack>,
+    /// 之前的確認，但結果已經變了。/ An earlier acknowledgement of a result that has changed since.
+    pub stale_ack: Option<Ack>,
 }
 
 fn check(id: &'static str, name: &'static str, status: Status, detail: impl Into<String>) -> Check {
-    Check { id, name, status, detail: detail.into() }
+    let detail = detail.into();
+    let fingerprint = fingerprint(&[id, status.as_str(), &detail]);
+    Check { id, name, status, detail, fingerprint, ack: None, stale_ack: None }
+}
+
+impl Check {
+    /// 換掉預設指紋（detail 裡有會一直變的數字時）；一定帶上 id 與狀態。
+    /// Replace the default fingerprint (when the detail holds numbers that keep changing); id and status always count.
+    fn fp(mut self, parts: &[&str]) -> Self {
+        let mut all = vec![self.id, self.status.as_str()];
+        all.extend_from_slice(parts);
+        self.fingerprint = fingerprint(&all);
+        self
+    }
+}
+
+/// 純函式：SHA-256(長度前綴的各部分) 的前 16 個 hex 字元。/ First 16 hex characters of SHA-256 over length-prefixed parts.
+pub fn fingerprint(parts: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for p in parts {
+        h.update((p.len() as u64).to_be_bytes());
+        h.update(p.as_bytes());
+    }
+    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// 存著的一筆確認（`telepy_health_ack`）。/ A stored acknowledgement.
+pub use crate::db::health_acks::AckRow;
+
+/// 純函式：把存著的確認對到檢查上；回傳「已經沒問題」的檢查 id（它們的確認該刪）。
+/// 指紋相同且仍是 ⚠ / ✗ = `ack`；指紋不同 = `stale_ack`；變成 ✓ / i = 不顯示、回傳要刪。
+/// Match stored acknowledgements to checks. Same fingerprint and still a problem = `ack`; a different fingerprint
+/// = `stale_ack`; now ok / info = neither, and the id is returned so the caller can delete it.
+pub fn apply_acks(checks: &mut [Check], stored: &[AckRow]) -> Vec<String> {
+    let mut resolved = Vec::new();
+    for c in checks.iter_mut() {
+        c.ack = None;
+        c.stale_ack = None;
+        let Some(a) = stored.iter().find(|a| a.check_id == c.id) else { continue };
+        if !c.status.is_problem() {
+            resolved.push(a.check_id.clone());
+            continue;
+        }
+        let shown = Ack { by: a.username.clone(), at: a.at.clone(), note: a.note.clone() };
+        if a.fingerprint == c.fingerprint {
+            c.ack = Some(shown);
+        } else {
+            c.stale_ack = Some(shown);
+        }
+    }
+    resolved
 }
 
 /// 核心表（缺了代表 schema 沒補齊）。/ Tables whose absence means the schema was never reconciled.
@@ -123,12 +206,13 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
                 if missing.is_empty() {
                     let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_user").fetch_one(&db.read).await.unwrap_or(0);
                     let tunnels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authorized_keys_reverseserverauthorizedkeys").fetch_one(&db.read).await.unwrap_or(0);
-                    out.push(check("database", "database", Status::Ok, format!("{} ({users} users, {tunnels} tunnels)", config.db_path.display())));
+                    out.push(check("database", "database", Status::Ok, format!("{} ({users} users, {tunnels} tunnels)", config.db_path.display())).fp(&[]));
                     if users == 0 {
                         out.push(check("accounts", "accounts", Status::Info, "no account yet: the first sign-up becomes the administrator (or run ./telepy.sh create-superuser)"));
                     }
                 } else {
-                    out.push(check("database", "database", Status::Warn, format!("tables missing: {}. Restart the backend or run ./telepy.sh migration", missing.join(", "))));
+                    let list = missing.join(", ");
+                    out.push(check("database", "database", Status::Warn, format!("tables missing: {list}. Restart the backend or run ./telepy.sh migration")).fp(&[&list]));
                 }
                 Some(db)
             }
@@ -157,6 +241,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
                     check("tunnel_keys", "tunnel keys", Status::Ok, format!("{} tunnel service keys, all readable", keys.len()))
                 } else {
                     check("tunnel_keys", "tunnel keys", Status::Warn, format!("{broken} of {} tunnel service keys cannot be decrypted (SECRET_KEY changed?); those tunnels fall back to the shared key", keys.len()))
+                        .fp(&[&broken.to_string()])
                 });
             }
             Err(e) => out.push(check("tunnel_keys", "tunnel keys", Status::Fail, format!("cannot read tunnel service keys: {e}"))),
@@ -201,14 +286,16 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     // 相依服務。/ Companion services.
     out.push(match tcp_reachable(&config.guacd_addr, Duration::from_secs(3)).await {
         Ok(()) => check("guacd", "guacd (remote desktop)", Status::Ok, config.guacd_addr.clone()),
-        Err(e) => check("guacd", "guacd (remote desktop)", Status::Warn, format!("cannot reach {}: {e}. Remote desktop will not work; start the guacd service", config.guacd_addr)),
+        // 指紋不含系統錯誤字（逾時 / 拒絕連線會來回變），連不到同一個位址就是同一個問題。
+        // The OS error text (timed out / refused flips back and forth) stays out of the fingerprint: same address, same problem.
+        Err(e) => check("guacd", "guacd (remote desktop)", Status::Warn, format!("cannot reach {}: {e}. Remote desktop will not work; start the guacd service", config.guacd_addr)).fp(&["unreachable", &config.guacd_addr]),
     });
     let health = format!("{}/healthz", config.kasm_api.trim_end_matches('/'));
     let http = reqwest::Client::builder().timeout(Duration::from_secs(4)).build().expect("reqwest client");
     out.push(match http.get(&health).send().await {
         Ok(r) if r.status().is_success() => check("kasm", "kasm-browser (remote browser)", Status::Ok, config.kasm_api.clone()),
         Ok(r) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("{health} answered {}", r.status())),
-        Err(e) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("cannot reach {health}: {e}. The remote browser will not work")),
+        Err(e) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("cannot reach {health}: {e}. The remote browser will not work")).fp(&["unreachable", &health]),
     });
     out.push(if crate::geoip::GeoIp::load(&config.geoip_dir).enabled() {
         check("geoip", "GeoIP", Status::Ok, format!("{}", config.geoip_dir.display()))
@@ -232,8 +319,8 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
             .fetch_all(&db.read)
             .await
             .unwrap_or_default();
-        let (status, detail) = client_addresses(&ips, config.trusted_proxy_hops, config.client_ip_header.as_deref());
-        out.push(check("client_addresses", "client addresses", status, detail));
+        let (status, detail, key) = client_addresses(&ips, config.trusted_proxy_hops, config.client_ip_header.as_deref());
+        out.push(check("client_addresses", "client addresses", status, detail).fp(&[&key]));
     }
 
     // 審計鏈。/ Audit chain.
@@ -241,25 +328,60 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         out.push(match db::audit_chain::verify(db).await {
             Ok(r) if r.ok => {
                 let rows: u64 = r.tables.iter().map(|t| t.checked).sum();
-                check("audit_log", "audit log", Status::Ok, format!("hash chain intact ({rows} rows checked)"))
+                let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
+                let extra = if foreign > 0 { format!("; {foreign} checkpoints from another database skipped") } else { String::new() };
+                check("audit_log", "audit log", Status::Ok, format!("hash chain intact ({rows} rows checked{extra})"))
             }
             Ok(r) => {
-                let broken: Vec<String> = r
-                    .tables
-                    .iter()
-                    .filter(|t| !t.ok)
-                    .map(|t| format!("{} at row {} ({})", t.table, t.broken_at.map(|b| b.to_string()).unwrap_or_else(|| "?".into()), t.reason.clone().unwrap_or_default()))
-                    .collect();
-                check("audit_log", "audit log", Status::Fail, format!("changed after it was written: {}", broken.join("; ")))
+                let failing: Vec<&db::audit_chain::TableReport> = r.tables.iter().filter(|t| !t.ok).collect();
+                // 鏈本身的問題與外部錨點的問題分開列：只列最早的一個時，後來的竄改會躲在舊的錨點不符後面。
+                // Chain and checkpoint problems are listed separately: naming only the earliest one let a later edit hide
+                // behind an old checkpoint mismatch.
+                let broken: Vec<String> = failing.iter().map(|t| audit_problem(t)).collect();
+                let mut detail = format!("changed after it was written: {}", broken.join("; "));
+                let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();
+                if foreign > 0 {
+                    detail.push_str(&format!(". {foreign} checkpoints from another database skipped"));
+                }
+                if failing.iter().any(|t| matches!(t.reason.as_deref(), Some("checkpoint_mismatch" | "checkpoint_missing"))) {
+                    detail.push_str(". If this database was restored or replaced, older lines in audit-anchors.log belong to the previous one.");
+                }
+                let fp = db::audit_chain::fingerprint(&r);
+                check("audit_log", "audit log", Status::Fail, detail).fp(&[&fp])
             }
             Err(e) => check("audit_log", "audit log", Status::Warn, format!("cannot verify: {e:#}")),
         });
     }
+    // 確認（只讀；表不在的舊資料庫 = 沒有）。/ Acknowledgements (read only; an older database without the table = none).
+    if let Some(db) = &db {
+        let stored = db::health_acks::list(db).await.unwrap_or_default();
+        apply_acks(&mut out, &stored);
+    }
     out
 }
 
-/// 純函式：最近登入的來源 IP 有幾個是公網位址。/ How many recent sign-in addresses are public.
-fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option<&str>) -> (Status, String) {
+/// 一張表的問題，人看的：鏈本身（某列被改、順序被換）與外部錨點（不符 / 不見了）各一句。
+/// One table's problem in words: the chain itself and the external checkpoints, one clause each.
+fn audit_problem(t: &db::audit_chain::TableReport) -> String {
+    let mut parts = Vec::new();
+    if let (Some(id), Some(reason)) = (t.chain_broken_at, t.chain_reason.as_deref()) {
+        let more = if t.chain_issues > 1 { format!(", {} rows in all", t.chain_issues) } else { String::new() };
+        parts.push(format!("row {id} ({reason}{more})"));
+    }
+    if let (Some(id), Some(reason)) = (t.checkpoint_broken_at, t.checkpoint_reason.as_deref()) {
+        let more = if t.checkpoints_mismatched > 1 { format!(", {} checkpoints", t.checkpoints_mismatched) } else { String::new() };
+        parts.push(format!("checkpoint at row {id} ({reason}{more})"));
+    }
+    if parts.is_empty() {
+        parts.push(format!("row {} ({})", t.broken_at.map(|b| b.to_string()).unwrap_or_else(|| "?".into()), t.reason.clone().unwrap_or_default()));
+    }
+    format!("{}: {}", t.table, parts.join(", "))
+}
+
+/// 純函式：最近登入的來源 IP 有幾個是公網位址。第三個值 = 指紋用（設定 + 排序後的內部位址，不含會變的筆數）。
+/// How many recent sign-in addresses are public. The third value feeds the fingerprint: the setting plus the
+/// sorted internal addresses, never the counts (they change with every sign-in).
+fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option<&str>) -> (Status, String, String) {
     let hops = hops.setting();
     let setting = match header {
         Some(h) => format!("CLIENT_IP_HEADER={h}, TRUSTED_PROXY_HOPS={hops}"),
@@ -267,19 +389,20 @@ fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option
     };
     let parsed: Vec<std::net::IpAddr> = ips.iter().filter_map(|ip| ip.parse().ok()).collect();
     if parsed.is_empty() {
-        return (Status::Info, format!("no sign-ins with an address in the last 30 days ({setting})"));
+        return (Status::Info, format!("no sign-ins with an address in the last 30 days ({setting})"), setting);
     }
     // 全是本機（loopback）= 在伺服器上自己登入／本機開發，看不出位址路徑。/ All loopback = signing in on the server itself, so the address path can't be judged.
     if parsed.iter().all(|ip| crate::geoip::scope(*ip) == crate::geoip::Scope::Loopback) {
-        return (Status::Info, format!("the last {} sign-ins were all from this machine (loopback), so the address path can't be judged from them ({setting}). If people sign in from elsewhere too, a proxy on this machine is replacing their address: check \"How Telepy sees your address\" from another computer", parsed.len()));
+        return (Status::Info, format!("the last {} sign-ins were all from this machine (loopback), so the address path can't be judged from them ({setting}). If people sign in from elsewhere too, a proxy on this machine is replacing their address: check \"How Telepy sees your address\" from another computer", parsed.len()), setting);
     }
     let internal: Vec<&std::net::IpAddr> = parsed.iter().filter(|ip| crate::geoip::scope(**ip) != crate::geoip::Scope::Public).collect();
     if internal.len() < parsed.len() {
-        return (Status::Ok, format!("{} of the last {} sign-ins came from public addresses ({setting})", parsed.len() - internal.len(), parsed.len()));
+        return (Status::Ok, format!("{} of the last {} sign-ins came from public addresses ({setting})", parsed.len() - internal.len(), parsed.len()), setting);
     }
     let mut distinct: Vec<String> = internal.iter().map(|ip| ip.to_string()).collect();
     distinct.sort();
     distinct.dedup();
+    let key = format!("{setting}|{}", distinct.join(","));
     (
         Status::Warn,
         format!(
@@ -287,12 +410,13 @@ fn client_addresses(ips: &[String], hops: crate::client_ip::Hops, header: Option
             parsed.len(),
             distinct.into_iter().take(3).collect::<Vec<_>>().join(", ")
         ),
+        key,
     )
 }
 
-/// 有沒有 ✗。/ Whether anything failed.
+/// 有沒有沒被確認的 ✗。/ Whether anything failed that nobody acknowledged.
 pub fn failed(checks: &[Check]) -> bool {
-    checks.iter().any(|c| c.status == Status::Fail)
+    checks.iter().any(|c| c.status == Status::Fail && c.ack.is_none())
 }
 
 /// 人看的文字。/ Human-readable report.
@@ -300,10 +424,16 @@ pub fn render(checks: &[Check]) -> String {
     let width = checks.iter().map(|c| c.name.chars().count()).max().unwrap_or(0);
     let mut s = String::new();
     for c in checks {
-        s.push_str(&format!("  {} {:<width$}  {}\n", c.status.symbol(), c.name, c.detail, width = width));
+        let ack = match &c.ack {
+            Some(a) => format!(" (acknowledged by {} {}: {})", a.by, a.at.get(..10).unwrap_or(&a.at), a.note),
+            None => String::new(),
+        };
+        s.push_str(&format!("  {} {:<width$}  {}{ack}\n", c.status.symbol(), c.name, c.detail, width = width));
     }
     let count = |st: Status| checks.iter().filter(|c| c.status == st).count();
-    s.push_str(&format!("\n{} ok, {} note(s), {} warning(s), {} failure(s)\n", count(Status::Ok), count(Status::Info), count(Status::Warn), count(Status::Fail)));
+    let acked = checks.iter().filter(|c| c.ack.is_some()).count();
+    let acked = if acked > 0 { format!(", {acked} acknowledged") } else { String::new() };
+    s.push_str(&format!("\n{} ok, {} note(s), {} warning(s), {} failure(s){acked}\n", count(Status::Ok), count(Status::Info), count(Status::Warn), count(Status::Fail)));
     s
 }
 
@@ -316,16 +446,21 @@ mod tests {
         use crate::client_ip::Hops;
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(client_addresses(&v(&[]), Hops::Fixed(2), None).0, Status::Info);
+        // 指紋鍵不含筆數：多一筆同樣的內部位址不變，換一個位址就變。/ The key ignores counts but not the addresses.
+        let k = |a: &[&str]| client_addresses(&v(a), Hops::Fixed(2), None).2;
+        assert_eq!(k(&["172.19.0.1"]), k(&["172.19.0.1", "172.19.0.1"]));
+        assert_ne!(k(&["172.19.0.1"]), k(&["172.19.0.1", "10.0.0.2"]));
+        assert_ne!(k(&["172.19.0.1"]), client_addresses(&v(&["172.19.0.1"]), Hops::Fixed(1), None).2);
         assert_eq!(client_addresses(&v(&["172.19.0.1", "198.51.100.7"]), Hops::Fixed(2), None).0, Status::Ok);
-        let (s, d) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), Hops::Fixed(2), None);
+        let (s, d, _) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), Hops::Fixed(2), None);
         assert_eq!(s, Status::Warn);
         assert!(d.contains("172.19.0.1;") && d.contains("TRUSTED_PROXY_HOPS=2") && d.contains("Server health"), "{d}");
-        let (s, d) = client_addresses(&v(&["127.0.0.1", "::1"]), Hops::Auto, None);
+        let (s, d, _) = client_addresses(&v(&["127.0.0.1", "::1"]), Hops::Auto, None);
         assert_eq!(s, Status::Info);
         assert!(d.contains("loopback"), "{d}");
         assert_eq!(client_addresses(&v(&["127.0.0.1", "192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
         assert_eq!(client_addresses(&v(&["192.168.1.5"]), Hops::Auto, None).0, Status::Warn);
-        let (_, d) = client_addresses(&v(&["10.0.0.9"]), Hops::Auto, Some("CF-Connecting-IP"));
+        let (_, d, _) = client_addresses(&v(&["10.0.0.9"]), Hops::Auto, Some("CF-Connecting-IP"));
         assert!(d.contains("CLIENT_IP_HEADER=CF-Connecting-IP, TRUSTED_PROXY_HOPS=auto"), "{d}");
     }
 
@@ -338,6 +473,72 @@ mod tests {
         assert!(s.ends_with("1 ok, 1 note(s), 1 warning(s), 0 failure(s)\n"), "{s}");
         assert!(!failed(&checks));
         assert!(failed(&[check("x", "x", Status::Fail, "")]));
+    }
+
+    #[test]
+    fn audit_problem_names_both_the_chain_and_the_checkpoints() {
+        let t = db::audit_chain::TableReport {
+            table: "telepy_gateway_event".into(),
+            ok: false,
+            checked: 12,
+            first_id: Some(1),
+            last_id: Some(12),
+            unhashed_before: 0,
+            broken_at: Some(1),
+            reason: Some("checkpoint_mismatch".into()),
+            checkpoints_checked: 3,
+            checkpoints_mismatched: 2,
+            chain_broken_at: Some(4),
+            chain_reason: Some("hash_mismatch".into()),
+            chain_issues: 1,
+            checkpoint_broken_at: Some(1),
+            checkpoint_reason: Some("checkpoint_mismatch".into()),
+            checkpoints_foreign: 0,
+        };
+        assert_eq!(audit_problem(&t), "telepy_gateway_event: row 4 (hash_mismatch), checkpoint at row 1 (checkpoint_mismatch, 2 checkpoints)");
+        let only_cp = db::audit_chain::TableReport { chain_broken_at: None, chain_reason: None, chain_issues: 0, checkpoints_mismatched: 1, ..t.clone() };
+        assert_eq!(audit_problem(&only_cp), "telepy_gateway_event: checkpoint at row 1 (checkpoint_mismatch)");
+        let older = db::audit_chain::TableReport { chain_broken_at: None, chain_reason: None, checkpoint_broken_at: None, checkpoint_reason: None, ..t };
+        assert_eq!(audit_problem(&older), "telepy_gateway_event: row 1 (checkpoint_mismatch)");
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_bounded() {
+        let a = fingerprint(&["ab", "c"]);
+        assert_eq!(a.len(), 16);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(a, fingerprint(&["ab", "c"]));
+        assert_ne!(a, fingerprint(&["a", "bc"]));
+        // 預設 = id|狀態|detail；狀態一變指紋就變。/ Default covers id, status and detail.
+        assert_ne!(check("x", "x", Status::Warn, "d").fingerprint, check("x", "x", Status::Fail, "d").fingerprint);
+        assert_ne!(check("x", "x", Status::Warn, "d").fingerprint, check("x", "x", Status::Warn, "e").fingerprint);
+        // 覆寫：detail 裡的數字不算，狀態照算。/ An override ignores the detail but still counts the status.
+        assert_eq!(check("t", "t", Status::Warn, "1 of 3").fp(&["1"]).fingerprint, check("t", "t", Status::Warn, "1 of 9").fp(&["1"]).fingerprint);
+        assert_ne!(check("t", "t", Status::Warn, "1").fp(&["1"]).fingerprint, check("t", "t", Status::Fail, "1").fp(&["1"]).fingerprint);
+    }
+
+    fn row(id: &str, fp: &str) -> AckRow {
+        AckRow { check_id: id.into(), fingerprint: fp.into(), status: "warn".into(), note: "known".into(), user_id: Some(1), username: "admin".into(), at: "2026-10-30T01:02:03Z".into() }
+    }
+
+    #[test]
+    fn acks_match_by_fingerprint_and_resolved_ones_go() {
+        let mut checks = vec![check("a", "a", Status::Warn, "x"), check("b", "b", Status::Fail, "y"), check("c", "c", Status::Ok, "fine"), check("d", "d", Status::Warn, "z")];
+        let stored = vec![row("a", &checks[0].fingerprint.clone()), row("b", "0000000000000000"), row("c", "whatever")];
+        let resolved = apply_acks(&mut checks, &stored);
+        assert_eq!(resolved, vec!["c".to_string()]);
+        assert_eq!(checks[0].ack.as_ref().map(|a| a.by.as_str()), Some("admin"));
+        assert!(checks[0].stale_ack.is_none());
+        assert!(checks[1].ack.is_none() && checks[1].stale_ack.is_some());
+        assert!(checks[2].ack.is_none() && checks[2].stale_ack.is_none());
+        assert!(checks[3].ack.is_none() && checks[3].stale_ack.is_none());
+        // 確認過的 ✗ 不算失敗；沒確認的才算。/ An acknowledged failure no longer fails the run.
+        assert!(failed(&checks));
+        checks[1].ack = checks[1].stale_ack.take();
+        assert!(!failed(&checks));
+        let s = render(&checks);
+        assert!(s.contains("x (acknowledged by admin 2026-10-30: known)"), "{s}");
+        assert!(s.ends_with("1 ok, 0 note(s), 2 warning(s), 1 failure(s), 2 acknowledged\n"), "{s}");
     }
 
     #[test]
