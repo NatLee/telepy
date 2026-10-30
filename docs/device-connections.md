@@ -267,6 +267,15 @@ Windows 的腳本只會移除，盤點還沒做（只回平台）。
 登入帳號有 `sudo -n` 時，金鑰、unit、迴圈腳本改用 `sudo -n cat` / `test -f` / `ssh-keygen -y -P ''` 讀（只讀，同一個檔案只問一次）；
 正式站第一輪盤點就是卡在這裡，只認出金鑰剛好放在 `/home/ubuntu` 的那一台。
 
+**沒寫金鑰的服務**：hdre 遷移腳本遇到舊通道沒指定 `-i` 時，新 unit 也不寫，ssh 就用執行帳號的預設金鑰
+（`~/.ssh/id_ed25519`、`id_ecdsa`、`id_rsa`…）。指令沒寫金鑰檔、明確連到這台 gateway 的 port、又有 `-R` 時，就拿執行帳號
+（程序的擁有者；unit 的 `User=`、plist 的 `UserName`，系統層沒寫 = root；其他 = 登入帳號）的預設金鑰比對。預設金鑰是那個人自己的
+檔案，刪除時不會刪。
+
+**指令長度**：OpenWrt 路由器常用 dropbear，它不收超過 9000 字的 exec 指令，而這支腳本有 25KB。超過 6000 字的腳本改成先分段
+`printf >> <暫存檔>`、最後一個 exec 跑它並刪掉（`exec::script_commands` / `run_script`），任何 sshd 都收得下；也在 BusyBox ash
+（Alpine）跑過。
+
 **連到別台伺服器的不碰**：同一把金鑰可能同時服務兩台 Telepy（hdre 與新站就是），以前「依金鑰比對」會把 hdre 的 unit 一起拆掉。
 現在檔案或命令列寫了 port（`-p N`、`'-p' 'N'`、`Port=N`、`SSH_REMOTE_PORT=N`）而且沒有一個是這台 gateway 的
 `REVERSE_SERVER_SSH_PORT`，就是別台的（`kept other-server`），刪除、盤點、改名都跳過。沒寫 port 的照舊認。
