@@ -91,7 +91,7 @@ pub fn build(state: AppState) -> Router {
     // Login-gated Swagger UI + spec (see api/doc.rs); the switch (OPENAPI_ENABLED / the site setting) is read per
     // request and answers 404 for both while off.
     rest = rest.merge(api::doc::router(&openapi).route_layer(axum::middleware::from_fn_with_state(state.clone(), openapi_gate)));
-    let rest = rest.layer(CompressionLayer::new()).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls));
+    let rest = rest.layer(CompressionLayer::new()).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls)).layer(axum::middleware::from_fn_with_state(state.clone(), ssh_host_guard));
 
     // WebSocket 與 MCP 路由不掛壓縮層（升級回應沒有 body；MCP 可能回 SSE 串流）。
     // No compression on WebSockets (no body) or MCP (may stream SSE).
@@ -110,6 +110,26 @@ pub fn build(state: AppState) -> Router {
 /// Every REST request made with a delegated token goes into the call log (route template, status, duration; written
 /// in the background); writes that passed the checks also get a `token_call` gateway event. `/api/ai/` has its own
 /// audit trail, so no gateway event there.
+/// 用 SSH 主機的名稱看網頁時擋住登入（`ssh_host::arrives_on_ssh_host`）：那個名稱只是給 SSH 用的，網頁在 `PUBLIC_URL`。
+/// 只擋會建立登入的端點（登入、註冊、續期），回 421 + 正確的網址；其他請求不動，設定不全時完全不擋。
+/// Refuse sign-ins through the SSH host's name: that name is for SSH, the web lives at PUBLIC_URL. Only the endpoints
+/// that create or renew a sign-in get 421 + the right address; anything else passes, and nothing is blocked unless
+/// both names are configured and differ.
+async fn ssh_host_guard(axum::extract::State(state): axum::extract::State<AppState>, req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    const SIGN_IN: &[&str] = &["/api/auth/token", "/api/auth/token/refresh", "/api/auth/google/token", "/api/auth/passkey/login", "/api/auth/register"];
+    if req.method() == axum::http::Method::POST && SIGN_IN.contains(&req.uri().path()) {
+        let public = state.config.public_base();
+        let web = crate::ssh_host::web_host(public.as_deref());
+        let ssh = state.config.ssh_host();
+        let here = crate::ssh_host::request_host(req.headers());
+        if crate::ssh_host::arrives_on_ssh_host(here.as_deref(), web.as_deref(), ssh.as_deref()) {
+            let body = serde_json::json!({ "error": "This address is Telepy's SSH host; sign in at the web address.", "code": "ssh_host", "public_url": public });
+            return (axum::http::StatusCode::MISDIRECTED_REQUEST, axum::Json(body)).into_response();
+        }
+    }
+    next.run(req).await
+}
+
 async fn token_calls(axum::extract::State(state): axum::extract::State<AppState>, mut req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     let slot = crate::auth::extractor::TokenCallSlot::default();
     req.extensions_mut().insert(slot.clone());

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, PREVIEW_MIN_HEIGHT, allStandard, effectiveGoogleClientId, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, previewHeight, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, onSshHost, publicPageUrl, PREVIEW_MIN_HEIGHT, allStandard, effectiveGoogleClientId, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, previewHeight, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
     assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", consent_style: "discreet", message: "Hi" }), {
@@ -10,6 +10,9 @@ test("the public endpoint and the cache both parse", () => {
         consentStyle: "discreet",
         message: "Hi",
         googleClientId: null,
+        webHost: null,
+        sshHost: null,
+        publicUrl: null,
     });
     assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", consentStyle: "standard", message: "" }), {
         style: "standard",
@@ -18,6 +21,9 @@ test("the public endpoint and the cache both parse", () => {
         consentStyle: "standard",
         message: "",
         googleClientId: null,
+        webHost: null,
+        sshHost: null,
+        publicUrl: null,
     });
     // 舊後端 / 舊快取沒有授權頁那個：一般（以前就是這樣）。/ No approval-page look = standard, as before.
     assert.equal(parseSignInLook({ style: "discreet", oauth_style: "discreet", cli_style: "discreet" })?.consentStyle, "standard");
@@ -146,4 +152,20 @@ test("the Google client ID comes from the server, with the build-time one for ol
     assert.equal(effectiveGoogleClientId(look(null), "build-id"), "build-id", "older backend: the build-time id");
     assert.equal(effectiveGoogleClientId(look(null), undefined), undefined);
     assert.equal(effectiveGoogleClientId(null, "build-id"), undefined, "not known yet = no button yet");
+});
+
+test("the SSH host's name is told apart from the web's, and only when both are known", () => {
+    const look = { ...DEFAULT_LOOK, webHost: "telepy.example.com", sshHost: "telepy-ssh.example.com", publicUrl: "https://telepy.example.com" };
+    assert.equal(onSshHost(look, "telepy-ssh.example.com"), true);
+    assert.equal(onSshHost(look, "Telepy-SSH.example.com."), true, "case and a trailing dot");
+    assert.equal(onSshHost(look, "telepy.example.com"), false);
+    assert.equal(onSshHost(look, "localhost"), false);
+    assert.equal(onSshHost(null, "telepy-ssh.example.com"), false, "not known yet");
+    assert.equal(onSshHost({ ...look, publicUrl: null, webHost: null }, "telepy-ssh.example.com"), false, "no PUBLIC_URL = never");
+    assert.equal(onSshHost({ ...look, sshHost: null }, "telepy-ssh.example.com"), false, "no SSH host");
+    assert.equal(onSshHost({ ...look, sshHost: "telepy.example.com" }, "telepy.example.com"), false, "one name for both");
+    assert.equal(publicPageUrl(look, "/tunnels?tab=x"), "https://telepy.example.com/tunnels?tab=x");
+    assert.equal(publicPageUrl({ ...look, publicUrl: null }, "/"), null);
+    const parsed = parseSignInLook({ style: "standard", oauth_style: "standard", web_host: "A.example", ssh_host: "", public_url: "https://a.example/" });
+    assert.deepEqual([parsed?.webHost, parsed?.sshHost, parsed?.publicUrl], ["a.example", null, "https://a.example/"]);
 });

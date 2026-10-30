@@ -1,6 +1,7 @@
 //! `/api/site/settings`（site_settings app）：`{"values": {...}, "meta": {...}}`。
 //! meta 的 label/description 直接取自 Django model 的 verbose_name/help_text（前端以字典優先、meta 退回）。
 
+use axum::http::HeaderMap;
 use axum::extract::State;
 use axum::Json;
 use serde_json::{json, Map, Value};
@@ -333,13 +334,24 @@ fn normalize_text(raw: &str, max: usize) -> Result<String, String> {
 }
 
 #[utoipa::path(post, path = "/api/site/settings", tag = "Site Settings", security(("bearer" = [])), request_body(content = Object, description = "Partial update: {field: value, …} using the keys of `values`"), responses((status = 200, body = super::schemas::SiteSettingsResponse), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody)))]
-async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     if !me.is_superuser {
         return Err(ApiError::forbidden("Permission denied. Only administrators can modify system settings."));
     }
     let mut updates = Vec::new();
     for f in META {
         if let Some(v) = body.get(f.name) {
+            // SSH 主機不能是你現在看網頁用的名稱（PUBLIC_URL 另有其名時）：那個名稱的登入會被擋，等於把自己鎖在外面。
+            // The SSH host must not be the name you are using the web at right now (when PUBLIC_URL names another):
+            // sign-ins through it would be refused, locking you out.
+            if f.name == "server_ssh_host" {
+                let wanted = v.as_str().map(crate::ssh_host::strip_port).unwrap_or_default();
+                let web = crate::ssh_host::web_host(state.config.public_base().as_deref());
+                let here = crate::ssh_host::request_host(&headers);
+                if !wanted.is_empty() && web.as_deref().is_some_and(|w| w != wanted) && here.as_deref() == Some(wanted.as_str()) {
+                    return Err(ApiError::field(f.name, format!("That is the name you are using the web at right now; sign-ins through it would be refused. The web address is {} — open Telepy there to set this, or change the public address first.", web.unwrap_or_default())));
+                }
+            }
             // 環境變數有設的鍵鎖住：它說了算，存了也不會生效。/ A key whose variable is set is locked: it wins anyway.
             if let (Some(var), Some(_)) = (crate::server_settings::env_var(f.name), state.config.env_value(f.name)) {
                 return Err(ApiError::field(f.name, crate::server_settings::locked_message(var)));

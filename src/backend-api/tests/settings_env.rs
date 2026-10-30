@@ -287,3 +287,54 @@ async fn ssh_server_domain_in_env_locks_the_field() {
     let r = app.get("/api/site/ssh-host", Some(&admin)).await;
     assert_eq!(r.json["ssh"]["source"], "env");
 }
+
+/// 用 SSH 主機的名稱看網頁：登入被擋（421 + 正確的網址）、網頁的名稱照常；SSH 主機不能設成自己正在用的名稱；公開端點
+/// 說出兩個名稱。沒有 PUBLIC_URL 就完全不擋。/ The web through the SSH host's name: sign-ins refused (421 + the right
+/// address), the web host unaffected; the SSH host can't be the name you're browsing on; the public endpoint names both.
+/// Without PUBLIC_URL nothing is blocked.
+#[tokio::test]
+async fn sign_ins_through_the_ssh_host_name_are_refused() {
+    let app = common::spawn_with(|c| {
+        unset(c);
+        c.public_url = Some("https://telepy.test".into());
+    })
+    .await;
+    let admin = app.login("admin", "pw").await;
+    let login_via = |host: &'static str| {
+        let app = &app;
+        async move {
+            let req = Request::post("/api/auth/token").header("x-forwarded-host", host).header("content-type", "application/json").body(Body::from(json!({"username": "admin", "password": "pw"}).to_string())).unwrap();
+            app.send(req).await
+        }
+    };
+    // 還沒設 SSH 主機：哪個名稱都能登入。/ No SSH host yet: any name signs in.
+    assert_eq!(login_via("telepy-ssh.test").await.status, StatusCode::OK);
+
+    // 設成自己正在用的名稱：拒絕。/ The name being used right now: refused.
+    let req = Request::post("/api/site/settings").header("authorization", format!("Bearer {admin}")).header("x-forwarded-host", "ssh.telepy.test").header("content-type", "application/json").body(Body::from(json!({"server_ssh_host": "ssh.telepy.test"}).to_string())).unwrap();
+    let r = app.send(req).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["server_ssh_host"][0].as_str().unwrap().contains("telepy.test"), "{}", r.text);
+    // 從網頁的名稱設：可以。/ From the web's name: fine.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"server_ssh_host": "ssh.telepy.test"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+
+    let r = login_via("ssh.telepy.test").await;
+    assert_eq!(r.status, StatusCode::MISDIRECTED_REQUEST, "{}", r.text);
+    assert_eq!((r.json["code"].as_str(), r.json["public_url"].as_str()), (Some("ssh_host"), Some("https://telepy.test")));
+    assert_eq!(login_via("telepy.test").await.status, StatusCode::OK, "the web host still signs in");
+    assert_eq!(login_via("Ssh.Telepy.Test:443").await.status, StatusCode::MISDIRECTED_REQUEST, "case and port ignored");
+    // 其他請求不擋（已登入的頁面照常）。/ Other requests pass.
+    let req = Request::get("/api/auth/user/profile").header("authorization", format!("Bearer {admin}")).header("x-forwarded-host", "ssh.telepy.test").body(Body::empty()).unwrap();
+    assert_eq!(app.send(req).await.status, StatusCode::OK);
+    let r = app.get("/api/auth/sign-in-page", None).await;
+    assert_eq!((r.json["web_host"].as_str(), r.json["ssh_host"].as_str(), r.json["public_url"].as_str()), (Some("telepy.test"), Some("ssh.telepy.test"), Some("https://telepy.test")));
+
+    // 沒有 PUBLIC_URL：不知道網頁在哪，完全不擋。/ No PUBLIC_URL: nowhere to send people, never blocked.
+    let bare = common::spawn_with(unset).await;
+    let a = bare.login("admin", "pw").await;
+    assert_eq!(bare.post("/api/site/settings", Some(&a), json!({"server_ssh_host": "ssh.telepy.test"})).await.status, StatusCode::OK);
+    let req = Request::post("/api/auth/token").header("x-forwarded-host", "ssh.telepy.test").header("content-type", "application/json").body(Body::from(json!({"username": "admin", "password": "pw"}).to_string())).unwrap();
+    assert_eq!(bare.send(req).await.status, StatusCode::OK);
+    assert!(bare.get("/api/auth/sign-in-page", None).await.json["web_host"].is_null());
+}

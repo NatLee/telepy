@@ -197,7 +197,7 @@ sharee）。
 ## 九、裝置怎麼到 gateway：TCP、WebSocket、PROXY protocol
 
 - **TCP（預設）**：對外 `REVERSE_SERVER_SSH_PORT`（24242，容器內 2222）。
-  - 連的名稱是 `SSH_SERVER_DOMAIN`（網站設定 → 伺服器 → SSH 主機），沒設就跟網頁同一個名稱。網頁的名稱放在只轉網頁 port 的代理後面（Cloudflare 的橘色雲朵、其他 CDN、HTTP 負載平衡器）時，那個名稱連不到 SSH 的 port，要另外給 SSH 一個直接到伺服器的名稱。known_hosts 的別名（`telepy-<網域>-<port>`）仍然用網域，換 SSH 主機不會變成「另一台伺服器」。已經裝好的裝置繼續連當初的名稱。設定頁會解析兩個名稱、認得出 Cloudflare 的位址（別的代理認不出來），`doctor` 的 `ssh_host` 檢查也會。
+  - 連的名稱是 `SSH_SERVER_DOMAIN`（網站設定 → 伺服器 → SSH 主機），沒設就跟網頁同一個名稱。網頁的名稱放在只轉網頁 port 的代理後面（Cloudflare 的橘色雲朵、其他 CDN、HTTP 負載平衡器）時，那個名稱連不到 SSH 的 port，要另外給 SSH 一個直接到伺服器的名稱。known_hosts 的別名（`telepy-<網域>-<port>`）仍然用網域，換 SSH 主機不會變成「另一台伺服器」。已經裝好的裝置繼續連當初的名稱。設定頁會解析兩個名稱、認得出 Cloudflare 的位址（別的代理認不出來），`doctor` 的 `ssh_host` 檢查也會。SSH 的名稱不該開得到網頁：`PUBLIC_URL` 有設、SSH 主機另有其名時，用 SSH 名稱進來的登入一律 421（`ssh_host`），前端換成一頁說明並指回正式網址；儲存時不能填自己正在用的名稱（會把自己鎖在外面）。這擋的是走錯網址與設定失誤，偽造 `Host` 要靠把 origin 鎖給代理。
 - **WebSocket**（`ws/gateway.rs`）：給只放行網頁 port 的網路（公司內網、飯店、4G 路由器）。裝置的 ssh 加上
   `ProxyCommand python3 telepy-ws.py wss://<host>/ws/gateway/`，小程式（只用 Python 標準函式庫，`GET /api/join/telepy-ws.py`）
   把位元組包成二進位 frame 送到網頁 port。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，
