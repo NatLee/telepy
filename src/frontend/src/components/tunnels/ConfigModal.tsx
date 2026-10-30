@@ -26,6 +26,7 @@ import { allDone, configDoneKey, markKeys, readConfigDone, writeConfigDone, type
 import { TransportInfoDialog } from "@/components/sshconfig/TransportInfoDialog";
 import { AccountChips } from "@/components/sshconfig/AccountChips";
 import { withoutPrefix } from "@/lib/aliasPrefix";
+import { keyPlan, planIsEmpty, reachInList, untouchedAccounts } from "@/lib/bulkSshConfig";
 import { TunnelModalProps, type Tunnel } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
@@ -69,8 +70,13 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
         return "missing";
     };
     const keyCount = keysData?.my_keys.length ?? 0;
-    const missingKeyIds = (keysData?.my_keys ?? []).filter((k) => !k.in_list).map((k) => k.id);
     const states = hosts.map((h) => accessOf(h.username));
+    // 只裝到上面勾的帳號（不是我在這台能用的每個帳號）；其他帳號列出來說不會動。
+    // Only into the accounts ticked at the top (not every account I may use here); the others are named as left alone.
+    const keyPlanHere = keysData
+        ? keyPlan(reachInList(keysData.my_keys), keysData.my_keys.filter((k) => !k.expired).map((k) => k.id), hosts)
+        : null;
+    const untouched = keysData ? untouchedAccounts(keysData.accounts, hosts.map((h) => h.username)) : [];
     const accessDone = keysData !== null && keyCount > 0 && states.length > 0 && states.every((s) => s === "installed");
     const accessStatus = !keysData ? null
         : accessDone ? <Chip tone="success"><Check />{t("config.access.ready")}</Chip>
@@ -263,11 +269,18 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                                                 </CheckRow>
                                             ))}
                                         </ul>
-                                        {keyCount > 0 && missingKeyIds.length > 0 && states.some((s) => s === "missing") && (
-                                            <Button size="sm" onClick={() => deviceKeys.addAllMine(missingKeyIds)} disabled={deviceKeys.busy !== null}>
-                                                {deviceKeys.busy === "all" ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
-                                                {t("config.access.addMine")}
-                                            </Button>
+                                        {keyCount > 0 && keyPlanHere && !planIsEmpty(keyPlanHere) && states.some((s) => s === "missing") && (
+                                            <div className="space-y-1.5">
+                                                <Button size="sm" onClick={() => deviceKeys.placeMine(keyPlanHere)} disabled={deviceKeys.busy !== null}>
+                                                    {deviceKeys.busy === "all" ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
+                                                    {t("config.access.addMineTo", { names: keyPlanHere.accounts.map((a) => a.username).join(", ") })}
+                                                </Button>
+                                                {untouched.length > 0 && (
+                                                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                                                        {tn("config.access.untouched", { names: <span className="font-mono">{untouched.join(", ")}</span> })}
+                                                    </p>
+                                                )}
+                                            </div>
                                         )}
                                         <p className="text-xs text-muted-foreground">
                                             {tn("config.access.manual", { path: code("~/.ssh/authorized_keys") })}{" "}

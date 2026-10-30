@@ -14,6 +14,7 @@ import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import type { DeviceKeys, KeyRemoval } from "@/types/keys";
 import { deviceKeyError, errorCode } from "@/lib/deviceKeyErrors";
+import { planIsEmpty, type KeyPlan } from "@/lib/bulkSshConfig";
 
 /** 剛做完的一次批次移除（頁尾的「還原」）。/ The bulk removal just made (the footer's undo). */
 export interface LastRemoval {
@@ -185,6 +186,33 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
         [base, run, t]
     );
 
+    /**
+     * 照計畫把我的金鑰放上去（SSH config 對話框、指令速查）：沒在清單上的一次加、只裝到 config 用的帳號，帳號不夠的加寬。
+     * Place my keys by a plan (SSH config dialog, command sheet): unlisted ones added for the config's accounts only,
+     * listed ones with too few accounts widened.
+     */
+    const placeMine = useCallback(
+        (plan: KeyPlan) => {
+            if (!base || planIsEmpty(plan)) return false;
+            const requests: (() => Promise<Response>)[] = [
+                ...(plan.add.length > 0
+                    ? [() => apiFetch(`${base}/device-keys`, { method: "POST", body: JSON.stringify({ user_key_ids: plan.add, accounts: plan.addAccounts }) })]
+                    : []),
+                ...plan.widen.map((w) => () => apiFetch(`${base}/device-keys/${w.keyId}`, { method: "PATCH", body: JSON.stringify({ accounts: w.accounts }) })),
+            ];
+            // 一個失敗就停在那個回應上（run 會顯示錯誤）。/ Stop at the first failure (run shows it).
+            return run("all", async () => {
+                let last: Response | null = null;
+                for (const request of requests) {
+                    last = await request();
+                    if (!last.ok) break;
+                }
+                return last!;
+            }, t("keys.toggleFailed"));
+        },
+        [base, run, t]
+    );
+
     const removeEntry = useCallback(
         (keyId: number) => base && run(`entry:${keyId}`, () => apiFetch(`${base}/device-keys/${keyId}`, { method: "DELETE" }), t("keys.toggleFailed")),
         [base, run, t]
@@ -329,5 +357,5 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
 
     const dismissRemoval = useCallback(() => setLastRemoval(null), []);
 
-    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, setAccounts, toggleGroup, removeLine, removeLines, lastRemoval, dismissRemoval, removals, loadRemovals, restore };
+    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, placeMine, removeEntry, setAccounts, toggleGroup, removeLine, removeLines, lastRemoval, dismissRemoval, removals, loadRemovals, restore };
 }

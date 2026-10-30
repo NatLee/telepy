@@ -275,10 +275,10 @@ export function SetupGuide({ openRequest, tunnelId, alias, username, online, mod
                     {state === "working" && <p className="text-xs">{online ? t("sheet.setup.deviceKeyWorking") : t("sheet.setup.deviceKeyWaiting")}</p>}
                     {state === "error" && <p className="text-xs text-destructive">{t("sheet.setup.deviceKeyError")}</p>}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                        {checklist.missingKeyIds.length > 0 && (
+                        {checklist.keysToPlace > 0 && (
                             <Button size="sm" variant={state === "done" ? "outline" : "default"} onClick={() => checklist.addKeys()} disabled={checklist.busy !== null}>
                                 {checklist.busy === "all" ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
-                                {t("sheet.setup.deviceKeyAdd", { alias, count: checklist.missingKeyIds.length })}
+                                {t("sheet.setup.deviceKeyAdd", { alias, count: checklist.keysToPlace })}
                             </Button>
                         )}
                         {manage}

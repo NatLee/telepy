@@ -4,7 +4,7 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
-import { keysToAdd, pickParam, splitBulkConfig, type BulkAccounts, type BulkConfigData } from "@/lib/bulkSshConfig";
+import { pickParam, planIsEmpty, splitBulkConfig, type BulkAccounts, type BulkConfigData, type KeyPlan } from "@/lib/bulkSshConfig";
 import { saveAliasPrefix } from "@/lib/aliasPrefix";
 import type { KeyDevice, UserKey } from "@/types/keys";
 
@@ -119,20 +119,32 @@ export function useBulkConfig() {
     const loading = result?.key !== key && failedKey !== key;
     const split = useMemo(() => (data ? splitBulkConfig(data) : null), [data]);
 
-    /** 把我所有的金鑰加到這些裝置的清單（已在的略過），一次 4 台。/ Add all my keys to these devices' lists, 4 at a time. */
+    /**
+     * 照每台的計畫把我的金鑰放上去（只裝到 config 用的帳號；帳號不夠的加寬），一次 4 台。
+     * Place my keys on these devices by each one's plan (only the accounts the config uses; widen narrower ones), 4 at a time.
+     */
     const addMyKeys = useCallback(
-        async (tunnelIds: number[]) => {
-            const ids = (myKeys ?? []).map((k) => k.id);
-            const jobs = tunnelIds.map((id) => ({ id, keys: keysToAdd(deviceMap.get(id), ids) })).filter((j) => j.keys.length > 0);
+        async (plans: { id: number; plan: KeyPlan }[]) => {
+            const jobs = plans.filter((j) => !planIsEmpty(j.plan));
             if (jobs.length === 0) return;
             setAdding(true);
             let failed = 0;
             const queue = [...jobs];
+            const send = async ({ id, plan }: { id: number; plan: KeyPlan }) => {
+                if (plan.add.length > 0) {
+                    const res = await apiFetch(`/api/reverse/server/${id}/device-keys`, { method: "POST", body: JSON.stringify({ user_key_ids: plan.add, accounts: plan.addAccounts }) });
+                    if (!res.ok) return false;
+                }
+                for (const w of plan.widen) {
+                    const res = await apiFetch(`/api/reverse/server/${id}/device-keys/${w.keyId}`, { method: "PATCH", body: JSON.stringify({ accounts: w.accounts }) });
+                    if (!res.ok) return false;
+                }
+                return true;
+            };
             const worker = async () => {
                 for (let job = queue.shift(); job; job = queue.shift()) {
                     try {
-                        const res = await apiFetch(`/api/reverse/server/${job.id}/device-keys`, { method: "POST", body: JSON.stringify({ user_key_ids: job.keys }) });
-                        if (!res.ok) failed += 1;
+                        if (!(await send(job))) failed += 1;
                     } catch {
                         failed += 1;
                     }
@@ -144,7 +156,7 @@ export function useBulkConfig() {
             if (failed > 0) showError(t("config.bulk.addFailed", { count: failed }));
             else showSuccess(t("config.bulk.added", { count: jobs.length }));
         },
-        [myKeys, deviceMap, loadDevices, showError, showSuccess, t]
+        [loadDevices, showError, showSuccess, t]
     );
 
     return { data, split, loading, accounts, setAccounts, transport, setTransport, picks, setDeviceAccounts, savePrefix, deviceMap, devicesLoaded: devices !== null, myKeys, adding, addMyKeys };

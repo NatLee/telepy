@@ -12,6 +12,7 @@ import { useDeviceKeys } from "@/hooks/useDeviceKeys";
 import type { ConnectMode } from "@/lib/forwardRecipes";
 import type { KeyTarget } from "@/types/keys";
 import { configDoneKey, markKeys, readConfigDone, writeConfigDone, type ConfigDone } from "@/lib/configDone";
+import { EMPTY_PLAN, keyPlan, planKeyCount, reachInList } from "@/lib/bulkSshConfig";
 
 export type SetupStepId = "key" | "online" | "deviceKey" | "config";
 /** done / todo；working = Telepy 正在處理（等裝置寫入）；error = 寫入失敗；loading = 還在讀。 */
@@ -85,8 +86,15 @@ export function useSetupChecklist({ tunnelId, username, keyCount, online, mode }
     ];
     const done = steps.filter((s) => s.state === "done").length;
     const current = steps.find((s) => s.state !== "done")?.id ?? null;
-    /** 還沒加進這台裝置清單的我的金鑰。/ My keys that are not on this device's list yet. */
-    const missingKeyIds = myKeys.filter((k) => !k.in_list).map((k) => k.id);
+    /**
+     * 把我的金鑰放到「目前這個帳號」要做的事（不是我在這台能用的每個帳號）。
+     * What putting my keys into the selected account takes (not every account I may use here).
+     */
+    const plan = useMemo(() => {
+        const id = data?.account_ids.find((a) => a.username === username)?.id;
+        if (!data || !username || id === undefined) return EMPTY_PLAN;
+        return keyPlan(reachInList(myKeys), myKeys.filter((k) => !k.expired).map((k) => k.id), [{ username, username_id: id }]);
+    }, [data, myKeys, username]);
 
     return {
         steps,
@@ -97,11 +105,12 @@ export function useSetupChecklist({ tunnelId, username, keyCount, online, mode }
         allowed,
         myKeys,
         keyTargets,
-        missingKeyIds,
+        /** 會放上去的金鑰數（0 = 沒事可做）。/ Keys the add button would place (0 = nothing to do). */
+        keysToPlace: planKeyCount(plan),
         role: data?.tunnel.role ?? null,
         deviceKeysLoaded: data !== null,
         busy: deviceKeys.busy,
-        addKeys: () => deviceKeys.addAllMine(missingKeyIds),
+        addKeys: () => deviceKeys.placeMine(plan),
         markConfig,
     };
 }

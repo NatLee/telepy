@@ -11,7 +11,7 @@
  */
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, FileCode2, FolderPlus, KeyRound, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, FileCode2, FolderPlus, KeyRound, Loader2, Search, UserRound } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,7 @@ import { AccountChips } from "./AccountChips";
 import { withoutPrefix } from "@/lib/aliasPrefix";
 import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
-import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, toggleAccount, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
+import { countAccess, deviceAccess, initialSelection, keyPlan, pickStanzas, planIsEmpty, reachOnDevice, toggleAccount, untouchedAccounts, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { TunnelGroup } from "@/types/groups";
@@ -107,8 +107,21 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
     const aliases = chosen.flatMap((r) => r.hosts.map((h) => h.alias));
     const access = new Map(chosen.map((r) => [r.id, deviceAccess(bulk.deviceMap.get(r.id), r.hosts.map((h) => h.username))]));
     const counts = countAccess([...access.values()]);
-    const keyIds = (bulk.myKeys ?? []).map((k) => k.id);
-    const needKeys = chosen.filter((r) => access.get(r.id) === "missing" && keysToAdd(bulk.deviceMap.get(r.id), keyIds).length > 0);
+    // 「加上我的金鑰」每台要做的事：只裝到 config 在那台用的帳號（不是我能用的每個帳號），按下去之前就列出來。
+    // What "add my keys" does per device: only the accounts the config uses there (not every account I may use),
+    // listed before the click.
+    const keyIds = (bulk.myKeys ?? []).filter((k) => !k.expired).map((k) => k.id);
+    const needKeys = chosen
+        .filter((r) => access.get(r.id) === "missing")
+        .map((r) => {
+            const device = bulk.deviceMap.get(r.id);
+            const used = r.hosts.map((h) => h.username);
+            return { r, plan: keyPlan(reachOnDevice(device), keyIds, r.hosts), untouched: untouchedAccounts(device?.accounts ?? [], used) };
+        })
+        .filter((x) => !planIsEmpty(x.plan));
+    const planAccounts = needKeys.reduce((n, x) => n + x.plan.accounts.length, 0);
+    const [planExpanded, setPlanExpanded] = useState(false);
+    const planRows = planExpanded || needKeys.length <= COLLAPSE_AT ? needKeys : needKeys.slice(0, NAMES_SHOWN);
     const keyCount = bulk.myKeys?.length ?? 0;
     const accessDone = chosen.length > 0 && keyCount > 0 && counts.ready === chosen.length;
 
@@ -410,10 +423,42 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                             })}
                                         </ul>
                                         {needKeys.length > 0 && has("keys.personal") && (
-                                            <Button size="sm" onClick={() => bulk.addMyKeys(needKeys.map((r) => r.id))} disabled={bulk.adding}>
-                                                {bulk.adding ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
-                                                {t("config.bulk.addMine", { count: needKeys.length })}
-                                            </Button>
+                                            <div className="space-y-2.5">
+                                                <div>
+                                                    <p className="text-foreground">{t("config.bulk.planTitle")}</p>
+                                                    <p className="text-xs text-muted-foreground">{t("config.bulk.planHint")}</p>
+                                                </div>
+                                                <ul className="divide-y divide-border/70 rounded-lg bg-surface ring-1 ring-inset ring-border/70">
+                                                    {planRows.map(({ r, plan, untouched }) => (
+                                                        <li key={r.id} className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-baseline sm:gap-3">
+                                                            <span className="min-w-0 truncate text-foreground sm:w-44 sm:shrink-0" title={r.name}>{r.name}</span>
+                                                            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                                                                <UserRound size={13} className="shrink-0 translate-y-0.5 text-muted-foreground" aria-hidden />
+                                                                <span className="font-mono text-sm text-foreground [overflow-wrap:anywhere]">{plan.accounts.map((a) => a.username).join(" · ")}</span>
+                                                            </span>
+                                                            {untouched.length > 0 && (
+                                                                <span className="text-xs text-muted-foreground [overflow-wrap:anywhere] sm:max-w-[40%] sm:text-right" title={untouched.join(", ")}>
+                                                                    {t("config.bulk.planUntouched", { names: names(untouched, t) })}
+                                                                </span>
+                                                            )}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                                {planRows.length < needKeys.length && (
+                                                    <Button type="button" variant="ghost" size="sm" className="w-full text-primary hover:text-primary" onClick={() => setPlanExpanded(true)}>
+                                                        <ChevronDown /> {t("config.bulk.showAll", { count: needKeys.length })}
+                                                    </Button>
+                                                )}
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <Button size="sm" onClick={() => bulk.addMyKeys(needKeys.map(({ r, plan }) => ({ id: r.id, plan })))} disabled={bulk.adding}>
+                                                        {bulk.adding ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
+                                                        {t("config.bulk.addMine", { count: needKeys.length, accounts: planAccounts })}
+                                                    </Button>
+                                                    <Button type="button" variant="ghost" size="sm" onClick={() => setStep("pick")}>
+                                                        {t("config.bulk.planChange")}
+                                                    </Button>
+                                                </div>
+                                            </div>
                                         )}
                                         <p className="text-xs text-muted-foreground">
                                             {tn("config.access.manual", { path: code("~/.ssh/authorized_keys") })}{" "}
