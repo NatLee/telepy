@@ -95,8 +95,30 @@ telepy --version
 
 各アーカイブの隣には `.sha256` があり、各リリースには `SHA256SUMS` があります
 （`curl -fsSL …/telepy-$TARGET.tar.gz.sha256 | sha256sum -c`、macOS では `shasum -a 256 -c`）。バージョンを指定する場合は
-`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz` とします。バイナリーには署名も公証もありません。`curl` ではなく
+`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz` とします。バイナリーには Apple や Microsoft の署名はありません。`curl` ではなく
 ブラウザーでダウンロードした場合、macOS では先に `xattr -d com.apple.quarantine telepy` が必要です。
+
+### ダウンロードの出どころを確かめる
+
+リリースのファイルが Telepy のものだと示す手段が 2 つあり、どちらもアカウントは不要です。
+
+- **ビルドの来歴。**リリースの各ファイルはビルド自身が証明します（GitHub artifact attestation）。
+  `gh attestation verify telepy-$TARGET.tar.gz --repo NatLee/telepy` で、どのコミットのどの workflow 実行がそのバイトを作ったかが分かります。
+- **署名されたチェックサム一覧。**`SHA256SUMS` は Telepy のリリース鍵（OpenSSH の ed25519 鍵。公開鍵は
+  [`src/backend-api/src/release_key.rs`](../src/backend-api/src/release_key.rs)）で署名され、`SHA256SUMS.sig` として
+  OpenSSH の署名形式で添付されます。OpenSSH だけで検証できます：
+
+  ```sh
+  echo "telepy-release $(sed -n 's/^ *"\(ssh-ed25519 [^"]*\)".*/\1/p' release_key.rs | head -1)" > allowed_signers
+  ssh-keygen -Y verify -f allowed_signers -I telepy-release -n telepy-release -s SHA256SUMS.sig < SHA256SUMS
+  sha256sum -c --ignore-missing SHA256SUMS
+  ```
+
+  （鍵の行を手で貼ってもかまいません。`allowed_signers` は 1 行だけ：`telepy-release <鍵>`。）
+
+`telepy update` とバックエンドのキャリア取得はこの検証を自分で行い、`SHA256SUMS` がない、または Telepy のリリース鍵で
+署名されていないリリースは受け付けません。`TELEPY_RELEASE_KEYS`（公開鍵の行を 1 つ以上、改行か `;` で区切る）で、
+自分の鍵で署名し直すミラー向けに内蔵の鍵を差し替えられます。
 
 自分でビルドすることもできます（Rust 1.88 以降）：`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`
 （報告されるバージョンは Cargo.toml の `0.1.0` です。ビルド時に `TELEPY_VERSION` を設定すると別のバージョンを刻印できます）。`ssh`、`scp`、`sftp` には
@@ -104,7 +126,8 @@ PATH 上にシステムの OpenSSH クライアントも必要です（`telepy d
 
 **メンテナー向け：**GitHub リリースを公開する（`gh release create v2.7.0 …`）と `.github/workflows/release-cli.yml` が動きます。
 そのタグから 5 つのターゲットをビルドし、`TELEPY_VERSION` には先頭の `v` を除いたタグを設定して、スモークテスト
-（`telepy --version` がそれを表示すること）を行い、`.sha256` ファイルと `SHA256SUMS` とともにリリースに添付します。Actions タブから
+（`telepy --version` がそれを表示すること）を行い、来歴を証明し、`.sha256` ファイルと、`RELEASE_SIGNING_KEY` secret
+（OpenSSH の ed25519 秘密鍵。なければ release ジョブは失敗します）で署名した `SHA256SUMS` とともにリリースに添付します。Actions タブから
 手動で実行することもできます。タグを指定すると既存のリリースに（再）添付し、指定しなければ試験ビルドとなり、ファイルはその実行の artifacts に残るだけです。バージョン刻印より前のタグ（`v2.8.0` など）にも
 同じ方法でビルドを与えられ、その CLI は Cargo.toml の `0.1.0` を報告します。`v2.8.0` 以降のすべての Telepy リリースには、そこからビルドした CLI が含まれます。
 CLI 専用のタグはありません。
@@ -113,12 +136,12 @@ CLI 専用のタグはありません。
 
 ```sh
 telepy update --check        # is a newer release out?
-telepy update                # download it, check it against the release's SHA256SUMS and replace this telepy
+telepy update                # download it, check it against the release's signed SHA256SUMS and replace this telepy
 telepy update --to v2.9.0    # a given release (also to go back)
 ```
 
-`telepy update` は、リリースからこのプラットフォーム用のアーカイブをダウンロードし、SHA-256 が
-`SHA256SUMS` と一致しなければ受け付けず、新しいバイナリーを古いものの隣に書き込み、古いものを脇へ移して、新しいものの `--version` を実行します。
+`telepy update` は、リリースからこのプラットフォーム用のアーカイブをダウンロードし、`SHA256SUMS` が Telepy のリリース鍵で
+署名されていないか、アーカイブの SHA-256 がそれと一致しなければ受け付けず、新しいバイナリーを古いものの隣に書き込み、古いものを脇へ移して、新しいものの `--version` を実行します。
 それが失敗したら古いものを元に戻します。telepy があるフォルダーへの書き込み権限が必要です（`/usr/local/bin` なら `sudo telepy update`）。
 `cargo install` や Homebrew でインストールした telepy は、それらのツールに任せます。Windows では、古い
 `.exe` の名前を変更し（実行中のファイルは削除できないため）、次回の実行時に片付けます。

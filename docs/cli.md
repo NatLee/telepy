@@ -96,8 +96,31 @@ telepy --version
 
 Each archive has a `.sha256` next to it, and every release a `SHA256SUMS`
 (`curl -fsSL …/telepy-$TARGET.tar.gz.sha256 | sha256sum -c`; `shasum -a 256 -c` on macOS). A specific version:
-`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz`. The binary is not signed or notarised: downloaded with a browser
-instead of `curl`, macOS needs `xattr -d com.apple.quarantine telepy` first.
+`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz`. The binary carries no Apple or Microsoft signature: downloaded
+with a browser instead of `curl`, macOS needs `xattr -d com.apple.quarantine telepy` first.
+
+### Checking where a download came from
+
+Two things prove a release file is Telepy's, both without any account:
+
+- **Build provenance.** Every file of a release is attested by the build itself (GitHub artifact attestations):
+  `gh attestation verify telepy-$TARGET.tar.gz --repo NatLee/telepy` says which commit and which workflow run produced
+  exactly these bytes.
+- **The signed checksum list.** `SHA256SUMS` is signed with Telepy's release key (an OpenSSH ed25519 key; the public
+  half is in [`src/backend-api/src/release_key.rs`](../src/backend-api/src/release_key.rs)) as `SHA256SUMS.sig`, in
+  OpenSSH's signature format. To check it with nothing but OpenSSH:
+
+  ```sh
+  echo "telepy-release $(sed -n 's/^ *"\(ssh-ed25519 [^"]*\)".*/\1/p' release_key.rs | head -1)" > allowed_signers
+  ssh-keygen -Y verify -f allowed_signers -I telepy-release -n telepy-release -s SHA256SUMS.sig < SHA256SUMS
+  sha256sum -c --ignore-missing SHA256SUMS
+  ```
+
+  (Or paste the key line from the file by hand; `allowed_signers` is one line: `telepy-release <the key>`.)
+
+`telepy update` and the backend's carrier fetch do this check themselves and refuse a release whose `SHA256SUMS` is
+missing or not signed with a Telepy release key. `TELEPY_RELEASE_KEYS` (one or more public key lines, separated by
+newlines or `;`) replaces the built-in keys for a mirror that re-signs releases with its own key.
 
 Or build it yourself (Rust 1.88 or newer): `cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`
 (reports Cargo.toml's `0.1.0`; set `TELEPY_VERSION` while building to stamp another). `ssh`, `scp` and `sftp` also
@@ -105,7 +128,8 @@ need the system OpenSSH client on your PATH (`telepy doctor` checks).
 
 **Maintainers:** publishing a GitHub release (`gh release create v2.7.0 …`) runs `.github/workflows/release-cli.yml`:
 the five targets are built from that tag with `TELEPY_VERSION` = the tag without its `v`, smoke-tested
-(`telepy --version` must print it) and attached to the release with their `.sha256` files and `SHA256SUMS`. Run it
+(`telepy --version` must print it), attested, and attached to the release with their `.sha256` files and a `SHA256SUMS`
+signed with the `RELEASE_SIGNING_KEY` secret (an OpenSSH ed25519 private key; without it the release job fails). Run it
 by hand from the Actions tab with a tag to (re)attach to an existing release, or without one for a trial build whose
 files stay as the run's artifacts. A tag from before version stamping (such as `v2.8.0`) can be given builds the same way; its
 CLI reports Cargo.toml's `0.1.0`. Every Telepy release from `v2.8.0` on carries the CLI built from it; there are no
@@ -115,12 +139,12 @@ separate CLI tags.
 
 ```sh
 telepy update --check        # is a newer release out?
-telepy update                # download it, check it against the release's SHA256SUMS and replace this telepy
+telepy update                # download it, check it against the release's signed SHA256SUMS and replace this telepy
 telepy update --to v2.9.0    # a given release (also to go back)
 ```
 
-`telepy update` downloads this platform's archive from the release, refuses it when its SHA-256 doesn't match
-`SHA256SUMS`, writes the new binary next to the old one, moves the old one aside, and runs the new one's `--version`;
+`telepy update` downloads this platform's archive from the release, refuses it when `SHA256SUMS` is not signed with a
+Telepy release key or the archive's SHA-256 doesn't match it, writes the new binary next to the old one, moves the old one aside, and runs the new one's `--version`;
 if that fails, the old one is put back. It needs write access to the folder telepy is in (`sudo telepy update` for
 `/usr/local/bin`); a telepy installed with `cargo install` or Homebrew is left to those tools. On Windows the old
 `.exe` is renamed (a running file can't be deleted) and cleaned up on the next run.

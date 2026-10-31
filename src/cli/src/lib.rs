@@ -19,6 +19,8 @@ pub mod tapi;
 pub mod mascot;
 pub mod oauth;
 pub mod prefs;
+#[path = "../../backend-api/src/release_key.rs"]
+pub mod release_key;
 pub mod signed_in;
 pub mod snippets;
 pub mod sshcfg;
@@ -26,6 +28,9 @@ pub mod table;
 pub mod target;
 pub mod tidy;
 pub mod update;
+
+/// `release_key.rs` 跟後端共用，兩邊都以 `crate::ssh_key` 找到 ssh-key crate。/ Shared with the backend: both reach ssh-key as `crate::ssh_key`.
+pub use ssh_key;
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
