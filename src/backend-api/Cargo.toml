@@ -78,6 +78,8 @@ tempfile = "3"
 urlencoding = "2"
 url = "2"
 maxminddb = "0.32"
+# `telepy-server geoip`：DB-IP 的檔是 .mmdb.gz。/ DB-IP ships its databases gzipped.
+flate2 = "1"
 # 指令規則：從終端機畫面讀出要跑的那一行（MIT）。/ Command rules: read the line about to run off the terminal screen.
 vt100 = "0.18"
 

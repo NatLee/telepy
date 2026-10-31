@@ -137,23 +137,22 @@ Telepy 由五個容器組成：
    cp .env.example .env
    ```
 
-2. 產生 gateway 的主機金鑰與服務金鑰（重跑會保留已有的金鑰——裝置會釘選它們）：
-
-   ```bash
-   ./telepy.sh keygen
-   ```
-
-3. 建置並啟動，然後檢查：
+2. 建置並啟動。後端第一次啟動時會在 `ssh/` 底下產生 gateway 的主機金鑰與服務金鑰（已有的金鑰會保留——裝置會釘選它們）：
 
    ```bash
    docker compose up -d --build
-   ./telepy.sh doctor
+   ```
+
+3. 檢查。登入後，管理區的**伺服器健康**頁會跑完所有檢查；同一組檢查也能在命令列執行：
+
+   ```bash
+   docker compose exec backend telepy-server doctor
    ```
 
 4. 打開 `http://localhost:<WEB_SERVER_PORT>`（預設 `http://localhost:8787`）登入。
 
 > [!NOTE]
-> **第一個帳號**會成為管理員——不論是用 Google 登入，或用 `./telepy.sh create-superuser` 建立。
+> **第一個帳號**會成為管理員——不論是用 Google 登入，或用 `docker compose exec backend telepy-server create-superuser --username admin --password …` 建立。
 
 正式環境請在 Traefik 前面放一層 HTTPS 代理，設定對外網址，並讓裝置連得到 gateway 埠（`REVERSE_SERVER_SSH_PORT`）。
 網頁的名稱若經過只轉送網頁流量的代理（Cloudflare 的橘色雲朵、CDN、HTTP 負載平衡器），請在**網站設定 → 伺服器 →
@@ -183,7 +182,7 @@ SSH 主機**給 SSH 一個直接指到伺服器的名稱——或讓裝置走網
 | `SERVER_DOMAIN`           | `localhost` | 這台伺服器的主機名稱；會寫進腳本、SSH 設定與釘選的主機金鑰               |
 | `SECRET_KEY`              | —           | 簽署登入並加密保存的機密；正式使用前請設一長串亂數                       |
 | `INTERNAL_API_TOKEN`      | —           | 後端與 kasm-browser 容器之間的密鑰                                        |
-| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | 後端讀離線 IP 地理資料庫與網卡廠牌表的位置（容器內路徑；`./telepy.sh geoip` / `oui` 會下載到這裡） |
+| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | 後端讀離線 IP 地理資料庫與網卡廠牌表的位置（容器內路徑；`telepy-server geoip` / `oui` 會下載到這裡） |
 
 下面這些是**選用**的：每一個在**網站設定 → 伺服器**都有對應的欄位，管理員可以直接在網頁上改，不用重啟。變數留空就
 在網頁上管理；`.env` 裡有值時以它為準，網頁上那一格會鎖住。
@@ -232,18 +231,17 @@ CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.z
 
 ## 維運
 
-`./telepy.sh`（Windows 用 `telepy.ps1`）包裝了日常工作：
+所有維運工作都是後端容器裡的 `telepy-server` 指令，Linux、macOS、Windows 都一樣：
 
-| 子指令             | 做什麼                                                       |
-| ------------------ | ------------------------------------------------------------ |
-| `keygen`           | 產生 gateway 主機金鑰與後端服務金鑰（已有的會保留）          |
-| `create-superuser` | 建立管理員帳號                                               |
-| `doctor`           | 檢查 `.env`、容器、連接埠與後端設定（有問題時回傳 1）        |
-| `geoip`            | 下載離線 IP 地理資料庫（DB-IP Lite）；每月更新一次           |
-| `oui`              | 下載 IEEE 廠牌清單，讓區網主機顯示網卡廠牌                   |
-| `migration`        | 對齊資料庫結構（每次啟動也會自動做）                         |
-| `shell`            | 進入後端容器的 shell                                         |
-| `backend-debug`    | 重建後端容器並追蹤日誌                                       |
+| 指令                                                         | 做什麼                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `docker compose exec backend telepy-server doctor`           | 檢查金鑰、資料庫、設定與相依服務（有問題時回傳 1）           |
+| `docker compose exec backend telepy-server create-superuser --username <帳號> --password <密碼>` | 建立管理員帳號                                   |
+| `docker compose exec backend telepy-server keygen`           | 補上缺少的 gateway 主機金鑰與服務金鑰（每次啟動也會做；已有的會保留） |
+| `docker compose exec backend telepy-server geoip`            | 下載離線 IP 地理資料庫（DB-IP Lite），之後重新啟動後端；每月更新一次 |
+| `docker compose exec backend telepy-server oui`              | 下載 IEEE 廠牌清單，讓區網主機顯示網卡廠牌，之後重新啟動後端 |
+| `docker compose exec backend telepy-server migrate`          | 對齊資料庫結構（每次啟動也會自動做）                         |
+| `docker compose logs -f backend`                             | 追蹤後端的日誌                                               |
 
 升級就是 `git pull && docker compose up -d --build`；資料庫結構在啟動時自動對齊。
 

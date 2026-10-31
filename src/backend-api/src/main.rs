@@ -1,4 +1,5 @@
-//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key / openapi / doctor / import-user-keys。
+//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key / openapi / doctor / import-user-keys /
+//! keygen / geoip / oui。維運指令都在容器裡跑（`docker compose exec backend telepy-server …`），主機不需要任何腳本。
 //! 啟動流程 = Django 版 docker-entrypoint 的 migrate + post_migrate signals + 聽埠，一個 binary 搞定，
 //! 不需要 supervisor / collectstatic。
 
@@ -36,6 +37,14 @@ enum Command {
     },
     /// Seed/refresh the `web-service` SSH public key from WEB_SERVICE_SSH_PUBKEY.
     SeedServiceKey,
+    /// Create the gateway host keys (GATEWAY_HOST_KEYS_DIR) and the service key (SSH_IDENTITY) when they are missing.
+    /// Existing keys are kept — devices pin them. `serve` does the same at every start.
+    Keygen,
+    /// Download the offline IP geolocation databases (DB-IP Lite, CC BY 4.0) into GEOIP_DIR, then restart the backend.
+    /// Re-run monthly.
+    Geoip,
+    /// Download IEEE's OUI registry (NIC vendors for LAN hosts) into OUI_DIR, then restart the backend.
+    Oui,
     /// Print the OpenAPI document (JSON) to stdout and exit.
     Openapi,
     /// Check the configuration and companion services (read-only); exit 1 when something is broken.
@@ -117,6 +126,14 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         tracing::warn!("SECRET_KEY is not set; using the legacy Django default. Set SECRET_KEY in .env for production.");
     }
     tracing::info!(db = ?config.db_path, bind = %config.bind, debug = config.debug, "starting telepy-server");
+    // 缺的金鑰在這裡補（gateway 主機金鑰、服務金鑰）；已有的不動。/ Missing keys are created here; existing ones are kept.
+    for o in telepy_server::keygen::ensure(&config, std::env::var_os("SSH_IDENTITY").is_some()) {
+        match &o {
+            telepy_server::keygen::Outcome::Kept(_) => {}
+            telepy_server::keygen::Outcome::Failed(..) => tracing::warn!("{}", telepy_server::keygen::line(&o)),
+            _ => tracing::info!("{}", telepy_server::keygen::line(&o)),
+        }
+    }
     let db = open_db(&config).await?;
     // 網站設定裡的伺服器設定（環境變數有設的照樣優先）；log 等級在這裡換成生效的那個。
     // The saved server settings (set variables still win); the log level switches to the one in effect here.
@@ -213,6 +230,56 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    if matches!(cli.command, Some(Command::Keygen | Command::Geoip | Command::Oui)) {
+        // 維運指令：輸出就是報告，不開 log。/ Maintenance commands: the report is the output, no logging.
+        let config = Config::from_env();
+        let ok = match cli.command {
+            Some(Command::Keygen) => {
+                let out = telepy_server::keygen::ensure(&config, std::env::var_os("SSH_IDENTITY").is_some());
+                print!("{}", telepy_server::keygen::render(&out));
+                if out.iter().any(|o| matches!(o, telepy_server::keygen::Outcome::Created(..))) {
+                    println!("Restart the backend to use the new keys: docker compose restart backend");
+                }
+                !telepy_server::keygen::failed(&out)
+            }
+            Some(Command::Geoip) => {
+                println!("Downloading DB-IP Lite into {} ...", config.geoip_dir.display());
+                match telepy_server::datasets::fetch_geoip(&config.geoip_dir, chrono::Utc::now().date_naive()).await {
+                    Ok(lines) => {
+                        for l in lines {
+                            println!("  {l}");
+                        }
+                        println!("Done. Restart the backend to load them: docker compose restart backend");
+                        println!("{}", telepy_server::datasets::ATTRIBUTION);
+                        true
+                    }
+                    Err(e) => {
+                        eprintln!("download failed:\n{e:#}");
+                        false
+                    }
+                }
+            }
+            Some(Command::Oui) => {
+                println!("Downloading the IEEE OUI registry into {} ...", config.oui_dir.display());
+                match telepy_server::datasets::fetch_oui(&config.oui_dir).await {
+                    Ok(line) => {
+                        println!("  {line}");
+                        println!("Done. Restart the backend to load it: docker compose restart backend");
+                        true
+                    }
+                    Err(e) => {
+                        eprintln!("download failed: {e:#}");
+                        false
+                    }
+                }
+            }
+            _ => unreachable!(),
+        };
+        if !ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(Command::ImportUserKeys { file, dry_run }) = &cli.command {
         let dry_run = *dry_run;
         // 不開 log：stdout 只放報告（gateway 事件照樣寫進 DB 與 ssh-gateway.log）。
@@ -254,6 +321,6 @@ async fn main() -> anyhow::Result<()> {
             let db = open_db(&config).await?;
             seed_service_key(&db, &config.web_service_pubkey_path).await
         }
-        Command::Openapi | Command::Doctor { .. } | Command::ImportUserKeys { .. } => unreachable!("handled above"),
+        Command::Openapi | Command::Doctor { .. } | Command::ImportUserKeys { .. } | Command::Keygen | Command::Geoip | Command::Oui => unreachable!("handled above"),
     }
 }

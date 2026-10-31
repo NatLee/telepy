@@ -1,5 +1,5 @@
 //! 離線 IP 地理資訊（國家 + ISP / ASN），以及位址範圍（公網 / 私有 / loopback…）。
-//! 讀 `GEOIP_DIR`（預設 `<DATA_DIR>/geoip`）裡的 DB-IP Lite（`./telepy.sh geoip` 下載）或 MaxMind GeoLite2 mmdb；
+//! 讀 `GEOIP_DIR`（預設 `<DATA_DIR>/geoip`）裡的 DB-IP Lite（`telepy-server geoip` 下載）或 MaxMind GeoLite2 mmdb；
 //! 沒有檔案就只回位址範圍。不打任何外部服務：裝置與使用者的 IP 不會送給第三方。
 //! 裝置 IP 落在私有範圍，通常代表 SSH 埠前面有 proxy / LB / Docker 轉發把真實來源吃掉了。
 //! Offline IP geolocation (country + network owner) from DB-IP Lite or MaxMind GeoLite2 files in

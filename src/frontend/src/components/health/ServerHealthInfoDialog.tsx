@@ -157,7 +157,7 @@ export function ServerHealthInfoDialog({ open, onClose, health, onPick }: { open
                         <li>{t("health.flow.notes.noChange")}</li>
                         <li>{t("health.flow.notes.refresh")}</li>
                         <li>{t("health.flow.notes.ack")}</li>
-                        <li>{tn("health.flow.notes.doctor", { cli: <code>./telepy.sh doctor</code> })}</li>
+                        <li>{tn("health.flow.notes.doctor", { cli: <code>docker compose exec backend telepy-server doctor</code> })}</li>
                     </ul>
                 </Callout>
             </div>

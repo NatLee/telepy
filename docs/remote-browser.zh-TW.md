@@ -283,7 +283,7 @@ docker compose exec kasm-browser bash -lc \
   'Xkasmvnc :20 -geometry 1280x720 -depth 24 -SecurityTypes None \
    -KasmPasswordFile /etc/kasmvnc/kasmpasswd -websocketPort 8463 \
    -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 & sleep 3'
-docker compose cp dev-scripts/phase0_kasmvnc_probe.py kasm-browser:/tmp/probe.py
+docker compose cp docker/kasm-browser/probe_kasmvnc.py kasm-browser:/tmp/probe.py
 docker compose exec kasm-browser python3 /tmp/probe.py --port 8463 \
   --user telepy --password telepyvnc
 ```
