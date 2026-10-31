@@ -89,12 +89,16 @@ or a permission is lowered, events of that tunnel are no longer sent to that per
 | `key.expiring` | SSH keys | The key's owner (a personal SSH key expires within 7 days) | |
 | `key.expired` | SSH keys | The key's owner (just expired: the gateway refuses it and it is removed from devices) | |
 | `user.created` | Administration | — | ✓ |
+| `carriers.updated` | Administration | — | ✓ |
+| `carriers.update_failed` | Administration | — | ✓ |
 | `webhook.test` | — | The "Send test" button; cannot be subscribed to | |
 
 `key.*` is about the **personal SSH keys** on the Keys page (the one a laptop uses to reach devices through the gateway; admins give them a lifetime with `user_key_max_days`).
 Tunnel (device) keys deliberately never expire, so there is no event for them. The check runs every 10 minutes (`webhooks/keys.rs`): a key expiring within 7 days sends `key.expiring`
 (`days_left` rounded up), an expired one sends `key.expired` (only keys that expired in the last 48 hours; older expiries are not sent retroactively); each key sends each stage once per expiry time
 (`telepy_key_expiry_notice`), and a renewal that changes the expiry time starts over.
+
+`carriers.*` is about the **device carriers** this server hands out (the program a device's tunnel uses to come in over the web port, see `device-connections.md`). `carriers.updated` is sent when copies were replaced with a newer release — by the daily automatic update or by an admin on Server health → Device carriers (`data`: `tag`, `targets`, `by`; `by` is null when automatic). `carriers.update_failed` is sent when the daily update could not read or fetch the latest release (`data.error`); the same error is sent once, and the copies already on the server keep being served.
 
 Status events (offline / online / degraded / recovered) are not sent the instant they happen: each webhook has its own delay (immediately – 1 day, default 1 minute),
 and the condition must last longer than the delay; online / recovered is only sent when offline / degraded was sent before. Only changes after the webhook was created are tracked.

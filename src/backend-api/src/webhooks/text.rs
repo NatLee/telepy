@@ -109,6 +109,8 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::KeyExpiring => ("SSH 金鑰快到期", "SSH 鍵の期限が近い"),
         Kind::KeyExpired => ("SSH 金鑰已到期", "SSH 鍵の期限切れ"),
         Kind::UserCreated => ("新帳號", "新しいアカウント"),
+        Kind::CarriersUpdated => ("裝置載體已更新", "デバイスのキャリアを更新"),
+        Kind::CarriersUpdateFailed => ("裝置載體更新失敗", "デバイスのキャリアの更新に失敗"),
         Kind::Test => ("測試", "テスト"),
     };
     tri(lang, kind.title().to_string(), zh.to_string(), ja.to_string())
@@ -357,6 +359,27 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
         Kind::UserCreated => {
             let (user, via) = (s(d, "user"), s(d, "via"));
             tri(lang, format!("New account {user} ({via})"), format!("新帳號 {user}（{via}）"), format!("新しいアカウント {user}（{via}）"))
+        }
+        Kind::CarriersUpdated => {
+            let tag = s(d, "tag");
+            let list = d.get("targets").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+            let who = s(d, "by");
+            let (by_en, by_zh, by_ja) = if who.is_empty() { (String::new(), String::new(), String::new()) } else { (format!(" by {who}"), format!("（{who} 按的）"), format!("（{who} が実行）")) };
+            tri(
+                lang,
+                format!("Device carriers updated to {tag}{by_en}: {list}. Devices get the new carrier the next time they are set up for the web port."),
+                format!("裝置載體已更新到 {tag}{by_zh}：{list}。裝置下次設定走網頁 port 時就會拿到新的。"),
+                format!("デバイスのキャリアを {tag} に更新しました{by_ja}：{list}。デバイスは次に Web ポート用に設定されたときに新しいものを受け取ります。"),
+            )
+        }
+        Kind::CarriersUpdateFailed => {
+            let why = s(d, "error");
+            tri(
+                lang,
+                format!("Updating the device carriers failed: {why}. Devices keep getting the carriers already on the server."),
+                format!("裝置載體更新失敗：{why}。裝置照樣拿伺服器上現有的載體。"),
+                format!("デバイスのキャリアの更新に失敗しました：{why}。デバイスはサーバーにある既存のキャリアを引き続き受け取ります。"),
+            )
         }
         Kind::Test => tri(lang, format!("Test message from {by}: this webhook works."), format!("{by} 送的測試訊息：這個 webhook 可以用。"), format!("{by} からのテストメッセージ：この webhook は動作しています。")),
     }

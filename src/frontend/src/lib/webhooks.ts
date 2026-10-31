@@ -34,6 +34,8 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "key.expiring": { label: "webhooks.ev.keyExpiring", hint: "webhooks.ev.keyExpiringHint" },
     "key.expired": { label: "webhooks.ev.keyExpired", hint: "webhooks.ev.keyExpiredHint" },
     "user.created": { label: "webhooks.ev.userCreated", hint: "webhooks.ev.userCreatedHint" },
+    "carriers.updated": { label: "webhooks.ev.carriersUpdated", hint: "webhooks.ev.carriersUpdatedHint" },
+    "carriers.update_failed": { label: "webhooks.ev.carriersUpdateFailed", hint: "webhooks.ev.carriersUpdateFailedHint" },
     "webhook.test": { label: "webhooks.ev.test", hint: "webhooks.ev.testHint" },
 };
 

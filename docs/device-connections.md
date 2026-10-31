@@ -212,7 +212,7 @@ Test: `tests/tunnel_service_keys.rs` (a new device trusts only the tunnel key, m
   `src/carrier/`, built for x86_64 / aarch64 / armv7 / armv6 Linux, macOS and Windows on every release; the device downloads it from this server at
   `GET /api/join/carrier/<target>` and checks it against the sha256 the server publishes at `…/sha256`, which in turn comes from the release's `SHA256SUMS`, accepted only with a valid `SHA256SUMS.sig` from a Telepy release key (`release_key.rs`);
   the server fetches it from the release page the first time a platform is asked for, caches it in `CARRIER_DIR` = `<DATA_DIR>/carriers`, and
-  `telepy-server fetch-carriers` fills the cache in advance), else `python3` with `telepy-ws.py` (standard library only, `GET /api/join/telepy-ws.py`) for
+  `telepy-server fetch-carriers` fills the cache in advance; with the site setting `carrier_auto_update`, on by default, the server asks the release page once a day and replaces older copies in the background, telling every admin and the site-wide webhooks (`carriers.updated` / `carriers.update_failed`); Server health → Companion services → **Device carriers** shows each platform's version and updates them by hand), else `python3` with `telepy-ws.py` (standard library only, `GET /api/join/telepy-ws.py`) for
   CPUs without a prebuilt binary (MIPS routers); `--carrier binary|python` on the join script forces one. Either wraps the bytes in binary frames and
   sends them to the web port. Both go through an HTTP CONNECT proxy when the device has one (`HTTPS_PROXY` / `--proxy`; `NO_PROXY` honoured; the join
   script bakes the proxy of its environment into the wrapper, since services have no environment of their own). Inside is the **same** SSH session: the

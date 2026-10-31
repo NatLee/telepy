@@ -68,6 +68,10 @@ export const NOTIFICATION_ACTIONS = {
     // webhook 連續失敗被暫停：{webhook_id, name, scope}（個人的送給擁有者，全站的送給每個管理員）。
     // A webhook was paused after failing again and again (its owner; every admin for a site-wide one).
     WEBHOOK_PAUSED: "WEBHOOK-PAUSED",
+    // 裝置載體換到新版（{tag, targets, by}）/ 自動更新失敗（{tag, error}）：送給每個管理員，按的人除外。
+    // The device carriers were updated ({tag, targets, by}) / the automatic update failed ({tag, error}): every admin but the clicker.
+    CARRIERS_UPDATED: "CARRIERS-UPDATED",
+    CARRIERS_UPDATE_FAILED: "CARRIERS-UPDATE-FAILED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];

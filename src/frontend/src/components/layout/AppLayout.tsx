@@ -11,6 +11,7 @@ import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { SessionEndedNotice } from "@/components/layout/SessionEndedNotice";
 import { NewSignInNotice } from "@/components/layout/NewSignInNotice";
 import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
+import { CarrierNotice } from "@/components/health/CarrierNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
 import { FeatureOffNotice } from "@/components/access/FeatureOffNotice";
@@ -94,6 +95,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 {/* 新裝置登入你的帳號時提醒。/ A heads-up when your account signs in from a new device. */}
                 <NewSignInNotice />
                 <WebhookPausedNotice />
+                {/* 裝置載體更新了或更新失敗（只有管理員收得到）。/ Device carriers updated or failed (admins only). */}
+                <CarrierNotice />
                 {/* 等你核准的指令（任何頁面右下角）。/ Commands waiting for your approval, bottom right on any page. */}
                 <CommandApprovalCenter />
                 <Sidebar />

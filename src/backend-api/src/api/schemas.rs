@@ -654,6 +654,110 @@ pub struct ServerHealth {
     pub resealed: Option<Vec<AuditReseal>>,
 }
 
+/// 裝置載體面板：`GET /api/site/carriers`。/ The device carriers panel.
+#[derive(ToSchema)]
+pub struct CarriersView {
+    /// 網站設定 `carrier_auto_update`。/ The `carrier_auto_update` site setting.
+    pub auto_update: bool,
+    #[schema(example = "https://github.com/NatLee/telepy/releases")]
+    pub releases_url: String,
+    #[schema(example = "/data/carriers")]
+    pub dir: String,
+    /// 信任的發行公鑰（`SHA256SUMS.sig` 要是其中一把簽的）。/ The trusted release keys.
+    pub keys: Vec<CarrierKey>,
+    pub latest: CarrierLatest,
+    /// 下一次自動檢查（自動更新開著時）。/ The next automatic check.
+    pub next_check_at: Option<String>,
+    /// 有一次更新正在跑。/ An update is running.
+    pub updating: bool,
+    pub targets: Vec<CarrierTarget>,
+    /// 最近一次更新（自動或手動；重啟後是 null）。/ The latest run (null after a restart).
+    pub last_run: Option<CarrierRun>,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierKey {
+    #[schema(example = "SHA256:l7AJqw88pcWGVuHpiJt1M371JXoyOltlyoxZgBAS+Iw")]
+    pub fingerprint: String,
+    #[schema(example = "telepy-release")]
+    pub comment: String,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierLatest {
+    #[schema(example = "v2.12.0")]
+    pub tag: Option<String>,
+    pub checked_at: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierTarget {
+    #[schema(example = "aarch64-unknown-linux-musl")]
+    pub target: String,
+    /// linux | darwin | windows
+    pub os: String,
+    #[schema(example = "aarch64")]
+    pub arch: String,
+    /// 快取裡的（沒有 = null）。/ The cached binary (null = none).
+    pub cached: Option<CarrierCached>,
+    /// 最新版比快取的新。/ The latest release is newer than the cached one.
+    pub update_available: bool,
+    /// 最近一次抓不到（10 分鐘內）。/ The latest failed fetch (within 10 minutes).
+    pub failure: Option<CarrierFailure>,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierCached {
+    /// 從哪個 release 抓的（手動放的 = null）。/ The release it came from (null = placed by hand).
+    pub version: Option<String>,
+    pub sha256: String,
+    pub size: i64,
+    pub fetched_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierFailure {
+    pub at: String,
+    pub error: String,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierRun {
+    pub at: String,
+    /// auto | manual
+    pub trigger: String,
+    pub by: Option<String>,
+    pub tag: Option<String>,
+    pub updated: Vec<CarrierUpdated>,
+    pub current: Vec<String>,
+    /// `[target, error]` 的清單。/ `[target, error]` pairs.
+    #[schema(value_type = Vec<Vec<String>>)]
+    pub failed: Vec<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct CarrierUpdated {
+    pub target: String,
+    pub from: Option<String>,
+    /// missing | release | manual
+    pub was: String,
+}
+
+/// `POST /api/site/carriers/update` 的 body。/ The update request.
+#[derive(ToSchema)]
+pub struct CarriersUpdateRequest {
+    /// 只更新這些平台；沒給 = 全部。/ Only these platforms; omitted = every platform.
+    pub targets: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct CarriersUpdateResponse {
+    pub run: CarrierRun,
+    pub carriers: CarriersView,
+}
+
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
 #[derive(ToSchema)]
 pub struct SignInEvent {

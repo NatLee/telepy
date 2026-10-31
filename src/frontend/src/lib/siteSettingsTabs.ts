@@ -30,6 +30,7 @@ const KEY_HOMES: Record<string, SiteTabId> = {
     user_key_max_days: "general",
     lan_scan_enabled: "devices",
     device_ip_lookup_url: "devices",
+    carrier_auto_update: "devices",
     // 終端機錄影檔留幾天。/ How long terminal recordings are kept.
     recording_retention_days: "commands",
 };

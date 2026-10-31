@@ -112,6 +112,8 @@ pub struct Config {
     pub carrier_dir: PathBuf,
     /// 載體從哪個 release 頁抓（`TELEPY_RELEASES_URL`，鏡像用）。/ Where carriers are fetched from (a mirror for offline sites).
     pub releases_url: String,
+    /// 換掉內建的發行公鑰（`TELEPY_RELEASE_KEYS`，自己重簽的鏡像用）；None = 內建的。/ Replaces the built-in release keys.
+    pub release_keys: Option<String>,
     /// IEEE OUI 廠商表的目錄（`oui.csv`）。/ Directory with IEEE's oui.csv.
     pub oui_dir: PathBuf,
     // --- WebSocket liveness (terminal / file manager / remote browser) ---
@@ -224,6 +226,7 @@ impl Config {
             geoip_dir,
             oui_dir,
             carrier_dir,
+            release_keys: env("TELEPY_RELEASE_KEYS"),
             releases_url: env("TELEPY_RELEASES_URL").map(|s| s.trim().trim_end_matches('/').to_string()).unwrap_or_else(|| crate::carriers::RELEASES.to_string()),
             ws_ping_interval: Duration::from_secs(env("WS_PING_INTERVAL_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(20)),
             ws_peer_timeout: Duration::from_secs(env("WS_PEER_TIMEOUT_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(40)),

@@ -56,6 +56,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許通道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該通道的 Logs。" },
     FieldMeta { name: "device_ip_lookup_url", kind: Kind::Url(512), label: "Device public IP lookup", description: "裝置的公網 IP 先問 Telepy 自己(/api/whoami);Telepy 看到的不是公網位址時(前面的代理或 Docker 把來源換掉了,或裝置跟 Telepy 在同一個 NAT 後面),裝置改問這個網址,它要用純文字回傳呼叫者的 IP(例如 https://api.ipify.org、https://ifconfig.me/ip)。每台裝置每次連上最多問一次、連著時每天一次。留空 = 不問第三方,看不到時只顯示內網 IP。" },
+    FieldMeta { name: "carrier_auto_update", kind: Kind::Bool, label: "Keep device carriers up to date", description: "裝置走網頁 port 時用的小幫手（telepy-carrier）：每天最多問一次 release 頁有沒有新版，有就在背景把伺服器快取裡比較舊的換掉，結果通知每個管理員。只有快取裡已經有從 release 抓來的載體時才會連外；手動放進去的不動。關閉後只在伺服器健康頁按「全部更新」或執行 telepy-server fetch-carriers 時才更新。" },
     FieldMeta { name: "notify_user_webhooks", kind: Kind::Bool, label: "Personal webhooks", description: "讓每個人在 Webhooks 頁設定自己的 webhook,收他在網頁上本來就會收到的通知(自己通道的狀態、分享、核准、登入…)。關閉後個人 webhook 全部暫停不送,管理員的全站 webhook 不受影響。" },
     FieldMeta { name: "notify_private_targets", kind: Kind::Bool, label: "Allow private network targets", description: "允許個人 webhook 連到內網、本機或雲端 metadata 這類位址(例如公司內部的 Mattermost)。伺服器會照使用者填的網址連線,開啟前請確認內網沒有不該被觸碰的服務。全站 webhook 一律允許。" },
     FieldMeta { name: "notify_max_webhooks", kind: Kind::Int, label: "Webhooks per person", description: "每個人最多可以建立幾個個人 webhook。0 到 100。" },
@@ -109,6 +110,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
     m.insert("device_ip_lookup_url".into(), json!(s.device_ip_lookup_url));
+    m.insert("carrier_auto_update".into(), json!(s.carrier_auto_update));
     m.insert("notify_user_webhooks".into(), json!(s.notify_user_webhooks));
     m.insert("notify_private_targets".into(), json!(s.notify_private_targets));
     m.insert("notify_max_webhooks".into(), json!(s.notify_max_webhooks));

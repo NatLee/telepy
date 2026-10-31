@@ -6,6 +6,7 @@ pub mod access_requests;
 pub mod ai;
 pub mod api_tokens;
 pub mod auth;
+pub mod carriers;
 pub mod browser;
 pub mod command_rules;
 pub mod credentials;

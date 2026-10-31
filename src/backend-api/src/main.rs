@@ -190,6 +190,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(state.desktop.clone().run_reaper(state.db.clone()));
     tokio::spawn(state.rustdesk.clone().run_reaper(state.db.clone()));
     tokio::spawn(telepy_server::device_keys::run(state.clone()));
+    // 裝置載體每天檢查一次新版（網站設定可以關）。/ Device carriers: a daily check for a newer release (a site setting).
+    tokio::spawn(telepy_server::carriers::run(state.clone()));
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
     }
@@ -265,17 +267,26 @@ async fn main() -> anyhow::Result<()> {
             Some(Command::FetchCarriers) => {
                 let carriers = telepy_server::carriers::Carriers::new(&config, reqwest::Client::builder().user_agent("telepy-server").build()?);
                 println!("Fetching the device carriers from {} into {} ...", carriers.releases(), carriers.dir().display());
-                let mut ok = true;
-                for (target, r) in carriers.prefetch().await {
-                    match r {
-                        Ok(c) => println!("  {target}: {} bytes, sha256 {}{}", c.size, &c.sha256[..12], c.version.map(|v| format!(" ({v})")).unwrap_or_default()),
-                        Err(e) => {
-                            println!("  {target}: FAILED: {e:#}");
-                            ok = false;
-                        }
-                    }
+                let run = carriers.prefetch().await;
+                if let Some(e) = &run.error {
+                    println!("  FAILED: {e}");
                 }
-                ok
+                for u in &run.updated {
+                    let c = carriers.cached(&u.target);
+                    let was = match (u.was, &u.from) {
+                        ("release", Some(v)) => format!(", was {v}"),
+                        ("manual", _) => ", replaced a hand-placed one".to_string(),
+                        _ => String::new(),
+                    };
+                    println!("  {}: {} {} bytes{was}", u.target, run.tag.as_deref().unwrap_or(""), c.map(|c| c.size).unwrap_or(0));
+                }
+                for t in &run.current {
+                    println!("  {t}: already {}", run.tag.as_deref().unwrap_or(""));
+                }
+                for (t, e) in &run.failed {
+                    println!("  {t}: FAILED: {e}");
+                }
+                run.ok()
             }
             Some(Command::Oui) => {
                 println!("Downloading the IEEE OUI registry into {} ...", config.oui_dir.display());

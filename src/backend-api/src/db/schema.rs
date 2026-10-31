@@ -1125,6 +1125,7 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "lan_scan_enabled", "bool NOT NULL DEFAULT 1"),
     // Telepy 自己看不到裝置的公網來源時，裝置去問的公網 IP 查詢網址（空 = 不問）。/ Where a device asks for its public IP when Telepy cannot tell (empty = never).
     ("site_settings_sitesettings", "device_ip_lookup_url", "varchar(512) NOT NULL DEFAULT 'https://api.ipify.org'"),
+    ("site_settings_sitesettings", "carrier_auto_update", "bool NOT NULL DEFAULT 1"),
     // 隧道狀態告警的 webhook（空 = 關閉）與「斷線多久才通知」（秒）。/ Status alert webhook (empty = off) and its delay.
     ("site_settings_sitesettings", "notify_webhook_url", "varchar(512) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "notify_down_delay", "integer NOT NULL DEFAULT 60"),

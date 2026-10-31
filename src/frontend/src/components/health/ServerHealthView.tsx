@@ -22,6 +22,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
 import { AuditResealDialog } from "@/components/health/AuditResealDialog";
+import { CarriersPanel } from "@/components/health/CarriersPanel";
 import { HealthAckDialog } from "@/components/health/HealthAckDialog";
 import { ServerHealthInfoDialog } from "@/components/health/ServerHealthInfoDialog";
 import { ServerStats } from "@/components/health/ServerStats";
@@ -245,6 +246,7 @@ export function ServerHealthView() {
                         <GroupPanel health={health} group={tab} actions={cardActions} />
                     )}
                     {tab === "addresses" && <ClientIpCheckPanel />}
+                    {tab === "services" && <CarriersPanel />}
                     {health && tab === "overview" && <p className="text-xs text-muted-foreground">{tn("health.cliNote", { cli: <code>docker compose exec backend telepy-server doctor</code> })}</p>}
                 </div>
             </div>
@@ -495,7 +497,7 @@ function CheckCard({ check, actions }: { check: HealthCheck; actions: CardAction
 
 /** 每項的修法；指令與設定名用 <code>，不翻譯。/ Each check's fix; commands and setting names in <code>, untranslated. */
 function FixText({ id }: { id: HealthCheckId }) {
-    const { tn } = useI18n();
+    const { t, tn } = useI18n();
     const c = (s: string) => <code className="[overflow-wrap:anywhere]">{s}</code>;
     const vars: Record<HealthCheckId, Record<string, React.ReactNode>> = {
         secret_key: { setting: c("SECRET_KEY"), env: c(".env") },
@@ -514,7 +516,7 @@ function FixText({ id }: { id: HealthCheckId }) {
         kasm: { cmd: c("docker compose up -d kasm-browser"), token: c("INTERNAL_API_TOKEN") },
         geoip: { cmd: c("docker compose exec backend telepy-server geoip") },
         oui: { cmd: c("docker compose exec backend telepy-server oui") },
-        carriers: { cmd: c("docker compose exec backend telepy-server fetch-carriers"), dir: c("telepy-data/carriers") },
+        carriers: { cmd: c("docker compose exec backend telepy-server fetch-carriers"), dir: c("telepy-data/carriers"), panel: <a href="#carriers" className="underline underline-offset-2">{t("carriers.title")}</a> },
         client_addresses: {},
         audit_log: { file: c("audit-anchors.log"), mismatch: c("checkpoint_mismatch"), missing: c("checkpoint_missing") },
     };
