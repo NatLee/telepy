@@ -2426,6 +2426,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "openssl-probe"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3333,12 +3339,25 @@ version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-native-certs"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a073f5dc7469f984c52ad2752b63b0807745133b6de880b7b64c1ac4c48aec4"
+dependencies = [
+ "openssl-probe",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework 3.7.0",
 ]
 
 [[package]]
@@ -3382,6 +3401,15 @@ checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
 dependencies = [
  "cfg-if",
  "cipher 0.5.2",
+]
+
+[[package]]
+name = "schannel"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4155,6 +4183,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "telepy-carrier"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "futures-util",
+ "libc",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "url",
+ "webpki-roots 1.0.10",
+]
+
+[[package]]
 name = "telepy-cli"
 version = "0.1.0"
 dependencies = [
@@ -4165,7 +4212,6 @@ dependencies = [
  "clap",
  "flate2",
  "futures",
- "futures-util",
  "http-body-util",
  "keyring",
  "libc",
@@ -4177,6 +4223,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "tar",
+ "telepy-carrier",
  "telepy-server",
  "tempfile",
  "terminal_size",
@@ -4201,6 +4248,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
+ "flate2",
  "futures",
  "hmac 0.12.1",
  "http",
@@ -4227,6 +4275,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "subtle",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4424,6 +4473,7 @@ dependencies = [
  "futures-util",
  "log",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",

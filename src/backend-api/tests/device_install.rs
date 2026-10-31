@@ -503,10 +503,33 @@ async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
 
     let bad = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "pigeon"})).await;
     assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.text);
+    // 這台機器的預編載體在伺服器的快取裡（像 fetch-carriers 之後）就裝 binary；沒編過就 python3。
+    // With the host's prebuilt carrier in the server's cache (as after fetch-carriers) the binary is installed, else python3.
+    let cached = {
+        let target_dir = std::env::var("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let built = target_dir.join("debug").join("telepy-carrier");
+        let uname = |a: &str| String::from_utf8_lossy(&std::process::Command::new("uname").arg(a).output().unwrap().stdout).trim().to_string();
+        match (built.is_file(), telepy_server::carriers::target_for(&uname("-s"), &uname("-m"))) {
+            (true, Some(target)) => {
+                let d = lab.app.state.config.carrier_dir.join(target);
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::copy(&built, d.join("telepy-carrier")).unwrap();
+                true
+            }
+            _ => false,
+        }
+    };
+    // 裝置從 Telepy 的對外位址下載載體：把網站設定的公開位址指到 lab 真的在聽的 HTTP 位址。
+    // The device downloads the carrier from Telepy's public address: point the site setting at the lab's real listener.
+    let public = lab.ws_base().await.replacen("ws://", "http://", 1);
+    telepy_server::db::users::set_flags(&lab.app.state.db, alice.id, Some(true), Some(true)).await.unwrap();
+    let r = lab.app.post("/api/site/settings", Some(&alice.token), serde_json::json!({"server_public_url": public})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "auto"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let rep = &r.json["report"];
     assert_eq!((rep["ok"].as_bool(), rep["transport"].as_str()), (Some(true), Some("auto")), "{rep:#}");
+    assert!(rep.get("no_carrier").is_none(), "a carrier was installed: {rep:#}");
     let steps: Vec<&str> = rep["steps"].as_array().unwrap().iter().map(|s| s["state"].as_str().unwrap()).collect();
     assert!(steps.iter().all(|s| *s == "done") && steps.len() == 7, "{rep:#}");
 
@@ -520,7 +543,12 @@ async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
     assert!(runner.contains(&format!("ProxyCommand={}/.ssh/telepy-{after}-ws.sh", home.display())), "{runner}");
     let wrapper = std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}-ws.sh"))).unwrap();
     assert!(wrapper.contains(&format!("--tcp 127.0.0.1:{} ", lab.gw_port)) && wrapper.contains("/ws/gateway/"), "{wrapper}");
-    assert!(std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}-ws.py"))).unwrap().starts_with("#!/usr/bin/env python3"));
+    if cached {
+        assert!(home.join(format!(".ssh/telepy-{after}-ws.bin")).is_file() && wrapper.contains(&format!("telepy-{after}-ws.bin")), "the prebuilt carrier was downloaded and checked: {wrapper}");
+        assert!(!home.join(format!(".ssh/telepy-{after}-ws.py")).exists(), "python3 was not needed");
+    } else {
+        assert!(std::fs::read_to_string(home.join(format!(".ssh/telepy-{after}-ws.py"))).unwrap().starts_with("#!/usr/bin/env python3"));
+    }
     // 舊迴圈走了，新的在跑，隧道在線；way_in = auto。/ The old loop is gone, the new one runs, online, way_in auto.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while old_runner.exists() || alive(&old_runner.to_string_lossy()) {

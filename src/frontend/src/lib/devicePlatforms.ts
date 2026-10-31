@@ -27,7 +27,7 @@ export interface Platform {
     id: PlatformId;
     join: JoinSupport;
     scripts: ScriptKind[];
-    /** 可以走網頁 port（HTTP / WebSocket，需要 python3）。/ Can ride the web port (needs python3). */
+    /** 可以走網頁 port（SSH 包在 WebSocket 裡；靠預編的 telepy-carrier，沒有就 python3）。/ Can ride the web port (the prebuilt telepy-carrier, else python3). */
     web: boolean;
 }
 
@@ -40,7 +40,7 @@ export const PLATFORMS: Platform[] = [
     { id: "linux", join: "service", scripts: ["service", "autossh", "ssh", "docker", "compose"], web: true },
     { id: "macos", join: "service", scripts: ["autossh", "ssh", "docker", "compose"], web: true },
     { id: "raspberrypi", join: "service", scripts: ["service", "autossh", "ssh", "docker", "compose"], web: true },
-    { id: "openwrt", join: "service", scripts: [], web: false },
+    { id: "openwrt", join: "service", scripts: [], web: true },
     { id: "windows", join: "no", scripts: ["windows"], web: false },
     { id: "docker", join: "no", scripts: ["docker", "compose"], web: false },
     { id: "unix", join: "untested", scripts: ["ssh", "autossh"], web: true },

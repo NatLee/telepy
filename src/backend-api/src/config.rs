@@ -108,6 +108,10 @@ pub struct Config {
     pub client_ip_header: Option<String>,
     /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
     pub geoip_dir: PathBuf,
+    /// 裝置端載體（`telepy-carrier` 各平台的 binary）的快取目錄（`CARRIER_DIR`，預設 `<DATA_DIR>/carriers`）。/ Device carrier cache.
+    pub carrier_dir: PathBuf,
+    /// 載體從哪個 release 頁抓（`TELEPY_RELEASES_URL`，鏡像用）。/ Where carriers are fetched from (a mirror for offline sites).
+    pub releases_url: String,
     /// IEEE OUI 廠商表的目錄（`oui.csv`）。/ Directory with IEEE's oui.csv.
     pub oui_dir: PathBuf,
     // --- WebSocket liveness (terminal / file manager / remote browser) ---
@@ -163,6 +167,7 @@ impl Config {
         let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
         let geoip_dir = env("GEOIP_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("geoip"));
         let oui_dir = env("OUI_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("oui"));
+        let carrier_dir = env("CARRIER_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("carriers"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -218,6 +223,8 @@ impl Config {
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,
             oui_dir,
+            carrier_dir,
+            releases_url: env("TELEPY_RELEASES_URL").map(|s| s.trim().trim_end_matches('/').to_string()).unwrap_or_else(|| crate::carriers::RELEASES.to_string()),
             ws_ping_interval: Duration::from_secs(env("WS_PING_INTERVAL_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(20)),
             ws_peer_timeout: Duration::from_secs(env("WS_PEER_TIMEOUT_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(40)),
             live: Default::default(),

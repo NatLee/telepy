@@ -47,7 +47,7 @@ Docker 的真平台驗證在第五節。
 |---|---|---|
 | ok | — | `keepalive=ssh`（預設，照舊） |
 | timeout | ok | 這個版本的 ssh 一設 timeout 就立刻逾時（OpenWrt #12574：fortify-headers 的 `ppoll` 把 64 位元 `time_t` 當 32 位元讀，big-endian 的 ath79 上 30 秒變成 30 奈秒；GL-AR750S）。自動改用 **compat 模式**：`ServerAliveInterval=0 -o TCPKeepAlive=yes`，`facts.compat = ["no_server_alive"]`，網頁與事件都標出來。`--no-compat` 禁止自動切換（改成報錯並說明），`--compat-no-server-alive` 強制 |
-| timeout / unreachable | timeout / unreachable | 連不到 gateway：對外 TCP 被擋（或用 `--auto` / `--via-web`，有 python3 時改走網頁 port）。**不**套用 compat |
+| timeout / unreachable | timeout / unreachable | 連不到 gateway：對外 TCP 被擋（或用 `--auto` / `--via-web`，靠小幫手改走網頁 port：裝置 CPU 的預編 `telepy-carrier`，沒有就 python3）。**不**套用 compat |
 | hostkey | — | gateway 的 host key 跟它宣告的不符：停 |
 
 compat 模式的限制會印在裝置上、記在 `facts` 與安裝紀錄裡：SSH 層心跳關了，斷線要等 TCP keepalive（內核預設常是 2 小時）才發現，
@@ -154,8 +154,8 @@ docker exec telepy-wrt sh -c 'opkg update && opkg install openssh-client openssh
   腳本在消耗 token 前就會偵測並說明（裝 OpenSSH client 即可）；等上游 russh 修正釋出、Telepy 升版後，腳本不用改就能用 dbclient。
 - Windows 原生（PowerShell、排程工作、ACL）仍是「逐步設定」；一鍵加入腳本不在 Windows 上執行。尚未實作或驗證的能力不宣稱支援。
 - dbclient：known_hosts 只比主機名稱，同一個主機名稱不能有兩把同類型的金鑰；沒有 `UserKnownHostsFile` / `HostKeyAlias`；OpenWrt 原廠沒有
-  `dropbearconvert`，所以換 client 時金鑰不能互轉。WebSocket 傳輸用 `-J`（仍需 python3）。
+  `dropbearconvert`，所以換 client 時金鑰不能互轉。WebSocket 傳輸用 `-J` 接同一個小幫手包裝腳本（預編的 `telepy-carrier`，沒有就 python3）。
 - compat 模式是繞開，不是修復：SSH 心跳關閉，斷線偵測慢。
 - 非 root 的 OpenWrt：讀不到 `/etc/dropbear/*_host_key`，又沒有 `/etc/ssh/*.pub` 或 ssh-keyscan 時，host key 沒有來源，腳本會停下來說明。
-- 在裝置上改名 / 換連線方式支援 procd（`/etc/init.d/telepy-<代號>`，跟一鍵加入裝的一樣；在 OpenWrt 23.05 rootfs 上實測）；`/etc/rc.local` 裡手寫的一行仍然不自動換。路由器通常沒有 python3，「改成自動」會裝成只走 SSH port 的新服務並說明（`no_python`）。
+- 在裝置上改名 / 換連線方式支援 procd（`/etc/init.d/telepy-<代號>`，跟一鍵加入裝的一樣；在 OpenWrt 23.05 rootfs 上實測）；`/etc/rc.local` 裡手寫的一行仍然不自動換。ARM 路由器（aarch64、armv7、armv6）有預編的 `telepy-carrier`；其他 CPU（MIPS）又沒有 python3 的路由器沒有小幫手，「改成自動」會裝成只走 SSH port 的新服務並說明（`no_carrier`）。
 - 腳本把裝置的 SSH server 綁定位址當通道回送目標；若 server 綁了多個非 loopback 位址，取第一個。

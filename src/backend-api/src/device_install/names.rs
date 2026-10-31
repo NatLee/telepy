@@ -63,6 +63,10 @@ impl Names {
     pub fn ws_sh(&self) -> String {
         format!("{}-ws.sh", self.base())
     }
+    /// 預編的載體（`telepy-carrier`）。/ The prebuilt carrier binary.
+    pub fn ws_bin(&self) -> String {
+        format!("{}-ws.bin", self.base())
+    }
     /// unit / plist 的說明：只有代號。/ The unit's description: the id only.
     pub fn description(&self) -> String {
         format!("Telepy reverse tunnel {}", self.id)

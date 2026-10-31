@@ -151,7 +151,8 @@ async fn a_device_can_dial_the_gateway_through_the_websocket() {
     let r = app.get(&format!("/tunnels/server/script/autossh/{}/22?transport=websocket", dev.tunnel_id), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let script = r.json["script"].as_str().unwrap();
-    assert!(script.contains("/api/join/telepy-ws.py") && script.contains("-o \"ProxyCommand=python3 $WS_CLIENT ws"), "{script}");
+    // 先抓預編的 telepy-carrier，沒有再 python3；ssh 經包裝腳本。/ The prebuilt carrier first, python3 second; ssh goes through the wrapper.
+    assert!(script.contains("/api/join/carrier/") && script.contains("/api/join/telepy-ws.py") && script.contains("-o \"ProxyCommand=$WS_SH\""), "{script}");
     let r = app.get(&format!("/tunnels/server/script/powershell/{}/22?transport=websocket", dev.tunnel_id), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
     let r = app.get(&format!("/tunnels/server/config/{}?transport=websocket", dev.tunnel_id), Some(&alice.token)).await;
@@ -187,6 +188,93 @@ async fn the_python_carrier_works_as_a_proxy_command() {
     let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
     let item = r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == dev.tunnel_id).unwrap();
     assert_eq!(item["endpoint"]["transport"], "websocket", "{item}");
+}
+
+/// 一個最小的 HTTP CONNECT 代理：數每一次 CONNECT，再把兩邊接起來。/ A minimal CONNECT proxy that counts requests.
+async fn connect_proxy(count: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> u16 {
+    use std::sync::atomic::Ordering;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut client, _)) = listener.accept().await else { break };
+            let count = count.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let n = client.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf).to_string();
+                let target = head.lines().next().and_then(|l| l.strip_prefix("CONNECT ")).and_then(|r| r.split_whitespace().next()).unwrap_or("").to_string();
+                count.fetch_add(1, Ordering::SeqCst);
+                match tokio::net::TcpStream::connect(&target).await {
+                    Ok(mut up) => {
+                        client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await.unwrap();
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+                    }
+                    Err(_) => {
+                        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+/// 公司內網只能經 HTTP 代理出去：python3 小程式對 SSH 的 port 與網頁 port 都先送 CONNECT（`--proxy`，或 HTTPS_PROXY / NO_PROXY）。
+/// Networks that only let traffic out through an HTTP proxy: the python3 carrier sends CONNECT for both the SSH port
+/// and the web port (`--proxy`, or HTTPS_PROXY with NO_PROXY honoured).
+#[tokio::test]
+async fn the_python_carrier_goes_through_a_connect_proxy() {
+    use std::sync::atomic::Ordering;
+    let Some(lab) = Lab::start().await else { return };
+    if !common::lab::have("python3") {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let script = lab.app.get("/api/join/telepy-ws.py", None).await.text;
+    assert!(script.contains("--proxy") && script.contains("def proxy_from_env"), "the served script has proxy support");
+    let path = lab.dir.path().join("telepy-ws-proxy.py");
+    std::fs::write(&path, script).unwrap();
+    let url = format!("{}/ws/gateway/", lab.ws_base().await);
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pport = connect_proxy(count.clone()).await;
+    let transport_of = |r: &common::Resp, id: i64| r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()["endpoint"]["transport"].clone();
+
+    // --proxy，自動：CONNECT 到關掉的 SSH port 失敗 → 經代理走網頁 port。/ --proxy, automatic: the SSH port fails through the proxy, the web port works.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let a = lab.machine("px-a", &[("ubuntu", &[&lab.service])], false).await;
+    let proxy = ["-o".to_string(), format!("ProxyCommand=python3 {} --proxy http://127.0.0.1:{pport} --tcp 127.0.0.1:{closed} {url}", path.display())];
+    let dev = lab.device_via_port(&alice, "px-a", &a, 1, &proxy).await;
+    assert!(wait_forward(&lab, dev.reverse_port).await, "through the proxy");
+    lab.username(&alice, &dev, "ubuntu").await;
+    assert_eq!(lab.backend_exec(&dev, "ubuntu", "whoami").await.unwrap(), "ubuntu");
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "websocket", "{}", r.text);
+    assert!(count.load(Ordering::SeqCst) >= 2, "CONNECT for the SSH port and for the web port: {}", count.load(Ordering::SeqCst));
+
+    // HTTPS_PROXY 環境變數 + NO_PROXY 列到的主機不走代理。/ HTTPS_PROXY from the environment; NO_PROXY keeps it out.
+    let before = count.load(Ordering::SeqCst);
+    let b = lab.machine("px-b", &[("ubuntu", &[&lab.service])], false).await;
+    let proxy = ["-o".to_string(), format!("ProxyCommand=env HTTPS_PROXY=http://127.0.0.1:{pport} NO_PROXY=127.0.0.1 python3 {} {url}", path.display())];
+    let dev = lab.device_via_port(&alice, "px-b", &b, 1, &proxy).await;
+    assert!(wait_forward(&lab, dev.reverse_port).await, "NO_PROXY");
+    assert_eq!(count.load(Ordering::SeqCst), before, "NO_PROXY: no CONNECT");
+    let c = lab.machine("px-c", &[("ubuntu", &[&lab.service])], false).await;
+    let proxy = ["-o".to_string(), format!("ProxyCommand=env HTTPS_PROXY=http://127.0.0.1:{pport} NO_PROXY= python3 {} {url}", path.display())];
+    let dev = lab.device_via_port(&alice, "px-c", &c, 1, &proxy).await;
+    assert!(wait_forward(&lab, dev.reverse_port).await, "HTTPS_PROXY");
+    assert!(count.load(Ordering::SeqCst) > before, "HTTPS_PROXY was honoured");
 }
 
 /// 自動：小程式先連 SSH 的 port（拿到 gateway 的 banner 才算），連不上（關掉的 port、只轉網頁的代理）才走 WebSocket；

@@ -4,8 +4,10 @@
 # 手動跑（Actions → Release CLI → Run workflow）：填 tag 就補掛到那個 release；不填只編、結果留在這次執行的 artifacts，
 # 用來先試編。不跑 PR、不是 CI。伺服器的 Docker build 不受影響（CLI 是獨立的 crate：src/cli）。
 #
-# Release builds of the telepy CLI: run for every published Telepy release (v2.7.0…) — one binary per platform,
-# stamped with that tag's version (`telepy --version`), packed with a SHA-256 and attached to the same release.
+# Release builds of the telepy CLI and of telepy-carrier (the device-side web-port helper, src/carrier): run for every
+# published Telepy release (v2.7.0…) — one binary per platform, stamped with that tag's version (`telepy --version`),
+# packed with a SHA-256 and attached to the same release. The carrier is also built for 32-bit ARM routers (armv7,
+# armv6; carrier only, with `cross`), and the backend fetches it from the release for devices (`carriers.rs`).
 # The file names carry no version, so `releases/latest/download/telepy-<target>.tar.gz` is always the newest (the
 # web CLI page links to exactly that). Run by hand (Actions → Release CLI → Run workflow): with a tag it attaches to
 # that release, without one it only builds and keeps the files as this run's artifacts (a trial build). Never on PRs;
@@ -47,6 +49,9 @@ jobs:
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, smoke: true }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, smoke: true }
           - { os: windows-2022, target: x86_64-pc-windows-msvc, smoke: true }
+          # 只編 telepy-carrier（路由器用；交叉編譯用 cross 的 Docker 映像）。/ Carrier only, for routers; cross-compiled with cross.
+          - { os: ubuntu-24.04, target: armv7-unknown-linux-musleabihf, smoke: false, carrier_only: true, cross: true }
+          - { os: ubuntu-24.04, target: arm-unknown-linux-musleabihf, smoke: false, carrier_only: true, cross: true }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,30 +72,45 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add ${{ matrix.target }}
       - name: musl tools
-        if: contains(matrix.target, 'musl')
+        if: contains(matrix.target, 'musl') && !matrix.cross
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build
+      - name: cross
+        if: matrix.cross
+        run: cargo install cross --locked
+      - name: Build the CLI
+        if: ${{ !matrix.carrier_only }}
         shell: bash
         run: cargo build --release --locked --manifest-path src/cli/Cargo.toml --bin telepy --target ${{ matrix.target }}
+      - name: Build the carrier
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --manifest-path src/carrier/Cargo.toml --bin telepy-carrier --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --manifest-path src/carrier/Cargo.toml --bin telepy-carrier --target ${{ matrix.target }}
+          fi
       - name: Package
         shell: bash
         run: |
-          dir=src/cli/target/${{ matrix.target }}/release
-          name=telepy-${{ matrix.target }}
           mkdir -p dist
           # AGPL：授權條款跟 binary 放在一起。/ AGPL: the licence travels with the binary.
           cp LICENSE NOTICE dist/
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "$dir/telepy.exe" dist/telepy.exe
-            (cd dist && 7z a "../$name.zip" telepy.exe LICENSE NOTICE >/dev/null)
-            archive="$name.zip"
-          else
-            cp "$dir/telepy" dist/telepy
-            tar -C dist -czf "$name.tar.gz" telepy LICENSE NOTICE
-            archive="$name.tar.gz"
-          fi
-          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
-          cat "$archive.sha256"
+          pack() { # $1 = crate dir, $2 = binary, $3 = archive stem
+            local dir=$1/target/${{ matrix.target }}/release bin=$2 name=$3 archive
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              cp "$dir/$bin.exe" "dist/$bin.exe"
+              (cd dist && 7z a "../$name.zip" "$bin.exe" LICENSE NOTICE >/dev/null)
+              archive="$name.zip"
+            else
+              cp "$dir/$bin" "dist/$bin"
+              tar -C dist -czf "$name.tar.gz" "$bin" LICENSE NOTICE
+              archive="$name.tar.gz"
+            fi
+            if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+            cat "$archive.sha256"
+          }
+          [ "${{ matrix.carrier_only }}" = "true" ] || pack src/cli telepy telepy-${{ matrix.target }}
+          pack src/carrier telepy-carrier telepy-carrier-${{ matrix.target }}
       - name: Smoke test
         if: matrix.smoke
         shell: bash
@@ -106,6 +126,11 @@ jobs:
             echo "::warning::$TAG predates version stamping; its CLI reports '$out'"
           fi
           "$bin" --help >/dev/null
+          carrier=dist/telepy-carrier; [ "${{ runner.os }}" = "Windows" ] && carrier=dist/telepy-carrier.exe
+          out=$("$carrier" --version)
+          echo "$out"
+          [ "$out" = "telepy-carrier $TELEPY_VERSION" ] || { echo "expected: telepy-carrier $TELEPY_VERSION"; exit 1; }
+          "$carrier" --help >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -113,6 +138,9 @@ jobs:
             telepy-*.tar.gz
             telepy-*.zip
             telepy-*.sha256
+            telepy-carrier-*.tar.gz
+            telepy-carrier-*.zip
+            telepy-carrier-*.sha256
 
   release:
     needs: build
@@ -129,7 +157,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # 一個檔列出全部的雜湊：`sha256sum -c --ignore-missing SHA256SUMS`。/ One file with every hash.
-          (cd dist && cat telepy-*.sha256 > SHA256SUMS)
+          (cd dist && cat telepy-*.sha256 telepy-carrier-*.sha256 | sort -u -k2 > SHA256SUMS)
           # release 由維護者發（附發行說明）；手動補掛時它得先存在。/ Releases are written by a maintainer; it must exist.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null \
             || { echo "::error::release $TAG does not exist; publish it first (gh release create $TAG …)"; exit 1; }

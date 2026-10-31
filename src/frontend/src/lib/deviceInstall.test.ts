@@ -94,5 +94,5 @@ test("switching to automatic is offered only when possible and not automatic yet
     assert.equal(offerAutomatic(v(true, "auto")), false, "already automatic");
     assert.equal(offerAutomatic(v(false, "ssh")), false, "a blocker (Windows, no service found…)");
     assert.equal(offerAutomatic({ online: true }), false, "an older backend");
-    assert.equal(failureKey("no_python"), "deviceInstall.fail.no_python");
+    assert.equal(failureKey("no_carrier"), "deviceInstall.fail.no_carrier");
 });

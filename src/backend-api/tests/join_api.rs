@@ -234,7 +234,7 @@ async fn soft_answers_gateway_info_config_recovery_and_facts() {
     // uclient-fetch 的 POST：x-www-form-urlencoded、看不到狀態碡 → soft。/ A uclient-fetch style POST: form content type + soft.
     let key = lab.keygen("wrt-device");
     let body = json!({"public_key": key.public, "hostname": "GL-AR750S", "username": "root", "ssh_port": 22, "os": "Linux mips",
-        "facts": {"shell": "ash (BusyBox v1.36.1)", "client": "OpenSSH_8.9p1", "server": "Dropbear 2022.82", "init": "procd", "keepalive": "tcp", "http": "uclient-fetch", "compat": ["no_server_alive"], "token": "leak?"}});
+        "facts": {"shell": "ash (BusyBox v1.36.1)", "client": "OpenSSH_8.9p1", "server": "Dropbear 2022.82", "init": "procd", "keepalive": "tcp", "http": "uclient-fetch", "transport": "auto", "carrier": "binary armv7-unknown-linux-musleabihf", "compat": ["no_server_alive"], "token": "leak?"}});
     let req = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/join/{token}?soft=1"))
@@ -268,6 +268,7 @@ async fn soft_answers_gateway_info_config_recovery_and_facts() {
     let facts = t.facts.expect("facts recorded");
     assert_eq!(facts["server"], "Dropbear 2022.82");
     assert_eq!(facts["compat"], json!(["no_server_alive"]));
+    assert_eq!(facts["carrier"], "binary armv7-unknown-linux-musleabihf", "which web-port carrier was installed is recorded");
     assert!(facts.get("token").is_none());
     let web = app.get(&format!("/api/reverse/join/{}", t.id), Some(&alice.token)).await;
     assert_eq!(web.json["facts"]["init"], "procd", "{}", web.text);
@@ -308,4 +309,35 @@ async fn an_automatic_join_records_what_was_installed() {
         let t = telepy_server::db::tunnels::by_id(&app.state.db, id).await.unwrap().unwrap();
         assert_eq!(t.way_in.as_deref(), Some(want), "{name}");
     }
+}
+
+/// 裝置端載體的端點：快取裡有的照給（sha256 / 大小 / 本體 + 標頭），沒有預編的平台 404，抓不到（release 頁連不上）503；
+/// 都是裝置看得懂的 KEY=value（`?soft=1` 時狀態碼進第一行）。/ The carrier endpoints: a cached binary is served with its
+/// sha256; an unknown target is 404; a target the server cannot fetch is 503; KEY=value lines, soft when asked.
+#[tokio::test]
+async fn carrier_endpoints_serve_the_cache_and_say_when_there_is_none() {
+    let app = common::spawn().await;
+    let target = "x86_64-unknown-linux-musl";
+    let dir = app.state.config.carrier_dir.join(target);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("telepy-carrier"), b"#!/bin/sh\necho fake carrier\n").unwrap();
+    let want = telepy_server::carriers::sha256_hex(b"#!/bin/sh\necho fake carrier\n");
+    let r = app.get(&format!("/api/join/carrier/{target}/sha256?soft=1"), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.text, format!("STATUS=200\nSHA256={want}\nSIZE={}\nFILE=telepy-carrier\n", "#!/bin/sh\necho fake carrier\n".len()), "{}", r.text);
+    let r = app.get(&format!("/api/join/carrier/{target}"), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.text, "#!/bin/sh\necho fake carrier\n");
+    assert_eq!(r.headers.get("x-telepy-sha256").and_then(|v| v.to_str().ok()), Some(want.as_str()));
+    assert_eq!(r.headers.get("content-type").and_then(|v| v.to_str().ok()), Some("application/octet-stream"));
+    // 沒有這個平台的預編版本。/ No prebuilt binary for this target.
+    let r = app.get("/api/join/carrier/mips-unknown-linux-musl/sha256?soft=1", None).await;
+    assert!(r.text.starts_with("STATUS=404\nERROR=no carrier is built for mips-unknown-linux-musl"), "{}", r.text);
+    assert_eq!(app.get("/api/join/carrier/mips-unknown-linux-musl", None).await.status, StatusCode::NOT_FOUND);
+    // 有這個平台、但快取沒有、release 頁連不上：503，說明原因；第二次直接從記憶裡回答。/ Known target, nothing cached, release page unreachable: 503.
+    let r = app.get("/api/join/carrier/aarch64-unknown-linux-musl/sha256?soft=1", None).await;
+    assert!(r.text.starts_with("STATUS=503\nERROR=cannot fetch the carrier for aarch64-unknown-linux-musl"), "{}", r.text);
+    let r = app.get("/api/join/carrier/aarch64-unknown-linux-musl", None).await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(r.text.contains("not retried for 10 min"), "{}", r.text);
 }

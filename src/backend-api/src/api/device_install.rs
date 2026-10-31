@@ -88,7 +88,7 @@ async fn tidy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id):
 
 /// 換連線方式（`{transport: auto | websocket | ssh}`）：同改名的先接上再拆舊的，新服務用新的安裝代號、連現在的 SSH 主機。
 /// Switch how the device connects: the rename's make-before-break with a fresh install id and the current SSH host.
-#[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/switch", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DeviceInstallSwitchRequest, responses((status = 200, description = "The switch ran (see ok / steps / code — no_python when the device has no python3); the view after it", body = super::schemas::DeviceInstallRename), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
+#[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/switch", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DeviceInstallSwitchRequest, responses((status = 200, description = "The switch ran (see ok / steps / code — no_carrier when the device has neither a prebuilt telepy-carrier nor python3); the view after it", body = super::schemas::DeviceInstallRename), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
 async fn switch(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, headers: HeaderMap, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
     let tunnel = load(&state, user.id, id).await?;
     let transport = match body.get("transport").and_then(Value::as_str).map(str::trim) {
@@ -98,7 +98,7 @@ async fn switch(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         _ => return Err(ApiError::field("transport", "Use \"auto\", \"ssh\" or \"websocket\".")),
     };
     let base = crate::oauth::issuer(state.config.public_base().as_deref(), &headers);
-    let sw = device_install::Switch { transport, ws_url: super::join::ws_url(&base) };
+    let sw = device_install::Switch { transport, ws_url: super::join::ws_url(&base), carrier_url: format!("{base}/api/join/carrier") };
     let report = match device_install::switch_transport(&state, &tunnel, &user.username, sw).await {
         Ok(r) => r,
         Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being changed right now.")),

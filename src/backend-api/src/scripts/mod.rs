@@ -64,13 +64,15 @@ pub struct ScriptContext<'a> {
     pub install_id: &'a str,
 }
 
-/// SSH over WebSocket 需要的兩個位址。/ What the WebSocket carrier needs.
+/// SSH over WebSocket 需要的位址。/ What the WebSocket carrier needs.
 #[derive(Debug, Clone, Copy)]
 pub struct WsCarrier<'a> {
     /// `wss://host/ws/gateway/`
     pub url: &'a str,
-    /// `https://host/api/join/telepy-ws.py`
+    /// `https://host/api/join/telepy-ws.py`：python3 的備胎。/ The python3 fallback.
     pub client_url: &'a str,
+    /// `https://host/api/join/carrier`：`/<target>` = 這台機器的預編 telepy-carrier。/ The prebuilt carrier, per target.
+    pub carrier_url: &'a str,
     /// 自動：先連這個 SSH 的 `host:port`，連不上才走 WebSocket（`telepy-ws.py --tcp`）。None = 只走 WebSocket。
     /// Automatic: the SSH `host:port` first, the WebSocket only when that fails. None = the WebSocket only.
     pub tcp: Option<&'a str>,
@@ -89,36 +91,73 @@ impl WsCarrier<'_> {
 /// 筆電 / 使用者層級腳本存放小程式的路徑。/ Where the carrier lives for user-level scripts and laptops.
 pub const WS_CLIENT_PATH: &str = "~/.ssh/telepy-ws.py";
 
-/// 使用者層級的 bash 腳本：下載小程式、組 ProxyCommand。回 (setup 區塊, ssh 選項)。自動：沒有 python3（或下載
-/// 失敗）就只走 SSH 的 port，跟以前一樣。
-/// User-level bash scripts: fetch the carrier, build the ProxyCommand. Returns (setup, option). Automatic: without
-/// python3 (or the download) the tunnel uses the SSH port only, as before.
-fn bash_ws(ws: Option<WsCarrier>, dir: &str, file: &str, python: &str) -> (String, String) {
+/// `uname -s`/`uname -m` → 預編載體的 target，sh 的 `case`（跟 `carriers::TARGETS` 同一張表；Windows 不在 bash 腳本裡）。
+/// The sh `case` that maps `uname -s`/`uname -m` to a prebuilt carrier target (the same table as `carriers::TARGETS`).
+pub fn carrier_case_sh() -> String {
+    let mut s = String::from("case \"$(uname -s)/$(uname -m)\" in\n");
+    for t in crate::carriers::TARGETS {
+        let os = match t.os {
+            "linux" => "Linux",
+            "darwin" => "Darwin",
+            _ => continue,
+        };
+        let pats: Vec<String> = t.machines.iter().map(|m| format!("{os}/{m}")).collect();
+        s.push_str(&format!("    {}) WS_TARGET={} ;;\n", pats.join("|"), t.name));
+    }
+    s.push_str("    *) WS_TARGET=\"\" ;;\nesac\n");
+    s
+}
+
+/// 找載體並寫包裝腳本的 sh 片段（使用者層級腳本與 systemd 服務共用）：先下載這台機器的預編 telepy-carrier（跑一次
+/// `--version` 才算），沒有就 python3 配 telepy-ws.py；結束時 `WS_SH` 非空 = 包裝腳本寫好了。`dir` = 檔案放哪
+/// （`$HOME/.ssh` 或 `/etc/ssh`）；`sudo` = `$SUDO ` 或空。安裝時有 `HTTPS_PROXY` 就把 `--proxy` 寫進包裝腳本（服務沒有環境變數）。
+/// The sh that finds a carrier and writes the wrapper (shared by the user scripts and the systemd flavour): the prebuilt
+/// telepy-carrier for this machine first (it must run `--version`), else python3 + telepy-ws.py; afterwards a non-empty
+/// `WS_SH` means the wrapper is in place. An `HTTPS_PROXY` at install time is baked into the wrapper (services have no env).
+fn carrier_setup(ws: &WsCarrier, dir: &str, names: &crate::device_install::names::Names, sudo: &str) -> String {
+    format!(
+        "WS_SH=\"\"\nWS_CMD=\"\"\n{sudo}mkdir -p \"{dir}\"\nWS_TMP=$(mktemp -d 2>/dev/null || echo \"$HOME/.telepy-ws-tmp\"); mkdir -p \"$WS_TMP\"\n\
+         {case}\
+         WS_PROXY=\"\"\n[ -z \"${{HTTPS_PROXY:-${{https_proxy:-}}}}\" ] || WS_PROXY=\"--proxy ${{HTTPS_PROXY:-$https_proxy}} \"\n\
+         if [ -n \"$WS_TARGET\" ] && curl -fsSL '{carrier_url}/'\"$WS_TARGET\" -o \"$WS_TMP/bin\" && chmod 755 \"$WS_TMP/bin\" && \"$WS_TMP/bin\" --version >/dev/null 2>&1; then\n\
+         \x20   {sudo}mv -f \"$WS_TMP/bin\" \"{dir}/{bin}\" && WS_CMD=\"{dir}/{bin}\" && echo \"[+] Web-port carrier: telepy-carrier ($WS_TARGET)\"\n\
+         elif command -v python3 >/dev/null 2>&1 && curl -fsSL '{client_url}' -o \"$WS_TMP/py\"; then\n\
+         \x20   {sudo}mv -f \"$WS_TMP/py\" \"{dir}/{py}\" && {sudo}chmod 755 \"{dir}/{py}\" && WS_CMD=\"python3 {dir}/{py}\" && echo \"[+] Web-port carrier: python3 {dir}/{py}\"\n\
+         fi\n\
+         rm -rf \"$WS_TMP\"\n\
+         if [ -n \"$WS_CMD\" ]; then\n\
+         \x20   printf '#!/bin/sh\\n# {desc}: the way to Telepy.\\nexec %s %s%s\\n' \"$WS_CMD\" \"$WS_PROXY\" '{args}' | {sudo}tee \"{dir}/{sh}\" >/dev/null && {sudo}chmod 755 \"{dir}/{sh}\" && WS_SH=\"{dir}/{sh}\"\n\
+         fi\n",
+        case = carrier_case_sh(),
+        carrier_url = ws.carrier_url,
+        client_url = ws.client_url,
+        bin = names.ws_bin(),
+        py = names.ws_py(),
+        sh = names.ws_sh(),
+        desc = names.description(),
+        args = ws.args(),
+    )
+}
+
+/// 使用者層級的 bash 腳本：找載體、組 ProxyCommand。回 (setup 區塊, ssh 選項)。自動：沒有載體就只走 SSH 的 port。
+/// User-level bash scripts: find a carrier, build the ProxyCommand. Returns (setup, option). Automatic: without any
+/// carrier the tunnel uses the SSH port only.
+fn bash_ws(ws: Option<WsCarrier>, dir: &str, names: &crate::device_install::names::Names) -> (String, String) {
     let Some(ws) = ws else { return (String::new(), String::new()) };
+    let setup = carrier_setup(&ws, dir, names, "");
     if ws.tcp.is_some() {
         let setup = format!(
-            "\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n\
+            "\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n{setup}\
              PROXY_ARGS=()\n\
-             WS_CLIENT=\"{dir}/{file}\"\n\
-             if command -v {python} >/dev/null 2>&1 && curl -fsSL '{}' -o \"$WS_CLIENT\"; then\n\
-             \x20   chmod 700 \"$WS_CLIENT\"\n\
-             \x20   PROXY_ARGS=(-o \"ProxyCommand={python} $WS_CLIENT {}\")\n\
-             else\n\
-             \x20   echo 'No {python} (or the carrier could not be downloaded): the tunnel uses the SSH port only.'\n\
-             fi\n",
-            ws.client_url,
-            ws.args()
+             if [ -n \"$WS_SH\" ]; then PROXY_ARGS=(-o \"ProxyCommand=$WS_SH\"); else echo 'No prebuilt telepy-carrier for this machine and no python3 (or the download failed): the tunnel uses the SSH port only.'; fi\n"
         );
         return (setup, "\"${PROXY_ARGS[@]}\" \\\n".to_string());
     }
     let setup = format!(
-        "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
-         command -v {python} >/dev/null 2>&1 || {{ echo '{python} is required to carry the tunnel over the web port.'; exit 1; }}\n\
-         WS_CLIENT=\"{dir}/{file}\"\n\
-         curl -fsSL '{}' -o \"$WS_CLIENT\" && chmod 700 \"$WS_CLIENT\" || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n",
-        ws.client_url
+        "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n{setup}\
+         [ -n \"$WS_SH\" ] || {{ echo 'The web port needs the carrier: no prebuilt telepy-carrier for this machine and no python3 (or the download failed).'; exit 1; }}\n"
     );
-    (setup, format!("-o \"ProxyCommand={python} $WS_CLIENT {}\" \\\n", ws.url))
+    (setup, "-o \"ProxyCommand=$WS_SH\" \\\n".to_string())
 }
 
 /// known_hosts 裡的別名（與一鍵加入相同）。/ The known_hosts alias (the same one the join script uses).
@@ -207,7 +246,7 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             let (setup, options) = bash_pinning(ctx);
             m.insert("known_hosts_setup", setup);
             m.insert("host_key_options", options);
-            let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", &names.ws_py(), "python3");
+            let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", &names);
             m.insert("ws_client_setup", ws_setup);
             m.insert("proxy_option", proxy);
             let tpl = if tunnel_type.eq_ignore_ascii_case("ssh") { SSH } else { AUTOSSH };
@@ -216,43 +255,30 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
         "autossh-service" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i {k} ")).unwrap_or_default());
             m.insert("unit_fixup", String::new());
-            // 系統服務：小程式放 /etc/ssh（服務跑在別的帳號下）。/ System service: the carrier goes to /etc/ssh.
+            // 系統服務：載體與包裝腳本放 /etc/ssh（服務跑在別的帳號下）。unit 是引號 heredoc，不能用變數，所以 ProxyCommand
+            // 寫死包裝腳本的路徑；自動模式下沒有載體就在寫好 unit 後把它拿掉。
+            // System service: the carrier and its wrapper go to /etc/ssh (the service runs as another account). The unit
+            // is a quoted heredoc, so the ProxyCommand names the wrapper's fixed path; in automatic mode it is taken
+            // out of the written unit when no carrier could be installed.
             match ctx.ws {
-                // 自動：有 python3 才帶 ProxyCommand；沒有就在寫好 unit 後拿掉它（unit 是引號 heredoc，不能用變數）。
-                // Automatic: the ProxyCommand only with python3; otherwise it is taken out of the written unit (a
-                // quoted heredoc cannot use variables).
                 Some(ws) if ws.tcp.is_some() => {
                     m.insert(
                         "ws_client_setup",
-                        format!(
-                            "\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n\
-                             CARRIER=\n\
-                             if command -v python3 >/dev/null 2>&1 && curl -fsSL '{}' | $SUDO tee /etc/ssh/{py} > /dev/null; then\n\
-                             \x20   $SUDO chmod 755 /etc/ssh/{py}\n\
-                             \x20   CARRIER=1\n\
-                             else\n\
-                             \x20   echo 'No python3 (or the carrier could not be downloaded): the tunnel uses the SSH port only.'\n\
-                             fi\n",
-                            ws.client_url,
-                            py = names.ws_py()
-                        ),
+                        format!("\n# Automatic: the SSH port first, the web port (a WebSocket) when that is blocked; the SSH inside is unchanged.\n{}", carrier_setup(&ws, "/etc/ssh", &names, "$SUDO ")),
                     );
-                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/{} {}\" ", names.ws_py(), ws.args()));
-                    m.insert("unit_fixup", "[ -n \"$CARRIER\" ] || $SUDO sed -i 's| -o \"ProxyCommand=[^\"]*\"||' \"$SERVICE_PATH\"\n".into());
+                    m.insert("proxy_option", format!("-o \"ProxyCommand=/etc/ssh/{}\" ", names.ws_sh()));
+                    m.insert("unit_fixup", "[ -n \"$WS_SH\" ] || { echo 'No prebuilt telepy-carrier for this machine and no python3 (or the download failed): the tunnel uses the SSH port only.'; $SUDO sed -i 's| -o \"ProxyCommand=[^\"]*\"||' \"$SERVICE_PATH\"; }\n".into());
                 }
                 Some(ws) => {
                     m.insert(
                         "ws_client_setup",
                         format!(
-                            "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
-                             command -v python3 >/dev/null 2>&1 || {{ echo 'python3 is required to carry the tunnel over the web port.'; exit 1; }}\n\
-                             curl -fsSL '{}' | $SUDO tee /etc/ssh/{py} > /dev/null || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n\
-                             $SUDO chmod 755 /etc/ssh/{py}\n",
-                            ws.client_url,
-                            py = names.ws_py()
+                            "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n{}\
+                             [ -n \"$WS_SH\" ] || {{ echo 'The web port needs the carrier: no prebuilt telepy-carrier for this machine and no python3 (or the download failed).'; exit 1; }}\n",
+                            carrier_setup(&ws, "/etc/ssh", &names, "$SUDO ")
                         ),
                     );
-                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/{} {}\" ", names.ws_py(), ws.url));
+                    m.insert("proxy_option", format!("-o \"ProxyCommand=/etc/ssh/{}\" ", names.ws_sh()));
                 }
                 None => {
                     m.insert("ws_client_setup", String::new());
@@ -742,7 +768,7 @@ mod tests {
     /// Automatic: the carrier gets `--tcp <ssh host>:<port>`; no python3 = the SSH port only; PowerShell / Docker use the SSH port.
     #[test]
     fn automatic_scripts_try_the_ssh_port_first() {
-        let ws = WsCarrier { url: "wss://t.test/ws/gateway/", client_url: "https://t.test/api/join/telepy-ws.py", tcp: Some("ssh.t.test:24242") };
+        let ws = WsCarrier { url: "wss://t.test/ws/gateway/", client_url: "https://t.test/api/join/telepy-ws.py", carrier_url: "https://t.test/api/join/carrier", tcp: Some("ssh.t.test:24242") };
         let ctx = ScriptContext {
             host_friendly_name: "box",
             server_domain: "t.test",
@@ -759,14 +785,21 @@ mod tests {
         };
         for kind in ["ssh", "autossh"] {
             let (s, _) = render_script(kind, &ctx).unwrap();
-            assert!(s.contains("PROXY_ARGS=(-o \"ProxyCommand=python3 $WS_CLIENT --tcp ssh.t.test:24242 wss://t.test/ws/gateway/\")"), "{kind}: {s}");
+            // 先抓預編的 telepy-carrier，沒有再 python3；包裝腳本帶 --tcp；兩者都沒有就只走 SSH 的 port，不是錯。
+            // The prebuilt carrier first, python3 second; the wrapper carries --tcp; neither = the SSH port only, no error.
+            assert!(s.contains("curl -fsSL 'https://t.test/api/join/carrier/'\"$WS_TARGET\"") && s.contains("Linux/x86_64|Linux/amd64) WS_TARGET=x86_64-unknown-linux-musl ;;"), "{kind}: {s}");
+            assert!(s.contains("curl -fsSL 'https://t.test/api/join/telepy-ws.py'") && s.contains("'--tcp ssh.t.test:24242 wss://t.test/ws/gateway/'"), "{kind}: {s}");
+            assert!(s.contains("PROXY_ARGS=(-o \"ProxyCommand=$WS_SH\")") && s.contains("$HOME/.ssh/telepy-k7m2q9xd-ws.sh"), "{kind}: {s}");
             assert!(s.contains("\"${PROXY_ARGS[@]}\" \\\n") && s.contains("-p 24242"), "{kind}: {s}");
-            assert!(s.contains("the tunnel uses the SSH port only") && !s.contains("exit 1; }\nWS_CLIENT"), "{kind}: no python3 is not fatal: {s}");
+            assert!(s.contains("the tunnel uses the SSH port only") && !s.contains("The web port needs the carrier"), "{kind}: no carrier is not fatal: {s}");
+            assert!(s.contains("WS_PROXY=\"--proxy ${HTTPS_PROXY:-$https_proxy} \""), "{kind}: an HTTPS_PROXY at install time is baked in: {s}");
         }
         let (s, _) = render_script("autossh-service", &ctx).unwrap();
-        assert!(s.contains("-o \"ProxyCommand=python3 /etc/ssh/telepy-k7m2q9xd-ws.py --tcp ssh.t.test:24242 wss://t.test/ws/gateway/\" "), "{s}");
-        assert!(s.contains("[ -n \"$CARRIER\" ] || $SUDO sed -i"), "{s}");
-        assert!(!s.contains("${"), "every placeholder substituted: {s}");
+        assert!(s.contains("-o \"ProxyCommand=/etc/ssh/telepy-k7m2q9xd-ws.sh\" "), "{s}");
+        assert!(s.contains("$SUDO mv -f \"$WS_TMP/bin\" \"/etc/ssh/telepy-k7m2q9xd-ws.bin\"") && s.contains("[ -n \"$WS_SH\" ] || { echo") && s.contains("$SUDO sed -i"), "{s}");
+        assert!(!s.contains("${ws_") && !s.contains("${proxy_option}") && !s.contains("${unit_fixup}") && !s.contains("${known_hosts_setup}"), "every placeholder substituted: {s}");
+        let web_only_ssh = render_script("ssh", &ScriptContext { ws: Some(WsCarrier { tcp: None, ..ws }), ..ctx.clone() }).unwrap().0;
+        assert!(web_only_ssh.contains("The web port needs the carrier") && web_only_ssh.contains("-o \"ProxyCommand=$WS_SH\" \\\n"), "{web_only_ssh}");
         for kind in ["powershell", "docker-run", "docker-compose"] {
             let (s, _) = render_script(kind, &ctx).unwrap();
             assert!(!s.contains("ProxyCommand") && !s.contains("telepy-ws"), "{kind}: {s}");
@@ -776,6 +809,20 @@ mod tests {
         assert!(render_script("powershell", &web_only).is_err() && render_script("docker-run", &web_only).is_err());
         assert_eq!(laptop_proxy_command(Some("ssh.t.test:24242"), "wss://t.test/ws/gateway/"), "ProxyCommand python3 ~/.ssh/telepy-ws.py --tcp ssh.t.test:24242 wss://t.test/ws/gateway/");
         assert_eq!(laptop_proxy_command(None, "wss://t.test/ws/gateway/"), "ProxyCommand python3 ~/.ssh/telepy-ws.py wss://t.test/ws/gateway/");
+    }
+
+    /// sh 的 case 跟 `carriers::TARGETS` 同一張表。/ The sh case lists every target of the table.
+    #[test]
+    fn carrier_case_matches_the_target_table() {
+        let case = carrier_case_sh();
+        for t in crate::carriers::TARGETS.iter().filter(|t| t.os != "windows") {
+            let os = if t.os == "linux" { "Linux" } else { "Darwin" };
+            for m in t.machines {
+                assert!(case.contains(&format!("{os}/{m}")), "{os}/{m} missing in:\n{case}");
+            }
+            assert!(case.contains(&format!("WS_TARGET={} ;;", t.name)));
+        }
+        assert!(!case.contains("windows"));
     }
 
     #[test]

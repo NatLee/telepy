@@ -41,6 +41,8 @@ pub struct Inner {
     pub geoip: Arc<GeoIp>,
     /// 網卡廠商表（IEEE OUI）。/ NIC vendor table.
     pub oui: Arc<Oui>,
+    /// 裝置端載體（`telepy-carrier`）的快取。/ The device carrier cache.
+    pub carriers: Arc<crate::carriers::Carriers>,
     /// 憑證庫的加解密（金鑰由 SECRET_KEY 衍生）。/ Credential vault cipher (key derived from SECRET_KEY).
     pub vault: Vault,
     pub gateway: Arc<Gateway>,
@@ -122,6 +124,7 @@ impl AppState {
         let step_up = gateway.step_ups();
         let webhooks = gateway.webhooks();
         let features = gateway.features();
+        let carriers = Arc::new(crate::carriers::Carriers::new(&config, http.clone()));
         db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         Self(Arc::new(Inner {
             remote_browser,
@@ -135,6 +138,7 @@ impl AppState {
             status,
             geoip: Arc::new(GeoIp::load(&config.geoip_dir)),
             oui: Arc::new(Oui::load(&config.oui_dir)),
+            carriers,
             vault: Vault::new(&config.secret_key),
             presence,
             gateway,

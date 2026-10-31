@@ -288,9 +288,9 @@ fn gateway_port(state: &AppState) -> String {
     Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string()
 }
 
-/// 腳本用的載具：`websocket` / `auto` 時 (ws url, 小程式 url, auto 時 SSH 的 `host:port`)。
-/// The carrier for the scripts: (ws url, carrier url, and the SSH `host:port` for `auto`).
-type Carrier = (String, String, Option<String>);
+/// 腳本用的載具：`websocket` / `auto` 時 (ws url, python3 小程式 url, 預編載體 url, auto 時 SSH 的 `host:port`)。
+/// The carrier for the scripts: (ws url, python3 carrier url, prebuilt carrier url, the SSH `host:port` for `auto`).
+type Carrier = (String, String, String, Option<String>);
 
 fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> Result<Option<Carrier>, ApiError> {
     let transport = super::join::parse_transport(transport)?;
@@ -299,7 +299,7 @@ fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) 
     }
     let base = crate::oauth::issuer(state.config.public_base().as_deref(), headers);
     let tcp = (transport == "auto").then(|| format!("{}:{}", ssh_host(headers, state), gateway_port(state)));
-    Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"), tcp)))
+    Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"), format!("{base}/api/join/carrier"), tcp)))
 }
 
 /// 六種腳本的共用渲染：autossh-service 需要目標使用者名稱（username_id 可指定）。
@@ -340,7 +340,7 @@ async fn render_for(
         key_path,
         telepy_public_key: service_key.as_deref(),
         gateway_host_keys: &gateway_keys,
-        ws: ws.as_ref().map(|(url, client_url, tcp)| scripts::WsCarrier { url, client_url, tcp: tcp.as_deref() }),
+        ws: ws.as_ref().map(|(url, client_url, carrier_url, tcp)| scripts::WsCarrier { url, client_url, carrier_url, tcp: tcp.as_deref() }),
         install_id: &install_id,
     };
     scripts::render_script(kind, &ctx).map_err(ApiError::bad_request)
@@ -467,7 +467,7 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
         Err(e) => return plain(StatusCode::BAD_REQUEST, format!("{:?}", e.body)),
     };
     let way = match &ws {
-        Some((_, _, Some(_))) => "auto",
+        Some((_, _, _, Some(_))) => "auto",
         Some(_) => "websocket",
         None => "ssh",
     };

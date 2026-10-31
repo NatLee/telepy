@@ -139,8 +139,8 @@ export interface RenameReport {
     ok: boolean;
     /** 換連線方式時：換成哪種。/ When switching: the new way. */
     transport?: WayInSetup;
-    /** 要自動、裝置卻沒有 python3：裝成只走 SSH 的 port（新主機）。/ Automatic asked, no python3: the SSH port only. */
-    no_python?: boolean;
+    /** 要自動、裝置卻沒有任何小幫手（預編的 telepy-carrier 或 python3）：裝成只走 SSH 的 port。/ Automatic asked, no helper at all: the SSH port only. */
+    no_carrier?: boolean;
     steps: ReportedStep[];
     code?: string;
     error?: string;
@@ -224,7 +224,7 @@ const FAILURE_KEY: Record<string, TranslationKey> = {
     old_came_back: "deviceInstall.fail.old_came_back",
     device_offline: "deviceInstall.fail.device_offline",
     connection_lost: "deviceInstall.fail.connection_lost",
-    no_python: "deviceInstall.fail.no_python",
+    no_carrier: "deviceInstall.fail.no_carrier",
 };
 
 /** 「怎麼連 Telepy」的文字。/ The label of a way in. */

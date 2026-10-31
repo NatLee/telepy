@@ -45,6 +45,9 @@ enum Command {
     Geoip,
     /// Download IEEE's OUI registry (NIC vendors for LAN hosts) into OUI_DIR, then restart the backend.
     Oui,
+    /// Fetch the device carrier (telepy-carrier) for every platform from the release page into CARRIER_DIR, so devices
+    /// that cannot reach GitHub get it from this server (otherwise each platform is fetched on its first request).
+    FetchCarriers,
     /// Print the OpenAPI document (JSON) to stdout and exit.
     Openapi,
     /// Check the configuration and companion services (read-only); exit 1 when something is broken.
@@ -230,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    if matches!(cli.command, Some(Command::Keygen | Command::Geoip | Command::Oui)) {
+    if matches!(cli.command, Some(Command::Keygen | Command::Geoip | Command::Oui | Command::FetchCarriers)) {
         // 維運指令：輸出就是報告，不開 log。/ Maintenance commands: the report is the output, no logging.
         let config = Config::from_env();
         let ok = match cli.command {
@@ -258,6 +261,21 @@ async fn main() -> anyhow::Result<()> {
                         false
                     }
                 }
+            }
+            Some(Command::FetchCarriers) => {
+                let carriers = telepy_server::carriers::Carriers::new(&config, reqwest::Client::builder().user_agent("telepy-server").build()?);
+                println!("Fetching the device carriers from {} into {} ...", carriers.releases(), carriers.dir().display());
+                let mut ok = true;
+                for (target, r) in carriers.prefetch().await {
+                    match r {
+                        Ok(c) => println!("  {target}: {} bytes, sha256 {}{}", c.size, &c.sha256[..12], c.version.map(|v| format!(" ({v})")).unwrap_or_default()),
+                        Err(e) => {
+                            println!("  {target}: FAILED: {e:#}");
+                            ok = false;
+                        }
+                    }
+                }
+                ok
             }
             Some(Command::Oui) => {
                 println!("Downloading the IEEE OUI registry into {} ...", config.oui_dir.display());
@@ -321,6 +339,6 @@ async fn main() -> anyhow::Result<()> {
             let db = open_db(&config).await?;
             seed_service_key(&db, &config.web_service_pubkey_path).await
         }
-        Command::Openapi | Command::Doctor { .. } | Command::ImportUserKeys { .. } | Command::Keygen | Command::Geoip | Command::Oui => unreachable!("handled above"),
+        Command::Openapi | Command::Doctor { .. } | Command::ImportUserKeys { .. } | Command::Keygen | Command::Geoip | Command::Oui | Command::FetchCarriers => unreachable!("handled above"),
     }
 }

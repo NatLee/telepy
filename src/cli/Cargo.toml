@@ -36,10 +36,10 @@ sha2 = "0.10"
 # 終端機寬度與字元欄寬：Tapi 旁邊的文字先折行，不讓終端機自己換行把圖切開。
 # Terminal width and character widths: the text beside Tapi is wrapped first, so the terminal never wraps it through the art.
 terminal_size = "0.4"
-# `telepy ssh` 經網頁 port 連 Telepy（自己當 ProxyCommand，不需要 python3）。/ `telepy ssh` through the web port, no python3.
+# `telepy ssh` 經網頁 port 連 Telepy（自己當 ProxyCommand，不需要 python3）：連線、代理、轉接都在 telepy-carrier 這個共用 crate。
+# `telepy ssh` through the web port, no python3: the connection, proxy and relay live in the shared telepy-carrier crate.
+telepy-carrier = { path = "../carrier" }
 tokio = { version = "1", features = ["rt", "io-std", "io-util", "net", "time", "macros", "sync"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 unicode-width = "0.2"
 url = "2"
 urlencoding = "2"

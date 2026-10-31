@@ -45,7 +45,7 @@ Docker による実プラットフォームでの検証は第 5 節にありま�
 |---|---|---|
 | ok | — | `keepalive=ssh`（デフォルト、従来どおり） |
 | timeout | ok | この版の ssh は、タイムアウトを設定した途端にすぐタイムアウトします（OpenWrt #12574：fortify-headers の `ppoll` が 64 ビットの `time_t` を 32 ビットとして読み、big-endian の ath79 では 30 秒が 30 ナノ秒になる。GL-AR750S）。自動的に **compat モード**に切り替えます：`ServerAliveInterval=0 -o TCPKeepAlive=yes`、`facts.compat = ["no_server_alive"]`。Web 画面とイベントにも表示されます。`--no-compat` は自動切り替えを禁止し（エラーにして説明する）、`--compat-no-server-alive` は強制します |
-| timeout / unreachable | timeout / unreachable | gateway に到達できません。外向きの TCP が遮断されています（`--auto` / `--via-web` を使うと、python3 があれば Web ポート経由になります）。compat は適用**しません** |
+| timeout / unreachable | timeout / unreachable | gateway に到達できません。外向きの TCP が遮断されています（`--auto` / `--via-web` を使うと、ヘルパー経由で Web ポートから入ります。ヘルパーはデバイスの CPU 向けのビルド済み `telepy-carrier`、なければ python3）。compat は適用**しません** |
 | hostkey | — | gateway の host key が、gateway が申告した内容と一致しません：中止します |
 
 compat モードの制約はデバイス上に表示され、`facts` とインストール記録にも残ります。SSH 層のハートビートが無効なので、切断は TCP keepalive（カーネルのデフォルトは 2 時間であることが多い）でしか検知されません。procd / systemd は ssh が終了した後にしか再起動しないため、プロセスが存在していてもトンネルが使えるとは限りません。これは下層パッケージの修正ではなく、回避策です。
@@ -111,8 +111,8 @@ docker exec telepy-wrt sh -c 'opkg update && opkg install openssh-client openssh
 
 - **dbclient だけのデバイス（OpenSSH client なし）は、当面 gateway に接続できません**：russh の strict-kex のシーケンス検査が Dropbear の推測パケットを許容しないためです（第 3b 節）。スクリプトは token を消費する前にこれを検出して説明します（OpenSSH client をインストールすれば解決します）。上流の russh が修正を出し、Telepy がそれに更新されれば、スクリプトを変えなくても dbclient が使えるようになります。
 - Windows ネイティブ（PowerShell、タスクスケジューラ、ACL）は引き続き「手順を追って設定」です。ワンコマンド追加のスクリプトは Windows では動きません。未実装または未検証の機能は、対応しているとは謳いません。
-- dbclient：known_hosts はホスト名だけを比較するため、同じホスト名に同じ種類の鍵を 2 つ持てません。`UserKnownHostsFile` / `HostKeyAlias` もありません。標準の OpenWrt には `dropbearconvert` がないので、client を切り替えるときに鍵を相互変換できません。WebSocket 経由は `-J` を使います（やはり python3 が必要）。
+- dbclient：known_hosts はホスト名だけを比較するため、同じホスト名に同じ種類の鍵を 2 つ持てません。`UserKnownHostsFile` / `HostKeyAlias` もありません。標準の OpenWrt には `dropbearconvert` がないので、client を切り替えるときに鍵を相互変換できません。WebSocket 経由は `-J` で同じヘルパーのラッパーを使います（ビルド済み `telepy-carrier`、なければ python3）。
 - compat モードは回避策であって修正ではありません：SSH のハートビートが無効なので、切断の検知が遅くなります。
 - root 以外の OpenWrt：`/etc/dropbear/*_host_key` が読めず、`/etc/ssh/*.pub` も ssh-keyscan もない場合、host key の取得元がなくなり、スクリプトは止まって説明します。
-- デバイス上での名前変更と接続方法の切り替えは procd に対応しています（`/etc/init.d/telepy-<id>`、ワンコマンド追加がインストールするものと同じ形。OpenWrt 23.05 rootfs で検証済み）。`/etc/rc.local` に手書きされた行は、引き続き自動では切り替わりません。ルーターには通常 python3 がないため、「自動に変更」すると SSH ポートだけを使う新しいサービスがインストールされ、その旨が表示されます（`no_python`）。
+- デバイス上での名前変更と接続方法の切り替えは procd に対応しています（`/etc/init.d/telepy-<id>`、ワンコマンド追加がインストールするものと同じ形。OpenWrt 23.05 rootfs で検証済み）。`/etc/rc.local` に手書きされた行は、引き続き自動では切り替わりません。ARM ルーター（aarch64、armv7、armv6）にはビルド済み `telepy-carrier` があります。ほかの CPU（MIPS）で python3 もないルーターにはヘルパーがないため、「自動に変更」すると SSH ポートだけを使う新しいサービスがインストールされ、その旨が表示されます（`no_carrier`）。
 - スクリプトは、デバイスの SSH server の bind アドレスをトンネルの折り返し先として使います。server が loopback 以外の複数のアドレスに bind している場合は、最初のものを使います。

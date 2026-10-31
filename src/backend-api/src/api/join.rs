@@ -35,6 +35,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(ticket_status, revoke_ticket))
         .routes(routes!(install_script))
         .routes(routes!(ws_client))
+        .routes(routes!(carrier_binary))
+        .routes(routes!(carrier_sha))
         .routes(routes!(gateway_info))
         .routes(routes!(register))
         .routes(routes!(device_config))
@@ -171,6 +173,54 @@ async fn revoke_ticket(State(state): State<AppState>, AuthUser(user): AuthUser, 
 #[utoipa::path(get, path = "/api/join/telepy-ws.py", tag = "Device join", responses((status = 200, description = "The python3 program that carries ssh inside a WebSocket to /ws/gateway/ (ProxyCommand)", content_type = "text/plain", body = String)))]
 async fn ws_client() -> Response {
     text(StatusCode::OK, WS_CLIENT.to_string())
+}
+
+/// 裝置端載體的雜湊（裝置先問這個：知道有沒有這個平台的、拿到要比對的 sha256）。`?soft=1` 同其他裝置端點。
+/// The carrier's checksum: the device asks this first (is there one for its platform, and what to verify against).
+#[utoipa::path(get, path = "/api/join/carrier/{target}/sha256", tag = "Device join", params(("target" = String, Path, description = "Rust target triple, e.g. x86_64-unknown-linux-musl"), ("soft" = Option<String>, Query, description = "1 = always 200 with STATUS=<code> first")), responses((status = 200, description = "KEY=value lines: SHA256 (of the binary), SIZE (bytes), FILE (telepy-carrier | telepy-carrier.exe), VERSION (the release it came from, when known)", content_type = "text/plain", body = String), (status = 404, description = "ERROR=… (no carrier is built for this target)", content_type = "text/plain", body = String), (status = 503, description = "ERROR=… (the server could not fetch it from the release page)", content_type = "text/plain", body = String)))]
+async fn carrier_sha(State(state): State<AppState>, Path(target): Path<String>, Query(q): SoftQuery) -> Response {
+    let soft = join::wants_soft(&q);
+    if !crate::carriers::is_target(&target) {
+        return device_error(StatusCode::NOT_FOUND, &format!("no carrier is built for {target}"), soft);
+    }
+    match state.carriers.get(&target).await {
+        Ok(c) => {
+            let mut lines = vec![("SHA256", c.sha256), ("SIZE", c.size.to_string()), ("FILE", crate::carriers::binary_name(&target).to_string())];
+            if let Some(v) = c.version {
+                lines.push(("VERSION", v));
+            }
+            answer(StatusCode::OK, join::kv_lines(&lines), soft)
+        }
+        Err(e) => device_error(StatusCode::SERVICE_UNAVAILABLE, &format!("{e:#}"), soft),
+    }
+}
+
+/// 裝置端載體本體（靜態 binary）。/ The carrier binary itself.
+#[utoipa::path(get, path = "/api/join/carrier/{target}", tag = "Device join", params(("target" = String, Path, description = "Rust target triple")), responses((status = 200, description = "The telepy-carrier binary for that platform (application/octet-stream, X-Telepy-Sha256 header)", content_type = "application/octet-stream", body = String), (status = 404, description = "ERROR=… (no carrier is built for this target)", content_type = "text/plain", body = String), (status = 503, description = "ERROR=… (the server could not fetch it)", content_type = "text/plain", body = String)))]
+async fn carrier_binary(State(state): State<AppState>, Path(target): Path<String>) -> Response {
+    if !crate::carriers::is_target(&target) {
+        return device_error(StatusCode::NOT_FOUND, &format!("no carrier is built for {target}"), false);
+    }
+    let c = match state.carriers.get(&target).await {
+        Ok(c) => c,
+        Err(e) => return device_error(StatusCode::SERVICE_UNAVAILABLE, &format!("{e:#}"), false),
+    };
+    let file = match tokio::fs::File::open(&c.path).await {
+        Ok(f) => f,
+        Err(e) => return device_error(StatusCode::SERVICE_UNAVAILABLE, &format!("cannot read the cached carrier: {e}"), false),
+    };
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, c.size.to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", crate::carriers::binary_name(&target))),
+            (header::HeaderName::from_static("x-telepy-sha256"), c.sha256),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[utoipa::path(get, path = "/api/join/install.sh", tag = "Device join", responses((status = 200, description = "The POSIX install script (run with --token, or --check for a preflight without a token). Its last line is `# telepy-sha256: <hex>` over everything before it, which the script verifies when run from a file", content_type = "text/plain", body = String)))]

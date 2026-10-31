@@ -33,7 +33,7 @@ export const SPOT_CHECKS: Record<HealthSpot, readonly HealthCheckId[] | null> = 
     devices: null,
     guacd: ["guacd"],
     kasm: ["kasm"],
-    lookups: ["geoip", "oui"],
+    lookups: ["geoip", "oui", "carriers"],
 };
 
 /** 點一站打開哪個分頁。/ The tab a click on the spot opens. */

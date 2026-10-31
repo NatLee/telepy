@@ -22,6 +22,9 @@ export interface JoinFacts {
     key_format?: string;
     authorized_keys?: string;
     ssh_host?: string;
+    transport?: string;
+    /** 網頁 port 的小幫手：`binary <target>` / `python3` / `none`。/ The web-port helper: `binary <target>`, `python3` or `none`. */
+    carrier?: string;
     compat?: string[];
 }
 
@@ -91,7 +94,7 @@ export function scriptProgress(phase: JoinPhase, hasTunnel: boolean, expired = f
 }
 
 export interface FactChip {
-    key: "shell" | "client" | "server" | "init" | "keepalive" | "http";
+    key: "shell" | "client" | "server" | "init" | "keepalive" | "http" | "carrier";
     label: TranslationKey;
     value: string;
 }
@@ -103,6 +106,7 @@ const CHIP_LABEL: Record<FactChip["key"], TranslationKey> = {
     init: "join.facts.init",
     keepalive: "join.facts.keepalive",
     http: "join.facts.http",
+    carrier: "join.facts.carrier",
 };
 
 const INIT_NAME: Record<string, string> = { procd: "procd", systemd: "systemd", launchd: "launchd", loop: "reconnect loop" };
@@ -119,7 +123,16 @@ export function factChips(facts: JoinFacts | null | undefined): FactChip[] {
     push("init", facts.init ? INIT_NAME[facts.init] ?? facts.init : undefined);
     push("shell", facts.shell);
     push("keepalive", facts.keepalive);
+    push("carrier", carrierLabel(facts.carrier));
     return out;
+}
+
+/** `binary x86_64-unknown-linux-musl` → `telepy-carrier (x86_64-unknown-linux-musl)`；`python3` 照樣；`none` / 空 = 不列。
+ *  The chip text for the carrier fact; `none` or nothing = no chip. */
+export function carrierLabel(carrier: string | undefined): string | undefined {
+    if (!carrier || carrier === "none") return undefined;
+    const target = carrier.match(/^binary\s+(\S+)/)?.[1];
+    return target ? `telepy-carrier (${target})` : carrier;
 }
 
 /** 相容模式（SSH keepalive 關了、只靠 TCP keepalive）。/ The compat mode: SSH keepalives off, TCP keepalive only. */
