@@ -18,8 +18,8 @@ pub const NAMESPACE: &str = "telepy-release";
 
 /// 內建的發行公鑰（OpenSSH 一行格式：`ssh-ed25519 AAAA… comment`）。/ The built-in release public keys.
 pub const RELEASE_KEYS: &[&str] = &[
-    // 把 RELEASE_SIGNING_KEY secret 的公鑰那一行貼在這裡（`ssh-keygen -y -f <私鑰>`）；空的 = 不信任任何 release。
-    // Paste the public half of the RELEASE_SIGNING_KEY secret here (`ssh-keygen -y -f <private key>`); empty = no release is trusted.
+    // RELEASE_SIGNING_KEY secret 的公鑰（`ssh-keygen -y -f <私鑰>`）；換鑰匙 = 多加一行。/ The public half of the secret; rotation = one more line.
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMGstD1s9wwcEgRDbhlk3JLY1Rvf+Af+6C/nysjKj/jD telepy-release",
 ];
 
 /// 覆寫內建公鑰的環境變數。/ The variable that replaces the built-in keys.
@@ -92,6 +92,9 @@ mod tests {
         assert!(verify_with(&[], MSG, SIG).unwrap_err().contains("no Telepy release key is configured"));
         assert!(verify_with(&keys, MSG, "garbage").unwrap_err().contains("not an OpenSSH signature"));
         assert_eq!(describe(&[]), "no release key configured");
+        // 內建的那幾行都解析得出來（貼錯一個字元就會在這裡被抓到）。/ Every built-in line parses (a mangled paste fails here).
+        assert_eq!(parse_keys(&RELEASE_KEYS.join("\n")).len(), RELEASE_KEYS.len());
+        assert!(RELEASE_KEYS.iter().all(|k| k.starts_with("ssh-ed25519 ") && k.ends_with(" telepy-release")));
         assert!(describe(&keys).contains("(other)") && describe(&keys).contains("(test-vector)"));
     }
 }
