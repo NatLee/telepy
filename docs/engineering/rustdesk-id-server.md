@@ -2,14 +2,14 @@
 
 > 問題：Telepy 的網頁能不能遠端一台**沒有裝 Telepy 隧道**的 RustDesk？能不能讓裝置「遠端申請號碼」？
 > **狀態（2026-10-26）：方案 B 做過（#201、#203、#206、#208）後，在 #212 移除了。** Telepy 只經隧道連 RustDesk（見
-> [`remote-desktop.md`](remote-desktop.md)），這樣終端機、檔案、分享、即時 session 等功能都同一條路。實作時在真的 Mac
+> [`remote-desktop.md`](../remote-desktop.md)），這樣終端機、檔案、分享、即時 session 等功能都同一條路。實作時在真的 Mac
 > 上學到的事（`sudo` 下 `--option` 與 `--deploy` 讀不同的設定檔、沒裝系統服務時設定會被 root 寫壞）記在 git 歷史裡。
 > 移除時資料遷移 `2026-10-26-drop-rustdesk-server-devices` 刪掉了它的存檔登入與兩張資料表；文中的 `/ws/id`、`/ws/relay`、
 > `/api/devices/*`、`telepy_rustdesk_device` 現在都不存在。之後經隧道的瀏覽器 RustDesk 也有了聲音與傳檔（#245、#256），
 > 下面比較表裡方案 A 的「瀏覽器沒有」是當時的狀態。
 >
 > 這份是研究紀錄＋方案比較，不是功能文件。上一份研究是 [`rustdesk-spike.md`](rustdesk-spike.md)，
-> 已上線的 SSH 路線見 [`remote-desktop.md`](remote-desktop.md)（#195、#196）。
+> 已上線的 SSH 路線見 [`remote-desktop.md`](../remote-desktop.md)（#195、#196）。
 
 ## 結論
 

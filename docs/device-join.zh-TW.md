@@ -86,9 +86,9 @@ dbclient 走自己的 `-K 30`（三次沒回應就斷），不受這個問題影
   忽略猜錯的封包後，真正的 `KEX_ECDH_INIT` 落在序號 2，被 `validate_client_msg_strict_kex` 當成 strict kex 違規
   （`strict kex violated at sequence no. 2, message type: 30`）而斷線——**任何** Dropbear 客戶端（新版 2024.86 也會猜、也支援 strict kex）
   都連不上 russh 伺服器。OpenSSH 客戶端不猜，所以從沒遇過。這是 russh 的 bug（RFC 4253 §7.1 允許猜測；OpenSSH 伺服器一直接受 Dropbear），
-  修法是忽略過猜測封包後把序號檢查往後挪一格——約 20 行，放在 [`docs/russh-dropbear-strict-kex.patch`](russh-dropbear-strict-kex.patch)，
-  用這個 patch 的 gateway 在 Docker 的原廠 OpenWrt 上實測 dbclient 2022.82 connected → verified。Telepy **不**自己揹這份修補
-  （不 fork、不 vendor），改向上游 Eugeny/russh 回報；在上游釋出前，**純 dbclient 的裝置列為「等 gateway 修正」**：腳本在消耗 token
+  修法是忽略過猜測封包後把序號檢查往後挪一格——約 20 行，已送到上游 [Eugeny/russh PR #805](https://github.com/Eugeny/russh/pull/805)（issue [#804](https://github.com/Eugeny/russh/issues/804)），
+  用這個修補的 gateway 在 Docker 的原廠 OpenWrt 上實測 dbclient 2022.82 connected → verified。Telepy **不**自己揹這份修補
+  （不 fork、不 vendor），等上游釋出；在上游釋出前，**純 dbclient 的裝置列為「等 gateway 修正」**：腳本在消耗 token
   之前的 gateway 預檢會拿到 `closed`，印出「gateway 在金鑰交換時關閉連線；請更新 Telepy，或裝 OpenSSH client 後用 `--client openssh`」。
   有 OpenSSH client 的 OpenWrt（兩台 GL 路由器都是）不受影響。
 - **`/usr/bin/ssh` 不是固定的**：原廠 OpenWrt 的 `ssh` 是 dropbear 的連結；之後 `opkg install openssh-client` 會把它換成 OpenSSH。

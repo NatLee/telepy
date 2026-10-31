@@ -218,6 +218,9 @@ OpenSSH コンテナがこの接続を受けていましたが、今はバック
   - ノート PC もこの方法で接続できます。SSH config ダイアログの「Telepy への接続方法」で「Web ポートのみ」（または「自動」= `--tcp` 付きで、先に SSH のポートを試す）を選ぶと、
     サーバーブロックに ProxyCommand の行が 1 行増えます（先に `telepy-ws.py` を `~/.ssh/telepy-ws.py` に保存します）。`telepy ssh / scp / sftp` はこのプログラムを使わず、
     既定で Web ポートを通ります（[cli.ja.md](./cli.ja.md) を参照）。
+- **ほかのキャリア（自分で用意する）**：上の WebSocket は Telepy 自身の小さなヘルパーにすぎず、gateway はそれに依存していません。ssh の stdin / stdout を gateway への TCP 接続につなげるプログラムなら、何でもデバイスの `ProxyCommand` になれます。Web ポートさえそのままでは越えられないネットワーク（CONNECT が必要な外向き HTTP プロキシ、SNI によるフィルタリング、TCP の帯域制限）には、[wstunnel](https://github.com/erebe/wstunnel) のような汎用トンネルが Telepy を変えずに役立ちます：バックエンドのネットワークに `wstunnel server` のコンテナを 1 つ追加して `--restrict-to backend:2222` を付け（`--restrict-http-upgrade-path-prefix` で秘密のパスも）、Traefik で 1 つのパスをそこへ振り向け、デバイスには `ProxyCommand wstunnel client -L stdio://backend:2222 wss://<ホスト>/<パス>` を書きます。中身は引き続き Telepy の SSH で、同じ鍵、ホスト鍵のピン留め、forward の規則が使われます。
+  - 失うもの：gateway が見る相手は wstunnel のコンテナになります（デバイスの公開アドレスは毎日の調査で後から補われます）。接続方式のバッジは SSH over WSS ではなく SSH と表示され、デバイスタブは手で入れたサービスを知りません。
+  - 正しく設定すべきこと：wstunnel server は既定ですべてを許可するので、`--restrict-to` がないと compose ネットワークへの開いた中継になります（guacd や kasm-browser の session-manager にも届きます）。Telepy はこれを同梱も管理もしません。wstunnel のプロトコルはメジャーバージョン間で変わるため、各デバイスの client はコンテナと一緒に更新する必要があります。
 - **PROXY protocol**（`gateway/proxy_protocol.rs`）：gateway の前に L4 プロキシ（nginx stream、HAProxy の `mode tcp`、クラウドの NLB）があると、
   gateway から見える送信元はすべてそのプロキシになります。プロキシをサイト設定 → サーバーの「SSH ゲートウェイの PROXY protocol 送信元」か、`.env` の `GATEWAY_PROXY_PROTOCOL_FROM` に登録すると
   （IP / CIDR をカンマまたは空白で区切る。空 = オフ。`.env` に設定があればそちらが優先され、ページ上ではロックされます）、プロキシが送る v1 / v2

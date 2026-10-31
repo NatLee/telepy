@@ -203,7 +203,7 @@ whatever sticks out of the frame is clipped by the frame and viewed by panning.
 RustDesk speaks its own protocol, which guacd does not understand. Telepy has two paths, **both through the tunnel**; when the desktop page's protocol is "RustDesk" the first one is the default:
 
 > History: a mode where "Telepy acts as RustDesk's ID / relay server" (devices need no tunnel) was built in #201–#208 and removed again in #212, leaving only the through-the-tunnel path
-> (terminal, files, sharing, live sessions, recording and the other features all take the same road). The research notes are in [`rustdesk-id-server.md`](rustdesk-id-server.md);
+> (terminal, files, sharing, live sessions, recording and the other features all take the same road). The research notes are in [`rustdesk-id-server.md`](engineering/rustdesk-id-server.md);
 > the data migration `2026-10-26-drop-rustdesk-server-devices` deleted the logins and two tables it stored.
 
 ### Connecting in the browser (`rustdesk/`, `api/rustdesk.rs`, `ws/rustdesk.rs`; frontend `components/desktop/RustDeskViewer.tsx`, `lib/rustdesk.ts`)
@@ -212,7 +212,7 @@ The core of RustDesk's web client (a community TypeScript port, AGPL-3.0, vendor
 with its source and version recorded in the `README.md` beside it) runs in the browser: it decodes video (WebCodecs), answers the password challenge, and sends keys and mouse. Telepy **does not run hbbs / hbbr**:
 the core thinks it is connecting to an ID server and a relay, but both connections go to the same WebSocket; the backend looks at the first message to decide the role, then
 re-frames the relay one into RustDesk's TCP wire format and attaches it to a `direct-tcpip` channel to the device's Direct IP port (21118). The research notes and measurements are in
-[`rustdesk-spike.md`](rustdesk-spike.md) (1280×800 high motion: the core through the relay 28 fps / ~645 KB/s, guacd VNC 4–5 fps / 0.5–1.3 MB/s).
+[`rustdesk-spike.md`](engineering/rustdesk-spike.md) (1280×800 high motion: the core through the relay 28 fps / ~645 KB/s, guacd VNC 4–5 fps / 0.5–1.3 MB/s).
 
 - `POST /api/reverse/server/{id}/rustdesk/start` (`{username?, port?, lan_host_id?, credential_id?, clipboard?}`; the same gate as desktop:
   `desktop_enabled`, VIEW, step-up, `choose_username` / `allowed_usernames`, and `desktop_max_sessions` counts guacd + RustDesk together):

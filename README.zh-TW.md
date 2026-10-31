@@ -259,9 +259,9 @@ CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.z
 - [遠端瀏覽器（KasmVNC）](./docs/remote-browser.zh-TW.md)
 - [後端怎麼連到裝置](./docs/device-connections.zh-TW.md)
 - [延遲量測深入解析](./docs/latency-deep-dive.zh-TW.md)
-- [Rust 後端遷移規劃](./docs/rust-migration-plan.md) 與 [效能比較：Django vs Rust](./docs/benchmarks.zh-TW.md)
+- [Rust 後端遷移規劃](./docs/engineering/rust-migration-plan.md) 與 [效能比較：Django vs Rust](./docs/benchmarks.zh-TW.md)
 - [README 截圖怎麼做的](./docs/screenshots/README.zh-TW.md)
-- [文章](./docs/articles/)
+- [文章](./docs/engineering/articles/)
 - 版本說明：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## 貢獻者

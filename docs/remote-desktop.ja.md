@@ -204,7 +204,7 @@ RDP では不要です：RDP セッションのサイズは私たち（ブラウ
 RustDesk は独自のプロトコルを使い、guacd は理解できません。Telepy には 2 つの経路があり、**どちらもトンネル経由**です。デスクトップページでプロトコルに「RustDesk」を選ぶと、既定は 1 つ目です：
 
 > 経緯：「Telepy を RustDesk の ID / リレーサーバーにする」モード（デバイスにトンネルが不要）は #201–#208 で作られ、#212 で再び取り除かれ、トンネル経由の経路だけが残りました
-> （ターミナル、ファイル、共有、ライブセッション、録画などの機能もすべて同じ道を通ります）。調査記録は [`rustdesk-id-server.md`](rustdesk-id-server.md) にあります。
+> （ターミナル、ファイル、共有、ライブセッション、録画などの機能もすべて同じ道を通ります）。調査記録は [`rustdesk-id-server.md`](engineering/rustdesk-id-server.md) にあります。
 > データ移行 `2026-10-26-drop-rustdesk-server-devices` が、そのモードが保存していたログインと 2 つのテーブルを削除しました。
 
 ### ブラウザーで接続（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`。フロントエンド `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
@@ -213,7 +213,7 @@ RustDesk の web client のコア（コミュニティによる TypeScript 移�
 出典とバージョンは隣の `README.md` に記載）がブラウザー内で動きます：映像のデコード（WebCodecs）、パスワードチャレンジへの応答、キーとマウスの送信を行います。Telepy は **hbbs / hbbr を立てません**：
 コアは ID サーバーとリレーに接続していると思っていますが、実際は 2 本とも同じ WebSocket につながり、backend は最初のメッセージで役割を判別し、リレー側を
 RustDesk の TCP ワイヤー形式にフレーミングし直して、デバイスの Direct IP ポート（21118）への `direct-tcpip` チャネルにつなぎます。調査記録と計測は
-[`rustdesk-spike.md`](rustdesk-spike.md) にあります（1280×800 の動きの大きい画面：中継経由のコア 28 fps / ~645 KB/s、guacd の VNC 4–5 fps / 0.5–1.3 MB/s）。
+[`rustdesk-spike.md`](engineering/rustdesk-spike.md) にあります（1280×800 の動きの大きい画面：中継経由のコア 28 fps / ~645 KB/s、guacd の VNC 4–5 fps / 0.5–1.3 MB/s）。
 
 - `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?, credential_id?, clipboard?}`。デスクトップと同じ関門：
   `desktop_enabled`、VIEW、ステップアップ、`choose_username` / `allowed_usernames`、`desktop_max_sessions` は guacd + RustDesk の合計を数えます）：

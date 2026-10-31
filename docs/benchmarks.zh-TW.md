@@ -2,7 +2,7 @@
 
 <p align="center"><a href="./benchmarks.md">English</a> | <b>繁體中文</b> | <a href="./benchmarks.ja.md">日本語</a></p>
 
-> **狀態：** 這是 2026-10-22 的快照，在切換到 Rust 後端（#88–#91）之後立即量測，並於 #94 加入。它呈現的是這次遷移前後的對照，不是目前的量測結果：Django 版本已從儲存庫移除，Telepy 之後也有不少變動（compose 檔現在執行 5 個容器，其中 guacd 負責遠端桌面；網頁終端機改以 russh 的 PTY 通道運作，每個通道與帳號共用一條連線池中的連線，不再啟動 OpenSSH 用戶端）。這次遷移的規劃見 [`rust-migration-plan.md`](rust-migration-plan.md)。
+> **狀態：** 這是 2026-10-22 的快照，在切換到 Rust 後端（#88–#91）之後立即量測，並於 #94 加入。它呈現的是這次遷移前後的對照，不是目前的量測結果：Django 版本已從儲存庫移除，Telepy 之後也有不少變動（compose 檔現在執行 5 個容器，其中 guacd 負責遠端桌面；網頁終端機改以 russh 的 PTY 通道運作，每個通道與帳號共用一條連線池中的連線，不再啟動 OpenSSH 用戶端）。這次遷移的規劃見 [`rust-migration-plan.md`](engineering/rust-migration-plan.md)。
 
 量測於 2026-10-22，在同一台機器上進行（Apple Silicon、10 核心、24 GB、透過 OrbStack 執行 Docker）。兩套系統分別從不同的 worktree 並排執行，各有自己的連接埠與資料目錄；裝置是一個 `linuxserver/openssh-server` 容器，兩邊的通道都連到同一個裝置。數字取自所列各次執行的中位數，原始輸出在新增本檔案的 PR（#94）中。
 

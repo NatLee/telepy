@@ -4,9 +4,9 @@
 
 > Lets a user drive a real Chromium desktop in the web UI, with its traffic leaving through the target machine.
 > This is the **architecture document** for the KasmVNC version (migration finished 2026-07-03; for the story of how it went, see
-> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](articles/2026-07-03-kasmvnc-migration-warstory.md)).
+> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](engineering/articles/2026-07-03-kasmvnc-migration-warstory.md)).
 >
-> **Current state (2026-10):** the backend was rewritten as a single Rust process (see [`rust-migration-plan.md`](rust-migration-plan.md)):
+> **Current state (2026-10):** the backend was rewritten as a single Rust process (see [`rust-migration-plan.md`](engineering/rust-migration-plan.md)):
 > - The session store lives in memory (plus one small table, `telepy_remote_browser_session`, used only to clean up orphaned kasm-side sessions after a restart).
 >   There are no gunicorn workers and no Redis.
 > - The SOCKS proxy runs **in-process** (`ssh/socks.rs`): every CONNECT is a direct-tcpip channel on the pooled device connection,

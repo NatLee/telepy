@@ -5,7 +5,7 @@
 >
 > **狀態：** 依下面的「設計」做出來了——瀏覽器裡的 RustDesk（#195，存密碼 #196），之後又補上 MVP 刻意不做的聲音與傳檔
 > （#245、#256）。程式在 `src/backend-api/src/rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`，前端用 vendored 的社群核心
-> `src/frontend/public/vendor/rustdesk-web-core/`；使用方式見 [`remote-desktop.md`](remote-desktop.md)。
+> `src/frontend/public/vendor/rustdesk-web-core/`；使用方式見 [`remote-desktop.md`](../remote-desktop.md)。
 
 > **2026-10-26 更新：** 下面「『不用 SSH』是反的」那一點已被推翻。RustDesk 1.5.0 能經 WebSocket 主動連 ID 伺服器，
 > Telepy 自己當 ID＋中繼伺服器就不需要 SSH、也不用開新埠，還多了端對端加密；見 [`rustdesk-id-server.md`](rustdesk-id-server.md)
