@@ -245,7 +245,7 @@ export function ServerHealthView() {
                         <GroupPanel health={health} group={tab} actions={cardActions} />
                     )}
                     {tab === "addresses" && <ClientIpCheckPanel />}
-                    {health && tab === "overview" && <p className="text-xs text-muted-foreground">{tn("health.cliNote", { cli: <code>./telepy.sh doctor</code> })}</p>}
+                    {health && tab === "overview" && <p className="text-xs text-muted-foreground">{tn("health.cliNote", { cli: <code>docker compose exec backend telepy-server doctor</code> })}</p>}
                 </div>
             </div>
 
@@ -503,17 +503,17 @@ function FixText({ id }: { id: HealthCheckId }) {
         internal_api_token: { setting: c("INTERNAL_API_TOKEN"), env: c(".env"), cmd: c("docker compose up -d") },
         data_dir: { path: c("/data"), host: c("./telepy-data") },
         log_dir: { path: c("/logs") },
-        database: { cmd: c("./telepy.sh migration"), df: c("df -h") },
-        accounts: { cmd: c("./telepy.sh create-superuser") },
+        database: { cmd: c("docker compose exec backend telepy-server migrate"), df: c("df -h") },
+        accounts: { cmd: c("docker compose exec backend telepy-server create-superuser --username <name> --password <password>") },
         tunnel_keys: { setting: c("SECRET_KEY") },
-        service_key: { cmd: c("./telepy.sh keygen"), restart: c("docker compose restart backend") },
+        service_key: { cmd: c("docker compose exec backend telepy-server keygen"), restart: c("docker compose restart backend") },
         shared_key: { setting: c("KEEP_SHARED_SERVICE_KEY"), env: c(".env") },
-        gateway: { cmd: c("./telepy.sh keygen"), dir: c("ssh/ssh_host_keys") },
+        gateway: { cmd: c("docker compose exec backend telepy-server keygen"), dir: c("ssh/ssh_host_keys") },
         ssh_host: { setting: c("SSH_SERVER_DOMAIN"), env: c(".env") },
         guacd: { cmd: c("docker compose up -d guacd"), net: c("telepy-desktop") },
         kasm: { cmd: c("docker compose up -d kasm-browser"), token: c("INTERNAL_API_TOKEN") },
-        geoip: { cmd: c("./telepy.sh geoip") },
-        oui: { cmd: c("./telepy.sh oui") },
+        geoip: { cmd: c("docker compose exec backend telepy-server geoip") },
+        oui: { cmd: c("docker compose exec backend telepy-server oui") },
         client_addresses: {},
         audit_log: { file: c("audit-anchors.log"), mismatch: c("checkpoint_mismatch"), missing: c("checkpoint_missing") },
     };

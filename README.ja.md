@@ -152,24 +152,25 @@ Docker と Compose プラグインが必要です。
    cp .env.example .env
    ```
 
-2. ゲートウェイのホスト鍵とサービス鍵を生成します（再実行しても既存の鍵は残ります——デバイスがピン留めしているため）：
-
-   ```bash
-   ./telepy.sh keygen
-   ```
-
-3. ビルドして起動し、確認します：
+2. ビルドして起動します。初回起動時にバックエンドが `ssh/` の下にゲートウェイのホスト鍵とサービス鍵を作ります（既存の鍵は
+   残ります——デバイスがピン留めしているため）：
 
    ```bash
    docker compose up -d --build
-   ./telepy.sh doctor
+   ```
+
+3. 確認します。サインイン後は管理セクションの**サーバーの状態**ページがすべてのチェックを実行します。同じチェックは
+   コマンドラインからも実行できます：
+
+   ```bash
+   docker compose exec backend telepy-server doctor
    ```
 
 4. `http://localhost:<WEB_SERVER_PORT>`（既定は `http://localhost:8787`）を開いてサインインします。
 
 > [!NOTE]
-> **最初のアカウント**が管理者になります——Google でサインインした場合も、`./telepy.sh create-superuser` で作成した場合も
-> 同じです。
+> **最初のアカウント**が管理者になります——Google でサインインした場合も、`docker compose exec backend telepy-server create-superuser --username admin --password …`
+> で作成した場合も同じです。
 
 本番環境では Traefik の前に HTTPS プロキシを置き、公開アドレスを設定し、デバイスからゲートウェイのポート
 （`REVERSE_SERVER_SSH_PORT`）に届くようにしてください。Web の名前が Web の通信しか通さないプロキシ（Cloudflare の
@@ -201,7 +202,7 @@ Docker と Compose プラグインが必要です。
 | `SERVER_DOMAIN`           | `localhost` | このサーバーのホスト名；スクリプト、SSH 設定、ピン留めするホスト鍵に書き込まれます |
 | `SECRET_KEY`              | —           | サインインの署名と保存する秘密情報の暗号化；本番前に長いランダム値を設定  |
 | `INTERNAL_API_TOKEN`      | —           | バックエンドと kasm-browser コンテナの間の秘密値                           |
-| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | IP 位置情報データベースと NIC メーカー一覧の場所（コンテナ内のパス。`./telepy.sh geoip` / `oui` がここに取得） |
+| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | IP 位置情報データベースと NIC メーカー一覧の場所（コンテナ内のパス。`telepy-server geoip` / `oui` がここに取得） |
 
 以下は**任意**です。どれも**サイト設定 → サーバー**に同じ項目があり、管理者が Web から再起動なしで変更できます。
 変数を空にしておけば Web で管理し、`.env` に値があればそちらが優先されてその項目はロックされます。
@@ -252,18 +253,17 @@ CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定しま�
 
 ## 運用
 
-`./telepy.sh`（Windows では `telepy.ps1`）が日常の作業をまとめています：
+運用作業はすべてバックエンドコンテナ内の `telepy-server` コマンドなので、Linux、macOS、Windows で同じです：
 
-| サブコマンド       | 内容                                                                 |
-| ------------------ | -------------------------------------------------------------------- |
-| `keygen`           | ゲートウェイのホスト鍵とバックエンドのサービス鍵を生成（既存の鍵は保持） |
-| `create-superuser` | 管理者アカウントを作成                                               |
-| `doctor`           | `.env`、コンテナ、ポート、バックエンドの設定を確認（問題があれば 1） |
-| `geoip`            | オフラインの IP 位置情報（DB-IP Lite）をダウンロード；毎月更新       |
-| `oui`              | IEEE のメーカー一覧をダウンロードし、LAN ホストに NIC のメーカーを表示 |
-| `migration`        | データベーススキーマを調整（起動時にも自動で実行）                   |
-| `shell`            | バックエンドコンテナのシェルに入る                                   |
-| `backend-debug`    | バックエンドコンテナを作り直してログを追う                           |
+| コマンド                                                     | 内容                                                                 |
+| ------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `docker compose exec backend telepy-server doctor`           | 鍵、データベース、設定、連携サービスを確認（問題があれば 1）         |
+| `docker compose exec backend telepy-server create-superuser --username <名前> --password <パスワード>` | 管理者アカウントを作成                                   |
+| `docker compose exec backend telepy-server keygen`           | 足りないゲートウェイのホスト鍵とサービス鍵を作成（起動時にも実行。既存の鍵は保持） |
+| `docker compose exec backend telepy-server geoip`            | オフラインの IP 位置情報（DB-IP Lite）をダウンロードし、バックエンドを再起動；毎月更新 |
+| `docker compose exec backend telepy-server oui`              | IEEE のメーカー一覧をダウンロードして LAN ホストに NIC のメーカーを表示し、バックエンドを再起動 |
+| `docker compose exec backend telepy-server migrate`          | データベーススキーマを調整（起動時にも自動で実行）                   |
+| `docker compose logs -f backend`                             | バックエンドのログを追う                                             |
 
 アップグレードは `git pull && docker compose up -d --build` だけです。スキーマは起動時に自動で調整されます。
 

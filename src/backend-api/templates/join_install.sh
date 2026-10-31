@@ -958,7 +958,7 @@ main() {
         done
         note "gateway: $GATEWAY_USER@$GATEWAY_HOST:$GATEWAY_PORT, $(printf '%s\n' "$GW_HOST_KEYS" | grep -c .) host key(s) pinned"
     else
-        [ "$CLIENT" = openssh ] || die "Telepy sent no gateway host keys, and dbclient cannot pin on first use non-interactively (ask the admin to run ./telepy.sh keygen)"
+        [ "$CLIENT" = openssh ] || die "Telepy sent no gateway host keys, and dbclient cannot pin on first use non-interactively (the backend creates them when it starts; ask the admin to check GATEWAY_HOST_KEYS_DIR)"
         STRICT=accept-new
         "$SSH_BIN" -G -o StrictHostKeyChecking=accept-new localhost >/dev/null 2>&1 || STRICT=no
         warn "Telepy sent no gateway host keys (the server has none configured): the key is accepted on first use ($STRICT)"

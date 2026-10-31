@@ -149,24 +149,25 @@ Requires Docker with the Compose plugin.
    cp .env.example .env
    ```
 
-2. Generate the gateway's host keys and the service key (re-running keeps existing keys — devices pin them):
-
-   ```bash
-   ./telepy.sh keygen
-   ```
-
-3. Build and start the stack, then check it:
+2. Build and start the stack. On its first start the backend creates the gateway's host keys and its service key
+   under `ssh/` (keys that already exist are kept — devices pin them):
 
    ```bash
    docker compose up -d --build
-   ./telepy.sh doctor
+   ```
+
+3. Check it. The admin section's **Server health** page runs every check once you are signed in; the same checks are
+   available from the command line:
+
+   ```bash
+   docker compose exec backend telepy-server doctor
    ```
 
 4. Open `http://localhost:<WEB_SERVER_PORT>` (default `http://localhost:8787`) and sign in.
 
 > [!NOTE]
 > The **first account** becomes the administrator — whether it signs in with Google or is created with
-> `./telepy.sh create-superuser`.
+> `docker compose exec backend telepy-server create-superuser --username admin --password …`.
 
 For production, put an HTTPS proxy in front of Traefik, set the public address, and make the gateway port
 (`REVERSE_SERVER_SSH_PORT`) reachable for your devices. If the web name goes through a proxy that only carries web
@@ -200,7 +201,7 @@ the full comments):
 | `SERVER_DOMAIN`           | `localhost` | Host name of this server; written into scripts, SSH configs and pinned host keys |
 | `SECRET_KEY`              | —           | Signs sign-ins and seals stored secrets; set a long random value before real use |
 | `INTERNAL_API_TOKEN`      | —           | Secret between the backend and the kasm-browser container                  |
-| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | Where the backend reads the IP geolocation databases and the NIC vendor list (paths inside the container; `./telepy.sh geoip` / `oui` fill them) |
+| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | Where the backend reads the IP geolocation databases and the NIC vendor list (paths inside the container; `telepy-server geoip` / `oui` fill them) |
 
 The next ones are **optional**: each is also a field under **Site settings → Server**, which an admin can change in the
 web without a restart. Leave the variable empty to manage it there; a value in `.env` wins and locks that field.
@@ -251,18 +252,18 @@ the permissions and tunnels; the **MCP** page has the setup for each client. Det
 
 ## Maintenance
 
-`./telepy.sh` (or `telepy.ps1` on Windows) wraps the day-to-day tasks:
+Every maintenance task is a `telepy-server` command inside the backend container, so it is the same on Linux, macOS and
+Windows:
 
-| Sub-command        | What it does                                                                     |
-| ------------------ | -------------------------------------------------------------------------------- |
-| `keygen`           | Generate the gateway host keys and the backend service key (keeps existing ones) |
-| `create-superuser` | Create an administrator account                                                   |
-| `doctor`           | Check `.env`, containers, ports and the backend's configuration (exit 1 on a problem) |
-| `geoip`            | Download offline IP geolocation (DB-IP Lite); re-run monthly                     |
-| `oui`              | Download the IEEE vendor list so LAN hosts show their NIC vendor                 |
-| `migration`        | Reconcile the database schema (also runs on every start)                         |
-| `shell`            | Open a shell in the backend container                                            |
-| `backend-debug`    | Recreate the backend container and follow its logs                               |
+| Command                                                      | What it does                                                                  |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `docker compose exec backend telepy-server doctor`           | Check the keys, database, configuration and companion services (exit 1 on a problem) |
+| `docker compose exec backend telepy-server create-superuser --username <name> --password <password>` | Create an administrator account                          |
+| `docker compose exec backend telepy-server keygen`           | Create missing gateway host keys and the service key (also done at every start; existing keys are kept) |
+| `docker compose exec backend telepy-server geoip`            | Download offline IP geolocation (DB-IP Lite), then restart the backend; re-run monthly |
+| `docker compose exec backend telepy-server oui`              | Download the IEEE vendor list so LAN hosts show their NIC vendor, then restart the backend |
+| `docker compose exec backend telepy-server migrate`          | Reconcile the database schema (also runs on every start)                      |
+| `docker compose logs -f backend`                             | Follow the backend's logs                                                     |
 
 Upgrading is `git pull && docker compose up -d --build`; the database schema is reconciled on start.
 

@@ -1,4 +1,4 @@
-//! 網卡廠商（IEEE OUI，MA-L：MAC 的前 24 位元）。讀 `<DATA_DIR>/oui/oui.csv`（`./telepy.sh oui` 從 IEEE 下載），
+//! 網卡廠商（IEEE OUI，MA-L：MAC 的前 24 位元）。讀 `<DATA_DIR>/oui/oui.csv`（`telepy-server oui` 從 IEEE 下載），
 //! 沒有檔案就不顯示廠商。查詢完全在本機。另外辨識「私有（隨機）MAC」：第一個位元組的 locally administered
 //! 位元為 1，手機與新版作業系統連 Wi-Fi 時常用，這種位址查不到廠商。
 //! NIC vendors from IEEE's public OUI registry (MA-L, the first 24 bits of a MAC) in `<DATA_DIR>/oui/oui.csv`;

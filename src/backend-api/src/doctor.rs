@@ -1,7 +1,8 @@
-//! `telepy-server doctor`：在後端容器裡檢查設定與相依服務，列出 ✓ / ! / ✗，有 ✗ 時以非零結束。
-//! 只讀：不改 schema、不寫任何資料（審計鏈驗證用讀取 transaction）。主機端的 `telepy.sh doctor` 先檢查
-//! .env、容器與對外埠，再呼叫這個。
-//! Read-only health check of the backend's configuration and dependencies, for `telepy.sh doctor`.
+//! `telepy-server doctor`：在後端容器裡檢查設定與相依服務（`docker compose exec backend telepy-server doctor`），列出
+//! ✓ / ! / ✗，有 ✗ 時以非零結束。只讀：不改 schema、不寫任何資料（審計鏈驗證用讀取 transaction）。管理區的「伺服器健康」
+//! 頁跑的是同一組檢查。
+//! Read-only health check of the backend's configuration and dependencies; the admin section's Server health page runs
+//! the same checks.
 
 use std::path::Path;
 use std::time::Duration;
@@ -212,11 +213,11 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
                     let tunnels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authorized_keys_reverseserverauthorizedkeys").fetch_one(&db.read).await.unwrap_or(0);
                     out.push(check("database", "database", Status::Ok, format!("{} ({users} users, {tunnels} tunnels)", config.db_path.display())).fp(&[]));
                     if users == 0 {
-                        out.push(check("accounts", "accounts", Status::Info, "no account yet: the first sign-up becomes the administrator (or run ./telepy.sh create-superuser)"));
+                        out.push(check("accounts", "accounts", Status::Info, "no account yet: the first sign-up becomes the administrator (or run telepy-server create-superuser in the backend container)"));
                     }
                 } else {
                     let list = missing.join(", ");
-                    out.push(check("database", "database", Status::Warn, format!("tables missing: {list}. Restart the backend or run ./telepy.sh migration")).fp(&[&list]));
+                    out.push(check("database", "database", Status::Warn, format!("tables missing: {list}. Restart the backend or run telepy-server migrate")).fp(&[&list]));
                 }
                 Some(db)
             }
@@ -253,7 +254,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     }
     // 服務金鑰：私鑰讀得到、公鑰存在、DB 裡登記的是同一把。/ Service key: private key loads, matches the DB.
     out.push(match crate::ssh::device::load_identity(&config.ssh_identity).await {
-        Err(e) => check("service_key", "service key", Status::Fail, format!("{}: {e:#}. Run ./telepy.sh keygen", config.ssh_identity.display())),
+        Err(e) => check("service_key", "service key", Status::Fail, format!("{}: {e:#}. Restart the backend (a missing key is created at start) or run telepy-server keygen", config.ssh_identity.display())),
         Ok(_) => {
             let file = std::fs::read_to_string(&config.web_service_pubkey_path).map(|s| s.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).unwrap_or_default();
             let seeded = match &db {
@@ -274,12 +275,12 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
 
     // gateway host keys。/ Gateway host keys.
     out.push(match (&config.gateway_host_keys_dir, config.gateway_enabled) {
-        (_, false) => check("gateway", "SSH gateway", Status::Warn, "disabled: no host-key directory, so devices cannot connect. Run ./telepy.sh keygen"),
+        (_, false) => check("gateway", "SSH gateway", Status::Warn, "disabled: GATEWAY_HOST_KEYS_DIR is not set, so devices cannot connect"),
         (None, true) => check("gateway", "SSH gateway", Status::Fail, "enabled without a host-key directory"),
         (Some(dir), true) => {
             let keys = crate::gateway::load_host_keys(dir);
             if keys.is_empty() {
-                check("gateway", "SSH gateway", Status::Fail, format!("no host key could be loaded from {}. Run ./telepy.sh keygen", dir.display()))
+                check("gateway", "SSH gateway", Status::Fail, format!("no host key could be loaded from {}. Restart the backend (missing host keys are created at start, the folder must be writable) or run telepy-server keygen", dir.display()))
             } else {
                 let algs: Vec<String> = keys.iter().map(|k| k.algorithm().as_str().to_string()).collect();
                 check("gateway", "SSH gateway", Status::Ok, format!("{} host key(s): {}", keys.len(), algs.join(", ")))
@@ -316,14 +317,14 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     out.push(if crate::geoip::GeoIp::load(&config.geoip_dir).enabled() {
         check("geoip", "GeoIP", Status::Ok, format!("{}", config.geoip_dir.display()))
     } else {
-        check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Run ./telepy.sh geoip")
+        check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Run telepy-server geoip in the backend container, then restart it")
     });
 
     let oui = crate::oui::Oui::load(&config.oui_dir);
     out.push(if oui.enabled() {
         check("oui", "OUI vendors", Status::Ok, format!("{} vendors from {}", oui.len(), config.oui_dir.display()))
     } else {
-        check("oui", "OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Run ./telepy.sh oui")
+        check("oui", "OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Run telepy-server oui in the backend container, then restart it")
     });
 
     // 最近登入記到的來源 IP：全是內部位址 = 前面的代理把真實位址弄丟了（或層數設錯）。

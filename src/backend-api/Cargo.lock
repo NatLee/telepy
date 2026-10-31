@@ -4112,6 +4112,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
+ "flate2",
  "futures",
  "hmac 0.12.1",
  "http",
