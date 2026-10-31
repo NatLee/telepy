@@ -210,7 +210,7 @@ Test: `tests/tunnel_service_keys.rs` (a new device trusts only the tunnel key, m
 - **WebSocket** (`ws/gateway.rs`): for networks that allow only web ports (corporate networks, hotels, 4G routers). The device's ssh gets
   `ProxyCommand ~/.ssh/telepy-<install id>-ws.sh`, a wrapper that runs the **carrier**: by preference the prebuilt `telepy-carrier` (a static Rust binary,
   `src/carrier/`, built for x86_64 / aarch64 / armv7 / armv6 Linux, macOS and Windows on every release; the device downloads it from this server at
-  `GET /api/join/carrier/<target>` and checks it against the sha256 the server publishes at `…/sha256`, which in turn comes from the release's `SHA256SUMS`;
+  `GET /api/join/carrier/<target>` and checks it against the sha256 the server publishes at `…/sha256`, which in turn comes from the release's `SHA256SUMS`, accepted only with a valid `SHA256SUMS.sig` from a Telepy release key (`release_key.rs`);
   the server fetches it from the release page the first time a platform is asked for, caches it in `CARRIER_DIR` = `<DATA_DIR>/carriers`, and
   `telepy-server fetch-carriers` fills the cache in advance), else `python3` with `telepy-ws.py` (standard library only, `GET /api/join/telepy-ws.py`) for
   CPUs without a prebuilt binary (MIPS routers); `--carrier binary|python` on the join script forces one. Either wraps the bytes in binary frames and

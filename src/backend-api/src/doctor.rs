@@ -326,7 +326,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         let have = carriers.cached_targets();
         let total = crate::carriers::TARGETS.len();
         out.push(if have.is_empty() {
-            check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only)", carriers.dir().display(), carriers.releases()))
+            check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only); releases must be signed with: {}", carriers.dir().display(), carriers.releases(), carriers.keys_description()))
         } else {
             check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {}", have.len(), carriers.dir().display(), have.join(", "))).fp(&[&have.len().to_string()])
         });

@@ -149,6 +149,8 @@ pub struct Carriers {
     version: Option<String>,
     http: reqwest::Client,
     no_redirect: reqwest::Client,
+    /// 信任的發行公鑰（`release_key`）。/ The release keys in force.
+    keys: Vec<crate::ssh_key::PublicKey>,
     /// 每個 target 一把鎖：同時來的請求只抓一次。/ One fetch per target at a time.
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// 最近失敗的（什麼時候、為什麼）。/ Recent failures (when, why).
@@ -157,6 +159,11 @@ pub struct Carriers {
 
 impl Carriers {
     pub fn new(config: &Config, http: reqwest::Client) -> Self {
+        Self::with_keys(config, http, crate::release_key::keys())
+    }
+
+    /// 指定公鑰（測試用假的 release 伺服器時）。/ With given keys (tests against a fake release server).
+    pub fn with_keys(config: &Config, http: reqwest::Client, keys: Vec<crate::ssh_key::PublicKey>) -> Self {
         let no_redirect = reqwest::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none()).user_agent("telepy-server").build().expect("reqwest client");
         Self {
             dir: config.carrier_dir.clone(),
@@ -164,9 +171,15 @@ impl Carriers {
             version: option_env!("TELEPY_VERSION").map(str::to_string),
             http,
             no_redirect,
+            keys,
             locks: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 給 doctor：信任哪些公鑰。/ For doctor: which keys are trusted.
+    pub fn keys_description(&self) -> String {
+        crate::release_key::describe(&self.keys)
     }
 
     pub fn dir(&self) -> &Path {
@@ -280,6 +293,9 @@ impl Carriers {
         let base = format!("{}/download/{tag}", self.releases);
         let name = archive_name(target);
         let sums = self.download(&format!("{base}/SHA256SUMS")).await.context("the release has no SHA256SUMS")?;
+        // 先驗簽：沒簽、簽錯、不是 Telepy 的發行金鑰 = 整個 release 不信。/ The signature first: unsigned or foreign = not trusted.
+        let sig = self.download(&format!("{base}/SHA256SUMS.sig")).await.context("the release has no SHA256SUMS.sig (not a signed release)")?;
+        let signer = crate::release_key::verify_with(&self.keys, &sums, &String::from_utf8_lossy(&sig)).map_err(|e| anyhow::anyhow!("SHA256SUMS signature: {e}"))?;
         let want = sum_for(&String::from_utf8_lossy(&sums), &name).ok_or_else(|| anyhow::anyhow!("SHA256SUMS lists no {name} (the release carries no carrier for {target})"))?;
         let archive = self.download(&format!("{base}/{name}")).await?;
         let got = sha256_hex(&archive);
@@ -303,7 +319,7 @@ impl Carriers {
         }
         std::fs::rename(&tmp, &path).with_context(|| format!("cannot move {} into place", tmp.display()))?;
         std::fs::write(dir.join("sha256"), format!("{sha} {tag}\n")).with_context(|| "cannot write the checksum file")?;
-        tracing::info!(target, tag, size = bin.len(), "device carrier fetched");
+        tracing::info!(target, tag, size = bin.len(), signer, "device carrier fetched");
         Ok(Cached { path, sha256: sha, size: bin.len() as u64, version: Some(tag.to_string()) })
     }
 
@@ -383,6 +399,98 @@ mod tests {
         }
         assert_eq!(extract_binary(zip_bytes.get_ref(), "telepy-carrier-w.zip").unwrap(), b"MZ");
         assert!(extract_binary(b"junk", "telepy-carrier-x.tar.gz").is_err());
+    }
+
+    /// 一個 tar.gz，裡面是 telepy-carrier。/ A tar.gz holding a telepy-carrier.
+    fn targz(bin: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let enc = flate2::write::GzEncoder::new(&mut out, flate2::Compression::fast());
+            let mut b = tar::Builder::new(enc);
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bin.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            b.append_data(&mut h, "telepy-carrier", bin).unwrap();
+            b.into_inner().unwrap().finish().unwrap();
+        }
+        out
+    }
+
+    /// 假的 release 伺服器：`/releases/latest` 轉址到 `vtest`，`/releases/download/vtest/<file>` 給檔案。
+    /// A fake release server: `/releases/latest` redirects to `vtest`, `/releases/download/vtest/<file>` serves the files.
+    async fn fake_release(files: HashMap<String, Vec<u8>>) -> String {
+        use axum::extract::{Path as AxPath, State};
+        use axum::http::{header, StatusCode};
+        use axum::response::IntoResponse;
+        use axum::routing::get;
+        let files = Arc::new(files);
+        let app = axum::Router::new()
+            .route("/releases/latest", get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/releases/tag/vtest")]).into_response() }))
+            .route(
+                "/releases/download/vtest/{file}",
+                get(|State(files): State<Arc<HashMap<String, Vec<u8>>>>, AxPath(file): AxPath<String>| async move {
+                    match files.get(&file) {
+                        Some(b) => (StatusCode::OK, b.clone()).into_response(),
+                        None => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }),
+            )
+            .with_state(files);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}/releases")
+    }
+
+    /// 抓載體：release 的 SHA256SUMS 要是信任的發行金鑰簽的；別人簽的、沒簽的都不要。/ A fetch needs SHA256SUMS signed by a trusted key.
+    #[tokio::test]
+    async fn carriers_come_only_from_a_release_signed_with_a_trusted_key() {
+        use crate::release_key::NAMESPACE;
+        use crate::ssh_key::{Algorithm, HashAlg, LineEnding, PrivateKey};
+        let key = PrivateKey::random(&mut rand10::rng(), Algorithm::Ed25519).unwrap();
+        let other = PrivateKey::random(&mut rand10::rng(), Algorithm::Ed25519).unwrap();
+        let target = "x86_64-unknown-linux-musl";
+        let name = archive_name(target);
+        let bin = b"#!/bin/sh\necho carrier\n";
+        let archive = targz(bin);
+        let sums = format!("{}  {name}\n", sha256_hex(&archive));
+        let sign = |k: &PrivateKey| k.sign(NAMESPACE, HashAlg::Sha512, sums.as_bytes()).unwrap().to_pem(LineEnding::LF).unwrap().into_bytes();
+        let files = |sig: Option<Vec<u8>>| {
+            let mut m = HashMap::from([(name.clone(), archive.clone()), ("SHA256SUMS".to_string(), sums.clone().into_bytes())]);
+            if let Some(s) = sig {
+                m.insert("SHA256SUMS.sig".to_string(), s);
+            }
+            m
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let trusted = vec![key.public_key().clone()];
+        let mut config = Config::from_env();
+
+        // 信任的金鑰簽的：抓下來、解開、快取。/ Signed by the trusted key: fetched, extracted, cached.
+        config.carrier_dir = dir.path().join("a");
+        config.releases_url = fake_release(files(Some(sign(&key)))).await;
+        let c = Carriers::with_keys(&config, reqwest::Client::new(), trusted.clone());
+        let got = c.get(target).await.unwrap();
+        assert_eq!((got.size as usize, got.version.as_deref()), (bin.len(), Some("vtest")));
+        assert_eq!(std::fs::read(&got.path).unwrap(), bin);
+        assert_eq!(c.cached(target).map(|x| x.sha256), Some(sha256_hex(bin)));
+
+        // 別人簽的。/ Signed by someone else.
+        config.carrier_dir = dir.path().join("b");
+        config.releases_url = fake_release(files(Some(sign(&other)))).await;
+        let c = Carriers::with_keys(&config, reqwest::Client::new(), trusted.clone());
+        let e = c.get(target).await.unwrap_err().to_string();
+        assert!(e.contains("none of the Telepy release keys"), "{e}");
+        assert!(c.cached(target).is_none());
+
+        // 沒簽。/ Unsigned.
+        config.carrier_dir = dir.path().join("c");
+        config.releases_url = fake_release(files(None)).await;
+        let c = Carriers::with_keys(&config, reqwest::Client::new(), trusted);
+        let e = c.get(target).await.unwrap_err().to_string();
+        assert!(e.contains("SHA256SUMS.sig"), "{e}");
+        assert!(c.keys_description().starts_with("SHA256:"));
     }
 
     #[tokio::test]

@@ -210,7 +210,7 @@ OpenSSH コンテナがこの接続を受けていましたが、今はバック
 - **WebSocket**（`ws/gateway.rs`）：Web ポートしか許可しないネットワーク（社内ネットワーク、ホテル、4G ルーター）向けです。デバイスの ssh に
   `ProxyCommand ~/.ssh/telepy-<インストール ID>-ws.sh` が付き、このラッパーが**キャリア**を実行します。優先されるのはビルド済みの `telepy-carrier`
   （Rust の静的バイナリ、`src/carrier/`。リリースごとに x86_64 / aarch64 / armv7 / armv6 Linux、macOS、Windows 向けにビルド。デバイスはこのサーバーの
-  `GET /api/join/carrier/<target>` からダウンロードし、サーバーが `…/sha256` で公開する sha256（リリースの `SHA256SUMS` 由来）と照合します。サーバーは
+  `GET /api/join/carrier/<target>` からダウンロードし、サーバーが `…/sha256` で公開する sha256（リリースの `SHA256SUMS` 由来。サーバーは Telepy のリリース鍵による有効な `SHA256SUMS.sig` があるものだけを受け入れます、`release_key.rs`）と照合します。サーバーは
   そのプラットフォームが最初に求められたときにリリースページから取得して `CARRIER_DIR` = `<DATA_DIR>/carriers` にキャッシュし、`telepy-server fetch-carriers`
   で先に揃えることもできます）。ビルド済みバイナリのない CPU（MIPS ルーター）は `python3` で `telepy-ws.py`（標準ライブラリのみ、`GET /api/join/telepy-ws.py`）
   を使います。参加スクリプトの `--carrier binary|python` で指定もできます。どちらもバイト列をバイナリフレームに包んで Web ポートへ送り、デバイスに

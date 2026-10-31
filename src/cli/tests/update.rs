@@ -66,12 +66,37 @@ fn archive(binary: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 發行版的檔案：archive + SHA256SUMS（`good_sum` = 雜湊是否正確）。/ The release files, with a right or wrong checksum.
-fn release(binary: &[u8], good_sum: bool) -> HashMap<String, Vec<u8>> {
+/// 一把用完即丟的發行金鑰（`ssh-keygen`）：回 (私鑰檔, 公鑰那一行)。/ A throwaway release key: (private key file, public key line).
+fn release_key(dir: &Path, name: &str) -> (PathBuf, String) {
+    let key = dir.join(name);
+    let ok = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", name, "-f"]).arg(&key).status().map(|s| s.success()).unwrap_or(false);
+    assert!(ok, "ssh-keygen makes the test's release key");
+    (key.clone(), std::fs::read_to_string(key.with_extension("pub")).unwrap().trim().to_string())
+}
+
+/// 像 CI 一樣簽 SHA256SUMS：`ssh-keygen -Y sign -n telepy-release`。/ Sign SHA256SUMS the way CI does.
+fn sign(dir: &Path, key: &Path, sums: &[u8]) -> Vec<u8> {
+    let f = dir.join(format!("SHA256SUMS-{}", std::process::id()));
+    std::fs::write(&f, sums).unwrap();
+    let _ = std::fs::remove_file(f.with_extension("sig"));
+    let ok = Command::new("ssh-keygen").args(["-Y", "sign", "-f"]).arg(key).args(["-n", "telepy-release"]).arg(&f).status().map(|s| s.success()).unwrap_or(false);
+    assert!(ok, "ssh-keygen signs");
+    std::fs::read(format!("{}.sig", f.display())).unwrap()
+}
+
+/// 發行版的檔案：archive + SHA256SUMS + 它的簽章（`good_sum` = 雜湊是否正確；`key` = 簽的金鑰，None = 沒簽）。
+/// The release files: the archive, SHA256SUMS and its signature (`good_sum` = a right checksum; `key` None = unsigned).
+fn release(dir: &Path, binary: &[u8], good_sum: bool, key: Option<&Path>) -> HashMap<String, Vec<u8>> {
     let name = archive_name(target().expect("a release target for this platform"));
     let bytes = archive(binary);
     let hash = if good_sum { sha256_hex(&bytes) } else { "0".repeat(64) };
-    HashMap::from([(name.clone(), bytes), ("SHA256SUMS".to_string(), format!("{hash}  {name}\n").into_bytes())])
+    let sums = format!("{hash}  {name}\n").into_bytes();
+    let mut files = HashMap::from([(name.clone(), bytes)]);
+    if let Some(k) = key {
+        files.insert("SHA256SUMS.sig".to_string(), sign(dir, k, &sums));
+    }
+    files.insert("SHA256SUMS".to_string(), sums);
+    files
 }
 
 /// 把編好的 telepy 複製到自己的目錄。/ A private copy of the built telepy.
@@ -84,11 +109,17 @@ fn install(dir: &Path) -> PathBuf {
 }
 
 fn telepy(exe: &Path, home: &Path, releases: &str, args: &[&str]) -> (bool, String, String) {
+    telepy_trusting(exe, home, releases, "", args)
+}
+
+/// `keys` = `TELEPY_RELEASE_KEYS`（信任的發行公鑰）。/ With the trusted release keys.
+fn telepy_trusting(exe: &Path, home: &Path, releases: &str, keys: &str, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(exe)
         .args(args)
         .env("HOME", home)
         .env("TELEPY_CONFIG_DIR", home.join("config"))
         .env("TELEPY_RELEASES_URL", releases)
+        .env("TELEPY_RELEASE_KEYS", keys)
         .env("TELEPY_NO_KEYRING", "1")
         .output()
         .unwrap();
@@ -105,31 +136,52 @@ fn leftovers(exe: &Path) -> Vec<String> {
 
 #[test]
 fn update_checks_verifies_rolls_back_and_replaces() {
+    if Command::new("ssh-keygen").arg("-?").output().is_err() {
+        eprintln!("skipping: no ssh-keygen to sign the fake release with");
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let exe = install(tmp.path());
     let before = version(&exe);
     assert!(before.starts_with("telepy "), "{before}");
+    let (key, pub_line) = release_key(tmp.path(), "release-key");
+    let (other_key, _) = release_key(tmp.path(), "other-key");
+    let bin = b"#!/bin/sh\necho 'telepy 99.0.0'\n";
 
-    // 雜湊對不上：拒絕，什麼都沒換。/ A wrong checksum: refused, nothing changed.
-    let bad_sum = serve(release(b"#!/bin/sh\necho 'telepy 99.0.0'\n", false));
-    let (ok, out, err) = telepy(&exe, tmp.path(), &bad_sum, &["update", "--check"]);
+    // 沒簽、別人簽的：拒絕，連 archive 都不下載。/ Unsigned or signed by someone else: refused before the archive is fetched.
+    let unsigned = serve(release(tmp.path(), bin, true, None));
+    let (ok, _, err) = telepy_trusting(&exe, tmp.path(), &unsigned, &pub_line, &["update"]);
+    assert!(!ok && err.contains("SHA256SUMS.sig") && err.contains("signed with a Telepy release key"), "{err}");
+    let foreign = serve(release(tmp.path(), bin, true, Some(&other_key)));
+    let (ok, _, err) = telepy_trusting(&exe, tmp.path(), &foreign, &pub_line, &["update"]);
+    assert!(!ok && err.contains("none of the Telepy release keys"), "{err}");
+    // 信任清單是空的（沒有設定公鑰）：也拒絕。/ An empty trust list refuses too.
+    let signed = serve(release(tmp.path(), bin, true, Some(&key)));
+    let (ok, _, err) = telepy_trusting(&exe, tmp.path(), &signed, "", &["update"]);
+    assert!(!ok && (err.contains("no Telepy release key is configured") || err.contains("none of the Telepy release keys")), "{err}");
+    assert_eq!(version(&exe), before);
+    assert_eq!(leftovers(&exe), Vec::<String>::new());
+
+    // 簽對了但雜湊對不上：拒絕，什麼都沒換。/ Signed, but a wrong checksum: refused, nothing changed.
+    let bad_sum = serve(release(tmp.path(), bin, false, Some(&key)));
+    let (ok, out, err) = telepy_trusting(&exe, tmp.path(), &bad_sum, &pub_line, &["update", "--check"]);
     assert!(ok, "{err}");
     assert!(out.contains("telepy 99.0.0 is out"), "{out}");
-    let (ok, _, err) = telepy(&exe, tmp.path(), &bad_sum, &["update"]);
+    let (ok, _, err) = telepy_trusting(&exe, tmp.path(), &bad_sum, &pub_line, &["update"]);
     assert!(!ok && err.contains("doesn't match its checksum"), "{err}");
     assert_eq!(version(&exe), before);
     assert_eq!(leftovers(&exe), Vec::<String>::new());
 
     // 新的 binary 跑不起來：換回原本的。/ A new binary that doesn't start: the old one comes back.
-    let broken = serve(release(b"#!/bin/sh\nexit 3\n", true));
-    let (ok, _, err) = telepy(&exe, tmp.path(), &broken, &["update"]);
+    let broken = serve(release(tmp.path(), b"#!/bin/sh\nexit 3\n", true, Some(&key)));
+    let (ok, _, err) = telepy_trusting(&exe, tmp.path(), &broken, &pub_line, &["update"]);
     assert!(!ok && err.contains("didn't start"), "{err}");
     assert_eq!(version(&exe), before, "rolled back");
     assert_eq!(leftovers(&exe), Vec::<String>::new());
 
     // 正常的：換上新版，不留備份。/ A good one: replaced, no backup left behind.
-    let good = serve(release(b"#!/bin/sh\necho 'telepy 99.0.0'\n", true));
-    let (ok, out, err) = telepy(&exe, tmp.path(), &good, &["update"]);
+    let good = serve(release(tmp.path(), bin, true, Some(&key)));
+    let (ok, out, err) = telepy_trusting(&exe, tmp.path(), &good, &pub_line, &["update"]);
     assert!(ok, "{err}");
     assert!(out.contains("to 99.0.0 (telepy 99.0.0)"), "{out}");
     assert_eq!(version(&exe), "telepy 99.0.0");

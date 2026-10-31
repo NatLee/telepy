@@ -239,12 +239,15 @@ fn download(url: &str) -> Result<Vec<u8>> {
     Ok(res.bytes()?.to_vec())
 }
 
-/// 下載並檢查一個發行版的 binary。/ Download a release's binary and check it.
+/// 下載並檢查一個發行版的 binary：`SHA256SUMS` 要是 Telepy 發行金鑰簽的（`SHA256SUMS.sig`），檔案的雜湊要對得上。
+/// Download a release's binary and check it: `SHA256SUMS` must be signed with a Telepy release key, the archive must match it.
 pub fn fetch_binary(tag: &str, target: &str) -> Result<Vec<u8>> {
     let base = format!("{}/download/{tag}", releases_url());
     let name = archive_name(target);
+    let sums = download(&format!("{base}/SHA256SUMS")).context("the release has no SHA256SUMS, so it can't be checked")?;
+    let sig = download(&format!("{base}/SHA256SUMS.sig")).context("the release has no SHA256SUMS.sig: telepy update only installs releases signed with a Telepy release key")?;
+    crate::release_key::verify(&sums, &String::from_utf8_lossy(&sig)).map_err(|e| anyhow!("the release's SHA256SUMS is not signed with a Telepy release key ({e}); nothing was changed"))?;
     let archive = download(&format!("{base}/{name}"))?;
-    let sums = download(&format!("{base}/SHA256SUMS")).or_else(|_| download(&format!("{base}/{name}.sha256"))).context("the release has no checksums, so it can't be checked")?;
     let want = sum_for(&String::from_utf8_lossy(&sums), &name).ok_or_else(|| anyhow!("the release's checksums don't list {name}"))?;
     let got = sha256_hex(&archive);
     if got != want {

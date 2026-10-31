@@ -4222,6 +4222,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "ssh-key",
  "tar",
  "telepy-carrier",
  "telepy-server",

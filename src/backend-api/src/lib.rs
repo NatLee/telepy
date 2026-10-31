@@ -39,6 +39,7 @@ pub mod oauth;
 pub mod permissions;
 pub mod presence;
 pub mod recording;
+pub mod release_key;
 pub mod remote_browser;
 pub mod rustdesk;
 pub mod scripts;
@@ -59,3 +60,6 @@ pub mod util;
 pub mod vault;
 pub mod webhooks;
 pub mod ws;
+
+/// `release_key.rs` 跟 CLI 共用，兩邊都以 `crate::ssh_key` 找到 ssh-key crate。/ `release_key.rs` is shared with the CLI; both reach the ssh-key crate as `crate::ssh_key`.
+pub use russh::keys::ssh_key;

@@ -210,7 +210,7 @@ sharee）。
 - **WebSocket**（`ws/gateway.rs`）：給只放行網頁 port 的網路（公司內網、飯店、4G 路由器）。裝置的 ssh 加上
   `ProxyCommand ~/.ssh/telepy-<安裝代號>-ws.sh`，這個包裝腳本執行**載體**：優先用預編的 `telepy-carrier`（Rust 靜態 binary，`src/carrier/`，
   每次 release 都編 x86_64 / aarch64 / armv7 / armv6 Linux、macOS 與 Windows；裝置從這台伺服器的 `GET /api/join/carrier/<target>` 下載，並用伺服器在
-  `…/sha256` 公布的 sha256 核對，那個值又來自 release 的 `SHA256SUMS`；伺服器在某平台第一次被要時才從 release 頁抓，快取在 `CARRIER_DIR` =
+  `…/sha256` 公布的 sha256 核對，那個值又來自 release 的 `SHA256SUMS`，而伺服器只接受帶有 Telepy 發行金鑰有效簽章（`SHA256SUMS.sig`，`release_key.rs`）的那份；伺服器在某平台第一次被要時才從 release 頁抓，快取在 `CARRIER_DIR` =
   `<DATA_DIR>/carriers`，`telepy-server fetch-carriers` 可以先抓齊），沒有預編 binary 的 CPU（MIPS 路由器）則用 `python3` 跑 `telepy-ws.py`
   （只用標準函式庫，`GET /api/join/telepy-ws.py`）；join 腳本的 `--carrier binary|python` 可以指定。兩種都把位元組包成二進位 frame 送到網頁 port，
   也都會走裝置設定的 HTTP CONNECT 代理（`HTTPS_PROXY` / `--proxy`，`NO_PROXY` 照用；join 腳本會把執行環境的代理寫進包裝腳本，因為服務沒有自己的

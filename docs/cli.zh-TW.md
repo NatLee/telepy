@@ -88,8 +88,29 @@ telepy --version
 
 每個壓縮檔旁邊都有一個 `.sha256`，每個發行版還有一份 `SHA256SUMS`
 （`curl -fsSL …/telepy-$TARGET.tar.gz.sha256 | sha256sum -c`；macOS 用 `shasum -a 256 -c`）。指定版本：
-`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz`。這個執行檔沒有簽章也沒有經過公證：如果是用瀏覽器而不是
+`…/releases/download/v2.11.0/telepy-$TARGET.tar.gz`。這個執行檔沒有 Apple 或 Microsoft 的簽章：如果是用瀏覽器而不是
 `curl` 下載，macOS 需要先執行 `xattr -d com.apple.quarantine telepy`。
+
+### 確認下載的來源
+
+兩件事可以證明一個發行檔是 Telepy 的，都不需要任何帳號：
+
+- **建置來源證明。**發行版的每個檔案都由建置本身出具證明（GitHub artifact attestation）：
+  `gh attestation verify telepy-$TARGET.tar.gz --repo NatLee/telepy` 會說出是哪個 commit、哪次 workflow 執行產生了這些位元組。
+- **簽過的雜湊清單。**`SHA256SUMS` 用 Telepy 的發行金鑰（一把 OpenSSH ed25519 金鑰，公鑰在
+  [`src/backend-api/src/release_key.rs`](../src/backend-api/src/release_key.rs)）簽成 `SHA256SUMS.sig`，格式是 OpenSSH 的簽章格式。
+  只靠 OpenSSH 就能驗：
+
+  ```sh
+  echo "telepy-release $(sed -n 's/^ *"\(ssh-ed25519 [^"]*\)".*/\1/p' release_key.rs | head -1)" > allowed_signers
+  ssh-keygen -Y verify -f allowed_signers -I telepy-release -n telepy-release -s SHA256SUMS.sig < SHA256SUMS
+  sha256sum -c --ignore-missing SHA256SUMS
+  ```
+
+  （也可以手動把那一行公鑰貼進去；`allowed_signers` 只有一行：`telepy-release <公鑰>`。）
+
+`telepy update` 與後端抓載體時都自己做這個檢查，`SHA256SUMS` 缺少或不是 Telepy 發行金鑰簽的 release 一律拒絕。
+`TELEPY_RELEASE_KEYS`（一行或多行公鑰，用換行或 `;` 分隔）可以換掉內建的公鑰，給用自己的金鑰重簽的鏡像用。
 
 也可以自己建置（Rust 1.88 以上）：`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`
 （回報的版本是 Cargo.toml 裡的 `0.1.0`；建置時設定 `TELEPY_VERSION` 可以標上別的版本）。`ssh`、`scp` 和 `sftp` 還需要
@@ -97,7 +118,8 @@ PATH 裡有系統的 OpenSSH 用戶端（`telepy doctor` 會檢查）。
 
 **維護者：**發佈 GitHub release（`gh release create v2.7.0 …`）會執行 `.github/workflows/release-cli.yml`：
 從該 tag 建置五個目標平台，`TELEPY_VERSION` 為去掉 `v` 的 tag，並做冒煙測試
-（`telepy --version` 必須印出它），再連同 `.sha256` 檔和 `SHA256SUMS` 附到 release 上。也可以在 Actions 分頁手動執行：帶 tag 就是
+（`telepy --version` 必須印出它）、出具來源證明，再連同 `.sha256` 檔和用 `RELEASE_SIGNING_KEY` secret（一把 OpenSSH ed25519 私鑰；
+沒有它 release 這一步會失敗）簽過的 `SHA256SUMS` 附到 release 上。也可以在 Actions 分頁手動執行：帶 tag 就是
 （重新）附到既有的 release，不帶 tag 則是試建置，檔案只留在該次執行的 artifacts 裡。版本標記機制出現之前的 tag（例如 `v2.8.0`）也能用同樣方式
 建置，它的 CLI 會回報 Cargo.toml 的 `0.1.0`。從 `v2.8.0` 起每個 Telepy 發行版都附有由它建置的 CLI；沒有
 獨立的 CLI tag。
@@ -106,12 +128,12 @@ PATH 裡有系統的 OpenSSH 用戶端（`telepy doctor` 會檢查）。
 
 ```sh
 telepy update --check        # is a newer release out?
-telepy update                # download it, check it against the release's SHA256SUMS and replace this telepy
+telepy update                # download it, check it against the release's signed SHA256SUMS and replace this telepy
 telepy update --to v2.9.0    # a given release (also to go back)
 ```
 
-`telepy update` 會從發行版下載對應這個平台的壓縮檔，若它的 SHA-256 和
-`SHA256SUMS` 不符就拒絕使用，把新的執行檔寫在舊檔旁邊，把舊檔移開，再執行新檔的 `--version`；
+`telepy update` 會從發行版下載對應這個平台的壓縮檔，若 `SHA256SUMS` 不是 Telepy 發行金鑰簽的、或壓縮檔的 SHA-256 和
+它不符就拒絕使用，把新的執行檔寫在舊檔旁邊，把舊檔移開，再執行新檔的 `--version`；
 失敗的話就把舊檔放回去。它需要 telepy 所在資料夾的寫入權限（`/usr/local/bin` 要用 `sudo telepy update`）；
 用 `cargo install` 或 Homebrew 安裝的 telepy 則交給那些工具處理。在 Windows 上，舊的
 `.exe` 會被改名（執行中的檔案無法刪除），下次執行時再清掉。

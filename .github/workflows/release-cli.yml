@@ -24,8 +24,12 @@ on:
         required: false
         default: ""
 
+# contents: 掛檔到 release；id-token + attestations: 每個檔的 build provenance（`gh attestation verify`）。
+# contents: attach files to the release; id-token + attestations: build provenance per file (`gh attestation verify`).
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-cli-${{ github.event.release.tag_name || inputs.tag || github.run_id }}
@@ -131,6 +135,17 @@ jobs:
           echo "$out"
           [ "$out" = "telepy-carrier $TELEPY_VERSION" ] || { echo "expected: telepy-carrier $TELEPY_VERSION"; exit 1; }
           "$carrier" --help >/dev/null
+      # 每個檔的來源證明（哪個 repo、哪個 workflow、哪個 commit 編的）；試編沒有 tag 就不留。
+      # Provenance for every file (which repo, workflow and commit built it); trial builds leave none.
+      - name: Attest build provenance
+        if: ${{ env.TAG != '' }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            telepy-*.tar.gz
+            telepy-*.zip
+            telepy-carrier-*.tar.gz
+            telepy-carrier-*.zip
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -155,9 +170,21 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           # 一個檔列出全部的雜湊：`sha256sum -c --ignore-missing SHA256SUMS`。/ One file with every hash.
           (cd dist && cat telepy-*.sha256 telepy-carrier-*.sha256 | sort -u -k2 > SHA256SUMS)
+          # 用 Telepy 的發行金鑰（OpenSSH ed25519，secret RELEASE_SIGNING_KEY）簽 SHA256SUMS：後端抓載體、`telepy update`
+          # 都只認簽過的 release（公鑰在 src/backend-api/src/release_key.rs）；沒有 secret 就不發（寧可失敗，不發沒簽的）。
+          # Sign SHA256SUMS with the release key (OpenSSH ed25519 in the RELEASE_SIGNING_KEY secret): the backend's carrier
+          # fetch and `telepy update` accept signed releases only (public key in src/backend-api/src/release_key.rs).
+          # No secret = fail rather than publish unsigned.
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::the RELEASE_SIGNING_KEY secret is not set; the release cannot be signed"; exit 1; }
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release_key"
+          ssh-keygen -Y sign -f "$RUNNER_TEMP/release_key" -n telepy-release dist/SHA256SUMS
+          rm -f "$RUNNER_TEMP/release_key"
+          test -s dist/SHA256SUMS.sig
           # release 由維護者發（附發行說明）；手動補掛時它得先存在。/ Releases are written by a maintainer; it must exist.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null \
             || { echo "::error::release $TAG does not exist; publish it first (gh release create $TAG …)"; exit 1; }
