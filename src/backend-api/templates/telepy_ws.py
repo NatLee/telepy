@@ -3,6 +3,11 @@
 #
 #   ssh -o ProxyCommand='python3 telepy-ws.py wss://telepy.example.com/ws/gateway/' ...
 #   ssh -o ProxyCommand='python3 telepy-ws.py --tcp ssh.example.com:24242 wss://telepy.example.com/ws/gateway/' ...
+#   ssh -o ProxyCommand='python3 telepy-ws.py --proxy http://proxy.corp:3128 wss://telepy.example.com/ws/gateway/' ...
+#
+# Networks that only let traffic out through an HTTP proxy: --proxy (or the HTTPS_PROXY / ALL_PROXY variables, with
+# NO_PROXY honoured) sends CONNECT to the proxy first, for the SSH port and the web port alike; --no-proxy ignores the
+# variables. This is the python3 twin of the prebuilt telepy-carrier binary: devices without one for their CPU use this.
 #
 # With --tcp it picks the way by itself: the SSH port first (the server must answer with its "SSH-" banner), the
 # WebSocket when that port cannot be reached (a firewall, or a web name behind a proxy such as Cloudflare's that
@@ -25,6 +30,84 @@ import threading
 import urllib.parse
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+PROXY = None  # (host, port, auth) or None
+
+
+def parse_proxy(value):
+    """http://[user:pass@]host:port (no port = 80); socks is not supported."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if "://" not in value:
+        value = "http://" + value
+    u = urllib.parse.urlsplit(value)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return None
+    auth = None
+    if u.username:
+        auth = (urllib.parse.unquote(u.username), urllib.parse.unquote(u.password or ""))
+    return (u.hostname, u.port or 80, auth)
+
+
+def no_proxy_matches(entries, host):
+    """curl's NO_PROXY rule: * = everything; a name matches itself and its subdomains; an IP must match exactly."""
+    host = host.strip("[]").lower()
+    for e in entries.replace(" ", ",").split(","):
+        e = e.strip().lstrip(".").lower()
+        if not e:
+            continue
+        h, sep, port = e.rpartition(":")
+        if sep and port.isdigit():
+            e = h
+        if e == "*" or host == e or host.endswith("." + e):
+            return True
+    return False
+
+
+def proxy_from_env(host):
+    no = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    if no_proxy_matches(no, host):
+        return None
+    for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        p = parse_proxy(os.environ.get(name))
+        if p:
+            return p
+    return None
+
+
+def open_tcp(host, port, timeout):
+    """A TCP connection to host:port, straight or through the proxy (CONNECT). Returns (socket, bytes already read)."""
+    if PROXY is None:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return sock, b""
+    phost, pport, auth = PROXY
+    sock = socket.create_connection((phost, pport), timeout=timeout)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    target = "[%s]:%d" % (host, port) if ":" in host else "%s:%d" % (host, port)
+    req = "CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: telepy-ws/1\r\nProxy-Connection: Keep-Alive\r\n" % (target, target)
+    if auth:
+        req += "Proxy-Authorization: Basic %s\r\n" % base64.b64encode(("%s:%s" % auth).encode()).decode()
+    req += "\r\n"
+    sock.sendall(req.encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise OSError("the proxy %s:%d closed the connection before answering CONNECT" % (phost, pport))
+        buf += chunk
+        if len(buf) > 65536:
+            raise OSError("the proxy's answer to CONNECT is too large")
+    head, rest = buf.split(b"\r\n\r\n", 1)
+    first = head.split(b"\r\n")[0].decode(errors="replace")
+    parts = first.split()
+    if len(parts) < 2 or not parts[0].startswith("HTTP/") or not parts[1].isdigit():
+        raise OSError("the proxy answered CONNECT with something that is not HTTP: %s" % first)
+    if not 200 <= int(parts[1]) < 300:
+        raise OSError("the proxy refused CONNECT %s: %s" % (target, first))
+    return sock, rest
 
 
 def die(message):
@@ -74,8 +157,9 @@ def connect(url):
         raise OSError("the URL must look like wss://host/ws/gateway/")
     tls = u.scheme == "wss"
     port = u.port or (443 if tls else 80)
-    sock = socket.create_connection((u.hostname, port), timeout=30)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock, pending = open_tcp(u.hostname, port, 30)
+    if pending:
+        raise OSError("the proxy sent data before the TLS handshake")
     if tls:
         sock = ssl.create_default_context().wrap_socket(sock, server_hostname=u.hostname)
     key = base64.b64encode(os.urandom(16)).decode()
@@ -191,10 +275,8 @@ def split_host_port(value):
 
 def direct(host, port):
     """Connect to the SSH port; succeed only once the server's SSH banner arrived (a proxy or a closed port fails)."""
-    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock, seen = open_tcp(host, port, CONNECT_TIMEOUT)
     sock.settimeout(BANNER_TIMEOUT)
-    seen = b""
     while True:
         chunk = sock.recv(4096)
         if not chunk:
@@ -314,14 +396,45 @@ def auto(tcp, url):
     die("cannot connect: the SSH port %s:%d and the web port both failed (%s)" % (host, port, "; ".join(errors)))
 
 
+USAGE = "usage: telepy-ws.py [--tcp host:port] [--proxy http://host:port | --no-proxy] wss://host/ws/gateway/"
+
+
 def main():
+    global PROXY
     args = sys.argv[1:]
-    if len(args) == 3 and args[0] == "--tcp":
-        auto(args[1], args[2])
-    if len(args) != 1:
-        die("usage: telepy-ws.py [--tcp host:port] wss://host/ws/gateway/")
+    tcp = None
+    proxy = None
+    no_proxy = False
+    url = None
+    while args:
+        a = args.pop(0)
+        if a == "--tcp" and args:
+            tcp = args.pop(0)
+        elif a == "--proxy" and args:
+            proxy = args.pop(0)
+        elif a == "--no-proxy":
+            no_proxy = True
+        elif a in ("--version", "-V"):
+            sys.stdout.write("telepy-ws.py 1\n")
+            return
+        elif a.startswith("-") or url is not None:
+            die(USAGE)
+        else:
+            url = a
+    if url is None:
+        die(USAGE)
+    if proxy:
+        PROXY = parse_proxy(proxy)
+        if PROXY is None:
+            die("--proxy: not an http proxy URL: %s" % proxy)
+    elif not no_proxy:
+        PROXY = proxy_from_env(urllib.parse.urlsplit(url).hostname or "")
+    if PROXY:
+        note("through the proxy %s:%d" % (PROXY[0], PROXY[1]))
+    if tcp:
+        auto(tcp, url)
     try:
-        sock, pending = connect(args[0])
+        sock, pending = connect(url)
     except (OSError, ssl.SSLError) as e:
         die("cannot connect: %s" % e)
     relay_ws(sock, pending)

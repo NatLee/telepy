@@ -998,7 +998,7 @@ pub struct ConfigResponse {
     pub transport: String,
     /// The gateway's WebSocket address (`wss://host/ws/gateway/`)
     pub ws_url: String,
-    /// Where to download the python3 carrier from
+    /// Where to download the python3 carrier from (laptops; devices get the prebuilt telepy-carrier from `/api/join/carrier/{target}`)
     pub ws_client_url: String,
     #[schema(example = "~/.ssh/telepy-ws.py")]
     pub ws_client_path: String,
@@ -3083,7 +3083,7 @@ pub struct JoinRegistration {
     pub name: Option<String>,
     /// This machine's SSH host keys (`type base64`, verified by the script with a strict handshake). Pinned at once; a machine another account's tunnel already pins is refused (409)
     pub host_keys: Option<Vec<String>>,
-    /// What the script found on the device: `shell`, `os`, `arch`, `http`, `client`, `server`, `init`, `keepalive` (ssh | tcp), `key_format`, `authorized_keys`, `ssh_host`, `compat` (list, e.g. `no_server_alive`). Allow-listed, ≤ 120 chars each
+    /// What the script found on the device: `shell`, `os`, `arch`, `http`, `client`, `server`, `init`, `keepalive` (ssh | tcp), `key_format`, `authorized_keys`, `ssh_host`, `transport` (ssh | websocket | auto), `carrier` (`binary <target>` | `python3` | `none`: which web-port carrier was installed), `compat` (list, e.g. `no_server_alive`). Allow-listed, ≤ 120 chars each
     #[schema(value_type = Object)]
     pub facts: Option<serde_json::Value>,
 }

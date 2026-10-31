@@ -73,8 +73,10 @@ Join this machine to Telepy as a device.
   --compat-no-server-alive          TCP keepalive instead of SSH ServerAlive (see --check)
   --no-compat             never switch to the compat mode automatically
   --no-service            same as --service loop
-  --via-web               carry the tunnel inside a WebSocket on Telepy's web port (needs python3)
-  --auto                  the SSH port first, the web port when it is blocked (uses python3 when present)
+  --via-web               carry the tunnel inside a WebSocket on Telepy's web port (needs a carrier, see --carrier)
+  --auto                  the SSH port first, the web port when it is blocked (with a carrier; without one the SSH port only)
+  --carrier auto|binary|python      the web-port carrier: auto (default) = the prebuilt telepy-carrier for this machine,
+                          downloaded from Telepy and checked against its sha256, else python3 with telepy-ws.py
   --ssh-dir DIR           where the key, known_hosts, record and uninstall script go (default: ~/.ssh)
 USAGE
 }
@@ -198,6 +200,67 @@ http_hint() {
     [ -z "$HTTP_ERR" ] || note "$(printf '%s' "$HTTP_ERR" | tail -n 1 | cut -c1-200)"
 }
 value() { printf '%s\n' "$HTTP_BODY" | sed -n "s/^$1=//p" | head -n 1; }
+
+# --- the web-port carrier -------------------------------------------------------------------------------------
+# Telepy builds a static telepy-carrier for these platforms (the same table as the server's; MIPS routers and other
+# CPUs fall back to python3 with telepy-ws.py). Sets CARRIER_TARGET (empty = no prebuilt binary for this machine).
+carrier_target() {
+    case "$OS/$ARCH" in
+        Linux/x86_64|Linux/amd64) CARRIER_TARGET=x86_64-unknown-linux-musl ;;
+        Linux/aarch64|Linux/arm64) CARRIER_TARGET=aarch64-unknown-linux-musl ;;
+        Linux/armv7l|Linux/armv7|Linux/armv8l) CARRIER_TARGET=armv7-unknown-linux-musleabihf ;;
+        Linux/armv6l|Linux/armv6) CARRIER_TARGET=arm-unknown-linux-musleabihf ;;
+        Darwin/arm64|Darwin/aarch64) CARRIER_TARGET=aarch64-apple-darwin ;;
+        Darwin/x86_64) CARRIER_TARGET=x86_64-apple-darwin ;;
+        *) CARRIER_TARGET="" ;;
+    esac
+}
+# Get a carrier into $TMP: the prebuilt binary (sha256 from Telepy, then --version must run), else python3. Sets
+# CARRIER (binary | python3), WS_CMD (what the wrapper execs), CARRIER_DESC (for messages) and CARRIER_FACT (reported
+# to Telepy); on failure CARRIER stays empty and CARRIER_WHY says why.
+fetch_carrier() {
+    CARRIER_WHY=""
+    if [ "$CARRIER_OPT" != python ] && [ -n "$CARRIER_TARGET" ]; then
+        if http GET "$TELEPY_URL/api/join/carrier/$CARRIER_TARGET/sha256" && [ "$HTTP_STATUS" = 200 ]; then
+            fc_want=$(value SHA256); fc_ver=$(value VERSION)
+            WS_BIN="$TMP/telepy-ws.bin"
+            if http_raw "$TELEPY_URL/api/join/carrier/$CARRIER_TARGET" > "$WS_BIN" && [ -s "$WS_BIN" ]; then
+                fc_got=""
+                if have sha256sum; then fc_got=$(sha256sum "$WS_BIN" | cut -d' ' -f1)
+                elif have shasum; then fc_got=$(shasum -a 256 "$WS_BIN" | cut -d' ' -f1)
+                elif have openssl; then fc_got=$(openssl dgst -sha256 "$WS_BIN" | sed 's/^.*= *//'); fi
+                if [ -n "$fc_got" ] && [ "$fc_got" != "$fc_want" ]; then
+                    CARRIER_WHY="the downloaded telepy-carrier does not match the checksum Telepy published"
+                elif chmod 700 "$WS_BIN" && "$WS_BIN" --version >/dev/null 2>&1; then
+                    CARRIER=binary; WS_CMD=$WS_BIN
+                    CARRIER_DESC="telepy-carrier${fc_ver:+ $fc_ver} ($CARRIER_TARGET${fc_got:+, checksum verified})"
+                    CARRIER_FACT="binary $CARRIER_TARGET"
+                    return 0
+                else
+                    CARRIER_WHY="the downloaded telepy-carrier cannot run here (the wrong CPU, or a noexec temporary directory)"
+                fi
+            else
+                CARRIER_WHY="cannot download telepy-carrier for $CARRIER_TARGET from Telepy"
+            fi
+        else
+            fc_err=$(value ERROR 2>/dev/null)
+            CARRIER_WHY="Telepy has no telepy-carrier for $CARRIER_TARGET${fc_err:+ ($fc_err)}"
+        fi
+        [ "$CARRIER_OPT" = binary ] && return 1
+        note "$CARRIER_WHY; trying python3"
+    fi
+    if [ "$CARRIER_OPT" != binary ] && [ -n "$PYTHON" ]; then
+        WS_PY="$TMP/telepy-ws.py"
+        if http_raw "$TELEPY_URL/api/join/telepy-ws.py" > "$WS_PY" && [ -s "$WS_PY" ]; then
+            chmod 700 "$WS_PY"
+            CARRIER=python3; WS_CMD="$PYTHON $WS_PY"; CARRIER_DESC="python3 ($PYTHON) with telepy-ws.py"; CARRIER_FACT=python3
+            return 0
+        fi
+        CARRIER_WHY="cannot download the python3 carrier from Telepy"
+    fi
+    [ -n "$CARRIER_WHY" ] || CARRIER_WHY="no prebuilt telepy-carrier for $OS/$ARCH and no python3 on this machine (installing python3 would do)"
+    return 1
+}
 values() { printf '%s\n' "$HTTP_BODY" | sed -n "s/^$1=//p"; }
 
 # --- host key verification -----------------------------------------------------------------------------------
@@ -540,13 +603,15 @@ main() {
     NAME=""
     COMPAT_OPT=auto
     VIA_WEB=0
+    CARRIER_OPT=auto
     SSH_DIR_OPT=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --token|--user|--ssh-port|--ssh-host|--authorized-keys|--client|--service|--name|--ssh-dir)
+            --token|--user|--ssh-port|--ssh-host|--authorized-keys|--client|--service|--name|--ssh-dir|--carrier)
                 [ "$#" -ge 2 ] || die "$1 needs a value"
                 case "$1" in
                     --token) TOKEN=$2 ;;
+                    --carrier) CARRIER_OPT=$2 ;;
                     --user) TARGET_USER=$2 ;;
                     --ssh-port) SSH_PORT=$2 ;;
                     --ssh-host) SSH_HOST=$2 ;;
@@ -566,6 +631,7 @@ main() {
             --service=*) SERVICE_OPT=${1#*=}; shift ;;
             --name=*) NAME=${1#*=}; shift ;;
             --ssh-dir=*) SSH_DIR_OPT=${1#*=}; shift ;;
+            --carrier=*) CARRIER_OPT=${1#*=}; shift ;;
             --check) CHECK_ONLY=1; shift ;;
             --no-service) SERVICE_OPT=loop; shift ;;
             --compat-no-server-alive) COMPAT_OPT=force; shift ;;
@@ -586,6 +652,7 @@ main() {
     case "$SSH_HOST" in *[!A-Za-z0-9.:_-]*) die "--ssh-host must be an address" ;; esac
     case "$CLIENT_OPT" in ""|openssh|dbclient) ;; *) die "--client must be openssh or dbclient" ;; esac
     case "$SERVICE_OPT" in ""|procd|systemd|launchd|loop) ;; *) die "--service must be procd, systemd, launchd or loop" ;; esac
+    case "$CARRIER_OPT" in auto|binary|python) ;; *) die "--carrier must be auto, binary or python" ;; esac
 
     TMP=$(mktemp -d 2>/dev/null || mktemp -d -t telepy-join) || die "cannot create a temporary directory"
     chmod 700 "$TMP"
@@ -687,16 +754,20 @@ main() {
             have dropbearkey || die "dropbearkey is missing ($(pkg_hint dropbear))"
             note "ssh client: $CLIENT_DESC at $SSH_BIN (has -R, -K, ExitOnForwardFailure; host key via ~/.ssh/known_hosts)" ;;
     esac
-    PYTHON=""
-    if [ "$VIA_WEB" -eq 1 ]; then
-        PYTHON=$(command -v python3 || true)
-        [ -n "$PYTHON" ] || die "--via-web needs python3 on this machine (it carries the SSH connection inside a WebSocket)"
-    elif [ "$VIA_WEB" -eq 2 ]; then
-        PYTHON=$(command -v python3 || true)
-        if [ -z "$PYTHON" ]; then
-            note "no python3 here: the tunnel uses the SSH port only (the web-port fallback needs python3)"
-            VIA_WEB=0
-        fi
+    # The web-port carrier: which ones this machine could use (the download happens once the gateway is known).
+    PYTHON=$(command -v python3 || true)
+    CARRIER=""; CARRIER_DESC=""; CARRIER_FACT=none; WS_BIN=""; WS_PY=""; WS_CMD=""
+    carrier_target
+    if [ "$VIA_WEB" -ne 0 ]; then
+        case "$CARRIER_OPT" in
+            python) [ -n "$PYTHON" ] || { [ "$VIA_WEB" -eq 1 ] && die "--carrier python: no python3 on this machine"; note "no python3 here (--carrier python): the tunnel uses the SSH port only"; VIA_WEB=0; } ;;
+            binary) [ -n "$CARRIER_TARGET" ] || { [ "$VIA_WEB" -eq 1 ] && die "--carrier binary: no prebuilt telepy-carrier for $OS/$ARCH"; note "no prebuilt telepy-carrier for $OS/$ARCH (--carrier binary): the tunnel uses the SSH port only"; VIA_WEB=0; } ;;
+            *) if [ -z "$CARRIER_TARGET" ] && [ -z "$PYTHON" ]; then
+                   [ "$VIA_WEB" -eq 1 ] && die "the web port needs a carrier: no prebuilt telepy-carrier for $OS/$ARCH and no python3 on this machine (installing python3 would do)"
+                   note "no prebuilt telepy-carrier for $OS/$ARCH and no python3 here: the tunnel uses the SSH port only (installing python3 would enable the web-port fallback)"
+                   VIA_WEB=0
+               fi ;;
+        esac
     fi
 
     CURRENT_USER=$(id -un)
@@ -969,36 +1040,33 @@ main() {
     PROXY_OPT=""
     PROXY_J=""
     # --auto: the carrier tries the SSH port itself (it wants the gateway's SSH banner) and takes the WebSocket only
-    # when that fails, on every connection; a failed download just means the SSH port only.
+    # when that fails, on every connection; no carrier at all just means the SSH port only (--via-web: an error).
+    # An HTTPS_PROXY in this environment is written into the wrapper: the service has no environment of its own.
     WS_ARGS="$WS_URL"
-    if [ "$VIA_WEB" -eq 2 ]; then
-        WS_ARGS="--tcp $GATEWAY_HOST:$GATEWAY_PORT $WS_URL"
+    [ "$VIA_WEB" -eq 2 ] && WS_ARGS="--tcp $GATEWAY_HOST:$GATEWAY_PORT $WS_URL"
+    WS_PROXY=""
+    [ -z "${HTTPS_PROXY:-${https_proxy:-}}" ] || WS_PROXY="--proxy ${HTTPS_PROXY:-$https_proxy} "
+    if [ "$VIA_WEB" -ne 0 ]; then
         case "$WS_URL" in
-            ws://*|wss://*)
-                WS_PY="$TMP/telepy-ws.py"
-                if ! http_raw "$TELEPY_URL/api/join/telepy-ws.py" > "$WS_PY" || [ ! -s "$WS_PY" ]; then
-                    note "cannot download the WebSocket carrier: the tunnel uses the SSH port only"
-                    VIA_WEB=0
-                fi ;;
-            *) note "Telepy sent no WebSocket address: the tunnel uses the SSH port only"; VIA_WEB=0 ;;
+            ws://*|wss://*) fetch_carrier || true ;;
+            *) [ "$VIA_WEB" -eq 1 ] && die "Telepy sent no WebSocket address"; note "Telepy sent no WebSocket address: the tunnel uses the SSH port only"; VIA_WEB=0 ;;
         esac
     fi
-    if [ "$VIA_WEB" -eq 1 ]; then
-        case "$WS_URL" in ws://*|wss://*) ;; *) die "Telepy sent no WebSocket address" ;; esac
-        WS_PY="$TMP/telepy-ws.py"
-        http_raw "$TELEPY_URL/api/join/telepy-ws.py" > "$WS_PY" || die "cannot download the WebSocket carrier"
-        [ -s "$WS_PY" ] || die "cannot download the WebSocket carrier (empty)"
+    if [ "$VIA_WEB" -ne 0 ] && [ -z "$CARRIER" ]; then
+        [ "$VIA_WEB" -eq 1 ] && die "cannot get a web-port carrier: $CARRIER_WHY"
+        note "cannot get a web-port carrier ($CARRIER_WHY): the tunnel uses the SSH port only"
+        VIA_WEB=0
     fi
     if [ "$VIA_WEB" -ne 0 ]; then
         WS_SH="$TMP/telepy-ws.sh"
-        printf '#!/bin/sh\nexec %s %s %s\n' "$PYTHON" "$WS_PY" "$WS_ARGS" > "$WS_SH"
-        chmod 700 "$WS_PY" "$WS_SH"
+        printf '#!/bin/sh\nexec %s %s%s\n' "$WS_CMD" "$WS_PROXY" "$WS_ARGS" > "$WS_SH"
+        chmod 700 "$WS_SH"
         PROXY_OPT="-o ProxyCommand=$WS_SH "
         PROXY_J="-J $WS_SH"
         if [ "$VIA_WEB" -eq 2 ]; then
-            note "transport: automatic, the SSH port $GATEWAY_HOST:$GATEWAY_PORT first, else the web port ($WS_URL)"
+            note "transport: automatic, the SSH port $GATEWAY_HOST:$GATEWAY_PORT first, else the web port ($WS_URL); carrier: $CARRIER_DESC${WS_PROXY:+; via the proxy ${HTTPS_PROXY:-$https_proxy}}"
         else
-            note "transport: WebSocket on the web port ($WS_URL)"
+            note "transport: WebSocket on the web port ($WS_URL); carrier: $CARRIER_DESC${WS_PROXY:+; via the proxy ${HTTPS_PROXY:-$https_proxy}}"
         fi
     fi
 
@@ -1069,6 +1137,7 @@ main() {
         say "  service          $SERVICE_DESC"
         say "  gateway          $GATEWAY_USER@$GATEWAY_HOST:$GATEWAY_PORT (host key pinned: $STRICT)"
         say "  keepalive        ${COMPAT:+TCP only (compat mode) — }$KEEPALIVE_WHY"
+        [ "$VIA_WEB" -eq 0 ] || say "  web port         $CARRIER_DESC"
         say "No token was used. Create the join command in Telepy and run it the same way."
         exit 0
     fi
@@ -1130,9 +1199,10 @@ main() {
     TRANSPORT_NAME=ssh
     [ "$VIA_WEB" -eq 1 ] && TRANSPORT_NAME=websocket
     [ "$VIA_WEB" -eq 2 ] && TRANSPORT_NAME=auto
-    FACTS=$(printf '{"shell":"%s","os":"%s","arch":"%s","http":"%s","client":"%s","server":"%s","init":"%s","keepalive":"%s","key_format":"%s","authorized_keys":"%s","ssh_host":"%s","transport":"%s","compat":[%s]}' \
+    [ "$VIA_WEB" -ne 0 ] || CARRIER_FACT=none
+    FACTS=$(printf '{"shell":"%s","os":"%s","arch":"%s","http":"%s","client":"%s","server":"%s","init":"%s","keepalive":"%s","key_format":"%s","authorized_keys":"%s","ssh_host":"%s","transport":"%s","carrier":"%s","compat":[%s]}' \
         "$(jstr "$SHELL_KIND")" "$(jstr "$DISTRO")" "$(jstr "$ARCH")" "$(jstr "$HTTP_TOOL")" "$(jstr "$CLIENT_DESC")" "$(jstr "${SERVER_DESC:-unknown}")" \
-        "$(jstr "$SERVICE")" "$(jstr "$KEEPALIVE")" "$KEY_FORMAT" "$(jstr "$AUTH_KEYS")" "$(jstr "$SSH_HOST:$SSH_PORT")" "$TRANSPORT_NAME" "$COMPAT_JSON")
+        "$(jstr "$SERVICE")" "$(jstr "$KEEPALIVE")" "$KEY_FORMAT" "$(jstr "$AUTH_KEYS")" "$(jstr "$SSH_HOST:$SSH_PORT")" "$TRANSPORT_NAME" "$(jstr "$CARRIER_FACT")" "$COMPAT_JSON")
     BODY=$(printf '{"public_key":"%s","hostname":"%s","username":"%s","ssh_port":%s,"os":"%s","name":"%s","host_keys":[%s],"facts":%s}' \
         "$PUBLIC_KEY" "$HOST_NAME" "$TARGET_USER" "$SSH_PORT" "$OS_INFO" "$NAME" "$HOST_KEYS_JSON" "$FACTS")
     if ! http POST "$TELEPY_URL/api/join/$TOKEN" "$BODY"; then
@@ -1234,21 +1304,27 @@ main() {
     fi
 
     # --- SSH over WebSocket: move the carrier next to the key ---------------------------------------------------
+    WS_FILES=""
     if [ "$VIA_WEB" -ne 0 ]; then
-        WS_PY_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.py"
         WS_SH_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.sh"
-        cp "$WS_PY" "$WS_PY_FINAL"
-        if [ "$VIA_WEB" -eq 2 ]; then
-            printf '#!/bin/sh\n# Telepy tunnel %s: the SSH port first, a WebSocket on the web port when that is blocked.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY_FINAL" "$WS_ARGS" > "$WS_SH_FINAL"
-        else
-            printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$INSTALL_ID" "$PYTHON" "$WS_PY_FINAL" "$WS_ARGS" > "$WS_SH_FINAL"
-        fi
-        chmod 700 "$WS_PY_FINAL" "$WS_SH_FINAL"
-        [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$WS_PY_FINAL" "$WS_SH_FINAL"
-        WS_PY=$WS_PY_FINAL; WS_SH=$WS_SH_FINAL
+        case "$CARRIER" in
+            binary)
+                WS_BIN_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.bin"
+                cp "$WS_BIN" "$WS_BIN_FINAL" && chmod 700 "$WS_BIN_FINAL"
+                WS_CMD=$WS_BIN_FINAL; WS_FILES=$WS_BIN_FINAL ;;
+            *)
+                WS_PY_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.py"
+                cp "$WS_PY" "$WS_PY_FINAL" && chmod 700 "$WS_PY_FINAL"
+                WS_CMD="$PYTHON $WS_PY_FINAL"; WS_FILES=$WS_PY_FINAL ;;
+        esac
+        if [ "$VIA_WEB" -eq 2 ]; then WS_COMMENT="the SSH port first, a WebSocket on the web port when that is blocked"; else WS_COMMENT="carry ssh inside a WebSocket to the web port"; fi
+        printf '#!/bin/sh\n# Telepy tunnel %s: %s (%s).\nexec %s %s%s\n' "$INSTALL_ID" "$WS_COMMENT" "$CARRIER_DESC" "$WS_CMD" "$WS_PROXY" "$WS_ARGS" > "$WS_SH_FINAL"
+        chmod 700 "$WS_SH_FINAL"
+        [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$WS_FILES" "$WS_SH_FINAL"
+        WS_SH=$WS_SH_FINAL
         PROXY_OPT="-o ProxyCommand=$WS_SH "
         PROXY_J="-J $WS_SH "
-        say "the tunnel will connect through $WS_URL"
+        say "the tunnel will connect through $WS_URL (carrier: $CARRIER_DESC)"
     fi
 
     case "$CLIENT" in
@@ -1262,7 +1338,7 @@ main() {
 
     # --- run the tunnel -----------------------------------------------------------------------------
     FILES="$KEY $KEY.pub $KNOWN_HOSTS $RECORD $UNINSTALL"
-    [ "$VIA_WEB" -ne 0 ] && FILES="$FILES $WS_PY $WS_SH"
+    [ "$VIA_WEB" -ne 0 ] && FILES="$FILES $WS_FILES $WS_SH"
     LOGS=""
     RUNNING=unknown; BOOT=unknown; SERVICE_KIND=""; SERVICE_NAME=""; SERVICE_FILE=""
     step "Starting the tunnel ($SERVICE_DESC)"
@@ -1304,6 +1380,7 @@ main() {
     record KEEPALIVE "$KEEPALIVE"
     [ -z "$COMPAT" ] || record COMPAT "$COMPAT"
     record TRANSPORT "$TRANSPORT_NAME"
+    record CARRIER "${CARRIER_DESC:-none}"
     record UNINSTALL "$UNINSTALL"
     record FILES "$FILES"
     chmod 600 "$RECORD"

@@ -36,10 +36,11 @@ const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleW
 test("the release targets match the workflow's matrix", () => {
     // 網頁連的檔名必須是 workflow 真的會掛上去的。/ The page must link to files the workflow attaches.
     const workflow = readFileSync(new URL("../../../../.github/workflows/release-cli.yml", import.meta.url), "utf8");
-    const targets = [...workflow.matchAll(/target: ([a-z0-9_-]+)/g)].map((m) => m[1]);
+    // carrier_only 的列只編 telepy-carrier（路由器用），不是 CLI 的下載。/ carrier_only rows build only telepy-carrier, not CLI downloads.
+    const targets = [...workflow.matchAll(/target: ([a-z0-9_-]+)([^\n]*)/g)].filter((m) => !m[2].includes("carrier_only: true")).map((m) => m[1]);
     const ours = (["macos", "linux", "windows"] as const).flatMap((os) => archesFor(os).map((arch) => cliTarget({ os, arch })));
     assert.deepEqual([...ours].sort(), [...new Set(targets)].sort());
-    assert.match(workflow, /name=telepy-\$\{\{ matrix\.target \}\}/, "archive names carry no version");
+    assert.match(workflow, /pack src\/cli telepy telepy-\$\{\{ matrix\.target \}\}/, "archive names carry no version");
 });
 
 test("archive names and the latest-download URL", () => {

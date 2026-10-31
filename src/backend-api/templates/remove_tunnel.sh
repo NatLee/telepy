@@ -313,7 +313,7 @@ done
 # Other loops in ~/.ssh that run this tunnel with its key, running or not: told apart by what they do, not by name
 # (a deleted tunnel's loop is left behind when a rejoin writes a new key to the same file).
 for r in "$HOME"/.ssh/telepy-*.sh; do
-    case "$r" in *-uninstall.sh|*-ws.sh) continue ;; esac
+    case "$r" in *-uninstall.sh|*-ws.sh|*-ws.bin) continue ;; esac
     case "$RUNNERS " in *" $r "*) continue ;; esac
     has_port "$r" && RUNNERS="$RUNNERS $r"
 done
@@ -533,14 +533,14 @@ for U in "$SSH_DIR/telepy-uninstall-$T_ID.sh" ${T_INSTALL:+"$SSH_DIR/telepy-$T_I
     fi
 done
 # The SSH-over-WebSocket carrier (used by this tunnel only; a rename copied it to the new name first).
-for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL-ws.py" "$SSH_DIR/telepy-$T_INSTALL-ws.sh"}; do
+for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL-ws.py" "$SSH_DIR/telepy-$T_INSTALL-ws.bin" "$SSH_DIR/telepy-$T_INSTALL-ws.sh"}; do
     kept_new "$f" && continue
     [ -f "$f" ] && rmf "$f" file
 done
 # A switch replaced an earlier install id: the files that id left behind (record, uninstall script, known_hosts,
 # carrier). Its service is matched by the key like any other; these are only the bookkeeping files.
 if [ "$T_MODE" = relabel ] && [ -n "$T_OLD_INSTALL" ] && [ "$T_OLD_INSTALL" != "$T_INSTALL" ]; then
-    for f in "$SSH_DIR/telepy-$T_OLD_INSTALL.install" "$SSH_DIR/telepy-$T_OLD_INSTALL-uninstall.sh" "$SSH_DIR/telepy-$T_OLD_INSTALL.known_hosts" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.py" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.sh"; do
+    for f in "$SSH_DIR/telepy-$T_OLD_INSTALL.install" "$SSH_DIR/telepy-$T_OLD_INSTALL-uninstall.sh" "$SSH_DIR/telepy-$T_OLD_INSTALL.known_hosts" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.py" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.bin" "$SSH_DIR/telepy-$T_OLD_INSTALL-ws.sh"; do
         [ -f "$f" ] && rmf "$f" file
     done
 fi

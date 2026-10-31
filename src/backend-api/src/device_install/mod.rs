@@ -269,16 +269,18 @@ pub struct Report {
     /// 換連線方式時：換成哪種（`auto` / `websocket` / `ssh`）。/ When switching: the new way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<String>,
-    /// 要自動、裝置卻沒有 python3：裝成只走 SSH 的 port（新主機）。/ Automatic asked, no python3: the SSH port only (new host).
+    /// 要自動、裝置卻沒有任何載體（沒有這台機器的預編 telepy-carrier、也沒有 python3）：裝成只走 SSH 的 port（新主機）。
+    /// Automatic asked, no carrier at all (no prebuilt telepy-carrier for the machine, no python3): the SSH port only.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub no_python: bool,
+    pub no_carrier: bool,
 }
 
-/// 換連線方式：新服務怎麼連 Telepy。`ws_url` = 網頁的 `/ws/gateway/`（auto / websocket 用）。
-/// Switching how a device connects: the new way, and the web `/ws/gateway/` URL for auto / websocket.
+/// 換連線方式：新服務怎麼連 Telepy。`ws_url` = 網頁的 `/ws/gateway/`，`carrier_url` = `…/api/join/carrier`（auto / websocket 用）。
+/// Switching how a device connects: the new way, the web `/ws/gateway/` URL and where the carrier is downloaded from.
 pub struct Switch {
     pub transport: &'static str,
     pub ws_url: String,
+    pub carrier_url: String,
 }
 
 /// 新服務要連的 gateway（`telepy@<SSH 主機>`、port）與 known_hosts 別名（網域的，見 `scripts::gateway_alias`）；
@@ -403,8 +405,8 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         Some(sw) => {
             let (dest, port, alias) = gateway_route(state, &p.spec.dest, p.spec.port);
             let carrier = match sw.transport {
-                "auto" => Some(plan::RouteCarrier { args: format!("--tcp {}:{port} {}", dest.rsplit('@').next().unwrap_or(""), sw.ws_url), program: crate::api::join::WS_CLIENT.to_string() }),
-                "websocket" => Some(plan::RouteCarrier { args: sw.ws_url.clone(), program: crate::api::join::WS_CLIENT.to_string() }),
+                "auto" => Some(plan::RouteCarrier { args: format!("--tcp {}:{port} {}", dest.rsplit('@').next().unwrap_or(""), sw.ws_url), carrier_url: sw.carrier_url.clone(), program: crate::api::join::WS_CLIENT.to_string() }),
+                "websocket" => Some(plan::RouteCarrier { args: sw.ws_url.clone(), carrier_url: sw.carrier_url.clone(), program: crate::api::join::WS_CLIENT.to_string() }),
                 _ => None,
             };
             p.route = Some(plan::Route { dest, port, carrier });
@@ -451,13 +453,13 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         Err(e) => vec![Item { kind: "failed".into(), what: "exec".into(), detail: format!("{e:#}") }],
     };
     run.report.install = items.clone();
-    if items.iter().any(|i| i.kind == "note" && i.what == "no_python") {
-        run.report.no_python = true;
+    if items.iter().any(|i| i.kind == "note" && i.what == "no_carrier") {
+        run.report.no_carrier = true;
         run.report.transport = Some("ssh".into());
     }
     if let Some(f) = items.iter().find(|i| i.kind == "failed").or(if items.iter().any(|i| i.kind == "done") { None } else { items.last() }) {
         let detail = format!("{} {}", f.what, f.detail);
-        let code = if f.kind == "failed" && f.what == "python3" { "no_python" } else { "install_failed" };
+        let code = if f.kind == "failed" && f.what == "carrier" { "no_carrier" } else { "install_failed" };
         undo(&mut run, &conn, &p, &names, port).await;
         return Ok(run.fail("install", code, detail).await);
     }
@@ -509,7 +511,7 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         if let Err(e) = db::device_install::adopt(&state.db, tunnel.id, &id, &tunnel.host_friendly_name, tunnel.user_id).await {
             tracing::warn!(tunnel = tunnel.id, error = %e, "cannot adopt the new install id");
         }
-        let way = if run.report.no_python { "ssh" } else { sw.transport };
+        let way = if run.report.no_carrier { "ssh" } else { sw.transport };
         if let Err(e) = db::tunnels::set_way_in(&state.db, tunnel.id, way).await {
             tracing::warn!(tunnel = tunnel.id, error = %e, "cannot record the new way in");
         }
@@ -538,7 +540,7 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
         run.report.code = Some(if removal.came_back { "old_came_back" } else { "old_left" }.into());
     }
     let (kind, verb) = match &switch {
-        Some(sw) => ("service_switched", format!("switched to {}, now", if run.report.no_python { "the SSH port only (no python3 on the device for the automatic way)" } else if sw.transport == "auto" { "automatic (the SSH port first, the web port when it is blocked)" } else if sw.transport == "websocket" { "the web port only" } else { "the SSH port only" })),
+        Some(sw) => ("service_switched", format!("switched to {}, now", if run.report.no_carrier { "the SSH port only (no prebuilt telepy-carrier for the device and no python3 for the automatic way)" } else if sw.transport == "auto" { "automatic (the SSH port first, the web port when it is blocked)" } else if sw.transport == "websocket" { "the web port only" } else { "the SSH port only" })),
         None => ("service_renamed", "renamed to".to_string()),
     };
     state

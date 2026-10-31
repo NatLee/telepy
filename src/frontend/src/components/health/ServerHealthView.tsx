@@ -514,6 +514,7 @@ function FixText({ id }: { id: HealthCheckId }) {
         kasm: { cmd: c("docker compose up -d kasm-browser"), token: c("INTERNAL_API_TOKEN") },
         geoip: { cmd: c("docker compose exec backend telepy-server geoip") },
         oui: { cmd: c("docker compose exec backend telepy-server oui") },
+        carriers: { cmd: c("docker compose exec backend telepy-server fetch-carriers"), dir: c("telepy-data/carriers") },
         client_addresses: {},
         audit_log: { file: c("audit-anchors.log"), mismatch: c("checkpoint_mismatch"), missing: c("checkpoint_missing") },
     };

@@ -42,6 +42,31 @@ struct Run {
     out: String,
 }
 
+
+/// 編好的 telepy-carrier（`cargo build -p telepy-carrier` 的產物，在共用的 target 目錄）；沒有就 None（測試改走 python3）。
+/// The built telepy-carrier from the shared target dir; None when it was never built (the test then uses python3).
+fn built_carrier() -> Option<std::path::PathBuf> {
+    let target = std::env::var("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let p = target.join("debug").join("telepy-carrier");
+    p.is_file().then_some(p)
+}
+
+/// 這台機器的 target（跟 join 腳本的 `uname -s` / `uname -m` 一樣）。/ This machine's target, as the join script sees it.
+fn host_target() -> Option<&'static str> {
+    let u = |a: &str| String::from_utf8_lossy(&std::process::Command::new("uname").arg(a).output().ok()?.stdout).trim().to_string().into();
+    let (os, m): (Option<String>, Option<String>) = (u("-s"), u("-m"));
+    telepy_server::carriers::target_for(&os?, &m?)
+}
+
+/// 把編好的載體放進 lab 的快取（像 `telepy-server fetch-carriers` 做的那樣）。/ Place the built carrier in the lab's cache.
+fn cache_carrier(app: &common::TestApp) -> Option<&'static str> {
+    let (bin, target) = (built_carrier()?, host_target()?);
+    let dir = app.state.config.carrier_dir.join(target);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(&bin, dir.join("telepy-carrier")).unwrap();
+    Some(target)
+}
+
 fn run_script(script: &Path, bin: &Path, args: &[&str]) -> Run {
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
     let o = Command::new("/bin/sh").arg(script).args(args).env("PATH", path).env_remove("SUDO_USER").stdin(Stdio::null()).output().unwrap();
@@ -108,17 +133,31 @@ async fn the_join_script_checks_joins_and_uninstalls_for_real() {
     assert!(!ssh_dir.exists(), "--check writes nothing");
     assert_eq!(app.get("/api/reverse/server/dashboard", Some(&alice.token)).await.json["tunnels"].as_array().unwrap().len(), 0, "--check registers nothing");
 
-    // --auto：有 python3 就經小程式（先 SSH 的 port）跑同一套探測；沒有就只走 SSH 的 port。
-    // --auto: with python3 the same probes run through the carrier (the SSH port first); without it, the SSH port only.
+    // --auto：載體先是這台機器的預編 telepy-carrier（從 lab 的快取下載、核對 sha256），沒有就 python3，再沒有就只走 SSH 的
+    // port；同一套探測經載體跑（先 SSH 的 port）。/ --auto: the prebuilt carrier first (downloaded from the lab's cache,
+    // sha256 checked), else python3, else the SSH port only; the same probes run through it.
+    let cached = cache_carrier(&lab.app);
     let r = run_script(&script, &bin, &[&["--check", "--auto"][..], &common_args[..]].concat());
     assert_eq!(r.status, 0, "{}", r.out);
-    if common::lab::have("python3") {
-        assert!(r.out.contains(&format!("transport: automatic, the SSH port 127.0.0.1:{} first", lab.gw_port)), "{}", r.out);
+    if let Some(target) = cached {
+        assert!(r.out.contains(&format!("transport: automatic, the SSH port 127.0.0.1:{} first", lab.gw_port)) && r.out.contains(&format!("carrier: telepy-carrier ({target}, checksum verified)")), "{}", r.out);
+        assert!(r.out.contains("  web port         telepy-carrier"), "{}", r.out);
+    } else if common::lab::have("python3") {
+        assert!(r.out.contains(&format!("transport: automatic, the SSH port 127.0.0.1:{} first", lab.gw_port)) && r.out.contains("carrier: python3"), "{}", r.out);
+        assert!(r.out.contains("no telepy-carrier for") || r.out.contains("trying python3"), "no cached binary: says so and falls back: {}", r.out);
     } else {
-        assert!(r.out.contains("no python3 here: the tunnel uses the SSH port only"), "{}", r.out);
+        assert!(r.out.contains("no prebuilt telepy-carrier for") && r.out.contains("the tunnel uses the SSH port only"), "{}", r.out);
     }
     assert!(r.out.contains("Preflight passed") && r.out.contains("handshake with ServerAliveInterval=30 completed"), "{}", r.out);
     assert!(!ssh_dir.exists(), "--check writes nothing");
+    // --carrier python 強制 python3；--carrier binary 在沒有預編 binary 的機器上就只走 SSH 的 port。/ --carrier python / binary.
+    if common::lab::have("python3") {
+        let r = run_script(&script, &bin, &[&["--check", "--auto", "--carrier", "python"][..], &common_args[..]].concat());
+        assert_eq!(r.status, 0, "{}", r.out);
+        assert!(r.out.contains("carrier: python3") && !r.out.contains("carrier: telepy-carrier"), "{}", r.out);
+    }
+    let r = run_script(&script, &bin, &[&["--check", "--auto", "--carrier", "nope"][..], &common_args[..]].concat());
+    assert!(r.status != 0 && r.out.contains("--carrier must be auto, binary or python"), "{}", r.out);
 
     // 錯的 port：清楚說沒有 SSH server 在那裡，而不是叫人裝 openssh-server。/ A wrong port is reported as "nothing answers there".
     let r = run_script(&script, &bin, &["--check", "--ssh-port", "1", "--ssh-dir", ssh_dir.to_str().unwrap()]);
@@ -142,7 +181,7 @@ async fn the_join_script_checks_joins_and_uninstalls_for_real() {
     // 紀錄：裝了什麼、哪裡、以誰執行；沒有 token。/ The record: what, where, as whom; no token.
     let record = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "install")).expect("install record");
     let rec = std::fs::read_to_string(&record).unwrap();
-    for needle in ["SERVICE=loop", "CLIENT=OpenSSH_", "KEY_FORMAT=openssh", "KEEPALIVE=ssh", &format!("AUTHORIZED_KEYS={}", auth_keys.display()), &format!("TUNNEL_ID={tunnel_id}")] {
+    for needle in ["SERVICE=loop", "CLIENT=OpenSSH_", "KEY_FORMAT=openssh", "KEEPALIVE=ssh", &format!("AUTHORIZED_KEYS={}", auth_keys.display()), &format!("TUNNEL_ID={tunnel_id}"), "CARRIER=none", "TRANSPORT=ssh"] {
         assert!(rec.contains(needle), "missing {needle:?} in record:\n{rec}");
     }
     assert!(!rec.contains(&token) && !r.out.contains(&token[5..]), "neither the record nor the output shows the token");
@@ -152,6 +191,39 @@ async fn the_join_script_checks_joins_and_uninstalls_for_real() {
     assert!(summary.contains("OpenSSH_") && summary.contains("loop") && summary.contains("keepalive ssh"), "{}", view.text);
     let crontab = std::fs::read_to_string(dir.join("crontab.txt")).unwrap();
     assert!(crontab.contains("@reboot") && crontab.contains(".sh"), "{crontab}");
+
+    // --auto 真的加入：載體與包裝腳本放在金鑰旁、事實說裝了哪種、服務的 ssh 帶 ProxyCommand。
+    // A real --auto join: the carrier and its wrapper next to the key, the facts say which one, the service's ssh has the ProxyCommand.
+    if cached.is_some() || common::lab::have("python3") {
+        let ticket2 = app.post("/api/reverse/join", Some(&alice.token), json!({"name": "wrt-lab-auto", "key_list": "empty", "transport": "auto"})).await;
+        let token2 = ticket2.json["token"].as_str().unwrap().to_string();
+        let auto_dir = dir.join("ssh-auto");
+        let pi_port = pi.port.to_string();
+        let auto_args = ["--ssh-port", &pi_port, "--authorized-keys", auth_keys.to_str().unwrap(), "--service", "loop", "--ssh-dir", auto_dir.to_str().unwrap(), "--auto"];
+        let r = run_script(&script, &bin, &[&["--token", &token2][..], &auto_args[..]].concat());
+        assert_eq!(r.status, 0, "{}", r.out);
+        assert!(r.out.contains("login verified         yes") && r.out.contains("the tunnel will connect through ws://"), "{}", r.out);
+        let names: Vec<String> = std::fs::read_dir(&auto_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().any(|n| n.ends_with("-ws.sh")), "the wrapper is there: {names:?}");
+        let rec2 = std::fs::read_to_string(auto_dir.join(names.iter().find(|n| n.ends_with(".install")).unwrap())).unwrap();
+        let st2 = app.get(&format!("/api/join/{token2}/status"), None).await;
+        let tid2: i64 = st2.text.lines().find_map(|l| l.strip_prefix("TUNNEL_ID=")).unwrap().parse().unwrap();
+        let view2 = app.get(&format!("/api/reverse/server/{tid2}/device-install"), Some(&alice.token)).await;
+        let carrier_fact = view2.json["join"]["facts"]["carrier"].as_str().unwrap_or("").to_string();
+        if let Some(target) = cached {
+            assert!(names.iter().any(|n| n.ends_with("-ws.bin")) && !names.iter().any(|n| n.ends_with("-ws.py")), "the binary, not the script: {names:?}");
+            assert!(rec2.contains("CARRIER=telepy-carrier") && rec2.contains("TRANSPORT=auto"), "{rec2}");
+            assert_eq!(carrier_fact, format!("binary {target}"), "{}", view2.text);
+        } else {
+            assert!(names.iter().any(|n| n.ends_with("-ws.py")), "{names:?}");
+            assert!(rec2.contains("CARRIER=python3"), "{rec2}");
+            assert_eq!(carrier_fact, "python3", "{}", view2.text);
+        }
+        let wrapper = std::fs::read_to_string(auto_dir.join(names.iter().find(|n| n.ends_with("-ws.sh")).unwrap())).unwrap();
+        assert!(wrapper.contains(&format!("--tcp 127.0.0.1:{} ws://", lab.gw_port)), "{wrapper}");
+        let uninstall2 = auto_dir.join(names.iter().find(|n| n.ends_with("-uninstall.sh")).unwrap());
+        assert_eq!(run_script(&uninstall2, &bin, &[]).status, 0);
+    }
 
     // 腳本寫的 uninstall：隧道斷、迴圈停、crontab 行走、紀錄與 known_hosts 刪，金鑰留著。
     // The uninstall it wrote: the tunnel drops, the loop stops, the crontab line and the record go, the key stays.

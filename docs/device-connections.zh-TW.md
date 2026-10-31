@@ -208,10 +208,16 @@ sharee）。
 - **TCP（預設）**：對外 `REVERSE_SERVER_SSH_PORT`（24242，容器內 2222）。
   - 連的名稱是 `SSH_SERVER_DOMAIN`（網站設定 → 伺服器 → SSH 主機），沒設就跟網頁同一個名稱。網頁的名稱放在只轉網頁 port 的代理後面（Cloudflare 的橘色雲朵、其他 CDN、HTTP 負載平衡器）時，那個名稱連不到 SSH 的 port，要另外給 SSH 一個直接到伺服器的名稱。known_hosts 的別名（`telepy-<網域>-<port>`）仍然用網域，換 SSH 主機不會變成「另一台伺服器」。已經裝好的裝置繼續連當初的名稱。設定頁會解析兩個名稱、認得出 Cloudflare 的位址（別的代理認不出來），`doctor` 的 `ssh_host` 檢查也會。SSH 的名稱不該開得到網頁：`PUBLIC_URL` 有設、SSH 主機另有其名時，用 SSH 名稱進來的登入一律 421（`ssh_host`），前端換成一頁說明並指回正式網址；儲存時不能填自己正在用的名稱（會把自己鎖在外面）。這擋的是走錯網址與設定失誤，偽造 `Host` 要靠把 origin 鎖給代理。
 - **WebSocket**（`ws/gateway.rs`）：給只放行網頁 port 的網路（公司內網、飯店、4G 路由器）。裝置的 ssh 加上
-  `ProxyCommand python3 telepy-ws.py wss://<host>/ws/gateway/`，小程式（只用 Python 標準函式庫，`GET /api/join/telepy-ws.py`）
-  把位元組包成二進位 frame 送到網頁 port。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，
-  沒有多信任什麼，也沒有 auth 第一則訊息（認證在裡面的 SSH 做）。在精靈的連線步驟或一鍵加入時選（`transport: websocket`）。
-- **自動**（`transport: auto`，精靈與一鍵加入的預設）：小程式加上 `--tcp <SSH 主機>:<port>`，每次連線先直接連 SSH 的 port、看到 gateway 的 `SSH-` banner 才算數；連不上（防火牆、網頁名稱在只轉網頁 port 的代理後面）就改走上面的 WebSocket。成功走 WebSocket 會記 30 分鐘（暫存目錄裡一個小檔），之後再先試 SSH 的 port；走哪條會寫在 stderr（服務的 log）。裝置沒有 python3 時就只走 SSH 的 port，跟以前一樣。一鍵加入是 `--auto`，註冊時回報實際裝的方式（`facts.transport`），存成 `way_in`。
+  `ProxyCommand ~/.ssh/telepy-<安裝代號>-ws.sh`，這個包裝腳本執行**載體**：優先用預編的 `telepy-carrier`（Rust 靜態 binary，`src/carrier/`，
+  每次 release 都編 x86_64 / aarch64 / armv7 / armv6 Linux、macOS 與 Windows；裝置從這台伺服器的 `GET /api/join/carrier/<target>` 下載，並用伺服器在
+  `…/sha256` 公布的 sha256 核對，那個值又來自 release 的 `SHA256SUMS`；伺服器在某平台第一次被要時才從 release 頁抓，快取在 `CARRIER_DIR` =
+  `<DATA_DIR>/carriers`，`telepy-server fetch-carriers` 可以先抓齊），沒有預編 binary 的 CPU（MIPS 路由器）則用 `python3` 跑 `telepy-ws.py`
+  （只用標準函式庫，`GET /api/join/telepy-ws.py`）；join 腳本的 `--carrier binary|python` 可以指定。兩種都把位元組包成二進位 frame 送到網頁 port，
+  也都會走裝置設定的 HTTP CONNECT 代理（`HTTPS_PROXY` / `--proxy`，`NO_PROXY` 照用；join 腳本會把執行環境的代理寫進包裝腳本，因為服務沒有自己的
+  環境變數）。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，沒有多信任什麼，也沒有 auth 第一則訊息（認證在裡面的
+  SSH 做）。在精靈的連線步驟或一鍵加入時選（`transport: websocket`）。裝了哪種會回報成 `carrier` 事實（`binary <target>` / `python3` / `none`），
+  顯示在 Device 分頁。
+- **自動**（`transport: auto`，精靈與一鍵加入的預設）：小程式加上 `--tcp <SSH 主機>:<port>`，每次連線先直接連 SSH 的 port、看到 gateway 的 `SSH-` banner 才算數；連不上（防火牆、網頁名稱在只轉網頁 port 的代理後面）就改走上面的 WebSocket。成功走 WebSocket 會記 30 分鐘（暫存目錄裡一個小檔），之後再先試 SSH 的 port；走哪條會寫在 stderr（服務的 log）。完全沒有載體的裝置（它的 CPU 沒有預編 binary、也沒有 python3）只走 SSH 的 port，join 會說明。一鍵加入是 `--auto`，註冊時回報實際裝的方式（`facts.transport`、`facts.carrier`），存成 `way_in`。
   - 來源 IP 取自轉送 header（`X-Forwarded-For`，哪幾段是代理見網站設定 → 伺服器的「信任的代理層數」或 `TRUSTED_PROXY_HOPS`：
     預設 `auto` 把右邊的內部位址都當代理），port 記成 0；連線資訊、`accepted` 事件與
     清單的 `endpoint.transport` 記 `websocket`。連線上限（`GATEWAY_MAX_CONNECTIONS`）兩個入口一起算。

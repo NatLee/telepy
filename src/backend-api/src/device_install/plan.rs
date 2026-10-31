@@ -425,10 +425,13 @@ pub struct Route {
     pub carrier: Option<RouteCarrier>,
 }
 
-/// `telepy-ws.py` 的參數（`[--tcp host:port] <ws url>`）與內容。/ The carrier's arguments and program.
+/// 載體的參數（`[--tcp host:port] <ws url>`）、預編 telepy-carrier 的下載位址（`…/api/join/carrier`，裝置自己接上
+/// `/<target>`）與 python3 備胎的程式內容。/ The carrier's arguments, where the prebuilt binary is downloaded from
+/// (`…/api/join/carrier`, the device appends `/<target>`) and the python3 fallback's program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteCarrier {
     pub args: String,
+    pub carrier_url: String,
     pub program: String,
 }
 
@@ -667,9 +670,9 @@ pub fn service_file(plan: &Plan, names: &Names, args: &[String]) -> (String, Str
 
 /// 安裝腳本：寫 known_hosts（與 WebSocket 載具）、寫服務檔、啟動。每個結果一行 `TELEPY|…`。
 /// The install script: known_hosts (and the WebSocket carrier), the service file, start it.
-/// `plain` = 沒有小程式的參數（換成自動、裝置卻沒有 python3 時裝這個，只走 SSH 的 port，回報 `note no_python`）；None = 沒有
-/// 小程式就停下來。/ `plain` = the arguments without the carrier: installed instead when the device has no python3 (the SSH
-/// port only, reported as `note no_python`); None = stop without python3.
+/// `plain` = 沒有載體的參數（換成自動、裝置卻沒有任何載體時裝這個，只走 SSH 的 port，回報 `note no_carrier`）；None = 沒有
+/// 載體就停下來。/ `plain` = the arguments without the carrier: installed instead when the device has no carrier at all
+/// (the SSH port only, reported as `note no_carrier`); None = stop without one.
 pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: &str, plain: Option<&[String]>) -> String {
     let (path, content) = service_file(plan, names, args);
     let ssh_dir = format!("{}/.ssh", plan.home);
@@ -684,28 +687,45 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
         s.push_str(&format!("put {} {} 644\n", sh_quote(&kh), sh_quote(known_hosts)));
     }
     if let Some(c) = plan.route_carrier() {
-        // 新的小程式：裝置要有 python3（沒有就停，舊服務完全沒動）；包裝腳本寫死 python3 的路徑（服務的 PATH 可能很短）。
-        // The new carrier: the device needs python3 (else stop; the old service is untouched); the wrapper pins
-        // python3's path (a service's PATH may be short).
+        // 新的載體：先在裝置上下載這台機器的預編 telepy-carrier（curl / wget / uclient-fetch，核對 Telepy 給的 sha256，
+        // 跑一次 --version），沒有再用 python3（程式內容由這裡帶過去）；兩者都沒有就看 `plain`：裝沒有載體的版本（只走
+        // SSH 的 port，回報 note no_carrier）或停下來（舊服務完全沒動）。包裝腳本寫死路徑（服務的 PATH 可能很短）。
+        // The new carrier: the device downloads the prebuilt telepy-carrier for its platform (curl / wget / uclient-fetch,
+        // checked against the sha256 Telepy publishes, run once with --version), else python3 (the program travels in
+        // this script); with neither, `plain` decides: the carrier-less service (the SSH port only, `note no_carrier`)
+        // or stop (the old service untouched). The wrapper pins paths (a service's PATH may be short).
         let to_sh = format!("{ssh_dir}/{}", names.ws_sh());
         let to_py = format!("{ssh_dir}/{}", names.ws_py());
-        s.push_str("PY=$(command -v python3 2>/dev/null) || PY=''\n");
-        let carrier_files = format!(
-            "put {} {} 700\nput {ts} \"$(printf '#!/bin/sh\\n# %s: the way to Telepy (the SSH port first when --tcp is given).\\nexec %s %s %s\\n' {desc} \"$PY\" {tp} {args})\" 700\n",
-            sh_quote(&to_py),
-            sh_quote(&c.program),
+        let to_bin = format!("{ssh_dir}/{}", names.ws_bin());
+        s.push_str("fetch() { if command -v curl >/dev/null 2>&1; then curl -fsSL \"$1\" -o \"$2\"; elif command -v wget >/dev/null 2>&1; then wget -q -O \"$2\" \"$1\"; elif command -v uclient-fetch >/dev/null 2>&1; then uclient-fetch -q -O \"$2\" \"$1\"; else return 1; fi; }\n");
+        s.push_str("carrier_ok() { chmod 755 \"$1\" 2>/dev/null || return 1; if [ -n \"$2\" ]; then if command -v sha256sum >/dev/null 2>&1; then g=$(sha256sum \"$1\" | cut -d' ' -f1); elif command -v shasum >/dev/null 2>&1; then g=$(shasum -a 256 \"$1\" | cut -d' ' -f1); elif command -v openssl >/dev/null 2>&1; then g=$(openssl dgst -sha256 \"$1\" | sed 's/^.*= *//'); else g=$2; fi; [ \"$g\" = \"$2\" ] || return 1; fi; \"$1\" --version >/dev/null 2>&1; }\n");
+        s.push_str(&crate::scripts::carrier_case_sh());
+        s.push_str(&format!(
+            "WS_URL={url}\nWS_TMP=$(mktemp -d 2>/dev/null || echo \"$HOME/.telepy-carrier-tmp\"); mkdir -p \"$WS_TMP\"\nWS_CMD=\"\"\n\
+             if [ -n \"$WS_TARGET\" ] && fetch \"$WS_URL/$WS_TARGET/sha256?soft=1\" \"$WS_TMP/sha\" && grep -q '^STATUS=200' \"$WS_TMP/sha\" && fetch \"$WS_URL/$WS_TARGET\" \"$WS_TMP/bin\" && carrier_ok \"$WS_TMP/bin\" \"$(sed -n 's/^SHA256=//p' \"$WS_TMP/sha\")\"; then\n\
+             \x20   $S mv -f \"$WS_TMP/bin\" {bin} && $S chmod 700 {bin} && out wrote file {bin} && WS_CMD={bin} || {{ out failed file {bin}; exit 0; }}\n\
+             elif PY=$(command -v python3 2>/dev/null); then\n\
+             \x20   put {py} {program} 700\n\
+             \x20   WS_CMD=\"$PY {py}\"\n\
+             fi\nrm -rf \"$WS_TMP\"\n",
+            url = sh_quote(&c.carrier_url),
+            bin = sh_quote(&to_bin),
+            py = sh_quote(&to_py),
+            program = sh_quote(&c.program),
+        ));
+        let wrapper = format!(
+            "put {ts} \"$(printf '#!/bin/sh\\n# %s: the way to Telepy (the SSH port first when --tcp is given).\\nexec %s %s\\n' {desc} \"$WS_CMD\" {args})\" 700\n",
             ts = sh_quote(&to_sh),
             desc = sh_quote(&names.description()),
-            tp = sh_quote(&to_py),
             args = sh_quote(&c.args),
         );
         match plain {
-            // 沒有 python3：裝沒有小程式的版本，只走 SSH 的 port。/ No python3: the carrier-less service, the SSH port only.
+            // 沒有載體：裝沒有小程式的版本，只走 SSH 的 port。/ No carrier: the carrier-less service, the SSH port only.
             Some(plain_args) => {
                 let (_, plain_content) = service_file(plan, names, plain_args);
                 let mode = if matches!(plan.method, Method::Loop | Method::Procd) { "755" } else { "644" };
                 s.push_str(&format!(
-                    "if [ -n \"$PY\" ]; then\n{carrier_files}put {p} {c} {mode}\nelse\nout note no_python 'python3 is not installed: the SSH port only'\nput {p} {pc} {mode}\nfi\n",
+                    "if [ -n \"$WS_CMD\" ]; then\n{wrapper}put {p} {c} {mode}\nelse\nout note no_carrier 'no prebuilt telepy-carrier for this machine and no python3: the SSH port only'\nput {p} {pc} {mode}\nfi\n",
                     p = sh_quote(&path),
                     c = sh_quote(&content),
                     pc = sh_quote(&plain_content),
@@ -713,8 +733,8 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
                 return finish_install(plan, names, s, &path, &kh, &owner);
             }
             None => {
-                s.push_str("[ -n \"$PY\" ] || { out failed python3 'python3 is not installed on the device'; exit 0; }\n");
-                s.push_str(&carrier_files);
+                s.push_str("[ -n \"$WS_CMD\" ] || { out failed carrier 'no prebuilt telepy-carrier for this machine and no python3 on the device'; exit 0; }\n");
+                s.push_str(&wrapper);
             }
         }
     } else if let Some((from_sh, from_py)) = carrier(plan).filter(|_| plan.route.is_none()) {
@@ -749,6 +769,7 @@ fn finish_install(plan: &Plan, names: &Names, mut s: String, path: &str, kh: &st
         if plan.has_carrier() {
             owned.push(format!("{ssh_dir}/{}", names.ws_sh()));
             owned.push(format!("{ssh_dir}/{}", names.ws_py()));
+            owned.push(format!("{ssh_dir}/{}", names.ws_bin()));
         }
         if !plan.method.system() {
             owned.push(path.clone());
@@ -802,6 +823,7 @@ pub fn undo_script(plan: &Plan, names: &Names) -> String {
     if plan.has_carrier() {
         files.push(format!("{ssh_dir}/{}", names.ws_sh()));
         files.push(format!("{ssh_dir}/{}", names.ws_py()));
+        files.push(format!("{ssh_dir}/{}", names.ws_bin()));
     }
     s.push_str(&format!("$S rm -f {}\n", files.iter().map(|f| sh_quote(f)).collect::<Vec<_>>().join(" ")));
     if plan.method == Method::Systemd {
@@ -1133,28 +1155,33 @@ mod procd_tests {
         let mut p = plan(&router(), &names).unwrap();
         assert_eq!((p.method, p.account.as_str(), p.sudo, p.run_user.as_str()), (Method::Procd, "root", false, "root"));
         assert_eq!(p.old, vec!["telepy-47xzwr2e".to_string()]);
-        p.route = Some(Route { dest: "telepy@telepy-ssh.natlee.info".into(), port: 56767, carrier: Some(RouteCarrier { args: "--tcp telepy-ssh.natlee.info:56767 wss://telepy.natlee.info/ws/gateway/".into(), program: "#!/usr/bin/env python3\n".into() }) });
+        p.route = Some(Route { dest: "telepy@telepy-ssh.natlee.info".into(), port: 56767, carrier: Some(RouteCarrier { args: "--tcp telepy-ssh.natlee.info:56767 wss://telepy.natlee.info/ws/gateway/".into(), carrier_url: "https://telepy.natlee.info/api/join/carrier".into(), program: "#!/usr/bin/env python3\n".into() }) });
         let args = ssh_args(&p, &names, "telepy-telepy.natlee.info-56767", true);
         assert!(args.contains(&"telepy@telepy-ssh.natlee.info".to_string()) && args.contains(&"ProxyCommand=/root/.ssh/telepy-q7h3m2ka-ws.sh".to_string()), "{args:?}");
         let (path, init) = service_file(&p, &names, &args);
         assert_eq!(path, "/etc/init.d/telepy-q7h3m2ka");
         assert!(init.starts_with("#!/bin/sh /etc/rc.common\n") && init.contains("USE_PROCD=1\nSTART=99") && init.contains("procd_set_param respawn 3600 10 0") && init.contains("procd_set_param env HOME='/root'") && !init.contains("procd_set_param user"), "{init}");
         assert!(init.contains("procd_set_param command '/usr/bin/ssh' '-NT'") && init.contains("'-R' '0:127.0.0.1:22' 'telepy@telepy-ssh.natlee.info'"), "{init}");
-        // 沒有 python3（路由器常見）：裝沒有小程式的版本、回報 no_python。/ No python3 (routers): the carrier-less one, reported.
+        // 載體：先下載這台機器的預編 telepy-carrier（核對 sha256），沒有再 python3；兩者都沒有（路由器常見）就裝沒有載體的
+        // 版本、回報 no_carrier。/ The prebuilt carrier first (sha256 checked), python3 second; neither = the carrier-less
+        // service, reported as no_carrier.
         let mut q = p.clone();
         q.route.as_mut().unwrap().carrier = None;
         let plain = ssh_args(&q, &names, "telepy-telepy.natlee.info-56767", true);
         assert!(!plain.iter().any(|a| a.contains("ProxyCommand")), "{plain:?}");
         let script = install_script(&p, &names, &args, "telepy-telepy.natlee.info-56767 ssh-ed25519 AAAA\n", Some(&plain));
-        assert!(script.contains("if [ -n \"$PY\" ]; then") && script.contains("out note no_python") && script.contains("put '/etc/init.d/telepy-q7h3m2ka'"), "{script}");
-        assert!(!script.contains("out failed python3"), "with a plain version there is nothing to fail: {script}");
+        assert!(script.contains("WS_URL='https://telepy.natlee.info/api/join/carrier'") && script.contains("fetch \"$WS_URL/$WS_TARGET/sha256?soft=1\"") && script.contains("Linux/armv7l|Linux/armv7|Linux/armv8l) WS_TARGET=armv7-unknown-linux-musleabihf ;;"), "{script}");
+        assert!(script.contains("$S mv -f \"$WS_TMP/bin\" '/root/.ssh/telepy-q7h3m2ka-ws.bin'") && script.contains("elif PY=$(command -v python3 2>/dev/null); then") && script.contains("put '/root/.ssh/telepy-q7h3m2ka-ws.py'"), "{script}");
+        assert!(script.contains("if [ -n \"$WS_CMD\" ]; then") && script.contains("out note no_carrier") && script.contains("put '/etc/init.d/telepy-q7h3m2ka'"), "{script}");
+        assert!(!script.contains("out failed carrier"), "with a plain version there is nothing to fail: {script}");
         assert!(script.contains("'/etc/init.d/telepy-q7h3m2ka' enable") && script.contains("running >/dev/null 2>&1; then $S '/etc/init.d/telepy-q7h3m2ka' restart; else $S '/etc/init.d/telepy-q7h3m2ka' start; fi"), "{script}");
         assert!(script.contains("put '/root/.ssh/telepy-q7h3m2ka.known_hosts'"), "{script}");
         let undo = undo_script(&p, &names);
         assert!(undo.contains("'/etc/init.d/telepy-q7h3m2ka' stop") && undo.contains("disable") && undo.contains("rm -f '/etc/init.d/telepy-q7h3m2ka'"), "{undo}");
-        // 沒給純版本：沒有 python3 就停。/ Without a plain version it stops.
+        // 沒給純版本：沒有載體就停。/ Without a plain version it stops.
         let strict = install_script(&p, &names, &args, "", None);
-        assert!(strict.contains("out failed python3"), "{strict}");
+        assert!(strict.contains("out failed carrier"), "{strict}");
+        assert!(undo.contains("telepy-q7h3m2ka-ws.bin"), "the undo removes the binary too: {undo}");
         // 盤點的呈現：init 腳本是一個服務。/ In the view the init script is a service.
         assert!(parts(&router(), &names).iter().any(|x| x.kind == "service" && x.name == "telepy-47xzwr2e" && !x.private));
     }

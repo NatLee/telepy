@@ -329,8 +329,8 @@ function SwitchDialog({ isOpen, onClose, view, steps, running, report, onStart, 
                 <StepList steps={steps} running={running} hintPrefix="deviceInstall.switchStep" />
                 {report &&
                     (report.ok ? (
-                        <Callout tone={report.no_python ? "warning" : "tip"} title={t(report.no_python ? "deviceInstall.switch.doneNoPython" : "deviceInstall.switch.done")}>
-                            {t(report.no_python ? "deviceInstall.switch.doneNoPythonBody" : "deviceInstall.switch.doneBody", { name: report.new_name ?? "", old: report.old.join(", ") })}
+                        <Callout tone={report.no_carrier ? "warning" : "tip"} title={t(report.no_carrier ? "deviceInstall.switch.doneNoCarrier" : "deviceInstall.switch.done")}>
+                            {t(report.no_carrier ? "deviceInstall.switch.doneNoCarrierBody" : "deviceInstall.switch.doneBody", { name: report.new_name ?? "", old: report.old.join(", ") })}
                         </Callout>
                     ) : (
                         <ReportResult report={report} />

@@ -1,20 +1,20 @@
 //! `telepy _carrier`：`telepy ssh / scp / sftp` 連 Telepy 那一跳的 ProxyCommand。預設把 SSH 包進網頁 port 的 WebSocket
 //! （`/ws/gateway/`），Telepy 才記得到這台電腦真正的位址（SSH 的 port 前面常有東西把來源換掉，例如 OrbStack / Docker 的
 //! port 轉送）；裡面是同一條 SSH，金鑰與 host key 檢查都不變。網頁 port 連不到時，照設定（`prefs::Fallback`）在終端機問、
-//! 一律、或從不退回 SSH 的 port。不需要 python3。
+//! 一律、或從不退回 SSH 的 port。不需要 python3。連線、HTTP CONNECT 代理（`HTTPS_PROXY` / `NO_PROXY`）與轉接都是
+//! `telepy-carrier` crate 的（裝置端的 `telepy-carrier` binary 用同一組）；這裡只有「先網頁 port、退回要同意」的順序。
 //! `telepy _carrier`: the ProxyCommand of the hop to Telepy for `telepy ssh / scp / sftp`. By default SSH rides inside
 //! a WebSocket on the web port (`/ws/gateway/`), so Telepy records this computer's real address (something in front
 //! of the SSH port often rewrites it, e.g. OrbStack's or Docker's port forwarding); the SSH inside is the same, keys
 //! and host-key checks included. When the web port can't be reached it asks in the terminal, always or never falls
-//! back to the SSH port, as set (`prefs::Fallback`). No python3 needed.
+//! back to the SSH port, as set (`prefs::Fallback`). No python3 needed. Connecting, the HTTP CONNECT proxy
+//! (`HTTPS_PROXY` / `NO_PROXY`) and relaying come from the `telepy-carrier` crate (the device binary shares them);
+//! only the order — web port first, consent to fall back — lives here.
 
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use telepy_carrier::{connect_ws, relay_tcp, relay_ws, split_host_port, tcp_connect, ws_endpoint, Proxy};
 
 use crate::prefs::{self, Fallback};
 
@@ -84,13 +84,15 @@ fn ask_terminal(question: &str) -> Option<String> {
 pub fn run(url: &str, tcp: Option<&str>, fallback: Fallback, server: &str) -> Result<i32> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(async move {
-        let err = match tokio::time::timeout(WS_TIMEOUT, tokio_tungstenite::connect_async(url)).await {
-            Ok(Ok((ws, _))) => {
+        // 代理照環境變數（HTTPS_PROXY / NO_PROXY），網頁 port 與 SSH 的 port 一樣。/ The proxy from the environment, both ways.
+        let ws_host = ws_endpoint(url).map(|(h, _, _)| h).unwrap_or_default();
+        let proxy = Proxy::from_env(&ws_host);
+        let err = match connect_ws(url, proxy.as_ref(), WS_TIMEOUT).await {
+            Ok(ws) => {
                 relay_ws(ws).await;
                 std::process::exit(0);
             }
-            Ok(Err(e)) => e.to_string(),
-            Err(_) => "timed out".to_string(),
+            Err(e) => format!("{e:#}"),
         };
         let Some(tcp) = tcp else {
             eprintln!("telepy: Telepy's web port can't be reached ({err}).");
@@ -128,79 +130,14 @@ pub fn run(url: &str, tcp: Option<&str>, fallback: Fallback, server: &str) -> Re
             if fallback == Fallback::Always {
                 eprintln!("telepy: Telepy's web port can't be reached ({err}); connecting on the SSH port {tcp}");
             }
-            let stream = tokio::time::timeout(TCP_TIMEOUT, tokio::net::TcpStream::connect(tcp)).await.map_err(|_| anyhow!("connecting to {tcp} timed out"))?.map_err(|e| anyhow!("cannot connect to {tcp}: {e}"))?;
-            let _ = stream.set_nodelay(true);
-            relay_tcp(stream).await;
+            let (host, port) = split_host_port(tcp).ok_or_else(|| anyhow!("--tcp wants host:port, got {tcp}"))?;
+            let tcp_proxy = Proxy::from_env(&host);
+            let (stream, pending) = tcp_connect(&host, port, tcp_proxy.as_ref(), TCP_TIMEOUT).await?;
+            relay_tcp(stream, &pending).await;
             std::process::exit(0);
         }
         Ok(255)
     })
-}
-
-/// stdin ↔ WebSocket 的二進位 frame；Ping 回 Pong，Close = 結束。/ stdin ↔ binary frames; Ping → Pong, Close = done.
-async fn relay_ws<S>(ws: tokio_tungstenite::WebSocketStream<S>)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (mut sink, mut stream) = ws.split();
-    let (tx, mut rx) = mpsc::channel::<Message>(64);
-    // 只有一個地方寫：stdin 的資料、Pong 與最後的 Close 都排進同一條。/ One writer: data, pongs and the final close.
-    let writer = tokio::spawn(async move {
-        while let Some(m) = rx.recv().await {
-            let close = matches!(m, Message::Close(_));
-            if sink.send(m).await.is_err() || close {
-                break;
-            }
-        }
-        let _ = sink.close().await;
-    });
-    let up = {
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut stdin = tokio::io::stdin();
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                match stdin.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
-                            return;
-                        }
-                    }
-                }
-            }
-            let _ = tx.send(Message::Close(None)).await;
-        })
-    };
-    let mut stdout = tokio::io::stdout();
-    while let Some(msg) = stream.next().await {
-        match msg {
-            Ok(Message::Binary(b)) => {
-                if stdout.write_all(&b).await.is_err() || stdout.flush().await.is_err() {
-                    break;
-                }
-            }
-            Ok(Message::Text(t)) => {
-                if stdout.write_all(t.as_bytes()).await.is_err() || stdout.flush().await.is_err() {
-                    break;
-                }
-            }
-            Ok(Message::Ping(p)) => {
-                let _ = tx.send(Message::Pong(p)).await;
-            }
-            Ok(Message::Close(_)) | Err(_) => break,
-            Ok(_) => {}
-        }
-    }
-    up.abort();
-    drop(tx);
-    let _ = tokio::time::timeout(Duration::from_secs(1), writer).await;
-}
-
-/// stdin / stdout ↔ TCP，原封不動。/ stdin / stdout ↔ TCP, unchanged.
-async fn relay_tcp(mut tcp: tokio::net::TcpStream) {
-    let mut local = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
-    let _ = tokio::io::copy_bidirectional(&mut local, &mut tcp).await;
 }
 
 #[cfg(test)]

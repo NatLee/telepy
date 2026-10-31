@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compatNoServerAlive, factChips, joinCommands, scriptProgress, SCRIPT_STEPS } from "./joinScript.ts";
+import { carrierLabel, compatNoServerAlive, factChips, joinCommands, scriptProgress, SCRIPT_STEPS } from "./joinScript.ts";
 
 test("command variants carry the token once and the download forms check syntax first", () => {
     const c = joinCommands("https://t.example/api/join/install.sh", "tpj_abc", { sudo: true, transport: "ssh" });
@@ -31,6 +31,12 @@ test("facts become chips, compat mode is detected", () => {
     const chips = factChips({ shell: "ash (BusyBox v1.36.1)", client: "dbclient 2022.82", server: "Dropbear 2022.82", init: "procd", keepalive: "ssh (-K 30)", http: "uclient-fetch" });
     assert.deepEqual(chips.map((c) => `${c.key}=${c.value}`), ["client=dbclient 2022.82", "server=Dropbear 2022.82", "init=procd", "shell=ash (BusyBox v1.36.1)", "keepalive=ssh (-K 30)"]);
     assert.equal(factChips({ init: "loop" })[0].value, "reconnect loop");
+    // 小幫手：預編的寫成 telepy-carrier (target)，python3 照樣，none 不列。/ The helper chip: prebuilt as telepy-carrier (target), python3 as is, none hidden.
+    assert.equal(carrierLabel("binary x86_64-unknown-linux-musl"), "telepy-carrier (x86_64-unknown-linux-musl)");
+    assert.equal(carrierLabel("python3"), "python3");
+    assert.equal(carrierLabel("none"), undefined);
+    assert.deepEqual(factChips({ carrier: "none" }), []);
+    assert.equal(factChips({ carrier: "python3" })[0].label, "join.facts.carrier");
     assert.ok(compatNoServerAlive({ compat: ["no_server_alive"] }));
     assert.ok(!compatNoServerAlive({ compat: [] }) && !compatNoServerAlive(undefined));
 });

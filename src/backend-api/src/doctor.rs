@@ -320,6 +320,18 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Run telepy-server geoip in the backend container, then restart it")
     });
 
+    // 裝置載體：快取了哪些平台的；沒有的第一次有裝置要時從 release 頁抓。/ Device carriers: which platforms are cached.
+    {
+        let carriers = crate::carriers::Carriers::new(config, reqwest::Client::new());
+        let have = carriers.cached_targets();
+        let total = crate::carriers::TARGETS.len();
+        out.push(if have.is_empty() {
+            check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only)", carriers.dir().display(), carriers.releases()))
+        } else {
+            check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {}", have.len(), carriers.dir().display(), have.join(", "))).fp(&[&have.len().to_string()])
+        });
+    }
+
     let oui = crate::oui::Oui::load(&config.oui_dir);
     out.push(if oui.enabled() {
         check("oui", "OUI vendors", Status::Ok, format!("{} vendors from {}", oui.len(), config.oui_dir.display()))

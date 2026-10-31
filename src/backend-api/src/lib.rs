@@ -7,6 +7,7 @@ pub mod api;
 pub mod api_calls;
 pub mod app;
 pub mod auth;
+pub mod carriers;
 pub mod client_ip;
 pub mod command_rules;
 pub mod config;

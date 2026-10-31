@@ -28,6 +28,7 @@ export const CHECK_IDS = [
     "kasm",
     "geoip",
     "oui",
+    "carriers",
     "client_addresses",
     "audit_log",
 ] as const;
@@ -57,6 +58,7 @@ export const GROUP_OF: Record<HealthCheckId, HealthGroup> = {
     kasm: "services",
     geoip: "services",
     oui: "services",
+    carriers: "services",
     client_addresses: "addresses",
 };
 
@@ -78,6 +80,7 @@ const ID_BY_NAME: Record<string, HealthCheckId> = {
     "kasm-browser (remote browser)": "kasm",
     GeoIP: "geoip",
     "OUI vendors": "oui",
+    "device carriers": "carriers",
     "client addresses": "client_addresses",
     "audit log": "audit_log",
 };
