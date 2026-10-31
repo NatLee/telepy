@@ -32,8 +32,8 @@
 
 ## 工程筆記
 
-以原本撰寫時的繁體中文保存：[Rust 後端遷移計畫](./rust-migration-plan.md)、
-RustDesk 研究（[spike](./rustdesk-spike.md)、[ID / 中繼伺服器](./rustdesk-id-server.md)）、
-[Dropbear 用的 russh strict-kex 修補](./russh-dropbear-strict-kex.patch)，以及[文章](./articles/)。
+以原本撰寫時的繁體中文保存在 [`engineering/`](./engineering/)：[Rust 後端遷移計畫](./engineering/rust-migration-plan.md)、
+RustDesk 研究（[spike](./engineering/rustdesk-spike.md)、[ID / 中繼伺服器](./engineering/rustdesk-id-server.md)），以及[文章](./engineering/articles/)。
+讓 Dropbear 客戶端通過 strict kex 的 russh 修補已送到上游：[Eugeny/russh#804](https://github.com/Eugeny/russh/issues/804) / [PR #805](https://github.com/Eugeny/russh/pull/805)。
 
 版本說明在 [GitHub Releases](https://github.com/NatLee/telepy/releases)。

@@ -33,8 +33,10 @@ each one is available in English, Traditional Chinese and Japanese.
 
 ## Engineering notes
 
-Kept as they were written, in Traditional Chinese: the [Rust backend migration plan](./rust-migration-plan.md), the
-RustDesk research ([spike](./rustdesk-spike.md), [ID / relay server](./rustdesk-id-server.md)), the
-[russh strict-kex patch for Dropbear](./russh-dropbear-strict-kex.patch) and the [articles](./articles/).
+Kept as they were written, in Traditional Chinese, under [`engineering/`](./engineering/): the
+[Rust backend migration plan](./engineering/rust-migration-plan.md), the RustDesk research
+([spike](./engineering/rustdesk-spike.md), [ID / relay server](./engineering/rustdesk-id-server.md)) and the
+[articles](./engineering/articles/). The russh fix that lets Dropbear clients through strict kex is proposed upstream:
+[Eugeny/russh#804](https://github.com/Eugeny/russh/issues/804) / [PR #805](https://github.com/Eugeny/russh/pull/805).
 
 Release notes are on [GitHub Releases](https://github.com/NatLee/telepy/releases).

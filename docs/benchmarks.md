@@ -2,7 +2,7 @@
 
 <p align="center"><b>English</b> | <a href="./benchmarks.zh-TW.md">繁體中文</a> | <a href="./benchmarks.ja.md">日本語</a></p>
 
-> **Status:** a snapshot from 2026-10-22, taken right after the cutover to the Rust backend (#88–#91) and added in #94. It is the before / after of that migration, not a current measurement: the Django stack is gone from the repo, and Telepy has changed since (the compose file now runs 5 containers, with guacd for remote desktop; web terminals run as russh PTY channels on one pooled connection per tunnel and account instead of spawning the OpenSSH client). The plan behind it is [`rust-migration-plan.md`](rust-migration-plan.md).
+> **Status:** a snapshot from 2026-10-22, taken right after the cutover to the Rust backend (#88–#91) and added in #94. It is the before / after of that migration, not a current measurement: the Django stack is gone from the repo, and Telepy has changed since (the compose file now runs 5 containers, with guacd for remote desktop; web terminals run as russh PTY channels on one pooled connection per tunnel and account instead of spawning the OpenSSH client). The plan behind it is [`rust-migration-plan.md`](engineering/rust-migration-plan.md).
 
 Measured 2026-10-22 on one machine (Apple Silicon, 10 cores, 24 GB, Docker via OrbStack), both stacks running side by side from separate worktrees with their own ports and data directories, one `linuxserver/openssh-server` container as the device, both tunnels into the same device. Numbers are medians of the runs listed; the raw outputs are in the PR that added this file (#94).
 

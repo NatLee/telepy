@@ -4,9 +4,9 @@
 
 > 讓使用者在網頁上操作一個「經目標機器出口上網」的真實 Chromium 桌面。
 > 本文是 KasmVNC 版的**架構文件**(2026-07-03 遷移完成;過程紀錄見
-> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](articles/2026-07-03-kasmvnc-migration-warstory.md))。
+> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](engineering/articles/2026-07-03-kasmvnc-migration-warstory.md))。
 >
-> **現況(2026-10):** 後端已改寫為 Rust 單一程序(見 [`rust-migration-plan.md`](rust-migration-plan.md)):
+> **現況(2026-10):** 後端已改寫為 Rust 單一程序(見 [`rust-migration-plan.md`](engineering/rust-migration-plan.md)):
 > - session store 在記憶體(另存一張小表 `telepy_remote_browser_session`,只給重啟後回收 kasm 側的孤兒用),
 >   沒有 gunicorn 多 worker、沒有 Redis。
 > - SOCKS 代理在**行程內**(`ssh/socks.rs`):每個 CONNECT 是連線池那條裝置連線上的一條 direct-tcpip channel,

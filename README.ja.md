@@ -279,9 +279,9 @@ CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定しま�
 - [リモートブラウザ（KasmVNC）](./docs/remote-browser.ja.md)
 - [バックエンドがデバイスに接続する仕組み](./docs/device-connections.ja.md)
 - [レイテンシ計測の詳細](./docs/latency-deep-dive.ja.md)
-- [Rust バックエンド移行計画](./docs/rust-migration-plan.md)（繁體中文） と [ベンチマーク：Django vs Rust](./docs/benchmarks.ja.md)
+- [Rust バックエンド移行計画](./docs/engineering/rust-migration-plan.md)（繁體中文） と [ベンチマーク：Django vs Rust](./docs/benchmarks.ja.md)
 - [README のスクリーンショットの作り方](./docs/screenshots/README.ja.md)
-- [記事](./docs/articles/)（繁體中文）
+- [記事](./docs/engineering/articles/)（繁體中文）
 - リリースノート：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## コントリビューター

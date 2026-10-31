@@ -33,8 +33,8 @@ Telepy とは何か、どうインストールするかは、まず[プロジェ
 
 ## エンジニアリングノート
 
-書かれた当時のまま繁体字中国語で残してあります：[Rust バックエンド移行計画](./rust-migration-plan.md)、
-RustDesk の調査（[spike](./rustdesk-spike.md)、[ID / リレーサーバー](./rustdesk-id-server.md)）、
-[Dropbear 向け russh strict-kex パッチ](./russh-dropbear-strict-kex.patch)、そして[記事](./articles/)。
+書かれた当時のまま繁体字中国語で [`engineering/`](./engineering/) に残してあります：[Rust バックエンド移行計画](./engineering/rust-migration-plan.md)、
+RustDesk の調査（[spike](./engineering/rustdesk-spike.md)、[ID / リレーサーバー](./engineering/rustdesk-id-server.md)）、そして[記事](./engineering/articles/)。
+Dropbear クライアントを strict kex で通す russh の修正は上流に提出済みです：[Eugeny/russh#804](https://github.com/Eugeny/russh/issues/804) / [PR #805](https://github.com/Eugeny/russh/pull/805)。
 
 リリースノートは [GitHub Releases](https://github.com/NatLee/telepy/releases) にあります。

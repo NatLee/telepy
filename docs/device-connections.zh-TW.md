@@ -218,6 +218,9 @@ sharee）。
   - 筆電也能這樣連：SSH config 對話框的「連到 Telepy 的方式」選「只有網頁 port」（或「自動」= 帶 `--tcp`，先試 SSH 的 port），
     伺服器區塊就多一行 ProxyCommand（先把 `telepy-ws.py` 存到 `~/.ssh/telepy-ws.py`）。`telepy ssh / scp / sftp` 不用這個小程式，
     預設就走網頁 port（見 [cli.md](cli.md)）。
+- **其他載體（自己動手）**：上面的 WebSocket 只是 Telepy 自己的小幫手，gateway 並不依賴它。任何能把 ssh 的 stdin / stdout 接成一條到 gateway 的 TCP 連線的程式，都能當裝置的 `ProxyCommand`。遇到連網頁 port 也過不去的網路（要 CONNECT 的對外 HTTP 代理、依 SNI 過濾、TCP 被限速），通用的隧道工具如 [wstunnel](https://github.com/erebe/wstunnel) 不用改 Telepy 就能補上：在後端的網路上多跑一個 `wstunnel server` 容器並加 `--restrict-to backend:2222`（再用 `--restrict-http-upgrade-path-prefix` 設一條暗號路徑），Traefik 把一條路徑導給它，裝置端寫 `ProxyCommand wstunnel client -L stdio://backend:2222 wss://<主機>/<路徑>`。裡面仍是 Telepy 的 SSH：同一組金鑰、host key 釘選與 forward 規則。
+  - 會失去的：gateway 看到的對端是 wstunnel 容器（裝置的公網位址只能等每日探測補上，有延遲），連入方式的標示會是 SSH 而不是 SSH over WSS，Device 分頁也不認得手動裝的服務。
+  - 必須做對的：wstunnel server 預設全部放行，沒有 `--restrict-to` 就等於開了一個進 compose 內網的中繼（guacd、kasm-browser 的 session-manager 都摸得到）。Telepy 不內建、也不管理它；wstunnel 的協定在大版本之間會變，每台裝置上的 client 得跟著容器一起升。
 - **PROXY protocol**（`gateway/proxy_protocol.rs`）：gateway 前面有 L4 代理（nginx stream、HAProxy `mode tcp`、雲端 NLB）時，
   gateway 看到的來源都是代理。把代理列進網站設定 → 伺服器的「SSH 閘道的 PROXY protocol 來源」或 `.env` 的
   `GATEWAY_PROXY_PROTOCOL_FROM`（IP / CIDR，逗號或空白分隔；空 = 關閉；`.env` 有設就以它為準、頁面上鎖住），它送的 v1 / v2

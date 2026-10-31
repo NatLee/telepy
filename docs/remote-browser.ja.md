@@ -4,9 +4,9 @@
 
 > ユーザーがウェブ上で、通信が対象マシンの出口から出ていく本物の Chromium デスクトップを操作できるようにします。
 > 本書は KasmVNC 版の**アーキテクチャ文書**です(2026-07-03 に移行完了。経緯は
-> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](articles/2026-07-03-kasmvnc-migration-warstory.md) を参照)。
+> [`articles/2026-07-03-kasmvnc-migration-warstory.md`](engineering/articles/2026-07-03-kasmvnc-migration-warstory.md) を参照)。
 >
-> **現状(2026-10):** バックエンドは Rust の単一プロセスに書き直されました([`rust-migration-plan.md`](rust-migration-plan.md) を参照):
+> **現状(2026-10):** バックエンドは Rust の単一プロセスに書き直されました([`rust-migration-plan.md`](engineering/rust-migration-plan.md) を参照):
 > - セッションストアはメモリ上にあります(小さなテーブル `telepy_remote_browser_session` を別に持ちますが、これは再起動後に kasm 側の孤立セッションを片付けるためだけのものです)。
 >   gunicorn のマルチワーカーも Redis もありません。
 > - SOCKS プロキシは**プロセス内**で動きます(`ssh/socks.rs`)。CONNECT 1 本ごとに、コネクションプール上のデバイス接続に direct-tcpip チャネルを 1 本開き、

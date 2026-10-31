@@ -278,9 +278,9 @@ Upgrading is `git pull && docker compose up -d --build`; the database schema is 
 - [Remote browser (KasmVNC)](./docs/remote-browser.md)
 - [How the backend reaches devices](./docs/device-connections.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
-- [Rust backend migration plan](./docs/rust-migration-plan.md) (Traditional Chinese) and [benchmark: Django vs Rust](./docs/benchmarks.md)
+- [Rust backend migration plan](./docs/engineering/rust-migration-plan.md) (Traditional Chinese) and [benchmark: Django vs Rust](./docs/benchmarks.md)
 - [How the README screenshots are made](./docs/screenshots/README.md)
-- [Articles](./docs/articles/) (Traditional Chinese)
+- [Articles](./docs/engineering/articles/) (Traditional Chinese)
 - Release notes: [GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## Contributors

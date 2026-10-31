@@ -204,7 +204,7 @@ RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只�
 RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，**都經通道**，桌面頁協定選「RustDesk」時預設走第一條：
 
 > 歷史：「Telepy 當 RustDesk 的 ID / 中繼伺服器」（裝置不需要通道）的模式在 #201–#208 做過，#212 又拿掉了，只留經通道這條
-> （終端機、檔案、分享、即時 session、錄影等功能都走同一條路）。研究紀錄在 [`rustdesk-id-server.md`](rustdesk-id-server.md)；
+> （終端機、檔案、分享、即時 session、錄影等功能都走同一條路）。研究紀錄在 [`rustdesk-id-server.md`](engineering/rustdesk-id-server.md)；
 > 資料遷移 `2026-10-26-drop-rustdesk-server-devices` 刪掉它存的登入與兩張表。
 
 ### 瀏覽器裡連（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`；前端 `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
@@ -213,7 +213,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 來源與版本記在旁邊的 `README.md`）在瀏覽器裡跑：解碼影像（WebCodecs）、做密碼挑戰、送鍵鼠。Telepy **不架 hbbs / hbbr**：
 核心以為自己在連 ID 伺服器與 relay，其實兩條都連到同一個 WebSocket，後端看第一則訊息分角色，然後把 relay 那條
 重新分框成 RustDesk 的 TCP 線路格式，接到裝置 Direct IP 埠（21118）的 `direct-tcpip` 通道。研究紀錄與量測在
-[`rustdesk-spike.md`](rustdesk-spike.md)（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
+[`rustdesk-spike.md`](engineering/rustdesk-spike.md)（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
 
 - `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?, credential_id?, clipboard?}`；和桌面同一道門：
   `desktop_enabled`、VIEW、step-up、`choose_username` / `allowed_usernames`、`desktop_max_sessions` 算的是 guacd + RustDesk 的總數）：
