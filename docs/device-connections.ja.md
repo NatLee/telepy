@@ -212,7 +212,7 @@ OpenSSH コンテナがこの接続を受けていましたが、今はバック
   （Rust の静的バイナリ、`src/carrier/`。リリースごとに x86_64 / aarch64 / armv7 / armv6 Linux、macOS、Windows 向けにビルド。デバイスはこのサーバーの
   `GET /api/join/carrier/<target>` からダウンロードし、サーバーが `…/sha256` で公開する sha256（リリースの `SHA256SUMS` 由来。サーバーは Telepy のリリース鍵による有効な `SHA256SUMS.sig` があるものだけを受け入れます、`release_key.rs`）と照合します。サーバーは
   そのプラットフォームが最初に求められたときにリリースページから取得して `CARRIER_DIR` = `<DATA_DIR>/carriers` にキャッシュし、`telepy-server fetch-carriers`
-  で先に揃えることもできます）。ビルド済みバイナリのない CPU（MIPS ルーター）は `python3` で `telepy-ws.py`（標準ライブラリのみ、`GET /api/join/telepy-ws.py`）
+  で先に揃えることもできます。サイト設定 `carrier_auto_update`（既定でオン）なら、サーバーは 1 日 1 回リリースページを確認して古いものをバックグラウンドで置き換え、すべての管理者とサイト全体の webhook（`carriers.updated` / `carriers.update_failed`）に知らせます。サーバーの状態 → 関連サービス → **デバイスのキャリア**で各プラットフォームのバージョンを確認し、手動で更新できます）。ビルド済みバイナリのない CPU（MIPS ルーター）は `python3` で `telepy-ws.py`（標準ライブラリのみ、`GET /api/join/telepy-ws.py`）
   を使います。参加スクリプトの `--carrier binary|python` で指定もできます。どちらもバイト列をバイナリフレームに包んで Web ポートへ送り、デバイスに
   HTTP CONNECT プロキシがあればそれを通ります（`HTTPS_PROXY` / `--proxy`、`NO_PROXY` も尊重。サービスには環境変数がないので、参加スクリプトは実行環境の
   プロキシをラッパーに書き込みます）。中身は**同じ** SSH セッションです。同じホスト鍵、同じ鍵認証と forward ルールで、余計に信頼するものはなく、最初の

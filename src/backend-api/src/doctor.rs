@@ -328,7 +328,8 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         out.push(if have.is_empty() {
             check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only); releases must be signed with: {}", carriers.dir().display(), carriers.releases(), carriers.keys_description()))
         } else {
-            check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {}", have.len(), carriers.dir().display(), have.join(", "))).fp(&[&have.len().to_string()])
+            let list = carriers.cached_versions().into_iter().map(|(t, v)| format!("{t} ({})", v.as_deref().unwrap_or("hand-placed"))).collect::<Vec<_>>().join(", ");
+            check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {list}", have.len(), carriers.dir().display())).fp(&[&have.len().to_string()])
         });
     }
 

@@ -38,6 +38,10 @@ pub enum Kind {
     KeyExpiring,
     KeyExpired,
     UserCreated,
+    /// 裝置載體（telepy-carrier）的快取換到新版。/ The cached device carriers were updated to a newer release.
+    CarriersUpdated,
+    /// 自動更新裝置載體失敗（同一個錯誤只送一次）。/ The automatic carrier update failed (each error once).
+    CarriersUpdateFailed,
     /// 「送測試」按鈕。不在目錄裡，不能訂。/ The "Send test" button; not in the catalogue, cannot be subscribed to.
     Test,
 }
@@ -69,6 +73,8 @@ pub const ALL: &[Kind] = &[
     Kind::KeyExpiring,
     Kind::KeyExpired,
     Kind::UserCreated,
+    Kind::CarriersUpdated,
+    Kind::CarriersUpdateFailed,
 ];
 
 /// 狀態事件：由監控迴圈依每個 webhook 自己的延遲發出。/ Status events, timed per webhook by the monitor.
@@ -170,6 +176,8 @@ impl Kind {
             Kind::KeyExpiring => "key.expiring",
             Kind::KeyExpired => "key.expired",
             Kind::UserCreated => "user.created",
+            Kind::CarriersUpdated => "carriers.updated",
+            Kind::CarriersUpdateFailed => "carriers.update_failed",
             Kind::Test => "webhook.test",
         }
     }
@@ -188,7 +196,7 @@ impl Kind {
             Kind::SessionStarted | Kind::SessionWatched | Kind::McpSessionOpened | Kind::McpSessionClosed => Group::Sessions,
             Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed => Group::Account,
             Kind::KeyExpiring | Kind::KeyExpired => Group::Keys,
-            Kind::UserCreated | Kind::Test => Group::Admin,
+            Kind::UserCreated | Kind::CarriersUpdated | Kind::CarriersUpdateFailed | Kind::Test => Group::Admin,
         }
     }
 
@@ -200,7 +208,7 @@ impl Kind {
             Kind::ShareEnded => Audience::ShareParties,
             Kind::ShareReceived | Kind::SessionWatched | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
             Kind::McpSessionOpened | Kind::McpSessionClosed => Audience::AgentAndOwner,
-            Kind::UserCreated | Kind::Test => Audience::SiteOnly,
+            Kind::UserCreated | Kind::CarriersUpdated | Kind::CarriersUpdateFailed | Kind::Test => Audience::SiteOnly,
         }
     }
 
@@ -223,6 +231,8 @@ impl Kind {
                 | Kind::DeviceWarning
                 | Kind::AccountSignInFailed
                 | Kind::UserCreated
+                | Kind::CarriersUpdated
+                | Kind::CarriersUpdateFailed
         )
     }
 
@@ -246,7 +256,8 @@ impl Kind {
             | Kind::AccountSignInFailed
             | Kind::AccountSignInNewDevice
             | Kind::KeyExpiring
-            | Kind::KeyExpired => Severity::Warning,
+            | Kind::KeyExpired
+            | Kind::CarriersUpdateFailed => Severity::Warning,
             Kind::TunnelOnline | Kind::TunnelRecovered => Severity::Ok,
             _ => Severity::Info,
         }
@@ -280,6 +291,8 @@ impl Kind {
             Kind::KeyExpiring => "SSH key expiring soon",
             Kind::KeyExpired => "SSH key expired",
             Kind::UserCreated => "New account",
+            Kind::CarriersUpdated => "Device carriers updated",
+            Kind::CarriersUpdateFailed => "Device carrier update failed",
             Kind::Test => "Test",
         }
     }
@@ -337,6 +350,10 @@ mod tests {
             assert!(!k.site(), "{}", k.name());
         }
         assert!(!Kind::UserCreated.personal());
+        // 裝置載體的更新只有全站 webhook 收得到。/ Carrier updates are site-wide only.
+        for k in [Kind::CarriersUpdated, Kind::CarriersUpdateFailed] {
+            assert!(k.site() && !k.personal() && !k.about_tunnel(), "{}", k.name());
+        }
     }
 
     #[test]

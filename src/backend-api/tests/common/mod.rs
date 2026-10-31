@@ -32,6 +32,10 @@ pub async fn spawn_with(customize: impl FnOnce(&mut Config)) -> TestApp {
     // Avoid env vars (parallel tests race on them); set the Config fields directly.
     let dir = tempfile::tempdir().unwrap();
     let mut config = Config::from_env();
+    // 測試不碰網路：載體只從暫存目錄來，release 頁指到沒人聽的位址（測試要的話自己改）。
+    // No network: carriers from the temp dir only, the release page unreachable (a test may point it elsewhere).
+    config.carrier_dir = dir.path().join("carriers");
+    config.releases_url = "http://127.0.0.1:9/releases".to_string();
     customize(&mut config);
     config.data_dir = dir.path().to_path_buf();
     config.db_path = dir.path().join("db.sqlite3");
@@ -40,9 +44,6 @@ pub async fn spawn_with(customize: impl FnOnce(&mut Config)) -> TestApp {
     config.server_domain = Some("telepy.test".to_string());
     config.internal_api_token = "internal-secret".to_string();
     config.ssh_logs_path = dir.path().join("missing.log");
-    // 測試不碰網路：載體只從暫存目錄來，release 頁指到沒人聽的位址。/ No network: carriers from the temp dir only.
-    config.carrier_dir = dir.path().join("carriers");
-    config.releases_url = "http://127.0.0.1:9/releases".to_string();
     let db = Db::open(&config.db_path).await.unwrap();
     db::schema::ensure_schema(&db.write).await.unwrap();
     let state = AppState::new(config, db);

@@ -87,12 +87,16 @@
 | `key.expiring` | SSH 金鑰 | 金鑰的擁有者（個人 SSH 金鑰 7 天內到期） | |
 | `key.expired` | SSH 金鑰 | 金鑰的擁有者（剛到期：gateway 拒絕、從裝置移除） | |
 | `user.created` | 管理 | — | ✓ |
+| `carriers.updated` | 管理 | — | ✓ |
+| `carriers.update_failed` | 管理 | — | ✓ |
 | `webhook.test` | — | 「送測試」按鈕，不能訂 | |
 
 `key.*` 指的是金鑰頁上的**個人 SSH 金鑰**（筆電經 gateway 連裝置用的那把；管理員用 `user_key_max_days` 讓它們有效期限）。
 通道（裝置）金鑰刻意不會到期，所以沒有對應事件。每 10 分鐘看一次（`webhooks/keys.rs`）：7 天內到期送 `key.expiring`
 （`days_left` 無條件進位），到期了送 `key.expired`（只送 48 小時內到期的，舊的到期不補發）；每把金鑰每個階段每個到期時間只送一次
 （`telepy_key_expiry_notice`），續期改了到期時間就重新算。
+
+`carriers.*` 指的是這台伺服器交給裝置的**載體**（裝置的通道走網頁埠時用的那支程式，見 `device-connections.zh-TW.md`）。載體換成較新的 release 時送 `carriers.updated`——每天的自動更新，或管理員在「伺服器健康 → 裝置載體」按的（`data`：`tag`、`targets`、`by`；`by` 為 null＝自動）。每天的自動更新讀不到或抓不到最新版時送 `carriers.update_failed`（`data.error`）；同一個錯誤只送一次，伺服器上已有的載體照樣提供。
 
 狀態事件（offline / online / degraded / recovered）不是一發生就送：每個 webhook 有自己的延遲（立刻 – 1 天，預設 1 分鐘），
 狀況要持續超過延遲才送；只有送過 offline / degraded 的，結束時才送 online / recovered。只追蹤 webhook 建立之後的變化。

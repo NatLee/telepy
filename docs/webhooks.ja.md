@@ -89,12 +89,16 @@ URL、カスタムヘッダー、署名シークレット、配信履歴、作�
 | `key.expiring` | SSH 鍵 | 鍵の所有者（個人 SSH 鍵の期限が 7 日以内） | |
 | `key.expired` | SSH 鍵 | 鍵の所有者（期限が切れた直後：gateway が拒否し、デバイスから削除されます） | |
 | `user.created` | 管理 | — | ✓ |
+| `carriers.updated` | 管理 | — | ✓ |
+| `carriers.update_failed` | 管理 | — | ✓ |
 | `webhook.test` | — | 「テスト送信」ボタン。購読はできません | |
 
 `key.*` は、鍵ページにある**個人 SSH 鍵**（ノート PC が gateway 経由でデバイスに接続するときの鍵。管理者は `user_key_max_days` で有効期間を設けられます）についてのものです。
 トンネル（デバイス）の鍵は意図的に期限切れにならないため、対応するイベントはありません。10 分ごとに確認します（`webhooks/keys.rs`）：期限まで 7 日以内なら `key.expiring` を、
 期限が切れていれば `key.expired` を送ります（`days_left` は切り上げ。送るのは 48 時間以内に切れたものだけで、それより前に切れたものは後から送りません）。各鍵につき、段階ごと・期限日時ごとに 1 回だけ送ります
 （`telepy_key_expiry_notice`）。更新して期限が変われば、数え直します。
+
+`carriers.*` は、このサーバーがデバイスに渡す**キャリア**（デバイスのトンネルが Web ポート経由で接続するときに使うプログラム。`device-connections.ja.md` を参照）についてのものです。新しいリリースに置き換えられたときに `carriers.updated` を送ります——毎日の自動更新、または管理者が「サーバーの状態 → デバイスのキャリア」で実行したもの（`data`：`tag`、`targets`、`by`。`by` が null なら自動）。毎日の自動更新が最新リリースを読み取れないか取得できなかったときは `carriers.update_failed`（`data.error`）を送ります。同じエラーは 1 回だけ送り、サーバーにあるキャリアはそのまま提供されます。
 
 状態イベント（offline / online / degraded / recovered）は、発生した瞬間には送られません。Webhook ごとに遅延（即時〜1 日、既定 1 分）があり、
 その状態が遅延より長く続いて初めて送られます。online / recovered は、先に offline / degraded を送った場合にだけ送ります。追跡するのは、Webhook を作成した後の変化だけです。

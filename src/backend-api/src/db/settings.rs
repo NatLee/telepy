@@ -22,6 +22,8 @@ pub struct SiteSettings {
     pub ai_max_sessions_per_user: i64,
     pub lan_scan_enabled: bool,
     pub device_ip_lookup_url: String,
+    /// 裝置載體（telepy-carrier）每天檢查新版、自動換掉舊的。/ Keep the cached device carriers current every day.
+    pub carrier_auto_update: bool,
     /// 一般使用者能不能設自己的 webhook。/ Whether everyone may set up personal webhooks.
     pub notify_user_webhooks: bool,
     /// 個人 webhook 能不能連到內網位址（全站 webhook 一律可以）。/ Personal webhooks may target private addresses.
@@ -89,6 +91,7 @@ pub const FIELDS: &[&str] = &[
     "ai_max_sessions_per_user",
     "lan_scan_enabled",
     "device_ip_lookup_url",
+    "carrier_auto_update",
     "notify_user_webhooks",
     "notify_private_targets",
     "notify_max_webhooks",
@@ -127,7 +130,7 @@ pub const FIELDS: &[&str] = &[
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
     remote_browser_max_sessions, remote_browser_geometry, remote_browser_ssh_timeout, remote_browser_ssh_attempts, \
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
-    ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
+    ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, carrier_auto_update, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
     desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_file_transfer, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime, terminal_detach_max_secs, \
     signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
     client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \
