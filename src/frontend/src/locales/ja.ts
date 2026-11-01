@@ -6333,6 +6333,7 @@ export const ja: Record<TranslationKey, string> = {
     "about.tapiDailyLocked": "クレジットを最後まで見ると、もうひとつ選べるようになります。",
     "about.tapiDailyUnlocked": "解放：Tapi が毎日ちがう色になれます。",
     "about.tapiWaiting": "クレジットのプレゼントが、ロゴの裏の誰かを待っています。",
+    "about.tapiSaveFailed": "Tapi の色を保存できませんでした。元の色に戻しました。",
     "about.tapiColor.teal": "ティール",
     "about.tapiColor.sakura": "さくら",
     "about.tapiColor.lemon": "レモン",

@@ -6351,6 +6351,7 @@ export const en = {
     "about.tapiDailyLocked": "Watch the credits to the end to unlock one more choice.",
     "about.tapiDailyUnlocked": "Unlocked: Tapi can wear a new colour every day.",
     "about.tapiWaiting": "A present from the credits is waiting for someone behind the logo.",
+    "about.tapiSaveFailed": "Couldn't save Tapi's colour. It is back to the one you had.",
     "about.tapiColor.teal": "Teal",
     "about.tapiColor.sakura": "Sakura",
     "about.tapiColor.lemon": "Lemon",
