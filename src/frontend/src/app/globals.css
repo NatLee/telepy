@@ -113,6 +113,7 @@
   --animate-refresh-done: refresh-done 0.32s cubic-bezier(0.16, 1, 0.3, 1);
   /* 彩蛋 / easter eggs：Tapi 飄啊飄、logo 沿著折返線重畫、粉圓掉下去。 */
   --animate-tapi-bob: tapi-bob 2.4s ease-in-out infinite;
+  --animate-tapi-hop: tapi-hop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
   --animate-glyph-draw: glyph-draw 0.9s ease-out both;
   --animate-pearl-fall: pearl-fall var(--pearl-dur, 1.6s) cubic-bezier(0.45, 0, 0.9, 0.6) forwards;
 
@@ -303,6 +304,13 @@
   @keyframes tapi-bob {
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(-7%); }
+  }
+
+  @keyframes tapi-hop {
+    0% { transform: translateY(0) scale(1, 1); }
+    35% { transform: translateY(-14%) scale(0.94, 1.06); }
+    70% { transform: translateY(0) scale(1.06, 0.94); }
+    100% { transform: translateY(0) scale(1, 1); }
   }
 
   /* 線條要有 pathLength="1" 與 stroke-dasharray="1"。/ Paths need pathLength="1" and stroke-dasharray="1". */

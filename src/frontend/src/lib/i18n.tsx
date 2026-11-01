@@ -34,6 +34,7 @@ import { parseViewModes } from "./viewModes";
 import { readViewModes, storeViewModes } from "./viewModeStore";
 import { fromServer, sameDisplay } from "./desktopDisplay";
 import { hasLocalDisplay, readDisplay, storeDisplay } from "./desktopDisplayStore";
+import { tapiStore } from "./tapiStore";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -215,6 +216,16 @@ export function UserSettingsSync() {
         } else if (hasLocalDisplay()) storeDisplay(readDisplay(), true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
+
+    // Tapi 的帳號設定：profile 每次進來都種回 store（存的時候 store 自己先換，不重抓 profile）。
+    // Tapi's account settings: every profile seeds the store (saves update the store first; no profile refetch).
+    const signedIn = !!user;
+    const tapiColor = user?.tapi_color ?? "";
+    const tapiDaily = !!user?.tapi_daily;
+    useEffect(() => {
+        if (signedIn) tapiStore.seed({ color: tapiColor, daily: tapiDaily });
+        else tapiStore.reset();
+    }, [signedIn, tapiColor, tapiDaily]);
 
     return null;
 }
