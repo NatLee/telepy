@@ -66,11 +66,16 @@ fn ssh_string(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
 }
 
-/// exec 模式找檔案的腳本（POSIX / BusyBox）：印 `PATH=` 與 `EXISTS=`。root + OpenWrt + Dropbear → `/etc/dropbear/authorized_keys`。
-/// The exec-mode locator script: prints `PATH=` and `EXISTS=`. Root on OpenWrt with Dropbear → `/etc/dropbear/authorized_keys`.
+/// exec 模式、[`super::locate`] 決定不了時的退路：帳號的 `~/.ssh/authorized_keys`。印 `PATH=` 與 `EXISTS=`。
+/// The exec-mode fallback when [`super::locate`] could not decide: the account's `~/.ssh/authorized_keys`.
 pub const LOCATE_SCRIPT: &str = r#"d=${HOME:-}; [ -n "$d" ] || d=$(cd ~ 2>/dev/null && pwd); p="$d/.ssh/authorized_keys"
-if [ "$(id -u 2>/dev/null)" = 0 ] && [ -d /etc/dropbear ] && [ -f /etc/openwrt_release ]; then p=/etc/dropbear/authorized_keys; fi
 printf 'PATH=%s\n' "$p"; if [ -f "$p" ]; then echo EXISTS=1; else echo EXISTS=0; fi"#;
+
+/// 一個已知路徑存不存在（exec 模式）。/ Whether a known path exists (exec mode).
+fn exists_script(path: &str) -> String {
+    let p = crate::tunnel_service::sh_quote(path);
+    format!("p={p}; printf 'PATH=%s\\n' \"$p\"; if [ -f \"$p\" ]; then echo EXISTS=1; else echo EXISTS=0; fi")
+}
 
 /// `LOCATE_SCRIPT` 的輸出 → (path, exists)。/ Parse the locator's output.
 pub fn parse_locate(out: &str) -> Option<(String, bool)> {
@@ -108,9 +113,17 @@ impl AuthorizedKeysFile {
     /// 以服務金鑰登入 `username`，找出 `~/.ssh`（`for_write` 時不存在就建立，0700），記下 `authorized_keys` 的實際路徑與權限。
     /// Windows 管理員帳號改用 `%ProgramData%\ssh\administrators_authorized_keys`（平台探測一次，快取）。
     /// 稽核只讀，不建目錄。/ Read-only callers (the audit) never create `~/.ssh`.
-    pub async fn open(state: &AppState, username: &str, reverse_port: i64, for_write: bool) -> anyhow::Result<Self> {
+    ///
+    /// `locked` = 呼叫者拿著這台裝置的鎖（`DeviceKeys::lock_for`），所以找檔案時可以短暫寫檔、登入試（見 `locate`）。
+    /// `locked` = the caller holds the device's lock (`DeviceKeys::lock_for`), so finding the file may write briefly
+    /// and test a login (see `locate`).
+    pub async fn open(state: &AppState, username: &str, reverse_port: i64, for_write: bool, locked: bool) -> anyhow::Result<Self> {
         let platform = state.device_keys.platform(state, reverse_port, username).await;
         let (admin_file, _, _) = platform.file_for(username);
+        // POSIX 裝置：伺服器讀哪個檔由 `locate` 依證據決定（SFTP 與 exec 一樣）；Windows 照平台的規則。
+        // POSIX devices: `locate` decides from evidence which file the server reads (SFTP and exec alike); Windows
+        // follows its platform rule.
+        let located = if admin_file.is_none() && !platform.windows { state.device_keys.keys_file(state, reverse_port, username, locked).await } else { None };
         let (lease, channel) = state.pool.session_channel(state, reverse_port, username).await?;
         let channel = match crate::ssh::device::open_sftp(channel).await {
             Ok(c) => c,
@@ -119,7 +132,7 @@ impl AuthorizedKeysFile {
                 if admin_file.is_some() {
                     bail!("the device has no sftp subsystem, and a Windows administrator's key file needs SFTP");
                 }
-                return Self::open_exec(state, username, reverse_port).await;
+                return Self::open_exec(state, username, reverse_port, located).await;
             }
             Err(e) => return Err(e),
         };
@@ -136,19 +149,23 @@ impl AuthorizedKeysFile {
                     bail!("sftp init: {e} (a Windows administrator's key file needs SFTP)");
                 }
                 tracing::debug!(port = reverse_port, account = username, error = %e, "device keys: no working sftp, using exec");
-                return Self::open_exec(state, username, reverse_port).await;
+                return Self::open_exec(state, username, reverse_port, located).await;
             }
         };
         let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
 
-        let (ssh_dir, in_place) = match admin_file {
-            Some(path) => (path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default(), true),
-            None => {
+        let split = |p: &str| p.rsplit_once('/').map(|(d, f)| (d.to_string(), f.to_string())).unwrap_or_default();
+        let (ssh_dir, file_name, in_place) = match (admin_file, located) {
+            (Some(path), _) => (split(&path).0, "administrators_authorized_keys".to_string(), true),
+            (None, Some(path)) => {
+                let (dir, file) = split(&path);
+                (dir, file, false)
+            }
+            (None, None) => {
                 let home = sftp.realpath(".").await.context("resolve home directory")?.files.first().map(|f| f.filename.clone()).context("resolve home directory")?;
-                (format!("{}/.ssh", home.trim_end_matches('/')), false)
+                (format!("{}/.ssh", home.trim_end_matches('/')), "authorized_keys".to_string(), false)
             }
         };
-        let file_name = if in_place { "administrators_authorized_keys" } else { "authorized_keys" };
         let backend = Backend::Sftp { sftp, _lease: lease, posix_rename };
         let Backend::Sftp { sftp, .. } = &backend else { unreachable!() };
         match sftp.stat(ssh_dir.as_str()).await {
@@ -181,9 +198,11 @@ impl AuthorizedKeysFile {
         Ok(Self { backend, state: state.clone(), reverse_port, account: username.to_string(), dir, path, mode, in_place })
     }
 
-    /// 沒有 SFTP：用 exec 找到檔案（路徑規則見 [`LOCATE_SCRIPT`]）。/ No SFTP: locate the file over exec.
-    async fn open_exec(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<Self> {
-        let out = Self::exec_in(state, reverse_port, username, &format!("sh -c {}", crate::tunnel_service::sh_quote(LOCATE_SCRIPT))).await.context("locate authorized_keys over exec (no sftp subsystem)")?;
+    /// 沒有 SFTP：`locate` 決定的檔案（決定不了 = [`LOCATE_SCRIPT`] 的預設）。/ No SFTP: the file `locate` chose
+    /// (or [`LOCATE_SCRIPT`]'s default).
+    async fn open_exec(state: &AppState, username: &str, reverse_port: i64, located: Option<String>) -> anyhow::Result<Self> {
+        let script = located.as_deref().map_or_else(|| LOCATE_SCRIPT.to_string(), exists_script);
+        let out = Self::exec_in(state, reverse_port, username, &format!("sh -c {}", crate::tunnel_service::sh_quote(&script))).await.context("locate authorized_keys over exec (no sftp subsystem)")?;
         let (path, exists) = parse_locate(&out).context("locate authorized_keys over exec: unexpected answer")?;
         let dir = path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_else(|| "/".into());
         Ok(Self { backend: Backend::Exec, state: state.clone(), reverse_port, account: username.to_string(), dir, path, mode: exists.then_some(0o600), in_place: false })
@@ -251,11 +270,11 @@ impl AuthorizedKeysFile {
         Ok(text)
     }
 
-    /// 面板上顯示的路徑：只有 exec 模式回報實際路徑（可能是 `/etc/dropbear/authorized_keys`）；SFTP 模式維持平台的標籤
-    /// （`~/.ssh/authorized_keys`），不把每台裝置的絕對家目錄攤出來。/ The path shown in the panel: only exec mode reports the
-    /// real one (it may be `/etc/dropbear/authorized_keys`); SFTP mode keeps the platform label.
+    /// 面板上顯示的路徑：exec 模式，或伺服器讀的不是家目錄的 `~/.ssh/authorized_keys`（例如 `/etc/dropbear/authorized_keys`）
+    /// 時回報實際路徑；否則維持平台的標籤，不把每台裝置的絕對家目錄攤出來。/ The path shown in the panel: the real one in
+    /// exec mode or when the server reads something other than `~/.ssh/authorized_keys`; else the platform label.
     fn reported_path(&self) -> Option<String> {
-        self.via_exec().then(|| self.path.clone())
+        (!self.in_place && (self.via_exec() || !self.path.ends_with("/.ssh/authorized_keys"))).then(|| self.path.clone())
     }
 
     /// 原子取代整個檔案（保留原本的權限；新檔 0600）。Windows 管理員檔則就地改寫（見模組說明）。
