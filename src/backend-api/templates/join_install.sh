@@ -61,6 +61,82 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# One loopback login as $TARGET_USER with only this key ($1; $2 = openssh | dbclient); 0 = it got in.
+auth_login_with() {
+    case "$2" in
+        # ssh exits 255 for its own failures (a refused login among them); anything else came from the device.
+        openssh) if "$OSSH_BIN" -F /dev/null -i "$1" -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthentications=publickey \
+                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p "$SSH_PORT" "$TARGET_USER@$SSH_HOST" true </dev/null >/dev/null 2>&1
+            then return 0; else [ "$?" -ne 255 ]; fi ;;
+        # A random password, never typed: dbclient never prompts. HOME points at the key's temporary directory, so the
+        # known_hosts dbclient writes goes away with it.
+        dbclient) HOME=$(dirname "$1") DROPBEAR_PASSWORD="telepy-$(date +%s)-no-password" "$DB_BIN" -y -i "$1" -p "$SSH_PORT" "$TARGET_USER@$SSH_HOST" true </dev/null >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Which file this SSH server reads for $TARGET_USER, found by a login: a throwaway key goes into each of
+# $AUTH_CANDIDATES in turn (only where the directory exists, or ~/.ssh), a loopback login with only that key is tried,
+# and the line is taken out again. The first file that works becomes $AUTH_KEYS. Needs an OpenSSH client with
+# ssh-keygen, or dbclient with dropbearkey; otherwise it says why in $AUTH_TEST_WHY and returns 1.
+find_auth_keys() {
+    AUTH_TEST_WHY=""
+    t_dir=$(mktemp -d 2>/dev/null) || t_dir="/tmp/telepy-auth-test-$(date +%s)"
+    mkdir -p "$t_dir" && chmod 700 "$t_dir" || { AUTH_TEST_WHY="no temporary directory"; return 1; }
+    t_key="$t_dir/key"; t_pub=""; t_how=""
+    if [ -n "$OSSH_BIN" ] && have ssh-keygen && ssh-keygen -q -t ed25519 -N '' -f "$t_key" >/dev/null 2>&1; then
+        t_pub=$(cut -d' ' -f1,2 "$t_key.pub"); t_how=openssh
+    elif [ -n "$DB_BIN" ] && have dropbearkey && dropbearkey -t ed25519 -f "$t_key" >/dev/null 2>&1; then
+        t_pub=$(dropbearkey -y -f "$t_key" 2>/dev/null | grep '^ssh-' | head -n 1 | cut -d' ' -f1,2); t_how=dbclient
+    fi
+    if [ -z "$t_pub" ]; then
+        rm -rf "$t_dir"; AUTH_TEST_WHY="no ssh client with a key tool to log in with"; return 1
+    fi
+    t_mark="telepy-join-locate-$(date +%s)"
+    # The control: with the key in no file yet, the login must fail. If it works anyway (an account without a
+    # password, a server that lets anyone in), a login cannot tell the files apart.
+    if auth_login_with "$t_key" "$t_how"; then
+        rm -rf "$t_dir"; AUTH_TEST_WHY="this server lets the login in without the key (an account without a password?), so a login cannot tell the files apart"; return 1
+    fi
+    t_tried=""
+    for f in $AUTH_CANDIDATES; do
+        d=$(dirname "$f")
+        [ -d "$d" ] || [ "$d" = "$SSH_DIR" ] || continue
+        t_new=0; [ -e "$f" ] || t_new=1
+        if [ "$d" = "$SSH_DIR" ] && [ ! -d "$d" ]; then
+            { mkdir -p "$d" && chmod 700 "$d"; } 2>/dev/null || continue
+            [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$d" 2>/dev/null
+        fi
+        if [ "$t_new" -eq 1 ]; then
+            ( umask 077; : > "$f" ) 2>/dev/null || continue
+            case "$f" in "$TARGET_HOME"/*) [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$f" 2>/dev/null ;; esac
+        elif [ -n "$(tail -c 1 "$f" 2>/dev/null)" ]; then
+            printf '\n' >> "$f" 2>/dev/null || continue
+        fi
+        printf '%s %s\n' "$t_pub" "$t_mark" >> "$f" 2>/dev/null || continue
+        t_tried="$t_tried $f"
+        t_ok=0
+        auth_login_with "$t_key" "$t_how" && t_ok=1
+        # Take the line out again: the copy is written back only when it is exactly that line shorter.
+        n=$(grep -cF "$t_mark" "$f" 2>/dev/null || true); [ -n "$n" ] || n=0
+        if [ "$n" -gt 0 ]; then
+            grep -vF "$t_mark" "$f" > "$t_dir/copy" 2>/dev/null || true
+            if [ "$(wc -l < "$t_dir/copy")" -eq "$(( $(wc -l < "$f") - n ))" ] && ! grep -qF "$t_mark" "$t_dir/copy"; then
+                cat "$t_dir/copy" > "$f"
+            else
+                warn "could not take the throwaway key back out of $f; remove the line ending in $t_mark by hand"
+            fi
+        fi
+        [ "$t_new" -eq 1 ] && ! grep -q '[^[:space:]]' "$f" 2>/dev/null && rm -f "$f"
+        if [ "$t_ok" -eq 1 ]; then
+            AUTH_KEYS=$f; rm -rf "$t_dir"; return 0
+        fi
+    done
+    rm -rf "$t_dir"
+    AUTH_TEST_WHY="a login with a throwaway key worked through none of:${t_tried:- (nothing could be written)}"
+    return 1
+}
+
 usage() {
     cat <<'USAGE'
 Join this machine to Telepy as a device.
@@ -722,17 +798,14 @@ main() {
     ARCH=$(uname -m 2>/dev/null || echo unknown)
     if [ -f /etc/openwrt_release ]; then
         DISTRO="OpenWrt $(sed -n "s/^DISTRIB_RELEASE='\(.*\)'$/\1/p" /etc/openwrt_release | head -n 1)"
-        OPENWRT=1
     elif [ "$OS" = Darwin ]; then
         DISTRO="macOS $(sw_vers -productVersion 2>/dev/null || true)"
-        OPENWRT=0
     elif [ -r /etc/os-release ]; then
         DISTRO=$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/os-release | head -n 1)
-        OPENWRT=0
     else
         DISTRO=$OS
-        OPENWRT=0
     fi
+    # DISTRO is only shown. Every decision below follows what this machine has and how it behaves, never its name.
     SHELL_KIND=sh
     if sh --help 2>&1 | head -n 1 | grep -q BusyBox; then
         SHELL_KIND="ash ($(sh --help 2>&1 | head -n 1 | sed 's/ multi-call.*//; s/ (.*//'))"
@@ -906,7 +979,8 @@ main() {
     SERVER_KIND=unknown
     SERVER_DESC=""
     if [ -z "$SSH_PORT" ]; then
-        if [ "$OPENWRT" -eq 1 ] && have uci; then
+        # A UCI-configured Dropbear says its port there.
+        if have uci; then
             SSH_PORT=$(uci -q get dropbear.@dropbear[0].Port 2>/dev/null | head -n 1 || true)
         fi
         [ -n "$SSH_PORT" ] || SSH_PORT=$( { sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null || true; } | awk '$1 == "port" { print $2; exit }')
@@ -966,7 +1040,7 @@ main() {
         "")
             # No banner and nothing refused the connection: decide by what is installed (the handshake below still has to succeed).
             if [ "$PROBE_REFUSED" -eq 1 ]; then :
-            elif [ "$OPENWRT" -eq 1 ] && [ -d /etc/dropbear ] && pidof dropbear >/dev/null 2>&1; then SERVER_KIND=dropbear; SERVER_DESC="Dropbear $(dropbear -V 2>&1 | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -n 1)"
+            elif pidof dropbear >/dev/null 2>&1; then SERVER_KIND=dropbear; SERVER_DESC="Dropbear $(dropbear -V 2>&1 | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -n 1)"
             elif pidof sshd >/dev/null 2>&1 || [ -d /etc/ssh ]; then SERVER_KIND=openssh; SERVER_DESC="OpenSSH (banner not read)"
             fi ;;
     esac
@@ -1049,22 +1123,25 @@ main() {
     fi
     say "ok ($SERVER_DESC)"
 
-    # Where this SSH server reads this account's keys. Only resolved from the server, never guessed from "~/.ssh" alone.
+    # Where this SSH server reads this account's keys: asked of the server when it can answer (OpenSSH's sshd -T);
+    # otherwise found during the install by a login (find_auth_keys): a throwaway key goes into each known location
+    # in turn ($AUTH_CANDIDATES) and the first one a loopback login works with is the file. The same rule as Telepy's
+    # device key lists; the known locations are candidates, never a rule by distribution or model.
+    AUTH_TEST=0
+    AUTH_CANDIDATES="$SSH_DIR/authorized_keys $SSH_DIR/authorized_keys2 /etc/dropbear/authorized_keys"
     if [ -n "$AUTH_KEYS_OPT" ]; then
         AUTH_KEYS=$AUTH_KEYS_OPT
         AUTH_KEYS_WHY="--authorized-keys"
-    elif [ "$SERVER_KIND" = dropbear ] && [ "$OPENWRT" -eq 1 ] && [ "$TARGET_UID" -eq 0 ]; then
-        AUTH_KEYS=/etc/dropbear/authorized_keys
-        AUTH_KEYS_WHY="OpenWrt's Dropbear reads root's keys from /etc/dropbear/authorized_keys"
     else
         AUTH_KEYS="$SSH_DIR/authorized_keys"
-        AUTH_KEYS_WHY="$SERVER_KIND reads ~/.ssh/authorized_keys"
+        AUTH_KEYS_WHY="$SERVER_KIND did not say where it reads keys: a login with a throwaway key finds the file during the install"
+        AUTH_TEST=1
         if [ "$SERVER_KIND" = openssh ]; then
             akf=$( { sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null || true; } | awk '$1 == "authorizedkeysfile" { print $2; exit }')
             if [ -n "$akf" ]; then
                 akf=$(printf '%s' "$akf" | sed "s|%h|$TARGET_HOME|g; s|%u|$TARGET_USER|g; s|%%|%|g")
                 case "$akf" in /*) ;; *) akf="$TARGET_HOME/$akf" ;; esac
-                case "$akf" in *[!A-Za-z0-9._/-]*) ;; *) AUTH_KEYS=$akf; AUTH_KEYS_WHY="sshd -T AuthorizedKeysFile" ;; esac
+                case "$akf" in *[!A-Za-z0-9._/-]*) ;; *) AUTH_KEYS=$akf; AUTH_KEYS_WHY="sshd -T AuthorizedKeysFile"; AUTH_TEST=0 ;; esac
             fi
         fi
     fi
@@ -1236,13 +1313,26 @@ main() {
         say "  http             $HTTP_TOOL"
         say "  ssh client       $CLIENT_DESC ($SSH_BIN)"
         say "  ssh server       ${SERVER_DESC:-unknown} on $SSH_HOST:$SSH_PORT, host key from $HOST_KEY_SOURCE"
-        say "  authorized_keys  $AUTH_KEYS"
+        if [ "$AUTH_TEST" -eq 1 ]; then say "  authorized_keys  found by a login during the install, among: $AUTH_CANDIDATES"
+        else say "  authorized_keys  $AUTH_KEYS"; fi
         say "  service          $SERVICE_DESC"
         say "  gateway          $GATEWAY_USER@$GATEWAY_HOST:$GATEWAY_PORT (host key pinned: $STRICT)"
         say "  keepalive        ${COMPAT:+TCP only (compat mode) — }$KEEPALIVE_WHY"
         [ "$VIA_WEB" -eq 0 ] || say "  web port         $CARRIER_DESC"
         say "No token was used. Create the join command in Telepy and run it the same way."
         exit 0
+    fi
+
+    # --- which authorized_keys the server reads -----------------------------------------------------
+    if [ "$AUTH_TEST" -eq 1 ]; then
+        step "Finding where this SSH server reads $TARGET_USER's keys"
+        if find_auth_keys; then
+            AUTH_KEYS_WHY="a login with a throwaway key worked through this file"
+        else
+            AUTH_KEYS_WHY="$AUTH_KEYS_WHY; not confirmed ($AUTH_TEST_WHY), so the usual place is used and Telepy's own login at the end tells whether it works"
+        fi
+        AUTH_DIR=$(dirname "$AUTH_KEYS")
+        note "authorized_keys: $AUTH_KEYS ($AUTH_KEYS_WHY)"
     fi
 
     # --- tunnel key ---------------------------------------------------------------------------------
