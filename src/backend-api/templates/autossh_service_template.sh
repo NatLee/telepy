@@ -13,7 +13,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 command -v autossh >/dev/null 2>&1 || { echo 'autossh not found. Please install autossh (e.g. apt/yum) before running this script.'; exit 1; }
-${known_hosts_setup}${ws_client_setup}
+${known_hosts_setup}${ws_client_setup}${keepalive_setup}
 # Named after the tunnel's install id (no user, server or tunnel name).
 SERVICE_PATH="/etc/systemd/system/${install_base}.service"
 

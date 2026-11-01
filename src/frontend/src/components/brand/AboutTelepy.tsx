@@ -14,6 +14,7 @@ import { Clapperboard, ExternalLink, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/Toast";
 import { DisclaimerButton } from "@/components/brand/Disclaimer";
 import { Tapi } from "@/components/brand/Tapi";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
@@ -166,6 +167,7 @@ function CrossSwatch({ fills }: { fills: string[] }) {
 /** 「你的 Tapi」：找到 Tapi 後才出現；顏色存在帳號上。/ "Your Tapi": appears once Tapi is found; stored on the account. */
 function YourTapi() {
     const { t } = useI18n();
+    const { showError } = useToast();
     const tapi = useTapi();
     if (!tapi.unlocked) {
         // 片尾名單看完了、Tapi 還沒找到：留一句話，免得忘了禮物還在等。/ Credits watched, Tapi not found yet: a reminder that the present is waiting.
@@ -177,11 +179,16 @@ function YourTapi() {
             </p>
         );
     }
-    const pick = (choice: string) => void tapi.save({ tapi_color: choice });
+    // 馬上換色（store 樂觀更新）；沒存到會自己退回，這裡只說一聲。/ Shows at once; a failed save reverts by itself, we just say so.
+    const pick = (choice: string) => {
+        if (choice === tapi.choice) return;
+        void tapi.save({ tapi_color: choice }).then((ok) => !ok && showError(t("about.tapiSaveFailed")));
+    };
     const swatch = "grid size-9 place-items-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
     return (
         <div className="mt-3.5 flex items-start gap-3.5 border-t border-border pt-3.5">
-            <Tapi pose="wave" size="3rem" look={{ clip: tapi.clip, festival: null }} className="mt-0.5 shrink-0" label={t("eggs.tapiLabel")} />
+            {/* 換色時跳一下（key 換了就重播一次）。/ Hops once when the colour changes (a new key replays it). */}
+            <Tapi key={tapi.choice} pose="wave" size="3rem" look={{ clip: tapi.clip, festival: null }} className="mt-0.5 shrink-0 animate-tapi-hop" label={t("eggs.tapiLabel")} />
             <div className="min-w-0 flex-1 space-y-2">
                 <p className="text-foreground">{t("about.tapiTitle")}</p>
                 <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={t("about.tapiTitle")}>

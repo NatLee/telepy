@@ -160,6 +160,65 @@ fn bash_ws(ws: Option<WsCarrier>, dir: &str, names: &crate::device_install::name
     (setup, "-o \"ProxyCommand=$WS_SH\" \\\n".to_string())
 }
 
+/// keepalive 由跟 Telepy 的握手決定——跟一鍵加入（`join_install.sh` 的 "Keepalive probe"）同一條規則：先帶 SSH keepalive
+/// 握手；逾時了、而不帶它的握手卻成功（這台的 ssh 計時器一設就誤觸發，OpenWrt #12574），就改用 TCP keepalive。握手不帶
+/// 金鑰，不會登入。第二次不能靠 ssh 自己的計時器（壞的正是它），有 `timeout` 就用它限時。結果：`TELEPY_COMPAT=1` 與
+/// `KEEPALIVE_ARGS`。`opts` / `proxy` = 這種腳本 ssh 指令裡的 host key 選項與到 Telepy 的路（照原樣接在續行後）。
+/// The keepalive is decided by a handshake with Telepy — the same rule as the one-command join ("Keepalive probe" in
+/// `join_install.sh`): with SSH keepalives first; if that times out while a handshake without them completes (an ssh
+/// whose timers misfire as soon as one is set, OpenWrt #12574), TCP keepalive instead. No key is offered, nothing logs
+/// in. The second try cannot rely on ssh's own timers (they are what is broken), so `timeout` bounds it when present.
+/// Result: `TELEPY_COMPAT=1` and `KEEPALIVE_ARGS`. `opts` / `proxy` = this flavour's host-key options and way to Telepy.
+pub fn keepalive_probe_sh(opts: &str, proxy: &str, host: &str, port: &str) -> String {
+    format!(
+        "\n# Keepalive, decided by a handshake with Telepy (the same rule as the one-command join): SSH keepalives every 30 s,\n\
+         # unless a handshake with them times out while one without them completes (an ssh whose timers misfire,\n\
+         # OpenWrt #12574): then TCP keepalive instead. No key is offered here; nothing logs in.\n\
+         TELEPY_COMPAT=0\n\
+         KEEPALIVE_ARGS=(-o \"ServerAliveInterval 30\" -o \"ServerAliveCountMax 3\")\n\
+         TELEPY_TO=\"\"; command -v timeout >/dev/null 2>&1 && TELEPY_TO=\"timeout 30\"\n\
+         telepy_handshake() {{\n\
+         \x20   $TELEPY_TO ssh -o BatchMode=yes -o PubkeyAuthentication=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \\\n\
+         {opts}{proxy}-p {port} \"$@\" telepy@{host} true 2>&1 | tail -n 1\n\
+         }}\n\
+         TELEPY_FIRST=$(telepy_handshake -o ConnectTimeout=15 -o ServerAliveInterval=30)\n\
+         case \"$TELEPY_FIRST\" in\n\
+         \x20   *\"Permission denied\"*|*refused*|*resolve*|*\"No route\"*|*nreachable*|*\"Host key verification failed\"*|*IDENTIFICATION*) ;;\n\
+         \x20   *) case \"$(telepy_handshake -o ServerAliveInterval=0)\" in\n\
+         \x20          *\"Permission denied\"*)\n\
+         \x20              TELEPY_COMPAT=1\n\
+         \x20              KEEPALIVE_ARGS=(-o \"ServerAliveInterval 0\" -o \"ServerAliveCountMax 3\" -o \"TCPKeepAlive yes\")\n\
+         \x20              echo \"[!] Compat mode: a handshake with SSH keepalives failed ($TELEPY_FIRST) but one without them completed, so this tunnel uses TCP keepalive (a dead link is noticed later).\" ;;\n\
+         \x20      esac ;;\n\
+         esac\n"
+    )
+}
+
+/// PowerShell 版的同一條規則（第二次握手用背景工作限時 30 秒）；結果在 `$keepAlive`。/ The same rule in PowerShell (the
+/// second handshake runs as a job bounded to 30 s); the result is `$keepAlive`.
+pub const KEEPALIVE_PROBE_PS: &str = r#"# Keepalive, decided by a handshake with Telepy (the same rule as the one-command join): SSH keepalives, unless a
+# handshake with them fails while one without them completes (an ssh whose timers misfire): then TCP keepalive instead.
+# No key is offered here; nothing logs in.
+$keepAlive = "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+function Test-TelepyHandshake([string]$extra) {
+    $probe = "ssh -o BatchMode=yes -o PubkeyAuthentication=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no $extra $hostKeyOptions -p $reverseServerSSHPort $sshUserHost exit 2>&1"
+    $job = Start-Job -ScriptBlock { param($c) Invoke-Expression $c | Out-String } -ArgumentList $probe
+    $answer = if (Wait-Job $job -Timeout 30) { Receive-Job $job | Out-String } else { "timed out" }
+    Remove-Job $job -Force
+    return $answer
+}
+try {
+    $firstTry = Test-TelepyHandshake "-o ConnectTimeout=15 -o ServerAliveInterval=15"
+    if ($firstTry -notmatch 'Permission denied|refused|resolve|No route|nreachable|Host key verification failed|IDENTIFICATION') {
+        if ((Test-TelepyHandshake "-o ServerAliveInterval=0") -match 'Permission denied') {
+            $keepAlive = "-o ServerAliveInterval=0 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes"
+            echo "[!] Compat mode: a handshake with SSH keepalives failed but one without them completed, so this tunnel uses TCP keepalive (a dead link is noticed later)."
+        }
+    }
+} catch {
+    echo "[!] Could not test the keepalive ($_); using SSH keepalives."
+}"#;
+
 /// known_hosts 裡的別名（與一鍵加入相同）。/ The known_hosts alias (the same one the join script uses).
 pub fn gateway_alias(server_domain: &str, reverse_server_ssh_port: &str) -> String {
     format!("telepy-{server_domain}-{reverse_server_ssh_port}")
@@ -249,6 +308,8 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", &names);
             m.insert("ws_client_setup", ws_setup);
             m.insert("proxy_option", proxy);
+            m.insert("keepalive_setup", keepalive_probe_sh(&m["host_key_options"], &m["proxy_option"], ctx.ssh_host, ctx.reverse_server_ssh_port));
+            m.insert("keepalive_option", "\"${KEEPALIVE_ARGS[@]}\" \\\n".into());
             let tpl = if tunnel_type.eq_ignore_ascii_case("ssh") { SSH } else { AUTOSSH };
             Ok((safe_substitute(tpl, &m), "bash"))
         }
@@ -305,6 +366,14 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
                 m.insert("known_hosts_setup", String::new());
                 m.insert("host_key_options", "-o \"StrictHostKeyChecking=no\" -o \"UserKnownHostsFile=/dev/null\" ".into());
             }
+            // keepalive：寫好 unit（引號 heredoc，不能用變數）後依握手的結果改。/ Keepalive: the unit is a quoted heredoc,
+            // so the handshake's result is applied to the written file.
+            m.insert("keepalive_setup", keepalive_probe_sh(&m["host_key_options"], "${WS_SH:+-o \"ProxyCommand=$WS_SH\" }", ctx.ssh_host, ctx.reverse_server_ssh_port));
+            let fixup = format!(
+                "{}[ \"$TELEPY_COMPAT\" != 1 ] || $SUDO sed -i 's|-o \"ServerAliveInterval 30\" -o \"ServerAliveCountMax 3\"|-o \"ServerAliveInterval 0\" -o \"ServerAliveCountMax 3\" -o \"TCPKeepAlive yes\"|' \"$SERVICE_PATH\"\n",
+                m["unit_fixup"]
+            );
+            m.insert("unit_fixup", fixup);
             Ok((safe_substitute(AUTOSSH_SERVICE, &m), "bash"))
         }
         // 只走網頁 port 這兩種做不到；自動 = 只走 SSH 的 port（跟以前一樣）。
@@ -328,6 +397,7 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
                     String::new()
                 },
             );
+            m.insert("keepalive_setup", KEEPALIVE_PROBE_PS.to_string());
             Ok((safe_substitute(POWERSHELL, &m), "powershell"))
         }
         "docker-run" | "docker-compose" => {
@@ -578,6 +648,80 @@ mod tests {
         assert!(alias_prefix_problem("work pi").is_some() && alias_prefix_problem("-x").is_some() && alias_prefix_problem(&"a".repeat(25)).is_some());
     }
 
+    /// 假的 `ssh`：照 ServerAliveInterval 回答，並記下每次被叫。/ A stub `ssh` that answers by ServerAliveInterval and logs calls.
+    fn stub_ssh(dir: &std::path::Path, with_alive: &str, without: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in *ServerAliveInterval=0*) echo '{without}' >&2 ;; *) echo '{with_alive}' >&2 ;; esac\nexit 255\n",
+            log = dir.join("calls").display()
+        );
+        std::fs::write(bin.join("ssh"), script).unwrap();
+        std::fs::set_permissions(bin.join("ssh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// 真的 bash 跑握手片段（假的 ssh）：健康 = 30 秒的 SSH keepalive、只握一次；計時器誤觸發 = 相容模式；連不到 = 不猜。
+    /// The handshake snippet in a real bash with a stub ssh: healthy = SSH keepalives after one handshake; misfiring
+    /// timers = compat mode; unreachable = no guessing.
+    #[test]
+    fn the_keepalive_is_decided_by_a_handshake() {
+        if std::process::Command::new("bash").arg("--version").output().is_err() {
+            return;
+        }
+        let denied = "telepy@t: Permission denied (publickey).";
+        let cases = [
+            ("healthy", denied, denied, "-o ServerAliveInterval 30 -o ServerAliveCountMax 3", "0", 1),
+            ("misfire", "Connection to 203.0.113.9 port 24242 timed out", denied, "-o ServerAliveInterval 0 -o ServerAliveCountMax 3 -o TCPKeepAlive yes", "1", 2),
+            ("refused", "ssh: connect to host t port 24242: Connection refused", denied, "-o ServerAliveInterval 30 -o ServerAliveCountMax 3", "0", 1),
+            ("down", "Connection to 203.0.113.9 port 24242 timed out", "Connection to 203.0.113.9 port 24242 timed out", "-o ServerAliveInterval 30 -o ServerAliveCountMax 3", "0", 2),
+        ];
+        for (name, with_alive, without, want, compat, calls) in cases {
+            let dir = std::env::temp_dir().join(format!("telepy-keepalive-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            stub_ssh(&dir, with_alive, without);
+            let snippet = keepalive_probe_sh("-o \"StrictHostKeyChecking=yes\" \\\n", "", "t", "24242");
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!("{snippet}\nprintf '%s ' \"${{KEEPALIVE_ARGS[@]}}\"; echo; echo \"COMPAT=$TELEPY_COMPAT\""))
+                .env("PATH", format!("{}:{}", dir.join("bin").display(), std::env::var("PATH").unwrap_or_default()))
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(text.contains(&format!("{want} \n")) && text.contains(&format!("COMPAT={compat}")), "{name}: {text}");
+            let log = std::fs::read_to_string(dir.join("calls")).unwrap();
+            assert_eq!(log.lines().count(), calls, "{name}: {log}");
+            assert!(log.lines().all(|l| l.contains("-o PubkeyAuthentication=no") && l.contains("StrictHostKeyChecking=yes") && l.contains("-p 24242") && l.ends_with("telepy@t true")), "{name}: no key, same pinning: {log}");
+            assert!(!log.lines().nth(1).is_some_and(|l| l.contains("ConnectTimeout")), "{name}: the second try uses no ssh timer: {log}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// 同一條規則的 PowerShell 版，用真的 pwsh 跑（`PWSH=<pwsh 的路徑>` 才跑）。/ The PowerShell twin in a real pwsh
+    /// (only with `PWSH=<path to pwsh>`).
+    #[test]
+    fn the_powershell_keepalive_follows_the_same_rule() {
+        let Ok(pwsh) = std::env::var("PWSH") else { return };
+        let denied = "telepy@t: Permission denied (publickey).";
+        for (name, with_alive, want) in [("healthy", denied, "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"), ("misfire", "Connection to 203.0.113.9 port 24242 timed out", "-o ServerAliveInterval=0 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes")] {
+            let dir = std::env::temp_dir().join(format!("telepy-keepalive-ps-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            stub_ssh(&dir, with_alive, denied);
+            let script = dir.join("t.ps1");
+            std::fs::write(&script, format!("$hostKeyOptions = \"-o StrictHostKeyChecking=yes\"\n$reverseServerSSHPort = \"24242\"\n$sshUserHost = \"telepy@t\"\n{KEEPALIVE_PROBE_PS}\nWrite-Output \"KA=$keepAlive\"\n")).unwrap();
+            let out = std::process::Command::new(&pwsh)
+                .args(["-NoProfile", "-File"])
+                .arg(&script)
+                .env("PATH", format!("{}:{}", dir.join("bin").display(), std::env::var("PATH").unwrap_or_default()))
+                .env("HOME", &dir)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(text.contains(&format!("KA={want}")), "{name}: {text}{}", String::from_utf8_lossy(&out.stderr));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn substitute_semantics() {
         let mut m = HashMap::new();
@@ -603,7 +747,8 @@ mod tests {
         };
         let (s, lang) = render_script("ssh", &ctx).unwrap();
         assert_eq!(lang, "bash");
-        assert!(s.contains("ssh  \\\n-o \"ServerAliveInterval 30\""), "{s}");
+        assert!(s.contains("ssh  \\\n\"${KEEPALIVE_ARGS[@]}\" \\\n"), "the keepalive the handshake chose: {s}");
+        assert!(s.contains("telepy_handshake() {") && s.contains("TELEPY_FIRST=$(telepy_handshake -o ConnectTimeout=15 -o ServerAliveInterval=30)"), "{s}");
         assert!(s.contains("-NR '*:0:localhost:22'"), "the number is the gateway's business; the device asks for 0: {s}");
         assert!(s.contains("telepy@telepy.test"));
         let ctx2 = ScriptContext { key_path: Some("~/.ssh/id_rsa"), ..ctx.clone() };
@@ -611,7 +756,7 @@ mod tests {
         assert!(s.contains("-i ~/.ssh/id_rsa"));
         let (s, lang) = render_script("powershell", &ctx2).unwrap();
         assert_eq!(lang, "powershell");
-        assert!(s.contains("-i '~/.ssh/id_rsa' -o ServerAliveInterval=15"));
+        assert!(s.contains("$sshOptions = \"-i '~/.ssh/id_rsa' $keepAlive $hostKeyOptions\"") && s.contains("function Test-TelepyHandshake"), "{s}");
         assert!(s.contains("$Host.UI.RawUI.ReadKey"), "unknown $identifiers must survive");
         assert!(render_script("nope", &ctx).is_err());
     }
@@ -699,7 +844,7 @@ mod tests {
         assert!(s.contains("$knownHosts = \"$env:USERPROFILE\\.ssh\\telepy-k7m2q9xd.known_hosts\""), "{s}");
         assert!(s.contains("[IO.File]::WriteAllText($knownHosts, @'\ntelepy-telepy.test-24242 ssh-ed25519 AAAAgateway\ntelepy-telepy.test-24242 ssh-rsa AAAArsa\n'@"), "{s}");
         assert!(s.contains("$hostKeyOptions = \"-o StrictHostKeyChecking=yes -o UserKnownHostsFile=`\"$knownHosts`\" -o HostKeyAlias=telepy-telepy.test-24242\""), "{s}");
-        assert!(s.contains("-o ServerAliveCountMax=3 $hostKeyOptions\""), "{s}");
+        assert!(s.contains("$keepAlive $hostKeyOptions\"") && s.contains("$keepAlive = \"-o ServerAliveInterval=15 -o ServerAliveCountMax=3\""), "{s}");
         // 容器版依主機名稱（非 22 port → [host]:port），掛到 /known_hosts。/ Container: keyed by host, mounted at /known_hosts.
         let (s, _) = render_script("docker-run", &ctx).unwrap();
         assert!(s.contains("[telepy.test]:24242 ssh-ed25519 AAAAgateway\n[telepy.test]:24242 ssh-rsa AAAArsa\nTELEPY_HOST_KEYS"), "{s}");

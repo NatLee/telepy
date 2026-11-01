@@ -257,7 +257,7 @@ async fn refresh_snapshots(state: &AppState, t: &Tunnel, accounts: &[String], fr
         .map(|acct| {
             let (state, acct, port) = (state.clone(), acct.clone(), t.reverse_port);
             async move {
-                let read = async { AuthorizedKeysFile::open(&state, &acct, port, false).await?.read().await }.await;
+                let read = async { AuthorizedKeysFile::open(&state, &acct, port, false, false).await?.read().await }.await;
                 if let Err(e) = read {
                     state.device_keys.record_failure(port, &acct, format!("{e:#}"));
                 }
@@ -529,7 +529,7 @@ async fn audit(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
         let acct = acct.clone();
         async move {
             let r = async {
-                let f: AuthorizedKeysFile = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await?;
+                let f: AuthorizedKeysFile = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false, false).await?;
                 let exists = f.exists();
                 anyhow::Ok((exists, f.read().await?))
             }
@@ -603,7 +603,7 @@ async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     }
     let lock = state.device_keys.lock_for(t.id);
     let _guard = lock.lock().await;
-    let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+    let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false, true).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     // 共用的舊服務金鑰：這台機器上每條隧道都用自己的金鑰登入過這個帳號，就可以手動移掉；隧道自己的金鑰永遠保護。
     // The legacy shared key may be removed by hand once every tunnel on the machine verified its own key there.
@@ -679,7 +679,7 @@ async fn audit_restore(State(state): State<AppState>, AuthUser(me): AuthUser, Pa
     }
     let lock = state.device_keys.lock_for(t.id);
     let _guard = lock.lock().await;
-    let file = AuthorizedKeysFile::open(&state, &record.username, t.reverse_port, true).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+    let file = AuthorizedKeysFile::open(&state, &record.username, t.reverse_port, true, true).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let r = restore_lines(&content, &record.raw_lines());
     if let Some(new) = &r.content {

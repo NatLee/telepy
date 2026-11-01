@@ -126,7 +126,8 @@ async fn authenticate(state: &AppState, handle: &mut Handle<ClientHandler>, user
     }
 }
 
-async fn connect_inner(state: &AppState, username: &str, reverse_port: i64, standby: bool) -> anyhow::Result<DeviceConn> {
+/// 到裝置的握手（含主機金鑰鎖定），還沒認證。/ The handshake with the device (host-key pinning included), not authenticated.
+async fn handshake(state: &AppState, reverse_port: i64, standby: bool) -> anyhow::Result<(Handle<ClientHandler>, Option<i64>)> {
     let port = u16::try_from(reverse_port).context("invalid reverse port")?;
     let refused = Arc::new(std::sync::Mutex::new(None));
     let tunnel_id = crate::db::tunnels::by_port(&state.db, reverse_port).await.ok().and_then(|t| t.first().map(|t| t.id));
@@ -138,16 +139,20 @@ async fn connect_inner(state: &AppState, username: &str, reverse_port: i64, stan
         let host = state.config.ssh_target_host.as_str();
         client::connect(client_config(), (host, port), handler()).await.with_context(|| format!("connect to {host}:{port}"))
     };
-    let mut device = match connected {
-        Ok(d) => d,
+    match connected {
+        Ok(d) => Ok((d, tunnel_id)),
         Err(e) => {
             match refused.lock().unwrap().take() {
                 Some((host_keys::Decision::Claimed, fp)) => bail!("{}: the device presented {fp}; {}.", host_keys::CLAIMED, host_keys::CLAIMED_HINT),
                 Some((_, fp)) => bail!("{}: the device presented {fp}, which is not the key Telepy pinned for this tunnel. The owner can review it in the tunnel's details.", host_keys::CHANGED),
-                None => return Err(e),
+                None => Err(e),
             }
         }
-    };
+    }
+}
+
+async fn connect_inner(state: &AppState, username: &str, reverse_port: i64, standby: bool) -> anyhow::Result<DeviceConn> {
+    let (mut device, tunnel_id) = handshake(state, reverse_port, standby).await?;
     let auth = authenticate(state, &mut device, username, tunnel_id).await.context("device auth")?;
     if let (AuthKey::Tunnel, Some(id)) = (auth, tunnel_id) {
         crate::ssh::tunnel_keys::verified(state, id, username).await;
@@ -161,6 +166,20 @@ pub async fn connect(state: &AppState, username: &str, reverse_port: i64) -> any
     tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(state, username, reverse_port, false))
         .await
         .map_err(|_| anyhow::anyhow!("timed out connecting to the device"))?
+}
+
+/// 裝置的 sshd 收不收這把金鑰（只試這一把，不碰服務金鑰；成功就斷線）。找 authorized_keys 用：在候選檔裡暫時放一把
+/// 臨時金鑰，能登入 = sshd 讀的是那個檔。/ Whether the device's sshd accepts this one key (only this key, never the
+/// service keys; disconnects right after). Used to find the authorized_keys file the server reads: a throwaway key placed
+/// in a candidate file logs in = the server reads that file.
+pub async fn accepts_key(state: &AppState, username: &str, reverse_port: i64, key: &Arc<PrivateKey>) -> anyhow::Result<bool> {
+    let run = async {
+        let (mut device, _) = handshake(state, reverse_port, false).await?;
+        let ok = try_key(&mut device, username, key).await?;
+        let _ = device.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+        anyhow::Ok(ok)
+    };
+    tokio::time::timeout(CONNECT_TIMEOUT, run).await.map_err(|_| anyhow::anyhow!("timed out connecting to the device"))?
 }
 
 /// 經**備援**連線登入（改名交接時，確認新的服務真的到得了裝置，才讓它接手）。

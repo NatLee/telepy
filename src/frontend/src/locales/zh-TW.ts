@@ -6356,6 +6356,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "about.tapiDailyLocked": "看完片尾名單，還能解鎖一個選項。",
     "about.tapiDailyUnlocked": "解鎖了：Tapi 可以每天換一個顏色。",
     "about.tapiWaiting": "片尾名單的禮物，還在等 logo 後面的那一位。",
+    "about.tapiSaveFailed": "Tapi 的顏色沒存到，已換回原本那個。",
     "about.tapiColor.teal": "青綠",
     "about.tapiColor.sakura": "櫻花粉",
     "about.tapiColor.lemon": "檸檬黃",

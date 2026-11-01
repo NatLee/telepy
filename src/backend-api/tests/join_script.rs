@@ -360,3 +360,56 @@ async fn without_any_ssh_client_the_join_uses_the_built_in_one() {
     let left: Vec<String> = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     assert!(!left.iter().any(|n| n.ends_with("-ws.bin") || n.ends_with(".install")), "{left:?}");
 }
+
+/// 這台的 SSH server 沒說它讀哪個 authorized_keys（不是 OpenSSH，或 `sshd -T` 問不到）：腳本在安裝時把一把臨時金鑰依序
+/// 放進已知的位置、用它登入看看，能登入的那個就是。這台 lab sshd 只讀 `~/.ssh/authorized_keys2`（像有些 Dropbear 對 root
+/// 只讀 `/etc/dropbear/authorized_keys`），不靠任何發行版判斷也找得到；`--check` 不寫任何東西，只說會這樣找。
+/// The server does not say which authorized_keys it reads: during the install the script puts a throwaway key into each
+/// known location in turn and logs in with it; the one that works is the file. This lab sshd reads only
+/// `~/.ssh/authorized_keys2` (like a Dropbear reading `/etc/dropbear/authorized_keys` for root), found without any
+/// distribution check; `--check` writes nothing and only says it will look.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_join_finds_the_keys_file_the_server_reads_by_logging_in() {
+    let Some(lab) = Lab::start().await else { return };
+    if !Path::new("/bin/sh").exists() || Command::new("curl").arg("--version").output().is_err() || !common::lab::have("ssh-keygen") {
+        eprintln!("skipping: needs /bin/sh, curl and ssh-keygen");
+        return;
+    }
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let me = String::from_utf8_lossy(&Command::new("id").arg("-un").output().unwrap().stdout).trim().to_string();
+    let opts = common::lab::MachineOpts { shell: true, keys_file: Some(".ssh/authorized_keys2"), ..Default::default() };
+    let pi = lab.machine_with("wrt-ak2", &[(me.as_str(), &[])], opts).await;
+    let ssh_dir = pi.account_home(&me).join(".ssh");
+    let base = lab.ws_base().await.replacen("ws://", "http://", 1);
+    let dir = lab.dir.path().join("join-keys-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("telepy-join.sh");
+    assert!(Command::new("curl").args(["-fsS", "-o", script.to_str().unwrap(), &format!("{base}/api/join/install.sh")]).status().unwrap().success());
+    let bin = stub_bin(&dir);
+    let pi_port = pi.port.to_string();
+    let common_args = ["--ssh-port", &pi_port, "--ssh-dir", ssh_dir.to_str().unwrap(), "--service", "loop", "--no-compat"];
+
+    let r = run_script(&script, &bin, &[&["--check"][..], &common_args[..]].concat());
+    assert_eq!(r.status, 0, "{}", r.out);
+    assert!(r.out.contains("authorized_keys  found by a login during the install, among:") && r.out.contains("authorized_keys2"), "{}", r.out);
+    assert!(!ssh_dir.exists(), "--check writes nothing");
+
+    let ticket = app.post("/api/reverse/join", Some(&alice.token), json!({"name": "wrt-ak2", "key_list": "empty"})).await;
+    let token = ticket.json["token"].as_str().unwrap().to_string();
+    let r = run_script(&script, &bin, &[&["--token", &token][..], &common_args[..]].concat());
+    assert_eq!(r.status, 0, "{}", r.out);
+    let found = format!("authorized_keys: {}/authorized_keys2 (a login with a throwaway key worked through this file)", ssh_dir.display());
+    assert!(r.out.contains(&found), "missing {found:?} in:\n{}", r.out);
+    assert!(r.out.contains("login verified         yes"), "Telepy's own login works through that file:\n{}", r.out);
+    let ak2 = std::fs::read_to_string(ssh_dir.join("authorized_keys2")).unwrap();
+    assert_eq!(ak2.lines().filter(|l| l.starts_with("ssh-ed25519 ")).count(), 1, "only the service key: {ak2}");
+    assert!(!ak2.contains("telepy-join-locate"), "the throwaway key is gone: {ak2}");
+    assert!(!ssh_dir.join("authorized_keys").exists(), "the file made only for the test is removed again");
+    let record = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "install")).expect("install record");
+    let rec = std::fs::read_to_string(&record).unwrap();
+    assert!(rec.contains(&format!("AUTHORIZED_KEYS={}/authorized_keys2", ssh_dir.display())), "{rec}");
+
+    let uninstall = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.to_string_lossy().ends_with("-uninstall.sh")).expect("uninstall script");
+    assert_eq!(run_script(&uninstall, &bin, &[]).status, 0);
+}

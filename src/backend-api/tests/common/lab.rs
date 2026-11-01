@@ -227,6 +227,10 @@ pub struct MachineOpts {
     /// `windows_admins`, and those accounts trust only the shared admin file (never their own).
     pub pretend_windows: bool,
     pub windows_admins: &'static [&'static str],
+    /// 這台 sshd **只**讀帳號家目錄下的這個檔（預設 `.ssh/authorized_keys`）：像 OpenWrt 的 Dropbear 對 root 只讀
+    /// `/etc/dropbear/authorized_keys` 那樣，伺服器讀的不是一般的位置。/ The only file (under the account's home) this
+    /// sshd reads, instead of `.ssh/authorized_keys` — a server reading somewhere unusual, like OpenWrt's Dropbear for root.
+    pub keys_file: Option<&'static str>,
     /// 帳號的登入 shell（例如 `/bin/bash`）：exec 的 `$SHELL` 是它；要了 PTY 的 shell 請求在 PTY 裡跑**真的**這個
     /// shell（互動模式，HOME = 帳號的 `<home>/<user>`，bash 讀那裡的 `.bashrc`、zsh 讀那裡的 `.zshrc`，不讀系統的
     /// rc），所以歷史檔也寫在那裡。/ The account's login shell: exec sees it as `$SHELL`, and a shell request with a PTY
@@ -288,7 +292,7 @@ impl SshdHandler {
         let file = if self.m.opts.pretend_windows && self.m.opts.windows_admins.contains(&user) {
             self.m.home.join("ProgramData/ssh/administrators_authorized_keys")
         } else {
-            self.m.home.join(user).join(".ssh/authorized_keys")
+            self.m.home.join(user).join(self.m.opts.keys_file.unwrap_or(".ssh/authorized_keys"))
         };
         file_trusts(&file, &offered).then(|| (String::new(), offered))
     }

@@ -2,15 +2,16 @@
 
 /**
  * Tapi（彩蛋吉祥物）的外觀：十字髮夾的顏色跟著帳號（`tapi_color`：空 = 還沒找到 Tapi、`daily` = 每天換一個），
- * 節日換裝跟著日期（lib/festivals）。存設定後重抓 profile，各處一起換。
+ * 節日換裝跟著日期（lib/festivals）。帳號設定放在 lib/tapiStore（不經過 auth context），存的時候馬上換、只有 Tapi 重畫。
  * Tapi's look: the clip colour follows the account (`tapi_color`: empty = not found yet, `daily` = a new one every
- * day) and the festive outfit follows the date (lib/festivals). Saving refetches the profile so every Tapi updates.
+ * day) and the festive outfit follows the date (lib/festivals). The account settings live in lib/tapiStore (not
+ * the auth context), so a save shows at once and only Tapi re-renders.
  */
 import { useCallback, useSyncExternalStore } from "react";
 import { apiFetch } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { festivalOn, type Festival } from "@/lib/festivals";
 import { clipHex, clipName, unixDay, type TapiLook } from "@/lib/mascot";
+import { tapiStore, type TapiPatch, type TapiPrefs } from "@/lib/tapiStore";
 
 // 一天算一次（getSnapshot 每次 render 都會被叫）。/ Computed once per day (getSnapshot runs on every render).
 let festivalCache: { day: string; key: string } | null = null;
@@ -38,32 +39,31 @@ export interface TapiState extends TapiLook {
     choice: string;
     unlocked: boolean;
     dailyUnlocked: boolean;
-    /** 存設定並重抓 profile。/ Save and refetch the profile. */
-    save: (patch: { tapi_color?: string; tapi_daily?: boolean }) => Promise<boolean>;
+    /** 存設定（畫面馬上換；失敗會退回並回 false）。/ Save (shown at once; a failure reverts and resolves false). */
+    save: (patch: TapiPatch) => Promise<boolean>;
+}
+
+const EMPTY_PREFS: TapiPrefs = { color: "", daily: false };
+
+/** 送到 /api/user/settings，回存好的值。/ Posts to /api/user/settings and returns what was stored. */
+async function sendTapi(patch: TapiPatch): Promise<TapiPrefs | null> {
+    const res = await apiFetch("/api/user/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { tapi_color?: unknown; tapi_daily?: unknown } | null;
+    if (!data || typeof data.tapi_color !== "string") return null;
+    return { color: data.tapi_color, daily: data.tapi_daily === true };
 }
 
 export function useTapi(): TapiState {
-    const { user, fetchUserProfile } = useAuth();
     const festival = useFestival();
-    const choice = user?.tapi_color ?? "";
-    const save = useCallback(
-        async (patch: { tapi_color?: string; tapi_daily?: boolean }) => {
-            try {
-                const res = await apiFetch("/api/user/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
-                if (res.ok) await fetchUserProfile();
-                return res.ok;
-            } catch {
-                return false;
-            }
-        },
-        [fetchUserProfile],
-    );
+    const prefs = useSyncExternalStore(tapiStore.subscribe, tapiStore.get, () => EMPTY_PREFS);
+    const save = useCallback((patch: TapiPatch) => tapiStore.save(patch, sendTapi), []);
     return {
-        clip: clipHex(clipName(choice, unixDay())),
+        clip: clipHex(clipName(prefs.color, unixDay())),
         festival: festival?.kind ?? null,
-        choice,
-        unlocked: choice !== "",
-        dailyUnlocked: !!user?.tapi_daily,
+        choice: prefs.color,
+        unlocked: prefs.color !== "",
+        dailyUnlocked: prefs.daily,
         save,
     };
 }
