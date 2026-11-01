@@ -2,41 +2,40 @@
 
 <p align="center"><b>English</b> | <a href="./README.zh-TW.md">繁體中文</a> | <a href="./README.ja.md">日本語</a></p>
 
-Start with the [project README](../README.md) for what Telepy is and how to install it. The documents below go deeper;
-each one is available in English, Traditional Chinese and Japanese.
+New here? The [project README](../README.md) covers what Telepy is and how to install it. The documents below go deeper, and each one comes in English, Traditional Chinese and Japanese.
 
 ## See it first
 
-- **[Telepy in pictures](./visual-guide.md)** — the diagrams behind the app's info buttons and a few recordings: adding
-  and removing a device, the terminal, files, remote desktop and browser, sharing, command rules, keys and SSH configs,
-  notifications, the CLI, API and MCP, sign-in and server health.
+[**Telepy in pictures**](./visual-guide.md) collects the diagrams behind the app's info buttons, plus a few recordings. It covers adding a device, the terminal, files, remote desktop, sharing, command rules, keys, notifications, the CLI and server health.
 
 ## Using Telepy
 
 | Document | What it covers |
 | --- | --- |
-| [One-command device join](./device-join.md) | What the join script does, which devices it supports (Linux, macOS, OpenWrt), what it leaves behind, how to diagnose it |
-| [Remote desktop](./remote-desktop.md) | RDP / VNC through guacd and RustDesk in the browser: quality, display, clipboard, sound, screens, files, saved logins |
-| [Remote browser](./remote-browser.md) | Chromium in KasmVNC whose traffic leaves through the device; sessions, limits, troubleshooting |
-| [The `telepy` command line and API tokens](./cli.md) | Installing and signing in, every command, tokens and scopes, the call log |
-| [MCP](./mcp.md) | Connecting MCP clients, the approval flow, tools, interactive shells, browsers, command rules, audit |
-| [Webhooks](./webhooks.md) | Personal and site-wide webhooks, events, formats, signatures, retries, opt-outs |
+| [Adding a device with one command](./device-join.md) | What the script does, which devices it supports, what it leaves behind, and what to do when it fails |
+| [Remote desktop](./remote-desktop.md) | RDP, VNC and RustDesk in the browser: quality, clipboard, sound, screens and files |
+| [Remote browser](./remote-browser.md) | A Chromium that goes online from the device, its limits, and troubleshooting |
+| [The command line and API tokens](./cli.md) | Installing, signing in, every command, and what a token may do |
+| [MCP](./mcp.md) | Connecting MCP clients, approving them, and what agents can and can't do |
+| [Webhooks](./webhooks.md) | Personal and site-wide webhooks: events, formats, signatures and retries |
 
 ## How it works inside
 
 | Document | What it covers |
 | --- | --- |
-| [How the backend reaches devices](./device-connections.md) | Shared connections, ports, host-key pinning, machine identity, per-tunnel service keys, TCP / WebSocket / PROXY protocol, install names |
-| [Where the latency number comes from](./latency-deep-dive.md) | How each hop's round trip is measured and shown |
+| [How the backend reaches devices](./device-connections.md) | Shared connections, host-key checks, machine identity, and the two ways in (SSH and WebSocket) |
+| [Where the latency number comes from](./latency-deep-dive.md) | How each hop is measured and shown |
 | [Benchmark: Django vs Rust](./benchmarks.md) | Numbers from the backend rewrite |
-| [How the README screenshots are made](./screenshots/README.md) | The demo server behind every picture in these documents |
+| [How the README screenshots are made](./screenshots/README.md) | The demo server behind every picture |
 
 ## Engineering notes
 
-Kept as they were written, in Traditional Chinese, under [`engineering/`](./engineering/): the
-[Rust backend migration plan](./engineering/rust-migration-plan.md), the RustDesk research
-([spike](./engineering/rustdesk-spike.md), [ID / relay server](./engineering/rustdesk-id-server.md)) and the
-[articles](./engineering/articles/). The russh fix that lets Dropbear clients through strict kex is proposed upstream:
-[Eugeny/russh#804](https://github.com/Eugeny/russh/issues/804) / [PR #805](https://github.com/Eugeny/russh/pull/805).
+Some notes are kept the way they were written, in Traditional Chinese only:
+
+- [Rust backend migration plan](./engineering/rust-migration-plan.md)
+- RustDesk research: [the first spike](./engineering/rustdesk-spike.md) and [Telepy as an ID / relay server](./engineering/rustdesk-id-server.md)
+- [Articles](./engineering/articles/)
+
+One fix is still waiting upstream: letting Dropbear clients through russh's strict key exchange ([issue #804](https://github.com/Eugeny/russh/issues/804), [PR #805](https://github.com/Eugeny/russh/pull/805)).
 
 Release notes are on [GitHub Releases](https://github.com/NatLee/telepy/releases).
