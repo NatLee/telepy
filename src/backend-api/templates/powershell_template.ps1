@@ -18,7 +18,8 @@ $reverseServerSSHPort = "${reverse_server_ssh_port}"
 $knownHosts = "$env:USERPROFILE\.ssh\${known_hosts_file}"
 $hostKeyOptions = "-o StrictHostKeyChecking=no"
 ${known_hosts_setup}
-$sshOptions = "${key_option}-o ServerAliveInterval=15 -o ServerAliveCountMax=3 $hostKeyOptions"
+${keepalive_setup}
+$sshOptions = "${key_option}$keepAlive $hostKeyOptions"
 $sshCommand = "ssh $sshOptions -p $reverseServerSSHPort -NR $sshRemoteForward $sshUserHost"
 
 # Add-Type for PowerManagement to prevent sleep
