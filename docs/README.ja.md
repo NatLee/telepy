@@ -30,7 +30,7 @@
 
 ## エンジニアリングノート
 
-書かれた当時のまま、繁体字中国語だけで残しているノートもあります。
+書かれた当時のまま、繁体字中国語だけで残しているノートもあります。当時の見込み違いも、そのまま残してあります。
 
 - [Rust バックエンド移行計画](./engineering/rust-migration-plan.md)
 - RustDesk の調査：[最初の試作](./engineering/rustdesk-spike.md)と [Telepy を ID／リレーサーバーにする案](./engineering/rustdesk-id-server.md)

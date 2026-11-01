@@ -191,7 +191,7 @@ The secret is stored encrypted with a key derived from `SECRET_KEY` and bound to
 - **Retries**: failures (connection errors, timeouts, 408, 429, 5xx) are retried once after 10 seconds and once after 1 minute. Other 4xx aren't retried.
 - **Redirects**: 3xx responses aren't followed, so enter the final URL.
 - **Rate limit**: at most 30 messages per webhook per minute. The rest are skipped, and the first skip is recorded as `skipped`.
-- **Pausing**: after 20 failures in a row the webhook is paused and its owner is notified (for a site-wide webhook, every admin). Turning it back on clears the pause.
+- **Pausing**: after 20 failures in a row the webhook is paused and its owner is notified (for a site-wide webhook, every admin). Most of us would have stopped calling after three. Turning it back on clears the pause.
 - **History**: each webhook keeps its latest 50 deliveries, with the body (up to 16 KB), for 30 days. A delivery is recorded as `sending` before it goes out and completed afterwards. If the backend restarted while a retry was still waiting, startup marks it failed ("Telepy restarted before this was delivered.").
 
 ### Resending a delivery

@@ -306,7 +306,7 @@ How it plays out:
 
 ## One shared connection per device and account
 
-A fresh SSH login for every click would be slow, so the backend keeps **one SSH connection per tunnel and OS account** and opens channels on it.
+A fresh SSH login for every click would be slow, and the device's auth log would start to look like a break-in attempt. So the backend keeps **one SSH connection per tunnel and OS account** and opens channels on it.
 
 - Telepy users who are allowed the same OS account share one connection, each with their own channel. Permissions are still checked before anything is borrowed.
 - The connection opens on first use and runs entirely inside the backend: a forwarded-tcpip channel on the device's tunnel, with the SSH handshake to the device's sshd on top. If several requests arrive at once, only one handshake runs and the rest wait for it.

@@ -30,7 +30,7 @@
 
 ## 工程筆記
 
-有些筆記維持當初寫下的樣子，只有繁體中文：
+有些筆記維持當初寫下的樣子，只有繁體中文，連當時想錯的地方也原封不動：
 
 - [Rust 後端遷移計畫](./engineering/rust-migration-plan.md)
 - RustDesk 研究：[第一次試做](./engineering/rustdesk-spike.md)，以及[讓 Telepy 當 ID／中繼伺服器](./engineering/rustdesk-id-server.md)

@@ -37,7 +37,7 @@ No port forwarding, no VPN, no public IP. The device only needs to reach the int
 - **Live sessions.** See who is connected where, watch a terminal live, hand over the keyboard, or end a session.
 - **Sign-in security.** Passkeys, authenticator apps, an extra check before sensitive devices, and an alert when your account signs in somewhere new.
 - **Notifications.** Per event, in the app or on your desktop, and out to Slack, Discord, Teams, Telegram, ntfy or your own webhook.
-- **Audit.** Tamper-evident logs, terminal recordings and sign-in history.
+- **Audit.** Tamper-evident logs, terminal recordings and sign-in history. "I didn't touch anything" is now something you can actually check.
 
 ### Automate
 

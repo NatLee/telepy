@@ -109,7 +109,7 @@ Modes stick: when the window changes size, Fit fits again and 1:1 stays 1:1. The
 
 ## One screen out of several (VNC)
 
-A VNC server sends every monitor stitched into one big picture (macOS Screen Sharing, x11vnc and TightVNC all do this), and guacd can't pick a monitor. So Telepy crops in your browser instead, and clicks still land in the right place.
+A VNC server sends every monitor stitched into one big picture (macOS Screen Sharing, x11vnc and TightVNC all do this). With three monitors, that's one very wide desktop with very small text. guacd can't pick a monitor, so Telepy crops in your browser instead, and clicks still land in the right place.
 
 The toolbar's **Screen** menu offers:
 
@@ -137,7 +137,7 @@ An administrator sets a ceiling (**Desktop clipboard limit**). The narrower of t
 
 ## Sound
 
-Sound works with RDP and RustDesk. VNC never carries sound: the protocol only knows pictures and input. macOS Screen Sharing is VNC, so to hear a Mac, use RustDesk.
+Sound works with RDP and RustDesk. VNC never carries sound: the protocol only knows pictures and input. It's a silent film by design. macOS Screen Sharing is VNC, so to hear a Mac, use RustDesk.
 
 Turn **Sound** on in the connect form. It's off by default because audio costs bandwidth, and the choice is saved on your account.
 
