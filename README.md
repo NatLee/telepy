@@ -25,7 +25,7 @@ No port forwarding, no VPN, no public IP. The device only needs to reach the int
 - **Web terminal.** Tabs, Nerd Fonts, colour schemes, a toolbox of saved commands, and recordings if you want them.
 - **Files.** Drag-and-drop uploads, move, copy, rename, permissions, zip downloads, and an editor that never saves half a file.
 - **Remote desktop.** RDP and VNC through the tunnel, or RustDesk right in the tab, with sound, clipboard control and multiple monitors.
-- **Remote browser.** A real Chromium whose traffic leaves from the device, for admin pages that only open on that network.
+- **Remote browser.** A real Chromium whose traffic leaves from the device, for admin pages that only open on that network and still look like 2009.
 - **The network behind it.** Scan the device's LAN without installing anything, then open a terminal or desktop on any host there.
 - **From your own laptop.** One command adds every device to your SSH config, and the command sheet hands you ready-made `ssh -L`, `scp` and `rsync` lines.
 
@@ -116,7 +116,7 @@ You need Docker with the Compose plugin.
    cp .env.example .env
    ```
 
-2. Build and start. On its first start Telepy creates its SSH keys. Keep them: devices remember them, and new keys would make every device stop trusting the server.
+2. Build and start. On its first start Telepy creates its SSH keys. Keep them: devices remember them, and new keys would make every device treat the server like a stranger.
 
    ```bash
    docker compose up -d --build
@@ -144,7 +144,7 @@ Once the tunnel shows **Online**, the terminal, files, desktop and browser butto
 
 - Put an HTTPS proxy in front of Telepy and set the public address, either in `.env` or later under **Site settings → Server**.
 - Make the SSH gateway port reachable from your devices.
-- If your web name sits behind a proxy that only carries web traffic (a CDN, an HTTP load balancer, Cloudflare's orange cloud), SSH can't get through it. Give SSH a name of its own under **Site settings → Server → SSH host**, or let devices use the web port.
+- If your web name sits behind a proxy that only carries web traffic (a CDN, an HTTP load balancer, Cloudflare's orange cloud), SSH can't get through it, however politely it asks. Give SSH a name of its own under **Site settings → Server → SSH host**, or let devices use the web port.
 - **Server health** tells you whether visitors' real addresses survive the trip through your proxies.
 
 ## Configuration

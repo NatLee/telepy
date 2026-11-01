@@ -2,442 +2,557 @@
 
 <p align="center"><a href="./remote-desktop.md">English</a> | <a href="./remote-desktop.zh-TW.md">繁體中文</a> | <b>日本語</b></p>
 
-> デバイス（またはその LAN 内のコンピューター）の RDP / VNC デスクトップをブラウザーで見て操作でき、RustDesk にもトンネル経由で接続できます。デバイス側には何もインストールしません。接続は
-> デバイス自身の sshd が中継し、RDP / VNC の画面は guacd が Guacamole プロトコルに変換し、RustDesk はブラウザー内の RustDesk コアがデコードします。コード：
-> `src/backend-api/src/desktop/`、`api/desktop.rs`、`ws/desktop.rs`（RustDesk：`rustdesk/`、`api/rustdesk.rs`、
-> `ws/rustdesk.rs`）。フロントエンド `app/tunnels/desktop/`、`components/desktop/`、`hooks/useDesktopPage.ts`、`lib/desktop.ts`。
-> テスト `tests/desktop_api.rs`、`tests/rustdesk_api.rs`。
->
-> 入口：`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`（サイドバー、トンネルのメニュー、LAN ホストのパネル、トンネル一覧の「リモートデスクトップ」ボタン）。フォームの先頭は
-> ターミナルページと共通の経路図ピッカーです（`DesktopPathPicker`：接続先、プロトコル、ポートは最後のノードの中）。その下に画質、クリップボード、音声、ログインが並びます。
-> 機能全体は機能権限 `remote_desktop` で管理されます（オフ = REST は 403 `feature_disabled` を返し、ページは説明に置き換わります）。
+コンピューターのデスクトップを、ブラウザーの中でそのまま見て操作できます。Windows なら RDP、VNC サーバーならどれでも、そして RustDesk にも対応しています。相手は Telepy のトンネルがあるデバイスでも、そのデバイスと同じネットワークにある別のコンピューターでもかまいません。
 
-## アーキテクチャ
+デバイスには何もインストールしません。デスクトップへの接続はデバイス自身の SSH サーバーが開き、Telepy がそれをトンネル経由でブラウザーまで運びます。
 
-```
-ブラウザー（guacamole-common-js）
-  │ wss /ws/desktop/<session>/?ticket=…&width=&height=&dpi=   サブプロトコル guacamole；チケットは 60 秒、1 回だけ使用可
-  ▼
-backend ws/desktop.rs
-  │  ブラウザー→guacd：key / mouse / touch / size / sync / nop / disconnect / clipboard / blob / end / ack だけ通す
-  │  guacd→ブラウザー：そのまま通す（長さの単位は両端に合わせて再エンコード：guacd はコードポイント、ブラウザーは UTF-16 単位で数える）
-  │  TCP guacd:4822：Guacamole のハンドシェイクは backend が済ませ、認証情報はブラウザーを通らない
-  ▼
-guacd コンテナー（telepy-desktop 内部ネットワーク、backend と guacd だけ）
-  │  connect 時に backend 上のこのセッション専用の rendezvous ポートへ接続し返す（guacd の送信元 IP だけ受け付け、1 本受けたら閉じる）
-  ▼
-backend desktop/bridge.rs
-  │  copy_bidirectional ⇄ russh direct-tcpip チャネル（ssh::pool のデバイス接続上の転送リース。セッション枠を消費しない）
-  ▼
-デバイスの sshd ──► 127.0.0.1:<port>（デバイス自身のデスクトップ）または <LAN アドレス>:<port>（LAN ホスト。ssh -J / LAN スキャンと同じ仕組み）
-```
+開く場所は次のとおりです。
 
-## 流れ
+- サイドバーの「リモートデスクトップ」
+- トンネルのメニュー、またはトンネル一覧の「デスクトップ」ボタン
+- 「ネットワーク」ページで、コンピューターのパネル
 
-![リモートデスクトップ接続のリアルタイム経路と流れるデータ](images/ja/desktop-flow.png)
+この機能は「リモートデスクトップ」という機能権限で管理されています。管理者があなたに対してオフにしている場合はページに説明が表示され、API は 403 `feature_disabled` を返します。
 
-1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?}`：
-   `desktop_enabled`、トンネルの VIEW、ステップアップ（機密トンネル）、`username` が `permissions::allowed_usernames` にあること（デバイスへの一段目のアカウント。
-   省略すると `choose_username` が既定を選ぶ）、LAN ホストがこのトンネルのものであること、`desktop_max_sessions` を確認します。続いて**先に**プールの接続を借りて、ターゲットへの direct-tcpip
-   チャネルを開くので、`device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` /
-   `device_unreachable` はこの時点で 502 になります（`desktop_disabled` / `desktop_busy` は 503）。WebSocket を待つ必要はありません。
-   返り値は `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, target, username}` で、認証情報はメモリにしか残りません。
-   `clipboard`：省略するとユーザーの個人設定 `desktop_clipboard` を使い、さらにサイトの同名の上限を適用します（狭い方）。レスポンスの `clipboard` は実際に使われた方向です。
-   `credential_id` を付けると、保管庫のその項目の login / password / domain を使います（下の「保存したログイン」を参照）。リクエスト内の認証情報フィールドは無視されます。
-2. ブラウザーがチケットで WS を開きます。backend は権限を再確認し、rendezvous を開いて guacd に接続し、ハンドシェイクします（`hostname` / `port` = rendezvous）。
-   guacd が接続し返してきた回線を手順 1 のチャネルにつなぎます。ハンドシェイクが終わったら、まず `0.,<uuid>;` を送り（guacamole-common-js はこれを受け取って初めてトンネルを開いた状態にします）、
-   続いてハンドシェイク中にパーサーがすでに読み込んでいた命令を送ります（guacd は `ready` と最初の画面を同じパケットに入れることがよくあります）。
-3. どちらかが終わるまで中継します。終了の理由：ユーザー、guacd、アイドル（`desktop_session_idle_timeout`、reaper が 10 秒ごとに確認）、
-   `POST /api/reverse/server/desktop/{sid}/stop`（4014）、ライブセッションページからの終了、権限の喪失（4009、「監査と可視性」を参照）、
-   開いたウェブのサインインがサインアウトされた場合（4010）。
-
-## 遅延とストリームの状態（`desktop/stats.rs`、フロントエンド `lib/desktopStats.ts`、`components/desktop/DesktopStats.tsx`）
-
-中継は毎秒、独自の命令を 2 つブラウザーに送ります（guacamole-common-js は未知の opcode を無視します。フロントエンドは Client に渡す前に横取りします）：
-
-| 命令 | 方向 | 内容 |
-|---|---|---|
-| `telepy-ping <n>` | 中継 → ブラウザー | ブラウザーはすぐ `telepy-pong <n>` を返します。中継がネットワークの往復を計算し、**guacd には転送しません** |
-| `telepy-stats <json>` | 中継 → ブラウザー | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind, audio}`（`audio` は「音声」を参照） |
-
-- **フレーム往復 `frame_ms`**：guacd は各フレームの最後に `sync <ts>` を送り、ブラウザーはそのフレームを描き終えてから `sync <ts>` を返します。送信から返答までの時間
-  = WebSocket の往復 + ブラウザーのデコードと描画で、ユーザーが感じる「もたつき」そのものです。3 秒間新しいサンプルがなければ null（デスクトップが静止）になります。
-- **ネットワーク往復 `net_ms`**：ping / pong。描画を含まず、静止中でも測れます。
-- **トンネル `tunnel_ms`**：monitor が 15 秒ごとに転送チャネル経由で測るデバイス sshd との往復（`StatusState::latency`）。
-- `frames` = この 1 秒のフレーム数。`merged` = 1 回の `sync` がまとめた論理フレーム数（guacd 1.6 の 2 番目の引数。> 1 = ブラウザーが追いつかず guacd がフレームを統合している）。
-  `behind` = 送信済みで未返答のフレーム数。`down` / `up` = この 1 秒のバイト数。
-- ツールバーのボタン：電波バー + フレーム往復 + 状態の語（ストリーミング中 / 遅延中 / データなし / 静止。`streamHealth`）。開くと各区間の数値、
-  解像度とズーム、「遅延が主にどこで生じているか」が見られます（`laggingHop`：ネットワーク、トンネル、またはフレーム往復がネットワーク往復を大きく上回る = ブラウザー自身の描画が遅い）。
-  info ダイアログの経路図は 2 本の線に往復時間を表示し、最も遅い区間を黄色にします。
-- `desktop_close` イベントには「12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)」のような記述が加わります。
-
-## 画質プリセット（`Quality`、start の `quality`）
-
-| 値 | RDP | VNC | フロントエンド |
-|---|---|---|---|
-| `auto`（既定） | 従来どおり（フォントのスムージングあり） | パラメーターを追加しない | — |
-| `speed` | `color-depth 16`、フォントのスムージングなし | `color-depth 16`、`compress-level 6`、`quality-level 5` | — |
-| `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | — |
-
-アカウントに保存されるリモートデスクトップの設定 `desktop_display.quality`（環境設定 → リモートデスクトップでも同じ値を変更できます）。start のレスポンスに `quality` が含まれます。以前は `sharp` が HiDPI 解像度も一緒に要求していましたが、今は HiDPI が「表示」の独立したスイッチです（次の節）。
-
-## 表示：ズーム、解像度、HiDPI（フロントエンド `lib/desktopDisplay.ts`、`lib/desktopZoom.ts`、`hooks/useDesktopZoom.ts`、`components/desktop/DisplayMenu.tsx` / `DisplaySettings.tsx`。バックエンド `desktop::clamp_size`、`ws/desktop.rs` の `browser_size`）
-
-**以前、画面が小さかった理由（OrbStack + 本物の guacd 1.6 + xrdp / x11vnc / Xvnc、1440×900 のウィンドウで実測）：**
-1. 画面枠の高さが `100dvh − 15rem` で、接続時にスクロールもしなかった：1440×900 では約 1150×684、1280×800 では 990×584 にしかならず、枠の下端は y = 815（ウィンドウの外）にありました。
-2. 「枠に収める」の上限が 1:1 で、VNC / RustDesk の画面が枠より小さくても拡大されませんでした（1540×864 の枠の中の VNC 1024×768 は 1024×768 のまま）。
-3. 画質が `sharp` のとき、HiDPI ディスプレイでは上限が 1 / devicePixelRatio になりました：Retina では x11vnc の 1024×768 の画面が 512×384 CSS px でしか描かれませんでした（実測）。
-   RDP では xrdp に 2 倍のピクセル（2300×1555）を要求しましたが、xrdp は `dpi` を無視するため、文字が半分の大きさになりました。
-4. サイト上限 `desktop_max_resolution` が幅と高さを別々に制限していました（3080×1916 が 2560 の上限で 2560×1916 になり、縦横比が崩れて黒帯が出る）。さらに、接続中にブラウザーが送る
-   `size` は上限をまったく通っていませんでした。
-5. ズームボタンはタッチデバイスにしかありませんでした。
-
-**現在：** 設定はアカウントに保存されます（個人設定 `desktop_display`。1 つの JSON で `scale` / `percent` / `resolution` / `width` / `height` / `hidpi` / `vnc_resize` / `quality` / `audio`。
-バックエンドの `desktop::display::parse` が検証し、未知のフィールドや範囲外の値 = フィールドエラー、パーセントは 25–400 に丸められ、空 = 未選択。localStorage の `telepy.desktopDisplay` は最初の描画用のキャッシュにすぎず、
-サインイン時にアカウントに値があればそれを使い、なければこのブラウザーの値（古い `telepy.desktopQuality` / `telepy.desktopAudio` を含む）をアップロードします）。
-環境設定 → リモートデスクトップ → 表示、接続フォームの「表示」欄、デスクトップページのツールバーの「表示」メニューは、すべて同じ 1 つの設定を読み書きします：
-- ズーム：`fit`（枠に収める。小さい画面も拡大。既定）/ `shrink`（縮小のみ、拡大しない = 以前の動作）/ `actual`（1:1。HiDPI のときはデバイスピクセル 1 つ。マウスを端に寄せるとスクロール、2 本指でドラッグ）/
-  `custom`（25–400 %）。モードは固定されます：ウィンドウが大きくなったり小さくなったりすると fit は収め直し、1:1 はそのままです。ツールバーの − / % / + とピンチは固定倍率に切り替わります。
-- RDP の解像度：ウィンドウに追従（既定。`resize-method display-update`、枠が 400 ms 止まってから `size` を送る）または固定（1280×720、1600×900、1920×1080、2560×1440、カスタム）。
-  固定のときは start に `resize: false` を付けます：guacd には resize-method を渡さず、中継はブラウザーの `size` を捨てます。
-- HiDPI：devicePixelRatio（≤ 2）倍のピクセルと `dpi` を要求します。既定はオフ。接続中に切り替えたり解像度を変えたりすると、ウィンドウに追従しているセッションにはすぐ新しい `size` が送られます。
-- VNC もウィンドウに追従（既定はオフ）：start に `resize: true` を付けると `disable-display-resize` を送らず、guacd 1.6 が SetDesktopSize でサーバーにサイズ変更を求めます
-  （接続時に 1 回、その後は `size` のたびに）。応じるのは仮想デスクトップ（TigerVNC Xvnc、KasmVNC）だけで、実際の画面（x11vnc、macOS の画面共有、ほとんどの Windows サーバー）は
-  元の解像度のままです。既定をオフにしているのは、実機の画面解像度を勝手に変えることはユーザーの望みではないからです。guacd 1.6 の VNC は既定で初期サイズを送るので、以前から Xvnc のサイズは実は変わっていました。
-- RustDesk：解像度はリモートが決め、ブラウザーは拡縮するだけです。ウェブコアの `change_resolution` は未実装です（`setByName change_resolution not implemented (phase 2)`）。
-  **今後できること：** ファイルパネルの `ReadEmptyDirs` と同じように、`Misc.change_resolution` を自前で組み立ててコアが追跡している WebSocket に送れば（RustDesk の Windows / Linux X11 側は解像度変更に対応）、
-  RustDesk もウィンドウに追従できるようになります。
-- 「ブラウザーのウィンドウいっぱいに表示」：カードが `fixed inset-0` でサイドバーとページヘッダーを覆います（全画面ではなく、Esc は引き続きリモートに送られます）。ツールバーの「ページに戻る」で抜けます。
-- 枠の高さは `100dvh − 8.5rem` になり、接続時にカードがページヘッダーの下までスクロールします。
-- 上限：`clamp_size` が長辺 = `desktop_max_resolution` になるよう縦横比を保って縮小し、ハンドシェイクと接続中のすべての `size` が通ります（以前はハンドシェイクだけで、しかも各辺を別々に制限していました）。start は `resize` と `max_resolution` を返します。
-
-実測（同じ環境、新しい枠の高さ）：ウィンドウに追従する RDP 1116×764（1440）→ 1534×944（1920）→ 958×664（1280）→ ウィンドウいっぱい 1280×751 → 958×664（`xdpyinfo`）。
-Retina での HiDPI 2236×1528、1920 のウィンドウでは 2560×1575（縦横比を保った制限）、接続中に HiDPI をオフ → 1534×944。固定 1600×900 はウィンドウに追従せず、ブラウザーが 70 % / 60 % に縮小。
-Xvnc は追従を求めると 1280×800 → 1118×764 → 958×664、求めないと変わらずブラウザーが 115 % / 142 % に拡大。Retina での x11vnc 1024×768 は既定で
-1019×764 に描画（以前は 512×384）、1:1 → 125 % にしてマウスを右端に寄せると右にスクロール。
-テスト：`tests/desktop_api.rs` の `desktop_resolution_follows_the_window_within_the_site_limit`。単体テスト `clamp_size`、`browser_size`、
-`lib/desktopZoom.test.ts`、`lib/desktopDisplay.test.ts`。
-
-## クリップボードの方向（各自が選び、サイト設定が上限）
-
-- 方向は 3 つ：`both`（双方向）/ `to_remote`（リモートへの貼り付けのみ）/ `off`。個人設定 `desktop_clipboard` はアカウントに保存され
-  （`/api/user/settings`。同じレスポンスに読み取り専用の `desktop_clipboard_limit` = サイト設定が含まれます）、デスクトップページの「クリップボード」欄と
-  環境設定 → リモートデスクトップ（`hooks/useDesktopClipboard.ts`、両方で 1 つのストアを共有）のどちらでも変更できます。上限を超える選択肢は UI で無効になります。
-- 各 start（RDP / VNC、RustDesk）は `clipboard` を付けてその 1 回だけ上書きでき、付けなければ個人設定を使います。実際に使われるのはその値とサイトの `desktop_clipboard` の
-  狭い方です（`desktop::Clipboard::within` / `effective`、フロントエンドは `lib/desktop.ts` の `clipboardWithin`）。レスポンスの `clipboard` が実際の値です。
-- 誰が強制するか：guacd は `disable-copy` / `disable-paste` で。RustDesk のデータストリームは backend から見えないので、ブラウザー内のコアが適用します（off = そのピアの
-  `disable-clipboard`、to_remote = リモートのクリップボードイベントを受け付けない）。テスト `desktop_clipboard_is_the_users_choice_within_the_site_limit`。
-
-## 音声（guacd 経由の RDP。RustDesk は次の節）
-
-- フォームの「音声」スイッチ（RDP と RustDesk のみ。guacd の VNC には音声がありません。別途 PulseAudio をつなぐ必要があり、デバイス側にはないため、VNC では
-  表示しません。VNC プロトコル自体は画面と入力しか扱いません。macOS の「画面共有」は VNC なので、Mac の音を聞くには RustDesk を使ってください）は、
-  アカウントの `desktop_display.audio` に保存されます（**既定はオフ**：音声は帯域を食うため。環境設定 → リモートデスクトップで変更するのも同じ値です）。
-- RDP：`POST …/desktop/start` に `audio: true` を付けます（VNC は付けても false 扱い。真偽値以外 = フィールドエラー）。レスポンスの `audio` が実際の値です。
-  オン：ハンドシェイクの `audio` 命令に `audio/L8` と `audio/L16`（guacamole-common-js の RawAudioPlayer が再生できる生 PCM）を並べ、
-  guacd が音声ストリーム（`audio` / `blob` / `end`）を開きます。guacd → ブラウザーは従来どおりすべてそのまま通し、ブラウザー → guacd の許可リストには `ack`（ストリームの受け入れ）を入れます。
-  ブラウザーが送る `audio`（= マイク）はこれまでどおり捨てます。オフ：接続パラメーターに `disable-audio=true` を付け、guacd は rdpsnd を読み込まず、リモートはそもそも何も送りません。
-  `desktop_open` イベントには `Remote desktop (RDP, sound) …` と記録されます。
-- ツールバーの音声ボタン（`components/desktop/SoundButton.tsx`）：ミュート = ブラウザー側で blob を捨てます（ミュート解除したときに一気に溢れ出ません）。
-  ボタンのアイコンと文言は `lib/desktopSound.ts` の判定に従います：**再生中**、**静か**（チャネルは開いているが無音）、**リモート待ち**（接続直後）、
-  **音声がブロックされています**（データは届いているが AudioContext が動いていない。横に「クリックして音声を有効化」ボタンが出る）、**音声なし**（接続後 10 秒たってもリモートが音声
-  チャネルを開かない）、ミュート、オフ。ツールチップと、info ダイアログの「この接続を流れるもの」の音声の行が理由を説明します。
-- **自動再生（「音声をオンにしたのに聞こえない」への対処）**：ブラウザーは「ユーザー操作の中で」作成または resume された AudioContext にしか音を出させません
-  （Safari が最も厳しく、操作の外で作った context は必ず `suspended`）。guacamole-common-js のプレーヤーは guacd が音声ストリームを開いたとき
-  （WebSocket メッセージの中で、操作なし）に初めて context を作り、画面上のクリック / キー入力でしか resume しませんでした。そのため見ているだけでは音が出ず、
-  しかも従来の「再生中」は blob が届いたかどうかしか見ていなかったので、context がブロックされていても再生中と表示されていました。今は「接続」のクリック（最初の await より前）で
-  `primeAudio()` が共有の context を 1 つ作って resume し、`Guacamole.AudioContextFactory.singleton` として guacd に渡します。RustDesk コアにも
-  `installRustDeskTap` を通じて同じものを渡します。ブロックされているときは、状態に正直に「音声がブロックされています」と表示します。
-- 中継は音声ストリームの量を数えます（`desktop/stats.rs`：guacd が開く `audio` ストリーム上の `blob`）：`telepy-stats` に `audio` が付き（音声ストリームを一度も開いていなければ
-  null）、統計パネルに「音声データ」の行が増え、`desktop_close` イベントには `sound 1.2 MB` と、音声を要求したのにチャネルが開かなければ
-  `no sound channel from the RDP server` と記録されます（Logs でリモートが送っていないことがわかります）。
-- リモート側：Windows の RDP ホストは、ポリシーで切られていない限り音声を既定で転送します（「オーディオおよびビデオの再生のリダイレクトを許可する」）。Linux の xrdp は
-  `pulseaudio-module-xrdp`（Debian / Ubuntu にはパッケージがないため、その手順に従ってソースからビルド）または `pipewire-module-xrdp` が必要で、なければ guacd は音声を受け取れません。
-- 実測（OrbStack）：本物の guacd 1.6 + xrdp + 自前ビルドの pulseaudio-module-xrdp で、セッション内の `module-sine` に 440 Hz を鳴らしました：
-  Chromium（`--autoplay-policy=document-user-activation-required`）も WebKit も無音でないバッファ（ピーク 0.5）をキューに入れ、context は
-  `running` でした。WebKit がクリックの中で作った context は `suspended` で、`primeAudio` の resume で初めて動きました。context を一時停止 → ボタンが「音声がブロックされています」に
-  → 「クリックして音声を有効化」を押す → また再生中に。テストは `tests/desktop_api.rs` の `desktop_rdp_sound_is_offered_and_relayed`（偽の guacd が
-  ハンドシェイクの形式、`disable-audio`、ストリームのパススルー、マイクの遮断、終了イベントの音声量と「音声チャネルなし」を検証）。
-
-## 複数モニター：1 つの画面だけ見る（`desktop/screens.rs`、`GET …/desktop/screens`、フロントエンド `lib/desktopScreens.ts`）
-
-VNC サーバーは全モニターを 1 枚の大きな画面につなげて送ってきます（macOS の画面共有、x11vnc、TightVNC はいずれもそうです）。guacd には画面を選ぶパラメーターがないので、
-「画面の指定」は**ブラウザー側のクロップ**です：viewer の `viewport` が Guacamole.Display の要素をクリップ枠の中へ移動します（座標は引き続き画面全体のもので、マウスの
-位置は変わりません）。その大きな画面の中で各モニターがどこにあるかは次のようにして求めます：
-
-1. `GET /api/reverse/server/{id}/desktop/screens?username=`（start と同じ関門：VIEW + 許可されたデバイスアカウント + ステップアップ）が、プール経由でデバイスに問い合わせます：
-   `uname -s` → Darwin なら `system_profiler SPDisplaysDataType -json`（サイズのみで位置はない）、その他の POSIX なら
-   `xrandr --listmonitors`（`$DISPLAY`、`:0`、`:1` を試す）、`uname` がなければ PowerShell の `[System.Windows.Forms.Screen]::AllScreens`。
-   返り値は `{os, source, screens: [{name, x, y, width, height, primary}], username}`。わからなくてもエラーではありません（`screens: []`）。
-   意味があるのは「デスクトップがデバイス自身」のときだけです（LAN ホストには問い合わせられる SSH がありません）。パーサーは純粋関数です（単体テストあり）。
-2. フロントエンドの `screenChoices`：位置のある画面は (0,0) に平行移動し、全体が画面サイズと違っても縦横比が同じなら比例して拡縮します（Windows の DPI スケーリング）。
-   サイズだけの報告（macOS）は画面全体から配置を推定します —— 幅の合計 = 画面の幅なら横並び、高さの合計 = 画面の高さなら縦積みで、高さが異なるときは
-   画面内の黒い領域をサンプリングして上端に寄せるか下端に寄せるかを判断します（`isBlack` が canvas を読む）。デバイスが何も報告しない場合（LAN ホスト、検出失敗、全体を覆う 1 枚だけを
-   報告する Xvfb）は、**`guessScreens` が形から推測します**：モニターの縦横比は数種類しかないので（`SCREEN_RATIOS`：16:9、16:10、MacBook ≈1.545、3:2、
-   4:3、5:4、21:9）、画面の幅を同じ高さの一般的な比率の 2〜4 枚に分割し（または高さを縦積みに分割）、合計の誤差が 0.5% 以内で、最も近いもの、次に同じ比率のもの、
-   次に枚数が少ないものを優先します。比率が異なる場合はどれが左か右かわからないため、すべての並び順を試し、画面より低い 1 枚は黒い領域で補正します（`refineHeight`：その範囲の
-   9 列で黒でない範囲を測り、すべて一致し、測った高さと幅が一般的な比率になる場合だけ採用します。黒い壁紙に騙されないためです）。最後に比率が最も一般的な
-   並びを選びます。同じ高さの組み合わせでは合わないとき（MacBook 1728×1117 + 2560×1440）は、「同じ高さの 1 枚 + 低い 1 枚」を試し、低い方を黒い領域で測ります。
-   一般的な比率 1 つだけの画面（21:9 のウルトラワイドを含む）は 1 枚と見なして推測しません。3840×1080 は 16:9 の 2 枚として扱います。推測した項目はメニューで「画面の形から推定」と表示されます。
-   何も推定できなくても、メニューには等分割と範囲選択が残ります。
-3. ツールバーの「画面」メニュー（VNC のみ）：デスクトップ全体 + 検出した各画面（名前、サイズ、プライマリ）+ **等分割**（左 / 右半分、
-   3 等分、上 / 下半分。`splitChoices`、検出に依存せずいつでも選べる）+ **カスタム範囲**（「範囲を選択…」で選択モードに入ります：viewer が
-   画面全体を表示して `AreaSelector` を重ね、長方形をドラッグ → `rectFromPoints` が画面内に収め、最小 64px。Esc か「キャンセル」で中止。選択中は
-   キーボードとマウスをリモートに送りません）+ 再検出。選択は localStorage の `telepy.desktopScreen.<tunnel>.<lanHost|device>` に、
-  カスタム範囲は `telepy.desktopArea.<…>`（JSON。画面サイズがわかってから `parseStoredArea` が検証）に保存されます。接続すると自動で 1 回検出します。
-
-RDP では不要です：RDP セッションのサイズは私たち（ブラウザーの枠）が決め、仮想画面は 1 つだけだからです。
-
-## タッチズーム（`lib/desktopZoom.ts` 純粋関数 + テスト、`hooks/useDesktopZoom.ts`、`components/desktop/ZoomControl.tsx`）
-
-2 つの画面コンポーネント（guacd の `DesktopViewer` と `RustDeskViewer`）は、どちらも `useDesktopZoom().layout()` でレイアウトします：「枠に収める」倍率にさらに
-倍率を掛け、枠からはみ出した部分は枠でクリップし、パンで見ます。
-
-- 2 本指のピンチでズーム、2 本指のドラッグでパン。1 本指はこれまでどおりリモートのマウスです（タップ = クリック、長押し = 右クリック）。
-- タッチデバイス（`pointer: coarse`）では右上に − / 倍率 / + の小さなカプセルが出ます（倍率をタップ = 枠に収める表示に戻る）。倍率は `ZOOM_STEPS` に止まり、上限は少なくとも 4 倍です。
-- スマートフォン（`(pointer: coarse) and (max-width: 639px)`）では、画面が縮小されているとき（解像度固定の VNC / RustDesk）、開いた直後から `PHONE_ZOOM`
-  （1.5 倍、左上から）になり、リモートの文字が読めるようになります。RDP は解像度が枠に追従するので拡大しません。新しい接続、画面 / 範囲の切り替え、解像度の変更のたびに再適用されます。
-- マウスだけのブラウザーでは何も変わりません。
-
-## RustDesk（ブラウザーで接続、またはトンネル経由でネイティブクライアントへ転送）
-
-RustDesk は独自のプロトコルを使い、guacd は理解できません。Telepy には 2 つの経路があり、**どちらもトンネル経由**です。デスクトップページでプロトコルに「RustDesk」を選ぶと、既定は 1 つ目です：
-
-> 経緯：「Telepy を RustDesk の ID / リレーサーバーにする」モード（デバイスにトンネルが不要）は #201–#208 で作られ、#212 で再び取り除かれ、トンネル経由の経路だけが残りました
-> （ターミナル、ファイル、共有、ライブセッション、録画などの機能もすべて同じ道を通ります）。調査記録は [`rustdesk-id-server.md`](engineering/rustdesk-id-server.md) にあります。
-> データ移行 `2026-10-26-drop-rustdesk-server-devices` が、そのモードが保存していたログインと 2 つのテーブルを削除しました。
-
-### ブラウザーで接続（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`。フロントエンド `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
-
-RustDesk の web client のコア（コミュニティによる TypeScript 移植、AGPL-3.0、`src/frontend/public/vendor/rustdesk-web-core/` に vendored。
-出典とバージョンは隣の `README.md` に記載）がブラウザー内で動きます：映像のデコード（WebCodecs）、パスワードチャレンジへの応答、キーとマウスの送信を行います。Telepy は **hbbs / hbbr を立てません**：
-コアは ID サーバーとリレーに接続していると思っていますが、実際は 2 本とも同じ WebSocket につながり、backend は最初のメッセージで役割を判別し、リレー側を
-RustDesk の TCP ワイヤー形式にフレーミングし直して、デバイスの Direct IP ポート（21118）への `direct-tcpip` チャネルにつなぎます。調査記録と計測は
-[`rustdesk-spike.md`](engineering/rustdesk-spike.md) にあります（1280×800 の動きの大きい画面：中継経由のコア 28 fps / ~645 KB/s、guacd の VNC 4–5 fps / 0.5–1.3 MB/s）。
-
-- `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?, credential_id?, clipboard?}`。デスクトップと同じ関門：
-  `desktop_enabled`、VIEW、ステップアップ、`choose_username` / `allowed_usernames`、`desktop_max_sessions` は guacd + RustDesk の合計を数えます）：
-  まず `desktop::prepare` —— プールのリース + ターゲットの Direct IP ポートへの `direct-tcpip` を開きます（`device_offline` / `target_unreachable` … はここで
-  502 になります）—— そのあと 60 秒・1 回限りのチケットを発行します：`{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username, clipboard,
-  clipboard_limit, file_transfer}`（`credential_id` を付けると `password` が 1 つ増えます。保存したログインを参照）。
-  **パスワードは backend を通りません**：固定パスワードはブラウザー内のコアにだけ渡され、コアが RustDesk のハッシュチャレンジに応答します。Telepy は中継するだけです。
-- `/ws/rustdesk/{sid}/?ticket=`：コアは 2 回接続します（`custom-rendezvous-server` と `relay-server` の両方がこの URL に設定されています）。最初の binary
-  メッセージは `RendezvousMessage` です：`punch_hole_request`（フィールド 8）= hbbs の役割で、backend は `relay_response`（フィールド 19：uuid + relay_server =
-  同じ URL）を返してあとは待機し、punch が来るたびに返します。`request_relay`（フィールド 18）= リレーの役割で、`prepare` 済みのチャネルを引き継ぎ、以降 WS の各 binary
-  メッセージ → `codec::encode_frame`（1–4 バイトの LE プレフィックス、下位 2 ビット = プレフィックス長 − 1）→ チャネル。チャネルのバイト列 → `decode_frame`
-  （上限 16 MiB）→ 1 メッセージずつ。presence の種別は `rustdesk`、gateway イベントは `rustdesk_open` / `rustdesk_close`（所要時間、理由、
-  両方向のバイト数を含む）。クローズコード：4404 チケットが無効 / 期限切れ、4403 権限またはログインガードによる拒否、4013 デバイス側がクローズ、4014 サーバーが停止（`POST
-  /api/reverse/server/rustdesk/{sid}/stop`。ファイルセッションには「画面側が終了した」「サイトがファイル転送を無効にした」「新しいものに置き換えられた」も別にあります）、4400 プロトコルエラー、
-  4009 ライブセッションページから終了または権限喪失、4010 開いたウェブのサインインがサインアウトされた。RustDesk にはアイドル切断がありません（`desktop_session_idle_timeout` は guacd にしか効きません）。
-- フロントエンド（デスクトップページ）：フォームに「RustDesk のパスワード」欄が加わり（ブラウザーの中にとどまります）、主ボタンは「ブラウザーで接続」です。`RustDeskViewer` がコアを読み込み（1 ページに 1 つだけ。
-  コアは window 上のグローバルオブジェクトのため）、2 つの server オプション = `rustdeskWsUrl()` を設定し、`session_add_sync` + `session_start` を呼び、
-  「暗号化されていない直接接続」の msgbox を自動で確認し（トンネル自体が暗号化されているため）、`onVideoFrame` を canvas に描きます（縦横比を保って縮小のみ、拡大しない）。キーボードフォーカスは非表示の
-  textarea にあり（IME の変換 → `input_string`、キー入力 → `input_key`。キー名の表は `lib/rustdesk.ts`）、マウス座標はズーム倍率で割り、カーソルは
-  `cursor_data` から CSS カーソルに変換します。ツールバー：遅延 / ストリームのボタン（コアの `update_quality_status` から：遅延、fps、目標ビットレート）、
-  画面メニュー（相手の `peer_info` の displays → `switch_display`、RustDesk ネイティブの画面切り替え。画質の best / balanced / low は Telepy の
-  3 つのプリセットに対応）、キーボードメニュー（テキストを送信、Ctrl+Alt+Del）、全画面、ヘルプ、切断。info の経路図は `inBrowser` バリアントを使います（3 ステップ）。
-  クリップボード：コアがタブにフォーカスがあるときにブラウザーのクリップボードを自分で読んで送ります。リモートでコピーしたテキストはツールバーの下に表示されます。
-- **準備チェックリスト（「そのコンピューターの RustDesk を準備する」、`components/desktop/RustDeskSetup.tsx`、純粋関数 `lib/rustdeskSetup.ts` + テスト）**：
-  RustDesk モードを開くと（またはターゲットを変えると）すぐ、デバイスから Direct IP ポートを 1 回探ります。チェックリストは 4 ステップで、それぞれ状態と、フラットな小さなウィンドウの
-  図があります（RustDesk 自身の翻訳ラベルを使い、クリックする場所を示します）：① RustDesk が起動していて「直接 IP アクセスを有効化する」がオン（設定 → セキュリティ → セキュリティ設定のロックを解除。プローブが
-  拒否された = `desktop.err.rdDirectIpOff`）② 固定パスワードがあり、パスワード設定が「ワンタイムパスワードを使用する」ではないこと（接続が `rdPassword` を返した = 失敗）③ macOS の画面収録 /
-  アクセシビリティ（`rdNoDisplay` = 失敗）④ システムサービス（見えないので注意喚起のみ：入れていないとアプリを閉じたり再起動したりしたときに接続できなくなる）。このページ訪問中に接続できた = 最初の 3
-  ステップは問題なしで、チェックリストは 1 行に折りたたまれます。「今見るべきステップ」（最初の失敗、なければ最初の未確認）だけが図を展開し、ほかは 1 行ずつで、「場所を表示」でクリック位置を確認できます。
-  きっかけ：ある Mac mini で RustDesk は起動していたものの IP 直接アクセスにチェックがなく、パスワード設定が「ワンタイムパスワードのみ」で、ページには検出できなかったとしか出ませんでした。
-- 保存したログイン：RustDesk のパスワードも保存できます（`protocol: rustdesk`）。フォームには「保存したログイン」の選択と「このログインを保存」があります。start に
-  `credential_id` を付けると backend が復号してレスポンスに入れ、コアに渡します（保存したログインの節を参照）。`rustdesk_open` イベントには with saved login '<label>' と記録されます。
-  統計：トンネル区間は monitor の遅延で補います（接続時にダッシュボードから 1 回読み、その後は `UPDATE-TUNNEL-LATENCY` に従う）。パネルにはフレーム往復 /
-  未描画フレームは表示されません（コアがブラウザー内でデコードするため、この 2 つの数値は存在しません）。「ネットワーク往復」はコア自身が測るブラウザー ↔ デバイスの値です。
-- 範囲：画面、マウスとキーボード、クリップボードのテキスト、画面切り替え、画質、**音声**、**ファイル転送**。ターミナル、リモート印刷、マイクはありません —— それらが必要なら下のアプリ経路を使ってください。
-- **音声**：コアが自分でデコードします（RustDesk は Opus を送り、WebCodecs の `AudioDecoder` → `AudioContext`。WebCodecs の音声がないブラウザーでは音が出ず、
-  ボタンは無効になって理由が表示されます）。オフ = そのピアの `disable-audio`：ログインの `OptionMessage` でデバイスに送らないよう頼みます（デバイスは音声サービスを起動せず、単なるミュート以上です）。
-  接続中のツールバーでの切り替えはコアの `option:toggle` を通ります（デバイスにオプションを送り、ミュート / ミュート解除する）。RDP と共通のアカウントの `desktop_display.audio` を使います。
-  デバイスが何を送るか（RustDesk 1.5 のソースより）：**Linux** は PulseAudio / PipeWire の monitor を録音し、サインイン済みのデスクトップセッションの接続マネージャー
-  （`--cm`）プロセスが担当します —— デスクトップに誰もサインインしていなければ音声はありません。**Windows** は既定の出力の WASAPI ループバックを録音します。**macOS（Apple シリコン）** は
-  ScreenCaptureKit 経由でシステム音を録音します（もともと必要な「画面収録」権限を使います）。**macOS（Intel）** は「オーディオ入力デバイス」（既定ではマイク）しか録音しないので、
-  Mac が再生する音を聞くには BlackHole のようなループバックデバイスをインストールし、RustDesk の設定 → 一般 → オーディオ入力デバイスで選ぶ必要があります。音声がオンで
-  前回接続したピアが Mac だったときは、チェックリストに「Mac の音声」というステップが加わります（RustDesk の設定の図付き）。
-  実測：コンテナー内の Linux 版 RustDesk 1.5（PulseAudio の null sink + 440 Hz）で、接続マネージャーを起動できるよう偽の `loginctl` と `sudo` を補ったところ、
-  Chromium も WebKit も無音でない Opus のデコード結果を再生しました。接続中にオフからオンに切り替えても音が出ました。コアの AudioContext は、クリックの中でアンロックされたものです。
-- **ファイル転送（「ファイル」パネル、`components/desktop/RustDeskFiles.tsx`、純粋関数 `lib/rustdeskFiles.ts`）**：RustDesk のファイル転送は**別の
-  接続**で行われます（ログインに `file_transfer` を付ける）。そのためパネルは `POST /api/reverse/server/rustdesk/{sid}/files` で、画面セッションの下にぶら下がる
-  子セッションを要求します（`rustdesk::Kind::Files`：同じターゲット、同じアカウント、専用のチケットと direct-tcpip チャネル。開けるのは画面を開いた本人だけで、
-  `desktop_max_sessions` には数えず、独自の presence も webhook もなく、1 画面につき最大 2 つで、さらに開くと最も古いものが閉じられます —— リロードや React 開発モードの
-  二重 effect で一時的に重なるため。画面側が終了すると一緒に終了します）。エラーコード：409 `not_connected`、503 `file_transfer_disabled` /
-  `desktop_disabled`、502 は start と同じ。サイト設定 `desktop_file_transfer`（既定はオン）をオフにすると、子セッションは発行されず、start は
-  `file_transfer: false` を返し（ボタンは無効になって説明が出る）、reaper が開いているものを閉じます。
-  - 2 つ目のコアが必要な理由：コアは window 上のグローバルオブジェクトで、1 つのコアの中では「最前面」のセッションだけが映像を受け取れます（`videoFrame` /
-    `rgba` は最前面にしか渡されません）。画面のコアの中でファイルセッションを開くと、リモート画面が止まってしまいます。そこでパネルは、見えない同一オリジンの iframe の中にコアをもう 1 つ読み込みます。
-  - コア自身のファイル API を使います：`read_remote_dir`（ログイン後に 1 回要求。空のパス = ホームフォルダー）、`send_files {is_remote: true}`（ダウンロード）、
-    `select_files` + `send_local_files`（アップロード）、`confirm_override_file`、`cancel_job`。イベントは `file_dir`、`job_progress`、
-    `job_done`、`job_error`、`update_folder_files`、`override_file_confirm`、`selected_files`。
-  - ダイアログにはユーザーの操作が必要です：保存ダイアログ（`showSaveFilePicker`）はこのページのクリックの中で開いてハンドルを iframe のコアに差し替え、ファイル選択は
-    このページの `<input type=file>` を使い（ドラッグ＆ドロップも可）、iframe 内でコアが作る input の `click()` は「このページで選択済みのファイルを渡す」処理に差し替えます。保存ダイアログのない
-    ブラウザー（Firefox / Safari）ではコアがすべてをメモリに載せてからダウンロードするので、1 ファイルあたり ≤ 2 GB です（アップロードも同じ制限）。
-  - パネル：パンくず（Windows の最上位 = ドライブ）、1 つ上へ、ホームフォルダー、隠しファイル、新しいフォルダー、フォルダーのアップロード、アップロード、各行のダウンロードボタンと「⋯」メニュー
-    （ダウンロード / 名前の変更 / 削除）、複数選択してまとめて削除、転送リスト（進捗、速度、キャンセル、名前が重なったときの「スキップ / 置き換え」。最新 4 件だけ表示し、実行中を先頭にする）。
-    デスクトップ幅では画面の右側（`lg:w-80`）、スマートフォンでは画面の下に置かれます。
-  - **フォルダー全体を .zip でダウンロード**（純粋関数 `lib/rustdeskFileOps.ts`、`lib/zipStream.ts`。zip の生成には client-zip（MIT、ストリーミング + ZIP64）を使用）：
-    ダウンロードをクリック → 保存ダイアログ（クリックの中で開く必要あり）→ `read_dir_to_remove_recursive`（= `ReadAllFiles`。応答は id 付きの `file_dir`、名前は
-    相対パス）でファイル数とサイズを数える → 空フォルダーをもう一度問い合わせる（`ReadEmptyDirs`：コアは応答（`empty_dirs` イベント）を処理するが送信はしない呼び出しで、パネルが
-    このメッセージを自分で組み立てて iframe の WebSocket から送ります。古い RustDesk は応答せず、4 秒後に「なし」とみなします）→ 500 ファイルまたは 2 GB を超えると転送リストで先に確認 →
-    `send_files {is_dir: true}`：コアは `showDirectoryPicker()` にフォルダーのハンドルを求め、ファイルごとに `getFileHandle().createWritable()` を呼びます。パネルはこれを
-    偽のハンドル（`zipDirectoryHandle`）に差し替え、各ファイルの内容を少しずつ zip に流し込み、ユーザーが選んだ .zip へストリーミングで書き込みます。保存ダイアログのないブラウザーは
-    メモリに集めます（≤ 2 GB、事前に拒否）。コアは 0 バイトのファイルのハンドルを開かないので、完了後にリストに基づいて空ファイルと空フォルダーを補います。進捗 = 何番目のファイル / 全体 + バイト数。
-  - **削除**：ファイル = `remove_file`。フォルダー = まず（隠しファイルも含めて）再帰的に一覧し、フォルダー名と中のファイル数・サイズを示す確認ダイアログを出してから、
-    一覧の id を使って 1 つずつ `remove_file` し、最後に `remove_all_empty_dirs`（RustDesk は「空の」ツリーしか削除しません）。複数選択も可能です。**名前の変更**（`rename_file`）：
-    デバイスは `new_name` を元の親フォルダーにつなげるので、`../x/名前` や絶対パスを入力すると同じディスク内の移動になります（ダイアログに結果のパスがその場で表示され、
-    フォルダーが変わるとボタンが「移動」になります）。**新しいフォルダー**（`create_dir`）。**フォルダーのアップロード**（`webkitdirectory` またはフォルダーのドラッグ。ドラッグでは空フォルダーも保持）：
-    先にフォルダーを順に作り（「すでに存在する」はエラーにしない）、そのあとファイルを 1 つずつアップロードします。各操作はその id に対するデバイスの `job_done` / `job_error` を待ち、エラーはデバイスのメッセージをそのまま表示します。
-  - **監査（`rustdesk/file_audit.rs`、純粋関数 + 単体テスト）**：中継はファイルセッションの平文を見られるので（暗号化は拒否）、ブラウザーが送る
-    `file_action`（`ReadAllFiles` / `RemoveFile` / `RemoveDir` / `Rename`）とデバイスが返す `done` / `error` を読み、`rustdesk_file_delete`
-    / `rustdesk_file_rename` イベントを書きます（パスと件数のみで、内容は含まない）：フォルダーの削除は 1 件にまとめられ（「deleted folder /x (12 files)」。失敗があれば
-    件数と最初のエラーを付記）、単一ファイルと名前の変更はデバイスの応答後にそれぞれ 1 件、セッション終了時に未応答のものも書き出されます。
-  - 説明図：パネルの info ボタン（`RustDeskFilesFlow.tsx`）が、あなたのブラウザー（2 つ目のコア）─ Telepy の中継 ─ トンネル ─ デバイス上の RustDesk ─ ディスク を描き、
-    段階と実行中の操作に応じて点灯します。下には 4 つの操作それぞれの状態が出ます。ページのデータフロー図も、「ファイル」の行の下にダウンロード / アップロード / 名前の変更 / 削除の状態を並べます。
-- **ログインガード（`rustdesk::codec::LoginGuard`）**：中継が解析する唯一のものは、ブラウザー → デバイス方向のピア `Message` の最外層です：
-  `login_request`（フィールド 7）の oneof の分岐が、この接続が何としてログインするか（リモート操作 / ファイル転送 / ポート転送 / カメラ / ターミナル）を決めます。画面セッションはリモート操作だけ、
-  ファイルセッションはファイル転送だけを許可し、合わなければ 4403 で、`rustdesk_close` イベントには `refused: a file transfer login on a remote control session` と記録されます。
-  中身のある `public_key`（フィールド 4、= 暗号化の要求）も拒否します：Telepy の偽 hbbs はデバイスの鍵を渡さず、私たちのコアは常に暗号化なしの Direct IP を使うので
-  （全体が TLS + SSH の中にある）、暗号化するのは改変されたクライアントだけで、暗号化されると何としてログインするのか見えなくなるからです。ログイン前に 32 を超えるメッセージが来た場合も拒否します。
-  画面セッションに現れた `file_action` / `file_response`（コアのファイル API はファイル転送接続しか使わないので、改変されたクライアントしかこう送りません）も拒否します。
-  このため、サイト設定 `desktop_file_transfer` は、ボタンを隠すだけでなくサーバーが強制する設定です。
-- 実測（OrbStack：Debian + RustDesk 1.5.0）：画面セッションを開いたまま「ファイル」を開いても、リモート画面は更新され続けました。コンテナー内の RustDesk には
-  接続マネージャーの UI がなく（Linux のファイル操作と音声キャプチャーはそれに任されている）、ファイル転送はテスト用のフロントプロキシ（リモート操作はそのまま転送し、ファイル転送はプロキシが処理）で確認しました：
-  一覧表示、テキストファイルと 3 MB のバイナリのダウンロード（md5 一致）、アップロード、同名の置き換え、データフロー図、スマートフォン幅で横スクロールなし。その後のフォルダー / 削除 / 名前の変更も
-  同じプロキシ（`ReadAllFiles`、`ReadEmptyDirs`、複数ファイルの `send`、`remove_*`、`create`、`rename` を追加）で確認しました：フォルダーの zip（ストリーミングと
-  メモリの両経路、空フォルダーと 0 バイトのファイルも入り、md5 一致）、501 ファイルで先に確認、名前の変更と `../` による移動、新しいフォルダー、フォルダーのアップロード、複数選択の削除
-  （確認が隠しファイルまで数える）、デバイスのエラーがそのまま表示される、Logs の 2 種類のイベント。音声：オンのときはデバイスが音声サービスに入り、
-  ログイン時にオフなら入らず、接続中にオフにすると抜けます（本物の音声は上の「音声」を参照）。
-- 踏んだ落とし穴：コアの `confirmInsecure()` は msgbox イベントを同期的に発行し、**そのあとで**応答を待つ resolver を記録するため、イベントハンドラーの中で同期的に
-  `continue-insecure-connection` を返すと捨てられます（接続が固まり、30 秒後にデバイス側が閉じ、リレー統計が「0 B to the device」になる）—— viewer は
-  `setTimeout(…, 0)` で次の tick に応答します。デバイス側の RustDesk が C ロケール（`LANG` なし）で動いていると、xdo がマルチバイトのテキストを拒否し（ログ
-  `Invalid multi-byte sequence encountered`）、`input_string` で中国語を入力できません —— それはデバイスの環境の問題で、Telepy の問題ではありません。
-- 実測（OrbStack 内の Debian + RustDesk 1.5.0 + Xvfb、ヘッドレス Chrome）：接続まで < 1 秒、クリック / ホイール / 移動はデバイス上の座標に
-  ぴったり一致し（`xev`）、タイピングは xterm に届き、ライブセッションページに `rustdesk` が表示され、Logs には 2 つのイベントがありました。（このブラウザー側の E2E スクリプトは
-  リポジトリに入っていません。リポジトリにあるのは `tests/rustdesk_api.rs` の偽デバイスのテストです。）
-
-### RustDesk アプリを使う（ポート転送）
-
-デスクトップページの「RustDesk アプリを使いたい場合」を開くと、デバイスの **Direct IP Access**（TCP 21118）をユーザーのコンピューターに転送し、アプリから `127.0.0.1` に接続できます。
-複数画面の切り替え、ファイル転送、音声はいずれも RustDesk 自身の機能です。
-
-- 「デバイスから確認」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：start と同じ関門、同じ経路 ——
-  プールのリース + direct-tcpip チャネルで、つながったらすぐ閉じる。`desktop_enabled` は見ない。エラーコードは start と同じ）→ `ssh -L 21118:<host>:21118 <alias>`
-  （コマンドシートの `rustdesk` レシピ。エイリアスは `/tunnels/server/config/{id}` から）→ アプリの ID に `127.0.0.1` を入力（ローカルポートが 21118 でなければ
-  `127.0.0.1:<port>`）。プローブ後、ブラウザーで接続していないときは、info の経路図にこのルート（あなたのコンピューター ─ssh─ Telepy ─トンネル─ デバイス ─ RustDesk）が表示されます。
-- コマンドシートには「RustDesk を使う」シナリオがあります（`-L`、フィールド：ホスト `localhost` = デバイス自身、RustDesk のポート、ローカルポート）。LAN スキャンは既定で
-  21118 を探り、`lib/lanConnect.ts` がそれを RustDesk と表示し、ネットワークページのコマンドタブにもその `-L` が並びます。
-
-## 入力メソッド（IME）とクロス OS キーボード
-
-- 画面はキーボードフォーカスを div ではなく `Guacamole.InputSink` の非表示 textarea に置きます：IME は編集可能な要素の上でしか変換できないため、Windows のブラウザーから
-  macOS / Linux の VNC にも中国語や日本語を入力できます（確定した文字は Unicode keysym `0x01000000 + codepoint` として送られ、RDP は unicode キーボード
-  イベントに変換し、VNC は keysym をそのまま送ります。macOS の画面共有、x11vnc、TigerVNC、TightVNC のいずれも受け付けます）。
-- 「キーボード → テキストを送信…」：ダイアログの中で自分の IME で入力すると、1 文字ずつキー入力として送られます（文字間隔 8 ms、改行 = Enter）。リモートデスクトップが
-  変換中のテキストを受け付けないときの代替手段で、最後の手段として「貼り付け」（リモートのクリップボードへ送信）もあります。
-- 「Ctrl を ⌘ Command として送る」：Control_L/R → Meta_L/R（Command）。デバイスが Darwin と検出され、ブラウザーが Mac でないときは既定でオン（`telepy.desktopCtrlAsCmd`
-  = auto / on / off）。キーを押したときに実際に送った keysym を記憶し、離すときも同じものを使うので、途中で切り替えても修飾キーが固着しません。
-
-## クローズコード
-
-WebSocket が閉じるとき、コードを reason にも入れます（guacamole-common-js の WebSocketTunnel は `parseInt(reason)` をステータスコードとして使います。
-独自のコードそのものは汎用の SERVER_ERROR に変換されてしまいます）。
-
-| コード | 意味 |
-|---|---|
-| 4404 | セッション / チケットが無効または期限切れ |
-| 4403 | すでに権限がない（VIEW またはデバイスアカウント） |
-| 4011 | guacd に接続できない、またはハンドシェイクに失敗 |
-| 4013 | guacd が切断された、または不正な命令を送った |
-| 4014 | サーバー側で終了（アイドル、`…/desktop/{sid}/stop`） |
-| 4400 | ブラウザーが解析できない命令を送った |
-| 4009 | ライブセッションページから終了（reason = 誰が）、または権限喪失（reason = `Telepy (access changed)`） |
-| 4010 | 開いたウェブのサインインがサインアウトされた（「このブラウザーはサインアウトされました」。reason = user / admin / logout / reuse / disabled） |
-
-上の表は guacd 側（`/ws/desktop/`）のものです。RustDesk（`/ws/rustdesk/`）のクローズコードは上の RustDesk の節を参照してください。どちらのソケットにも auth フレームはなく
-（1 回限りの `?ticket=`）、機能権限とステップアップは REST の start で止められているので、4012 / 4008 は出てきません。
-
-guacd 自身のエラーは Guacamole の `error` 命令としてブラウザーに届きます（たとえば 0x0203 / 0x0301 = RDP のログイン拒否）。
-フロントエンドの `lib/desktop.ts` にある `sessionFailure` が、これを翻訳と「どの区間で止まったか」に対応させます。
-
-## 保存したログイン（認証情報の保管庫）
-
-`vault.rs`、`db/credentials.rs`、`api/credentials.rs`。テスト `tests/credentials_api.rs` と `tests/desktop_api.rs` の vault の部分。
-
-- ユーザーごとに自分専用：`GET /api/credentials`（`tunnel_id` / `lan_host_id` / `protocol` で絞り込み可）、`POST`、
-  `PATCH /api/credentials/{id}`、`DELETE`。本人だけが見られ、使えます。管理者も例外ではありません。
-- 各項目は 1 つのデスクトップに紐づきます：`protocol`（`rdp` / `vnc` / `rustdesk`）+ `tunnel_id` + 任意の `lan_host_id` / `port`、さらに `label`、`login`、`domain`
-  （RustDesk は固定パスワードのみなので `login` は空）。同じ保管庫には `ssh` の行（ネットワークページの LAN ホストへの一段目のログイン：パスワードおよび / または秘密鍵）も保存されますが、
-  それはターミナルの話で、この文書の範囲外です。
-  `start` に渡された `credential_id` が同じターゲット（トンネル、LAN ホスト、プロトコル）のものでなければ `credential_id` のフィールドエラーを返すので、
-  ある Windows のパスワードが別のマシンへのログインに使われることはありません。
-- パスワードは AES-256-GCM で封印され、鍵は `SECRET_KEY` から導出されます（プレフィックス `telepy-vault-v1:`）。AAD =
-  `telepy-credential:{user_id}:{id}`：暗号文を別の人や別の項目に移すと復号できません。API が返すのは `has_password`（`ssh` の行にはさらに `has_key`）だけで、パスワードは決して返しません。
-  復号が行われるのは `start` のときだけで、結果は手入力したときと同じくセッションのメモリにしか残りません。`SECRET_KEY` をローテーションすると古い保存分は復号できなくなります（保存し直してください）。
-  **RustDesk だけが唯一の例外です**：チャレンジへの応答はブラウザー内のコアが行い、backend が代わりに答えることはできないため、`POST …/rustdesk/start` に `credential_id` が付くと
-  backend が復号してレスポンスの `password` に入れます（このときだけ、TLS 上で、ログには残さない）。フロントエンドはそれをコアに渡し、ページの状態には保持しません。
-- トンネルや LAN ホストを削除すると、それに紐づく認証情報も一緒に削除されます。使用時に `last_used_at` が更新され、`desktop_open` イベントには
-  「with saved login '<label>'」と記録されます（名前のみで、認証情報は含みません）。
-- フロントエンド：デスクトップページの「保存したログイン」の選択（`hooks/useSavedLogins.ts`）と「このログインを保存」のチェック（接続前に保存してから
-  `credential_id` で接続）。環境設定の「保存したログイン」タブ（`components/layout/SavedLogins.tsx`）で一覧表示と削除ができます。
-  どちらで追加・削除しても `telepy:saved-logins-changed` が発行され、ほかの画面が再読み込みされます。
-
-## 監査と可視性
-
-- gateway イベントの `desktop_open` / `desktop_close`（所要時間、終了理由、ストリームの要約、guacd の最後のエラーを含む）、`rustdesk_open` /
-  `rustdesk_close`（両方向のバイト数を含む）、`rustdesk_file_delete` / `rustdesk_file_rename` が、そのトンネルの Logs に記録されます。
-- presence の種別 `desktop` / `rustdesk`（ログインに使ったデバイスアカウントを含む）：所有者 / ADMIN は、トンネル一覧の「N 人が使用中」で誰が開いているか見られ、
-  ライブセッションページ（`/tunnels/sessions`、管理者は `/tunnels/admin/sessions`）に一覧が出て終了もできます（4009、reason = 誰が終了したか）。
-- **権限を失うとセッションが終わります**（`access_recheck.rs`。ターミナル、ファイル、リモートブラウザーと同じ仕組み）：共有の解除 / 共有の期限切れ、権限や許可リストの縮小、
-  デバイスアカウントの名前変更や削除、機能 `remote_desktop` のオフ、アカウントの無効化などが起きるとすぐ `access_recheck::kick` が動き、ほかのケースは 10 秒ごとの `run` が拾います。
-  判定は純粋関数 `lost()` です（VIEW + このセッションが使うデバイスアカウントがまだ許可リストにあること）。終了はライブセッションの経路を通ります：ソケットは 4009、reason は
-  `Telepy (access changed)`、`desktop_close` / `rustdesk_close` には `ended by …: <理由>` が付き、本人には `SESSION-ENDED` が届きます。
-  デスクトップ / RustDesk 独自の reaper はもう権限を再確認しません。テスト `desktop_ends_when_access_is_lost`、`rustdesk_ends_when_access_is_lost`。
-- 開いたウェブのサインインが取り消された場合（「お使いのデバイス」からのサインアウト、管理者によるサインアウト、アカウントの無効化）：start のときに記録した web セッションが取り消された時点で 4010 になります。
-
-## サイト設定（設定 → リモートデスクトップ）
-
-| key | 既定値 | 説明 |
-|---|---|---|
-| `desktop_enabled` | true | オフにすると新しいセッションを開けなくなります |
-| `desktop_max_sessions` | 4 | サイト全体の同時上限（まだ使われていないチケットを含む）、0 = 無制限 |
-| `desktop_session_idle_timeout` | 900 | キーボード / マウス / クリップボードの入力がない状態が何秒続いたら切断するか（秒）、0 = 切断しない |
-| `desktop_clipboard` | both | **上限**：both / to_remote / off。各自がデスクトップページか環境設定で方向を選び（個人設定 `desktop_clipboard`）、2 つのうち狭い方が適用されます。guacd は disable-copy / disable-paste で強制し、RustDesk はブラウザー内のコアが適用します（off = そのピアの `disable-clipboard`） |
-| `desktop_max_resolution` | 2560 | 要求するリモートサイズの上限（長辺、ピクセル）。超えると縦横比を保って縮小されます。ハンドシェイクと接続中の `size` の両方に適用 |
-| `desktop_file_transfer` | true | ブラウザー内 RustDesk の「ファイル」パネル（アップロード / ダウンロード / 名前の変更 / 削除）。オフにすると中継もファイル転送のログインを拒否し、開いているものを閉じます |
-
-## この接続を流れるもの（info ダイアログのデータフロー図）
-
-`lib/desktopStreams.ts`（純粋関数 + テスト）→ `components/desktop/DesktopStreams.tsx`。`DesktopFlow` の経路図の下に置かれ、画面、キーボードと
-マウス、クリップボード、音声、ファイルの 5 本が並行する直線で描かれます（左 = あなたのブラウザー、右 = デスクトップ、矢印 = 方向）。各線の状態は on / oneWay（クリップボードの to_remote）/
-off（自分でオフにした、このタブで RDP をミュートした）/ blocked（サイト上限）/ unsupported（この接続方法にはない：guacd の VNC に音声はない、RDP / VNC の画面はファイルを運ばない、
-ブラウザーに WebCodecs の音声がない）のいずれかで、横に理由が 1 行付きます。音声の線は `lib/desktopSound.ts` の判定（リモート待ち / ブロック / 音声なし）に従い、
-ファイルの行は RustDesk の下にダウンロード / アップロード / 名前の変更 / 削除それぞれの状態を並べます。
-
-info ダイアログ（`DesktopInfoDialog`）の上半分は `DesktopFlow` の経路図です：あなたのブラウザー ─ Telepy ─ デバイス ─ デスクトップで、各点は waiting / active /
-ok / failed です（`lib/desktop.ts` の `spotStates`。失敗は `sessionFailure` によってどの区間で止まったかに対応づけられます）。接続中は 2 本の線に往復時間が表示されます。ブラウザー内で接続した RustDesk
-は `inBrowser` バリアントを使い、アプリの場合はポート転送の経路を描きます。
-
-## 接続方法の比較（`components/desktop/ConnectionWays.tsx`、純粋関数 `lib/connectionWays.ts` + テスト）
+## 接続方法の選び方
 
 ![2 つの接続方法の比較](images/ja/desktop-ways.png)
 
-1 つのダイアログで、どちらもトンネル経由の 2 つの接続方法を並べて比較します：guacd 経由の RDP / VNC（Telepy が画面を画像に変換）と RustDesk（ブラウザー内のコアがデコード）。
-2 つの経路は列を揃えて並び（ブラウザー ─ Telepy ─ デバイス ─ デスクトップ。トンネル = 二重線、デバイスからデスクトップへの区間 = 破線）、それぞれの下に「どの区間を誰が暗号化するか」の
-ものさしがあり（TLS / SSH / プロトコル自身のもの、`layerColumns`）、画面がどこで描かれるかが示されます。次に事実表（スマートフォンではカード、`ROWS`：音声とファイルを含む）
-と選び方が続きます。現在使っている方式（`wayFor(protocol)`）には印が付きます。デスクトップページのタイトルバー、プロトコル欄のヒント、info ダイアログのフッターから開けます。
-事実が変わったら `ROWS` を更新してください。
+接続方法は 2 つあり、どちらもトンネルを通ります。
 
-## デプロイ
+- **RDP / VNC**：Telepy のデスクトップエンジン（guacd）がデスクトップと RDP や VNC で話し、画面を画像にしてブラウザーへ送ります。
+- **RustDesk**：RustDesk 自身のエンジンがブラウザーのタブの中で動き、映像をブラウザーでデコードします。Telepy は中継するだけです。RustDesk アプリを使いたい場合は、ポートをあなたのコンピューターへ転送することもできます。
 
-`docker-compose.yml` の `guacd` サービス（`guacamole/guacd:1.6.0`）は、内部ネットワーク `telepy-desktop-${PROJECT_NAME}` にだけ接続されます。
-backend は `telepy-network` とそのネットワークの両方に接続します。環境変数：`GUACD_ADDR`（既定は `guacd:4822`）、`DESKTOP_CALLBACK_HOST`
-（guacd が backend に接続し返すときの名前。compose では `backend`。未設定なら `HOSTNAME` を使います）。
+| | RDP / VNC | トンネル経由で RustDesk |
+|---|---|---|
+| 接続先で動いているもの | RDP または VNC サーバー | 直接 IP アクセスを有効にした RustDesk |
+| 画面 | Telepy が画像に変換 | 映像をブラウザーでデコード |
+| 動きの速い画面 | カクつく（実測で約 5 フレーム／秒） | なめらか（実測で約 28 フレーム／秒） |
+| 複数の画面 | VNC：1 つずつ表示、RDP：画面は 1 つ | RustDesk 自身の画面切り替え |
+| 音声 | RDP のみ、オンにしたとき。VNC にはない | あり |
+| ファイル | ビューアーにはなし（ターミナルのファイルマネージャーを使う） | 「ファイル」パネル、1 ファイル最大 2 GB |
+| ログイン | Windows や VNC のログイン、保存可 | RustDesk のパスワード、保存可 |
 
-## デバイス側の要件
+ざっくり言うと、Windows や一般的な VNC サーバーなら RDP / VNC、すでに RustDesk が入っていてなめらかな映像がほしいなら RustDesk です。
 
-- sshd が TCP 転送を許可していること（`AllowTcpForwarding`。OpenSSH と Win32-OpenSSH では既定でオン）。
-- デスクトップサーバー：Windows リモートデスクトップ（3389）、macOS 画面共有（5900。「VNC 閲覧者がパスワードで画面を操作できる」でパスワードを設定）、
-  TigerVNC / x11vnc（5900 + display。たとえば :1 = 5901）、xrdp（3389）。
-- RDP は `security=any` + `ignore-cert=true` を使います。NLA には正しい Windows の認証情報（ドメインを含む）が必要です。
+ページ上部の「接続方法の比較」ボタンを押すと、アプリの中でこの比較が見られます。どの区間を誰が暗号化しているか、いま使っている方法はどれかも示されます。プロトコル欄のヒントと、情報ダイアログのフッターからも開けます。
+
+## 接続先のコンピューターに必要なもの
+
+- **デバイスで転送が許可されていること**：デバイスの sshd が TCP 転送（`AllowTcpForwarding`）を許可している必要があります。OpenSSH と Win32-OpenSSH は既定で許可しています。
+- **デスクトップサーバー**：デバイス自身か、そのネットワーク上のコンピューターで動いているもの。
+  - Windows リモートデスクトップ：ポート 3389
+  - Linux の xrdp：3389
+  - macOS の画面共有：5900（「VNC 閲覧者がパスワードで画面を操作できる」でパスワードを設定）
+  - TigerVNC / x11vnc：5900 にディスプレイ番号を足した値（`:1` = 5901）
+  - RustDesk：直接 IP アクセス、ポート 21118（[RustDesk](#rustdesk) を参照）
+- **使ってよいデバイスのアカウント**：デバイスへの SSH の 1 ホップに使うだけで、デスクトップのログインではありません。そのデバイスで使えるアカウントがない場合は、トンネルのオーナーに許可してもらってください。
+
+RDP は `security=any` と `ignore-cert=true` で接続します。Windows 側がネットワークレベル認証（NLA）を求める場合は、ドメインも含めてログイン情報が正確である必要があります。
+
+## RDP / VNC に接続する
+
+1. 「リモートデスクトップ」を開き、デバイスを選びます。フォームの先頭は経路図で、ターミナルページと同じものです：あなたのブラウザー → Telepy → デバイス → デスクトップ。
+2. 経路図の中で「デスクトップの場所」（デバイス自身か、そのネットワーク上のコンピューター）、デバイスのアカウント、「プロトコル」、「ポート」を選びます。
+3. ログイン情報を入力します。「デスクトップのユーザー」と「パスワード」、Windows なら「ドメイン」も。「保存したログイン」から選んでもかまいません。
+4. 下にある「画質」「クリップボード」「音声」「表示」を確認します。最初は保存済みの設定が入っています。
+5. 「接続」を押します。
+
+デスクトップへのログインは Telepy がサーバー側で行います。パスワードはこの接続のためだけに送られ、接続中はメモリーに置かれますが、保存はされません。「このデスクトップ用にログインを保存」にチェックを入れた場合を除きます。
+
+セッションの前に確認を求めるよう設定されたトンネル（ステップアップ）では、先に 2 段階目の認証を求められます。
+
+接続すると、画面がちょうどページ上部のすぐ下に来るようにスクロールします。画面をクリックすると入力できます。
+
+## 画面
+
+### 画質
+
+| プリセット | RDP | VNC |
+|---|---|---|
+| **自動**（既定） | なめらかなフォント、ほかは guacd に任せる | 追加の設定なし |
+| **速度優先** | 16 ビットカラー、フォントのスムージングなし | 16 ビットカラー、圧縮を強める |
+| **鮮明さ優先** | 24 ビットカラー、可逆圧縮のみ | 24 ビットカラー、最高画質、可逆圧縮のみ |
+
+トンネルが遅いときは「速度優先」を、「鮮明さ優先」は帯域を多く使います。HiDPI 画面で文字をくっきりさせたいときは、「表示」にある別のスイッチを使います。選んだ画質はアカウントに保存され、環境設定 → リモートデスクトップにも同じ設定が表示されます。
+
+### 拡大・縮小
+
+表示の設定は 3 か所から変えられ、どこで変えても同じ値です：環境設定 → リモートデスクトップ → 表示、接続フォームの「表示」欄、ツールバーの「表示」メニュー。アカウントに保存されるので、どのブラウザーでサインインしても同じ設定になります。
+
+- **ウィンドウに合わせる**（既定）：画面全体が枠いっぱいに収まり、リモートの画面が小さいときは拡大もされます。
+- **縮小のみ**：大きい画面は枠に収まるよう縮小し、小さい画面は 1:1 のままです。
+- **実寸（1:1）**：リモートの 1 ピクセルを画面の 1 ピクセルで表示します（HiDPI のときはデバイスピクセル）。残りの部分は、マウスを画面の端へ動かすか、2 本指でドラッグすると見られます。
+- **カスタム %**：25〜400 % の範囲で指定できます。
+
+モードは維持されます。ウィンドウの大きさが変わると「ウィンドウに合わせる」は合わせ直し、1:1 は 1:1 のままです。ツールバーの − / % / + やピンチ操作を使うと、固定の倍率に切り替わります。
+
+### 解像度と HiDPI
+
+- **RDP の解像度**：「ウィンドウに合わせる」（既定）では、リモートデスクトップが画面の枠と同じ大きさになります。ウィンドウのサイズ変更、ウィンドウいっぱいの表示、全画面表示にも追従し、枠が 400 ms 止まってから新しいサイズを要求します。「固定サイズ」（1280×720、1600×900、1920×1080、2560×1440、またはカスタム）はそのサイズのままブラウザーで拡大縮小し、次の接続から有効になります。
+- **HiDPI（デバイスピクセル）**：Retina / HiDPI 画面で、画面本来のピクセル数（最大 2 倍）を要求して文字をくっきりさせます。既定はオフです。Windows は合わせてインターフェースを大きくしますが、xrdp や多くの VNC サーバーはそうしないので、文字がとても小さくなります。接続中に切り替えると、ウィンドウに合わせているセッションはすぐにサイズが変わります。
+- **VNC もウィンドウに合わせてサイズ変更**（既定はオフ）：VNC サーバーにウィンドウのサイズに合わせるよう頼みます。従うのは仮想デスクトップ（TigerVNC の Xvnc、KasmVNC）だけで、実機の画面（x11vnc、macOS の画面共有、多くの Windows サーバー）は元の解像度のままです。既定でオフなのは、実機のモニターの解像度を断りなく変えられて喜ぶ人は、まずいないからです。
+- **RustDesk**：解像度はリモート側が決め、Telepy はブラウザーの中で拡大縮小するだけです。
+- **サイトの上限**：管理者は最大解像度（長辺、既定 2560）を設定できます。これを超える要求は、縦横比を保って縮小されます。接続時も、ウィンドウが変わるたびにも同じです。
+
+### ウィンドウいっぱいに表示
+
+「表示」メニューの「ブラウザーのウィンドウいっぱいに表示」は、サイドバーとページ上部を覆って画面を広く使います。全画面表示ではないので、Esc は引き続きリモートデスクトップに送られます。ツールバーの「ページに戻る」で元に戻ります。全画面表示にはツールバーに専用のボタンがあります。
+
+### タッチ画面とスマートフォン
+
+- 2 本指でピンチすると拡大縮小、2 本指でドラッグすると移動します。
+- 1 本指はリモートのマウスのままです。タップでクリック、長押しで右クリックです。
+- 右上に小さな − / % / + のボタンがあります。倍率をタップすると枠に合わせた表示に戻ります。少なくとも 4 倍まで拡大できます。
+- スマートフォンでは、縮小された画面（VNC や、固定解像度の RustDesk）は文字が読めるよう左上を起点に 1.5 倍で開きます。RDP は解像度がもともと枠に合わせてあるので拡大しません。新しい接続、別の画面や範囲への切り替え、解像度の変更のたびに、この最初の倍率に戻ります。
+- マウスだけのブラウザーでは何も変わりません。
+
+## 複数モニターのうち 1 つだけ表示（VNC）
+
+VNC サーバーはすべてのモニターを 1 枚の大きな画像につなげて送ってきます（macOS の画面共有、x11vnc、TightVNC はいずれもそうです）。guacd にはモニターを選ぶ方法がないので、Telepy はブラウザーの中で切り抜いて表示します。クリックした位置は正しく伝わります。
+
+ツールバーの「画面」メニューには次の項目があります。
+
+- 「デスクトップ全体」
+- 検出された各画面（名前、サイズ、どれがメインか）
+- 「等分割」：左半分 / 右半分、3 等分、上半分 / 下半分。いつでも使えます。
+- 「カスタム範囲」：「範囲を選択…」を選び、見たい部分をドラッグします（64 px 以上）。Esc か「キャンセル」で中止できます。選択中のキーとクリックはリモートに送られません。
+- 「画面を再検出」
+
+接続すると、Telepy はデバイスに画面の配置を一度問い合わせます。これはデバイス自身にしか使えず、同じネットワーク上の別のコンピューターには問い合わせられません。役に立つ答えが返ってこないときは、画像の形から推定します（モニターの縦横比はいくつかに限られるからです）。そうした項目には「画面の形から推定」と表示されます。選んだ画面は、デバイスやコンピューターごとにこのブラウザーが覚えています。
+
+RDP にはどれも必要ありません。RDP セッションのサイズは Telepy が決めるので、画面はいつも 1 つです。
+
+## クリップボード
+
+接続フォームの「クリップボード」欄か、環境設定 → リモートデスクトップで方向を選びます。アカウントに保存されます。
+
+- **双方向**：送ったテキストは向こうへ届き、リモートデスクトップでコピーしたテキストはあなたのクリップボードに来ます。
+- **貼り付けのみ**：テキストはリモートデスクトップへ送るだけで、向こうでコピーしたものは向こうに残ります。
+- **オフ**：どちらの方向にも何も通しません。
+
+RDP / VNC では「貼り付け」ボタンでテキストを送ります。RustDesk では、タブにフォーカスがある間にあなたのコンピューターでコピーしたテキストが送られ、リモートでコピーしたテキストはツールバーの下に表示されます。
+
+管理者は上限（「デスクトップのクリップボードの上限」）を設定できます。あなたの選択と上限のうち、狭いほうが使われ、上限を超える選択肢はグレーアウトします。RDP / VNC ではサーバー上の guacd が制御します。RustDesk のストリームの中身はサーバーからは見えないので、タブ内の RustDesk エンジンが適用します。オフのときは相手の RustDesk にクリップボードを無効にするよう伝え、貼り付けのみのときはリモートから戻ってくる内容を無視します。
+
+## 音声
+
+音声は RDP と RustDesk で使えます。VNC には音声がありません。このプロトコルが知っているのは画面と入力だけだからです。macOS の画面共有は VNC なので、Mac の音を聞きたいときは RustDesk を使ってください。
+
+接続フォームで「音声」をオンにします。音声は帯域を使うので既定はオフで、選択はアカウントに保存されます。
+
+- **RDP**：接続時に決まります。オフのときは guacd が音声チャンネルそのものを読み込みません。接続中にツールバーでできるのはミュートだけです。
+- **RustDesk**：接続中もツールバーで切り替えられます。オフにすると、デバイスに音声を送らないよう頼みます。
+- マイクの音が逆方向に送られることはありません。
+
+### 音声ボタン
+
+| 状態 | 意味 |
+|---|---|
+| **再生中** | 音声が届いて再生されています。 |
+| **無音** | 音声チャンネルは開いていますが、リモートでいま何も鳴っていません。 |
+| **音声を待機中** | 接続した直後で、リモートが音声チャンネルを開くのを待っています。 |
+| **音声が止められています** | 音声は届いていますが、ページをクリックするまでブラウザーが止めています。「クリックして音声を有効化」を押してください。 |
+| **音声なし** | 接続して 10 秒たっても、リモートが音声チャンネルを開いていません。 |
+| **ミュート中** | このタブでミュートしました。音声は届き続けて捨てられるので、ミュートを解除しても溜まった音が一気に流れることはありません。 |
+
+理由はボタンのツールチップと、情報ダイアログの「音声」の行に表示されます。
+
+### オンにしたのに聞こえない？
+
+ブラウザーは、一度クリックされたページにしか音を出させません。勝手に鳴る広告を黙らせてくれるありがたい決まりですが、ときどきこちらまで黙らされます。Telepy は「接続」をクリックした時点で音声を使えるようにしておくので、ふつうはそのまま鳴ります。それでも止められているときは（Safari がいちばん厳しいです）、ボタンが「音声が止められています」になり、「クリックして音声を有効化」が表示されます。
+
+ボタンが「音声なし」なら、リモートが何も送っていません。トンネルのログにも出ていて、そのセッションの終了の行に `no sound channel from the RDP server` と記録されます。リモートのコンピューターを確認してください。
+
+- **Windows（RDP）**：ポリシーで「オーディオおよびビデオ再生のリダイレクトを許可する」が無効にされていなければ、音声はリダイレクトされます。
+- **Linux（xrdp）**：`pulseaudio-module-xrdp`（Debian / Ubuntu ではパッケージがないので、説明に従ってソースからビルドします）か `pipewire-module-xrdp` が必要です。
+- **Linux の RustDesk**：サインイン中のデスクトップセッションのサウンドサーバー（PulseAudio / PipeWire）を録音します。デスクトップに誰もサインインしていなければ音声はありません。
+- **Windows の RustDesk**：既定の出力デバイスで鳴っている音を録音します。
+- **Apple シリコンの Mac の RustDesk**：もともと必要な「画面収録」の権限を使って、システムの音を録音します。
+- **Intel Mac の RustDesk**：録音するのは「音声入力デバイス」だけで、既定ではマイクです。聞こえてくるのは再生中の音楽ではなく、向こうの部屋のエアコンの音です。BlackHole のようなループバックデバイスをインストールし、RustDesk の設定 → 一般 → 音声入力デバイスで選んでください。
+
+RustDesk の音声には、WebCodecs で音声をデコードできるブラウザーも必要です。できないブラウザーでは音声ボタンが無効になり、理由が表示されます。
+
+## キーボードと入力メソッド
+
+- **入力メソッドはそのまま使えます**：日本語や中国語のような変換を伴う入力も、OS をまたいで届きます。たとえば Windows のブラウザーから Mac の画面共有へ入力できます。確定した文字は Unicode の文字として送られ、RDP と一般的な VNC サーバー（macOS の画面共有、x11vnc、TigerVNC、TightVNC）が受け付けます。
+- **キーボード → テキストを送信…**：それでもリモートが変換した文字を受け付けないときは、このダイアログに自分の入力メソッドで書きます。1 文字ずつキー入力として送られ、改行は Enter になります。内容は保存されません。
+- **貼り付け**：最後の手段です。テキストをリモートのクリップボードへ送ります。
+- **Ctrl を ⌘ Command として送る**（RDP / VNC）：macOS のデスクトップでは、Ctrl+C が ⌘C として届きます。デバイスが Mac で、あなたのブラウザーが Mac でないときは既定でオンになり、選択はこのブラウザーが覚えています。キーを押したまま切り替えても、修飾キーが押しっぱなしになることはありません。
+- **Ctrl+Alt+Del**：RDP と RustDesk の「キーボード」メニューにあります。
+
+## RustDesk
+
+RustDesk は独自のプロトコルを使うので、guacd には理解できません。Telepy は 2 つの方法で RustDesk に接続し、どちらもトンネルを通ります。ブラウザーで接続する方法（プロトコルに「RustDesk」を選んだときの既定）と、転送したポートを通して RustDesk アプリで接続する方法です。
+
+どちらの場合も、RustDesk の ID サーバーやリレーサーバーは使いません。Telepy がデバイスを経由して、そのマシンの RustDesk に直接つなぎます。
+
+### そのコンピューターの RustDesk を準備する
+
+RustDesk を選ぶと、ページはデバイスから RustDesk が応答するかを確認し、チェックリストを表示します。各ステップには RustDesk の画面を表した小さな図があり、RustDesk 自身の表記でクリックする場所を示します（「場所を表示」）。開いているのはいま見るべきステップだけで、ここで一度接続できると、リストは 1 行に折りたたまれます。
+
+1. **RustDesk が起動していて直接接続を受け付ける**：RustDesk の設定 → セキュリティ →「セキュリティ設定のロックを解除」を開き、「直接 IP アクセスを有効化する」（ポート 21118）をオンにします。RustDesk は起動したままにしておく必要があります。
+2. **RustDesk が受け付ける固定パスワード**：同じページの「パスワード」で「両方のパスワードを使用する」を選び（「ワンタイムパスワードを使用する」ではなく）、「固定パスワードを設定」します。ワンタイムパスワードはとても便利です。一度しかつながなくていいなら。
+3. **画面の表示と操作の権限**（Mac）：システム設定 → プライバシーとセキュリティで、「画面収録」と「アクセシビリティ」の RustDesk をオンにします。オフのままだと画面が真っ黒になるか、マウスが効きません。
+4. **閉じたり再起動したりしても接続できるように**（推奨）：RustDesk が勧める場所で、システムサービスをインストールします。入れていないと、アプリを閉じたときに止まり、再起動後も戻ってきません。
+
+音声がオンで、前回接続した相手が Mac だった場合は、「Mac の音声」というステップも加わります（[音声](#音声) を参照）。
+
+### ブラウザーで接続する
+
+「RustDesk のパスワード」を入力して「ブラウザーで接続」を押します。パスワードはブラウザーの中にとどまります。RustDesk の認証チャレンジにはタブ内の RustDesk エンジンが自分で答え、Telepy は中継するだけです。
+
+使えるのは、画面、マウスとキーボード、クリップボードのテキスト、画面の切り替え、画質、音声、ファイルです。ターミナル、リモート印刷、マイクはないので、必要なら RustDesk アプリを使ってください。
+
+- **「画面」メニュー**：リモート側の各ディスプレイ（RustDesk がネイティブに切り替えます）と画質。速度優先 / 自動 / 鮮明さ優先は、RustDesk の low / balanced / best に対応します。
+- **「キーボード」メニュー**：テキストを送信…と Ctrl+Alt+Del。
+- 遅延のボタンには、RustDesk のエンジンが測った値（遅延、フレーム／秒、目標ビットレート）と、トンネルの遅延が表示されます。
+- RustDesk は「暗号化されていない直接接続」の確認を求めてきますが、Telepy が自動で確認します。経路全体がもともと TLS と SSH のトンネルの中にあるからです。
+- 1 ページで開ける RustDesk の画面は 1 つだけです。
+- RustDesk のセッションはアイドルで切断されません。サイトのアイドルタイムアウトは RDP / VNC だけが対象です。
+
+WebCodecs に対応したブラウザー（最新の Chrome、Edge、Safari）が必要です。
+
+### ファイル
+
+ブラウザーで接続した RustDesk のセッションでは、ツールバーに「ファイル」ボタンが出ます。パネルは広い画面なら映像の右、スマートフォンでは下に表示されます。RustDesk 自身のファイル転送を別の接続で使い、Telepy がトンネル経由で中継します。1 ファイル最大 2 GB です。
+
+- **閲覧**：パンくずリスト（Windows では最上位がドライブの一覧）、「1 つ上のフォルダー」、「ホームフォルダー」、「隠しファイルを表示」。
+- **アップロード**：ファイル、または「フォルダーをアップロード」（フォルダーをドラッグしても同じで、空のフォルダーも保たれます）。フォルダーを先に作ってからファイルを送ります。すでにあるフォルダーでも問題ありません。
+- **ダウンロード**：ファイル単体か、「.zip でダウンロード」でフォルダーごと。Telepy は先に中身を数え、500 ファイルか 2 GB を超えるときは確認します。空のファイルやフォルダーも含まれます。
+- **名前を変更**：新しい名前か、`../archive/name` のようなパスを入力すると同じディスク内で移動できます。ダイアログに移動先が表示され、ボタンは「移動」に変わります。
+- **新しいフォルダー**と**削除**（複数選択も可）：フォルダーを削除する前に、中のファイル数と合計サイズが隠しファイルも含めて表示されます。RustDesk にはゴミ箱がないので、元に戻せません。
+- **転送の一覧**：進捗と速度が表示され、キャンセルもできます。同じ名前があるときは「スキップ」か「置き換え」を聞かれます。
+
+ブラウザーによる違い：Chrome と Edge は、選んだファイルへ直接書き込むので、大きな zip でも大丈夫です。Firefox と Safari には保存ダイアログがないので、ダウンロードはいったんメモリーに集められ、フォルダーの zip は 2 GB 以内に収める必要があります。デバイスがエラーを返したときは、そのメッセージをそのまま表示します。
+
+パネルの情報ボタン（「ファイルの通り道」）では、経路が図で示されます：あなたのブラウザー ─ Telepy ─ トンネル ─ デバイス上の RustDesk ─ ディスク。
+
+ファイルパネルを開けるのは、その画面を開いた本人だけで、画面が終わるとファイルの接続も終わります。管理者はサイト全体で「RustDesk のファイル転送」をオフにできます。パネルが消えるだけでなく、中継がファイル転送のログインを拒否するので、ボタンを隠しているだけではありません。削除と名前の変更はトンネルのログに記録されます（パスと件数だけで、中身は記録しません）。
+
+### RustDesk アプリを使う
+
+「RustDesk アプリを使いたい場合」を開くと、Telepy が RustDesk の直接 IP アクセスのポートをあなたのコンピューターへ転送し、アプリは `127.0.0.1` に接続します。ファイル転送、音声、ツールバーなど、RustDesk 自身の機能はいつもどおり使えます。
+
+1. 「デバイスから確認」を押して、デバイスから RustDesk に届くか確かめます。
+2. 表示されたコマンドを自分のコンピューターで実行し、開いたままにしておきます。
+
+   ```
+   ssh -L 21118:<host>:21118 <alias>
+   ```
+
+3. RustDesk アプリの ID に `127.0.0.1` を入力し（ローカルのポートが 21118 でなければ `127.0.0.1:<port>`）、固定パスワードを使います。
+
+ポートを転送するには、そのデバイスで使えるアカウントが必要です。「コマンド早見表」の「RustDesk を使う」に、細かい設定（RustDesk のホスト、RustDesk のポート、ローカルのポート）があります。LAN スキャンもポート 21118 を探し、「ネットワーク」ページの「コマンド」タブには RustDesk のマシン向けの `-L` コマンドが表示されます。
+
+## 保存したログイン
+
+接続するときに「このデスクトップ用にログインを保存」にチェックを入れると、次からは「保存したログイン」で選ぶだけです。一覧の確認と削除は、環境設定 → 保存したログインで行えます。
+
+- **本人専用**：ほかの人は見ることも使うこともできません。管理者も同じです。
+- **1 件につき 1 つのデスクトップ**：保存したログインは、トンネルとプロトコル、設定していればネットワーク上のコンピューターとポートに結び付いています。ほかの場所で使おうとしても Telepy が拒否するので、Windows のパスワードが別のマシンに迷い込むことはありません。
+- **サーバー上で暗号化**：鍵はサーバーの `SECRET_KEY` から導出します。パスワードは二度と表示されず、復号するのは接続するときだけです。管理者が `SECRET_KEY` を変えると、それまでのログインは復号できなくなるので、保存し直してください。
+- **RustDesk だけは例外です**：RustDesk のパスワードはブラウザー内のエンジンが検証するので、その接続の開始時だけ Telepy が復号し、TLS でエンジンへ渡します。ログには残らず、ページにも保持されません。
+- トンネルやネットワーク上のコンピューターを削除すると、それに結び付いたログインも削除されます。ログのセッションの行には、使ったログインの名前（名前だけ）が記録されます。
+
+同じ保管庫には、デバイスのネットワーク上のコンピューターへの SSH ログインも入っています。こちらはターミナルの機能なので、ここでは扱いません。
+
+## いま何が起きているかを見る
+
+![リモートデスクトップ接続のリアルタイム経路と流れるデータ](images/ja/desktop-flow.png)
+
+ページの情報ボタン（「しくみ」）を押すと、いまの経路が表示されます：あなたのブラウザー ─ Telepy ─ デバイス ─ デスクトップ。各地点が待機・進行中・正常・失敗のどれかを示すので、何かがうまくいかないとき、どの区間で止まったかがわかります。接続中は各区間に往復時間が表示され、いちばん遅い区間が黄色になります。ブラウザーで接続する RustDesk や、アプリを使う経路では、それに合わせた図に変わります。
+
+その下の「この接続で流れるもの」には、5 本の線（画面、キーボードとマウス、クリップボード、音声、ファイル）が並び、それぞれに状態と 1 行の理由が付きます。
+
+- **オン**、または**一方向**（クリップボードが貼り付けのみ）
+- **オフ**：自分でオフにした、またはこのタブでミュートした
+- **サイトの上限で停止**：管理者が設定した上限
+- **この方式にはない**：VNC には音声がない、RDP / VNC ではファイルを運べない、ブラウザーが WebCodecs の音声に対応していない
+- 音声にはさらに**待機中**と**届いていない**があり、RustDesk のファイルではダウンロード、アップロード、名前の変更、削除のそれぞれの状態が出ます
+
+### 遅延とストリームの状態
+
+ツールバーの遅延のボタンには、電波マーク、フレーム往復の時間、そして「ストリーミング中」「遅延あり」「データなし」「待機中」のどれかが表示されます。開くと数値が見られます。
+
+- **フレーム往復**：1 フレームが Telepy を出てから、ブラウザーが描き終えて応答するまでの時間です。体感する「重さ」はこれです。デスクトップが止まっているときは空欄になります。
+- **ネットワーク往復**：ブラウザー ↔ Telepy の往復で、描画を含みません。
+- **Telepy ↔ デバイス**：トンネルそのもので、15 秒ごとに測ります。
+- フレーム／秒、画面データ、あなたの入力、音声データ、「描画待ちフレーム」（送られたがまだ描かれていないもの）、そしてブラウザーが追いつかないために guacd がまとめたフレームの数。
+- リモート画面のサイズと倍率、それに遅延の大部分がどこにあるかを示す一文。ネットワークか、トンネルか、ブラウザーの描画が遅いのか、です（ウィンドウを小さくする、「速度優先」にする、ほかのタブを閉じると改善します）。
+
+RustDesk ではエンジンがブラウザーの中でデコードするので、フレーム往復と描画待ちフレームはありません。ネットワーク往復は、RustDesk 自身が測ったブラウザー ↔ デバイスの値です。
+
+## トラブルシューティング
+
+### 接続ボタンを押してすぐ失敗する
+
+Telepy は画面が出る前にデスクトップまでの経路を開くので、たいていの問題は「接続」を押した瞬間にわかります。
+
+| ページの表示 | 対処 |
+|---|---|
+| デバイスがオフラインです | Telepy へのトンネルがつながっていません。まずデバイスを戻してください。 |
+| デバイスがアカウントでの Telepy の鍵を拒否しました | そのアカウントの `authorized_keys` に Telepy のサービス鍵を追加します。 |
+| デバイスの SSH サーバーがポート転送を許可していません | `sshd_config` で `AllowTcpForwarding yes` を設定し、sshd を再起動します。 |
+| デバイスが異なる SSH ホスト鍵を提示しました | 信頼する前に、トンネルの詳細で確認します。 |
+| デバイスからアドレスに接続できませんでした | RDP / VNC サーバーが起動していて、そのポートで待ち受けているか確認します。 |
+| リモートデスクトップの枠がすべて使用中です | サイトの上限に達しています。少し待ってからやり直します。 |
+| このサーバーではリモートデスクトップが無効です | 管理者がオフにしています。 |
+| Telepy のデスクトップエンジン（guacd）が動いていません | 管理者に起動を依頼します。 |
+| デスクトップがログインを拒否しました | ユーザー、パスワード、ドメインを確認します。 |
+
+### 画面や文字が小さすぎる
+
+- 「縮小のみ」ではなく「ウィンドウに合わせる」を使います。
+- 「HiDPI」がオンで、相手が xrdp や VNC なら、オフにします。これらのサーバーはインターフェースを大きくしません。
+- 固定サイズの RDP は枠に合わせて縮小されます。「ウィンドウに合わせる」に切り替えます。
+
+### 日本語や中国語が入力できない
+
+「キーボード → テキストを送信…」を試してください。Linux の RustDesk の場合は、RustDesk がロケール（`LANG`）を設定した状態で動いているか確認します。C ロケールではマルチバイトの文字を受け付けず、ログに `Invalid multi-byte sequence encountered` と出ます。これはデバイス側の環境の問題で、Telepy からは直せません。
+
+### RustDesk につながらない
+
+- **ポート 21118 が応答しない**：RustDesk が閉じているか、「直接 IP アクセスを有効化する」がオフです。
+- **パスワードが拒否される**：固定パスワードを使い、パスワード設定が「ワンタイムパスワードを使用する」になっていないか確認します。
+- **表示する画面がない、または画面が真っ黒**：デスクトップセッションに誰もログインしていないか、（Mac で）「画面収録」や「アクセシビリティ」の権限がありません。
+- **エンジンが起動しない**：ブラウザーが WebCodecs に対応している必要があります（最新の Chrome、Edge、Safari）。
+
+音声については [オンにしたのに聞こえない？](#オンにしたのに聞こえない) を見てください。
+
+### 接続が切れた理由は？
+
+セッションが閉じると、ページに理由が表示されます。その裏にあるコードは次のとおりです。
+
+| コード | RDP / VNC | RustDesk |
+|---|---|---|
+| 4404 | セッションかチケットが無効、または期限切れ | チケットが無効、または期限切れ |
+| 4403 | 権限がなくなった（トンネルかデバイスのアカウント） | 権限またはログインガードによる拒否 |
+| 4011 | guacd に届かない、またはハンドシェイクの失敗 | — |
+| 4013 | guacd が切断した、または壊れたデータを送ってきた | デバイスが接続を閉じた |
+| 4014 | サーバーが終了：アイドル、または停止 | サーバーが停止。ファイルの接続は、画面の終了、ファイル転送の無効化、新しい接続への置き換えでも終わる |
+| 4400 | ブラウザーが読めないものを送った | プロトコルエラー |
+| 4009 | 「ライブセッション」から終了された（理由に誰かが入る）、または権限を失った（`Telepy (access changed)`） | 同じ |
+| 4010 | 開いたブラウザーのサインインがサインアウトされた（理由：user / admin / logout / reuse / disabled） | 同じ |
+
+guacd 自身のエラー、たとえば 0x0203 / 0x0301（RDP のログイン拒否）は、ページ上で翻訳され、止まった区間が示されます。
+
+## 誰が何を見られるか、いつ終了するか
+
+- **ログ**：セッションごとに、トンネルのログへ開始と終了の行が書かれます。かかった時間、終了の理由、ブラウザーへ送った量（たとえば「12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)」）、音声の量、guacd の最後のエラーです。RustDesk の行には両方向のバイト数が入り、RustDesk でのファイルの削除と名前の変更も、それぞれ行が書かれます。
+- **「N 人が使用中」**：オーナーと ADMIN 権限で共有されている人は、トンネル一覧で誰がデスクトップを開いているか、どのデバイスのアカウントを使っているかを見られます。
+- **「ライブセッション」**：これらの一覧を見て、終了させることもできます。終了された側には誰が終了したかが表示されます。管理者には「全体のライブセッション」があります。
+- **権限を失うとセッションは終わります**：共有の解除、共有の期限切れ、権限の引き下げ、アカウントの許可リストの縮小、デバイスのアカウントの名前変更や削除、機能のオフ、アカウントの無効化。Telepy はすぐに確認し、その後も 10 秒ごとに確認します。セッションは `Telepy (access changed)` で閉じ、ログの行に理由が書かれ、本人に通知が届きます。
+- **サインアウトでも終わります**：デスクトップを開いたブラウザーのサインインがサインアウトされると（「お使いのデバイス」から、管理者によって、またはアカウントの無効化で）、デスクトップはすぐに閉じます。
+- セッションはサーバーから停止されても終わり、RDP / VNC はサイトのアイドルタイムアウトでも切断されます。
+
+## 管理者向け
+
+### サイト設定
+
+サイト設定 → リモートデスクトップ：
+
+| 設定 | 既定 | 内容 |
+|---|---|---|
+| リモートデスクトップを許可（`desktop_enabled`） | オン | オフにすると新しいセッションを開けません。開いているものには影響しません。 |
+| 同時デスクトップ数の上限（`desktop_max_sessions`） | 4 | サイト全体で、RDP / VNC と RustDesk の合計。開始中の接続も数えます。0 = 無制限。 |
+| デスクトップのアイドルタイムアウト（`desktop_session_idle_timeout`） | 900 秒 | キーボード、マウス、クリップボードの入力がこの時間なければ切断します。0 = 切断しない。RDP / VNC のみ。 |
+| デスクトップのクリップボードの上限（`desktop_clipboard`） | both | 許可できる最大の方向：`both` / `to_remote` / `off`。各自はこの範囲で選びます。 |
+| 最大解像度（`desktop_max_resolution`） | 2560 | 長辺のピクセル数（640〜16384）。超える要求は縦横比を保って縮小します。接続時も接続中も同じです。 |
+| RustDesk のファイル転送（`desktop_file_transfer`） | オン | オフにすると「ファイル」パネルを隠し、中継がファイル転送のログインを拒否し、開いているファイルの接続を閉じます。 |
+
+### guacd の運用
+
+`docker-compose.yml` は `guacamole/guacd:1.6.0` を `guacd` サービスとして動かします。このサービスは内部ネットワーク（`telepy-desktop-${PROJECT_NAME}`）にだけつながっていて、そのネットワークを共有しているのは backend だけです。関係する環境変数は 2 つです。
+
+- `GUACD_ADDR`：backend が guacd を探す場所（既定 `guacd:4822`）。
+- `DESKTOP_CALLBACK_HOST`：guacd が backend に接続し直すときに使う名前（compose では `backend`。未設定ならコンテナーの `HOSTNAME`）。
+
+## 内部のしくみ
+
+RDP / VNC のセッションを、ふつうの言葉で説明するとこうなります。
+
+1. ブラウザーが Telepy に開始を頼みます。Telepy は権限を確認し、すぐにデバイスを経由してデスクトップまでの経路を開きます。「デバイスがオフライン」や「そのポートで応答がない」がすぐにわかるのはこのためです。ブラウザーは 60 秒有効の使い捨てチケットを受け取ります。
+2. ブラウザーがチケットを使って WebSocket を開きます。Telepy はもう一度確認し、サーバー上で guacd を通してデスクトップにログインし（パスワードがブラウザーに戻ることはありません）、guacd を手順 1 の経路につなぎます。
+3. 画面がブラウザーへ流れ、キー、マウス、クリップボードが逆向きに流れます。ブラウザーが送れるのは入力だけで、guacd に独自の命令を送ることはできません。
+
+guacd は backend からしか届かない内部ネットワークにいて、デバイスへ自分から接続することはありません。セッションごとに backend 上の使い捨てのポートへ接続し直し、backend がそれを、デバイスの既存の SSH 接続上のチャネルへつなぎます。デバイスでは sshd が `127.0.0.1:<port>`（デバイス自身のデスクトップ）か、ネットワーク上のコンピューターのアドレスへ接続します。`ssh -J` や LAN スキャンと同じしくみです。
+
+ブラウザーで接続する RustDesk は少し違います。RustDesk のエンジン（RustDesk の Web クライアントをコミュニティが TypeScript に移植したもの、AGPL-3.0、Telepy に同梱）は、ID サーバーとリレーに話しかけているつもりでいます。実際にはどちらも Telepy 上の同じ WebSocket で、Telepy がリレー側をデバイスの直接 IP アクセスのポートへ渡します。Telepy 自身は RustDesk のサーバーを一切動かしていません。
+
+ここから先は、API を使う人とコントリビューター向けの参考資料です。
+
+<details>
+<summary>アーキテクチャ図（RDP / VNC）</summary>
+
+```
+ブラウザー（guacamole-common-js）
+  │ wss /ws/desktop/<session>/?ticket=…&width=&height=&dpi=   サブプロトコル guacamole。チケットは 60 秒、1 回限り
+  ▼
+backend（デスクトップの WebSocket）
+  │  ブラウザー → guacd：key / mouse / touch / size / sync / nop / disconnect / clipboard / blob / end / ack だけ通す
+  │  guacd → ブラウザー：そのまま中継（長さは両側に合わせて再エンコード：guacd はコードポイント、ブラウザーは UTF-16 単位で数える）
+  │  TCP guacd:4822：Guacamole のハンドシェイクは backend で完結し、認証情報はブラウザーに戻らない
+  ▼
+guacd コンテナー（backend とだけ共有する内部ネットワーク）
+  │  backend 上のこのセッション専用のランデブーポートへ接続し直す（guacd のアドレスだけ受け付け、1 本で閉じる）
+  ▼
+backend のブリッジ
+  │  双方向にコピー ⇄ デバイスの共有 SSH 接続上の direct-tcpip チャネル（セッション枠は使わない）
+  ▼
+デバイスの sshd ──► 127.0.0.1:<port>（デバイス自身のデスクトップ）または <LAN のアドレス>:<port>（ネットワーク上のコンピューター）
+```
+
+ハンドシェイクのあと、backend はまず `0.,<uuid>;` を送り（guacamole-common-js はこれを受け取って初めてトンネルを開いたと見なします）、続けてハンドシェイク中にすでに読み込んだ命令を送ります（guacd は `ready` と最初の画面更新を同じパケットに入れることがよくあります）。
+
+</details>
+
+<details>
+<summary>API リファレンス</summary>
+
+**RDP / VNC**
+
+- `POST /api/reverse/server/{id}/desktop/start`、本文は `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?, resize?}`。
+  - 確認すること：リモートデスクトップが有効、トンネルに VIEW 権限、機密トンネルのステップアップ、`username` が使えるデバイスのアカウントであること（省略時は既定のもの）、LAN ホストがこのトンネルのものであること、サイトの上限。
+  - エラー：502 `device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` / `device_unreachable`、503 `desktop_disabled` / `desktop_busy`。保存したログインが別の接続先のものなら `credential_id` のフィールドエラー、`audio` が真偽値でなければフィールドエラー。
+  - 戻り値は `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, resize, max_resolution, target, username}`。`clipboard` と `audio` は実際に有効な値です（VNC の `audio` は常に `false`）。
+  - `clipboard` を省略すると個人設定が使われ、サイトの上限がかかります。`credential_id` は `login` / `password` / `domain` の代わりになります。
+  - `quality`：`auto` / `speed` / `sharp`。`resize: false` は固定サイズ、VNC で `resize: true` はウィンドウに合わせるようサーバーに頼みます。
+- `/ws/desktop/<session>/?ticket=…&width=&height=&dpi=`：WebSocket、サブプロトコルは `guacamole`。guacamole-common-js は理由しか読まないので、クローズコードは理由にも入れています。
+- `POST /api/reverse/server/desktop/{sid}/stop`：セッションを終了（4014）。
+- `GET /api/reverse/server/{id}/desktop/screens?username=`：デバイスの画面。関門は start と同じ。戻り値は `{os, source, screens: [{name, x, y, width, height, primary}], username}`。わからなくてもエラーにはなりません（`screens: []`）。
+- `GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：デバイスからそのポートが応答するか確認します。関門も経路も start と同じで、つながったらすぐ閉じます。`desktop_enabled` は見ません。
+
+**RustDesk**
+
+- `POST /api/reverse/server/{id}/rustdesk/start`、本文は `{username?, port?, lan_host_id?, credential_id?, clipboard?}`。関門はデスクトップの start と同じで、サイトの上限は RDP / VNC と RustDesk を合わせて数えます。戻り値は `{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username, clipboard, clipboard_limit, file_transfer}`、`credential_id` を送ったときは `password` も付きます。
+- `/ws/rustdesk/{sid}/?ticket=`：エンジンが（2 回）接続する WebSocket。
+- `POST /api/reverse/server/rustdesk/{sid}/stop`：セッションを終了（4014）。
+- `POST /api/reverse/server/rustdesk/{sid}/files`：接続済みの画面セッションの下にファイルの接続を開きます。409 `not_connected`、503 `file_transfer_disabled` / `desktop_disabled`、502 は start と同じ。
+
+**保存したログイン**
+
+- `GET /api/credentials`（`tunnel_id` / `lan_host_id` / `protocol` で絞り込み可）、`POST`、`PATCH /api/credentials/{id}`、`DELETE`。本人だけが使えます。
+- フィールド：`protocol`（`rdp` / `vnc` / `rustdesk`。`ssh` はターミナル用）、`tunnel_id`、任意の `lan_host_id` / `port`、`label`、`login`（RustDesk では空）、`domain`、そしてパスワード。レスポンスには `has_password`（`ssh` では `has_key` も）だけが入り、パスワードは返しません。
+
+**個人の設定**（`/api/user/settings`）
+
+- `desktop_clipboard`：`both` / `to_remote` / `off`。レスポンスには読み取り専用の `desktop_clipboard_limit`（サイトの上限）も入ります。
+- `desktop_display`：1 つの JSON オブジェクト `{scale, percent, resolution, width, height, hidpi, vnc_resize, quality, audio}`。`scale` は `fit` / `shrink` / `actual` / `custom`。未知のフィールドや範囲外の値はフィールドエラー、`percent` は 25〜400 に丸められ、空は未選択を表します。サインイン時はアカウントの値が優先され、アカウントにまだ値がなければこのブラウザーでの以前の選択をアップロードします。
+
+</details>
+
+<details>
+<summary>guacd に何を頼んでいるか</summary>
+
+| 選択 | guacd に送るもの |
+|---|---|
+| 画質「自動」 | RDP は従来どおり（なめらかなフォント）、VNC は追加パラメーターなし |
+| 画質「速度優先」 | RDP は `color-depth 16`、フォントのスムージングなし。VNC は `color-depth 16`、`compress-level 6`、`quality-level 5` |
+| 画質「鮮明さ優先」 | RDP は `color-depth 24`、`force-lossless`。VNC は `color-depth 24`、`quality-level 9`、`force-lossless` |
+| ウィンドウに合わせる（RDP） | `resize-method display-update`。ブラウザーの `size` は枠が 400 ms 止まってから送る |
+| 固定サイズ（RDP） | resize method なし。中継がブラウザーの `size` を捨てる |
+| HiDPI | devicePixelRatio（≤ 2）倍のピクセルと `dpi` |
+| VNC のサイズ変更オフ | `disable-display-resize`（ないと guacd 1.6 は接続時に SetDesktopSize を送る） |
+| クリップボード | `disable-copy` / `disable-paste` |
+| 音声オン（RDP） | ハンドシェイクの `audio` 命令で `audio/L8` と `audio/L16` を提示 |
+| 音声オフ（RDP） | `disable-audio=true`。rdpsnd は読み込まれない |
+
+要求するサイズは、接続時も接続中も、長辺がサイトの上限に収まるよう縮小されます。guacd の音声ストリーム（`audio` / `blob` / `end`）はそのまま中継し、ブラウザーは `ack` を返せます。ブラウザーからの `audio`（マイク）は捨てます。
+
+</details>
+
+<details>
+<summary>ストリームの統計の送り方</summary>
+
+中継は毎秒、独自の命令を 2 つブラウザーへ送ります。guacamole-common-js は知らない opcode を無視し、ページは Guacamole のクライアントに渡す前にこれを取り出します。
+
+| 命令 | 内容 |
+|---|---|
+| `telepy-ping <n>` | ブラウザーはすぐ `telepy-pong <n>` を返します。中継はそれでネットワーク往復を計算し、guacd へは転送しません。 |
+| `telepy-stats <json>` | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind, audio}` |
+
+- `frame_ms`：guacd は各フレームの終わりに `sync <ts>` を送り、ブラウザーはそのフレームを描き終えてから同じ `sync` を返します。新しいサンプルが 3 秒なければ null。
+- `net_ms`：ping / pong。描画は含みません。
+- `tunnel_ms`：monitor が 15 秒ごとに測るデバイスの sshd との往復。
+- `frames` は毎秒のフレーム数、`merged` は 1 回の `sync` でまとめたフレーム数（guacd 1.6 の 2 番目の引数。1 を超えたらブラウザーが追いついていない）、`behind` は送ったがまだ返ってこないフレーム、`down` / `up` はこの 1 秒のバイト数。
+- `audio`：guacd の音声ストリームのバイト数。一度も開いていなければ null。
+
+</details>
+
+<details>
+<summary>画面の検出と推定のしかた</summary>
+
+デバイスの SSH 接続で問い合わせます。
+
+- まず `uname -s`。Darwin なら `system_profiler SPDisplaysDataType -json`（サイズだけで位置はなし）。
+- ほかの POSIX 系は `xrandr --listmonitors`（`$DISPLAY`、`:0`、`:1` の順に試す）。
+- `uname` がなければ PowerShell の `[System.Windows.Forms.Screen]::AllScreens`。
+
+配置：位置のある画面は (0,0) を起点にずらし、合計が画像と同じ形で大きさだけ違う場合（Windows の表示スケール）は拡大縮小します。サイズしかない場合（macOS）は画像から並びを推し量ります。幅の合計が画像の幅なら横並び、高さの合計が画像の高さなら縦積みで、背の低い画面が上下どちらに寄っているかは画像の黒い部分で判断します。
+
+推定は、デバイスから役に立つ答えが得られないとき（ネットワーク上の別のコンピューター、検出の失敗、すべてを覆う 1 画面だけを報告する Xvfb など）に使います。モニターの縦横比はいくつかに限られる（16:9、16:10、MacBook ≈ 1.545、3:2、4:3、5:4、21:9）ので、次のように考えます。
+
+- 幅を、それらの比率で高さのそろった 2〜4 画面に分けます（縦積みなら高さを分けます）。誤差は 0.5 % 以内です。いちばんぴったりのもの、次に比率がそろったもの、次に画面が少ないものを優先し、並び順はすべて試します。
+- 画像より背の低い画面は、黒い帯から高さを測ります。9 列の標本すべてで一致し、幅と合わせて一般的な比率になるときだけ採用するので、黒い壁紙にはだまされません。
+- 高さのそろった分け方が見つからないとき（MacBook の 1728×1117 と 2560×1440 の組み合わせなど）は、「高さのそろった 1 画面と、背の低い 1 画面」を試します。
+- 画像全体が一般的な比率 1 つに当てはまる場合（21:9 を含む）は 1 画面とし、3840×1080 は 16:9 が 2 つとして扱います。
+
+選択はこのブラウザーの localStorage の `telepy.desktopScreen.<tunnel>.<lanHost|device>` に、カスタム範囲は `telepy.desktopArea.<…>` に保存されます。
+
+</details>
+
+<details>
+<summary>RustDesk の中継とログインガード</summary>
+
+エンジンは `/ws/rustdesk/{sid}/` に 2 回接続します。ID サーバーとリレーサーバーの両方がこの URL に設定されているからです。最初のバイナリメッセージで役割が決まります。
+
+- `punch_hole_request` は ID サーバーの役割です。backend は同じ URL を示す `relay_response` を返し、あとは待ちます。追加の punch が来ても同じように返します。
+- `request_relay` はリレーの役割です。start のときに開いたチャネルを引き継ぎ、以後は WebSocket の各メッセージを RustDesk の TCP のフレーミング（1〜4 バイトの長さプレフィックス）と相互に変換します。1 フレーム最大 16 MiB です。
+
+**ログインガード**は中継が解析する唯一のもので、それもブラウザーからデバイスへのメッセージの外側だけを見ます。
+
+- `login_request` は、画面のセッションではリモート操作、ファイルのセッションではファイル転送でなければなりません。それ以外（ポート転送、カメラ、ターミナル、種類の取り違え）は 4403 で閉じ、ログの終了の行に `refused: …` と書かれます。
+- 中身のある `public_key`（暗号化の要求）は拒否します。Telepy の代役の ID サーバーはデバイスの鍵を渡さないので、これを求めるのは改造されたクライアントだけです。しかも暗号化されると、中継には何としてログインしたかが見えなくなります。経路全体はどのみち TLS と SSH の中にあります。
+- 画面のセッションでの `file_action` / `file_response` は拒否します（エンジンはファイル転送の接続でしか使いません）。
+- ログイン前に 32 を超えるメッセージが来たら拒否します。
+
+そのため、ファイル転送をオフにすると、ボタンがなくなるだけでなくサーバー側で止まります。
+
+その他：RustDesk のパスワードにはエンジンが答え、backend は通りません。例外は保存したパスワードで、その start のレスポンスでだけ返します（TLS 経由、記録なし）。音声オフは、ログイン前に RustDesk の `disable-audio` オプションを送るので、デバイスは音声サービスを起動しません。ツールバーでの切り替えはエンジンのオプション切り替えを使います。クリップボードのオフは相手の `disable-clipboard`、貼り付けのみはリモートからのクリップボードのイベントを捨てます。ログの行は `rustdesk_open` / `rustdesk_close` です。
+
+この設計を選んだときの実測（1280×800、動きの多い画面）：中継経由のエンジンは 28 fps / 約 645 KB/s、guacd の VNC は 4〜5 fps / 0.5〜1.3 MB/s でした。メモは [`rustdesk-spike.md`](engineering/rustdesk-spike.md) にあります。
+
+</details>
+
+<details>
+<summary>RustDesk のファイルパネルのしくみ</summary>
+
+- RustDesk は、ログインでファイル転送を求める別の接続でファイルを運びます。パネルは画面セッションの下に子セッションを求めます。接続先とアカウントは同じで、チケットと SSH のチャネルは専用です。サイトの上限には数えず、「ライブセッション」にも出ず、webhook も送りません。1 つの画面につき最大 2 本で、もう 1 本開くと最も古いものが閉じます（再読み込みのときは一瞬重なります）。画面が終わると一緒に終わります。
+- 1 つの RustDesk エンジンの中では、映像を受け取れるのはいちばん上のセッションだけなので、そこでファイルのセッションを開くと画面が止まってしまいました。そこでパネルは、同じページの非表示の iframe にエンジンをもう 1 つ読み込み、そのファイル API（`read_remote_dir`、`send_files`、`select_files` + `send_local_files`、`confirm_override_file`、`cancel_job`）を操作します。
+- ファイルを選ぶダイアログはあなたのクリックの中で開く必要があります。保存ダイアログはページ側で開いてそのハンドルを iframe に渡し、アップロードはページ自身のファイル入力やドロップから受け取ります。
+- フォルダーの .zip（タブの中で client-zip で作成、MIT、ストリーミング + ZIP64）：パネルはまずフォルダーを再帰的に一覧し、次に `ReadEmptyDirs` で空のフォルダーを尋ねます。このメッセージは、返事はエンジンが理解できるのに送ることはできないので、パネルが自分で組み立ててエンジンの WebSocket に送ります（古い RustDesk は返事をせず、4 秒たったら空フォルダーなしと見なします）。エンジンのフォルダーのダウンロードは代役のフォルダーハンドルに書き込み、各ファイルが順に zip へ流し込まれます。エンジンは 0 バイトのファイルのハンドルを開かないので、空のファイルとフォルダーは一覧をもとにあとから加えます。
+- フォルダーの削除：隠しファイルも含めて再帰的に一覧し、ファイルを 1 つずつ消してから、空になったフォルダーを消します（RustDesk は空のツリーしか消さないため）。
+- 名前の変更：デバイスは新しい名前を元の親フォルダーにつなげるので、`../` や絶対パスを入れると移動になります。
+- 各操作は、デバイスからその処理の完了またはエラーの返事を待ちます。
+- 監査：ファイルの接続は暗号化されていない（ガードがそうさせています）ので、中継はブラウザーの要求とデバイスの返事を読んで、`rustdesk_file_delete` / `rustdesk_file_rename` の行を書きます。フォルダーの削除は 1 行にまとめ（「deleted folder /x (12 files)」、失敗時は件数と最初のエラーを追加）、単体のファイルと名前の変更はデバイスが答えたあとにそれぞれ 1 行、セッション終了時に返事のなかったものも書き出します。
+
+</details>
+
+<details>
+<summary>コントリビューター向けメモ</summary>
+
+- **表示がいまの形になった理由**：本物の guacd 1.6 と xrdp、x11vnc、Xvnc で測りました。見直す前は、次のような状態でした。
+  - 画面の枠は `100dvh − 15rem` で、スクロールして見える位置にも来ませんでした（いまは `100dvh − 8.5rem`）。
+  - 「ウィンドウに合わせる」は 1:1 が上限で、小さい VNC の画面は大きくなりませんでした。
+  - 「鮮明さ優先」は HiDPI も要求していたため、Retina では x11vnc の 1024×768 が 512×384 で描かれ、xrdp の文字は半分の大きさになりました。
+  - 最大解像度は幅と高さを別々に切り詰めていて（3080×1916 → 2560×1916、形が崩れる）、接続中の `size` は上限を素通りしていました。
+  - ズームのボタンはタッチ端末にしかありませんでした。
+- **音声の自動再生**：guacamole-common-js も RustDesk のエンジンも、ユーザー操作のない WebSocket のメッセージの中で AudioContext を作るので、ブラウザーはそれを suspended のままにします（Safari は必ず）。「接続」のクリックで（最初の await より前に）共有の context を 1 つ作って resume し、guacd のプレーヤーはそれを AudioContext の供給元として使い、RustDesk のエンジンもビューアーが表示されている間は同じものを受け取ります。本物の音（xrdp + pulseaudio-module-xrdp 経由の 440 Hz と、Linux 版 RustDesk 1.5）で、Chromium と WebKit の両方を確認しました。
+- **RustDesk の確認の落とし穴**：エンジンは「安全でない接続」のメッセージボックスを同期的に発火し、そのあとで返事を待つ側を記録します。そのためイベントハンドラーの中で同期的に答えると失われ、接続が止まり、デバイスが 30 秒後に閉じ、統計は「0 B to the device」になります。ビューアーは次の tick で答えます。
+- **RustDesk の解像度（いずれ）**：Web 版エンジンの `change_resolution` は実装されていません（`setByName change_resolution not implemented (phase 2)`）。`Misc.change_resolution` を自前で組み立てて `ReadEmptyDirs` と同じように送れば、RustDesk もウィンドウに追従できます（RustDesk の Windows / Linux X11 側は解像度の変更に対応しています）。
+- **「接続方法の比較」ダイアログ**の比較表はフロントエンドにあります。ここに書いた事実が変わったら、そちらも更新してください。
+- **選ばなかった道**：Telepy 自身が RustDesk の ID / リレーサーバーになるモード（トンネル不要）が #201–#208 で作られ、#212 で取り除かれました。残ったのは、ほかのすべての機能が通るトンネル経由の経路だけです。調査メモは [`rustdesk-id-server.md`](engineering/rustdesk-id-server.md)。データ移行 `2026-10-26-drop-rustdesk-server-devices` で、そのモードが保存していたログインと 2 つのテーブルを削除しました。
+- **テスト**：`tests/desktop_api.rs`（偽の guacd：ハンドシェイク、音声、クリップボード、解像度、権限喪失）、`tests/rustdesk_api.rs`（偽の RustDesk デバイス、ログインガード、ファイルとその監査）、`tests/credentials_api.rs`。本物の RustDesk / guacd を使ったブラウザーでのエンドツーエンドの確認は手作業で、リポジトリには入っていません。
+
+</details>

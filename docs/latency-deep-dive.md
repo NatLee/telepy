@@ -1,104 +1,170 @@
-# Where Does That "ms" Come From? — Telepy's Latency Indicator
+# Where does that "ms" come from?
 
 <p align="center"><b>English</b> | <a href="./latency-deep-dive.zh-TW.md">繁體中文</a> | <a href="./latency-deep-dive.ja.md">日本語</a></p>
 
-> **Update, October 2026:** After the backend was rewritten in Rust, the "Bash probe → Redis → update_ports polling"
-> supply chain described in sections 3, 4 and 5 was replaced by the built-in SSH gateway
-> (those three sections are marked "Django era" and kept as design context). What it looks like now:
->
-> - **Online / offline** is a connection event: when the gateway receives a `tcpip-forward` registration or release, it updates `StatusState` (`monitor/mod.rs`). It no longer samples `ss -tln`.
-> - **Latency**: every 15 seconds (`GATEWAY_PROBE_INTERVAL_SECS`), `Gateway::probe_latency` (`gateway/mod.rs`) opens a
->   forwarded-tcpip channel on every forward and reads the first byte of the device's sshd banner. It is the same measurement with no child processes and no Redis. All probes run in parallel, each with a 4-second timeout.
->   The results go straight into memory through `StatusState::record_probes`.
-> - **The resident broadcaster** is `monitor/runner.rs` (one round every 5 seconds, started from `main.rs`). The debounce and throttle rules are ported unchanged from `update_ports`
->   (`monitor/ports.rs`: `FLAP_THRESHOLD` 2, 5 ms / 6-round keep-alive).
-> - **Not being able to measure is also information**: if the forward is still there but the banner fails to arrive 2 times in a row (`DEGRADED_AFTER`), the tunnel is **degraded** (see Bonus 2 at the end of section 5).
->
-> Sections 1, 2 and 6, which describe the frontend and the ping/pong, are still accurate (file names updated).
-
-> A byte's trip around the world, and how we time it.
-
-That little badge in the Telepy terminal title bar:
+The title bar of the terminal page carries a small latency badge:
 
 ```
 You ●──23ms──● Telepy ●──87ms──● Device   Σ 110ms
 ```
 
-Looks harmless, doesn't it? Behind it sits a whole supply chain that spans the browser, Django, Redis, the SSH container,
-and a "poor man's ping" written in Bash.
-(That was the Django era. Today the middle stops have shrunk into one Rust process and its built-in SSH gateway, but the byte takes the same road.)
+It looks simple. This page explains where each number comes from, how often it is measured, and why Telepy goes to some trouble to make sure it is real.
 
----
-
-## 1. The World Is Cut in Two
+## Two hops, measured separately
 
 ![The terminal's info diagram shows the round trip of each hop](images/en/terminal-flow.png)
 
-End-to-end latency is split into two hops, each measured and owned separately:
+Nothing can time the whole trip in one go: your browser can't reach the device, and the device doesn't know your browser exists. So Telepy times each hop on its own and adds them up at the end (the Σ).
 
 | Hop | What it measures | Measured by | How often |
 |---|---|---|---|
-| You → Telepy | WebSocket RTT between browser and server | Frontend `useTerminalPage` | Every 5 seconds |
-| Telepy → Device | Tunnel RTT between the SSH gateway and the remote device's sshd | Backend `Gateway::probe_latency` (Django era: `probe_latency.sh` in the SSH container) | Every 15 seconds |
+| You → Telepy | WebSocket round trip between your browser and the server | The terminal page, in your browser | Every 5 seconds |
+| Telepy → Device | Round trip through the tunnel to the device's SSH server | The backend's built-in SSH gateway | Every 15 seconds |
 
-Why not measure end to end?
-Because we can't: the browser can't reach the device, and the device doesn't know the browser exists.
-So we do what an accountant does: keep separate books and add them up at the end (Σ).
-Both numbers are **round-trip** RTT, not one-way. Please don't argue with the speed of light about them.
+Both numbers are round-trip times (RTT), not one-way. Added up, they come close to the real round trip between you and your device.
 
----
+## Hop 1: your browser to Telepy
 
-## 2. Hop 1: ping/pong, and Why the Pong Is Binary
-
-Every 5 seconds the frontend throws one line at the terminal WebSocket:
+Every 5 seconds the terminal page sends one line over its WebSocket:
 
 ```json
 { "action": "ping" }
 ```
 
-The backend (`src/backend-api/src/ws/terminal.rs`; in the Django era `tunnels/consumers.py`) answers with a `pong`. Note that it is a **binary frame**, not text.
+The backend answers with `pong` in a binary frame, not a text frame. The page checks how long that took and updates the badge.
 
-This is not engineers being quirky.
-The terminal's `onmessage` has an iron rule:
-> **Every text frame goes into the screen through `term.write()`**, because that is the highway for PTY output.
-If the pong came back as text, a `pong` would appear out of nowhere in your vim every 5 seconds, as if the machine were haunted.
-With binary, the frontend sees "oh, that's not characters, it's a control message", checks its watch, computes `Date.now() - pingSentAt`, updates state, and the screen is left untouched.
+Why binary? The terminal page writes every text frame straight to the screen, because text frames carry the shell's output. A text pong would make the word `pong` appear in your vim every 5 seconds, like a very punctual ghost. A binary frame tells the page "this is a control message, not output", and the screen stays untouched.
 
-One frame type has saved countless code reviews.
+Other control messages on the terminal socket follow the same rule. The message about a shell kept alive after a disconnect, command-rule notices and the list of who is watching are all binary JSON. The page first checks whether a binary frame is exactly `pong`, and only then reads it as JSON.
 
-The "binary = control message" rule was later reused by other features: the `shell` message for kept-alive disconnected sessions, the `command` notices from command rules,
-and the `watchers` message for "who is watching" are all binary JSON. The frontend (`parseTerminalFrame` in `lib/commandRules.ts`) first checks whether the content is exactly `pong`,
-and only then parses it as JSON. Text frames still all go to `term.write()`.
+Two more things worth knowing:
 
-The application-level ping on the other WebSockets (notifications, single-tunnel status, file manager) is answered with the text `{"type":"pong"}`, because there is no xterm to protect there.
-The terminal, file manager and remote browser also have a server-side WebSocket Ping heartbeat (`ws::Heartbeat`, every 20 seconds, dropped after 40 seconds without a reply) that catches connections
-whose peer left without sending a close. That is liveness detection, not a latency measurement.
+- The other WebSockets (notifications, a single tunnel's status, the file manager) answer their ping with the text `{"type":"pong"}`. They have no terminal screen to protect.
+- The server also sends a WebSocket Ping to the terminal, file manager and remote browser every 20 seconds, and closes a connection that stays silent for 40 seconds. That catches browsers that left without saying goodbye. It is a liveness check, not a latency measurement.
 
----
+## Hop 2: Telepy to the device
 
-## 3. Hop 2: The Day the Kernel Lied
+### Why not just ask the kernel?
 
-The most intuitive approach is to ask the kernel: `ss -ti` already reports the RTT of every TCP connection, free and instant.
-That is what we thought at first.
+The obvious shortcut is the kernel: `ss -ti` already reports an RTT for every TCP connection, for free. That was the first idea, too.
 
-Then docker-proxy showed up.
+The trouble starts when docker-proxy or an L4 load balancer sits in front of the server. The device's TCP connection then ends at that proxy, on the same machine, and the kernel confidently reports an RTT of about 0 ms.
 
-When the device's control TCP connection is **terminated** up front by docker-proxy or an L4 load balancer,
-the "peer" the kernel sees is actually the proxy on the same machine. So it confidently reports:
+Meanwhile the device is in a data center hundreds of kilometers away, waving through three layers of NAT. The kernel's number is precise; it just measures the wrong distance.
 
-> RTT ≈ 0ms. This device lives next door!
+### Knock, and read one byte
 
-In reality the device is in a data center hundreds of kilometers away, waving at you through three layers of NAT. Measuring latency with the kernel's RTT
-is like estimating "your house to the train station" from the distance "your house to your front door": a precise measurement of the wrong thing.
+So Telepy measures through the tunnel itself:
 
-### The fix: Active Probe, starring Bash (Django era)
+1. The gateway opens a channel down the device's reverse tunnel, the same kind `ssh -R` opens when someone connects to a forwarded port.
+2. The ssh client on the device connects that channel to the device's own SSH server.
+3. The gateway starts a stopwatch and reads exactly one byte: the first byte of the SSH server's banner (the `S` in `SSH-2.0-...`).
 
-`ssh/custom_scripts/custom-services.d/probe_latency.sh` does it in a rascally but correct way:
+That byte has to travel out through the tunnel and back, so the result is a real network round trip. A proxy can fool the kernel, but it can't conjure up the device's banner. Physics doesn't take bribes.
 
-1. Use `ss -tln` to find all reverse-tunnel ports (the `-R` forwarding ports sshd binds on `127.0.0.1`).
-2. For each port, open a TCP connection directly with Bash's hidden trick `/dev/tcp`. No nc to install, no ICMP;
-   Bash itself is the network tool.
-3. Check the watch with `$EPOCHREALTIME` (microsecond resolution), then **read just 1 byte**.
+That is also why the number stays accurate behind an L4 proxy, or when Docker rewrites the source address: the byte travels inside the tunnel, not over the connection the kernel sees.
+
+The details:
+
+- One round every 15 seconds. The advanced backend variable `GATEWAY_PROBE_INTERVAL_SECS` changes that.
+- All tunnels are probed in parallel, each with a 4-second timeout. A device that has dozed off only costs its own 4 seconds and doesn't hold up the others.
+- The stopwatch reads to 0.1 ms.
+
+Probes only measure. Whether a tunnel is online or offline comes from the tunnel itself: the device registering or releasing its forward. No number of probe timeouts will mark a tunnel offline. Repeated failures do change one thing, though, as the next section explains.
+
+## When nobody answers the knock: Degraded
+
+Sometimes the forward is still there, but the banner never comes back: the device's sshd has stopped, a firewall blocks it, or it hangs. The tunnel looks online, yet nothing can actually get through.
+
+So Telepy counts failed probes for each tunnel. Two failures in a row mark the tunnel Degraded, and one success resets the count. A single failure doesn't count: a busy device occasionally misses the 4-second window, and that's fine.
+
+The tunnel list shows four states:
+
+| State | Shown as | Meaning |
+|---|---|---|
+| Online | Green dot | The tunnel is up and the device's sshd answers through it |
+| Degraded | Amber dot | The tunnel is up, but sshd hasn't answered two probes in a row |
+| Offline | Grey dot | The device connected before, but has no tunnel now |
+| Never connected | Dashed ring | No connection on record |
+
+When a tunnel degrades or recovers:
+
+- The tunnel's Logs page records an "SSH not answering" or "SSH answering again" event.
+- Everyone who can see the tunnel is notified. The list shows the amber dot and the tunnel's open buttons look offline. A degrade also brings a warning toast.
+- Webhooks subscribed to status events hear about it as well, each after its own delay.
+
+"Couldn't measure" is never shown as zero. A tunnel whose probe failed simply has no number, and the badge shows grey bars and `—` instead of a made-up 0 ms. When the gateway isn't running at all, no latency is sent that round.
+
+## Getting the number to your screen
+
+A loop in the backend runs every 5 seconds. It picks up the latest probe results and sends them to the browsers that may see them.
+
+- **Only when it matters:** RTT jitters by a few milliseconds all the time (87, 89, 86, 88…). Re-rendering every page every 5 seconds for that would be a waste, so an update goes out only when a tunnel moved by 5 ms or more, or a tunnel appeared or disappeared. Otherwise the loop stays quiet, but for at most 6 rounds before it sends anyway, so a page that just connected doesn't wait long.
+- **Even when nothing else changed:** latency is sent before the loop's "nothing changed, stop here" check. Otherwise a perfectly stable tunnel would show its first number forever.
+- **Online / offline is debounced:** a tunnel's state has to look different two rounds in a row before the change is announced.
+- **Only your tunnels:** each person gets latency only for tunnels they own or that are shared with them. The latency of other people's tunnels stays private.
+
+The numbers travel two ways:
+
+- The tunnel list gets them over the notification socket, `/ws/notifications/`.
+- The terminal page and the Create Tunnel wizard subscribe to that one tunnel's status socket, `/ws/tunnel_connection/{id}/`, and get its number in real time.
+
+## How the number is drawn
+
+The tunnel list loads once from `GET /api/reverse/server/dashboard`, which returns tunnels, ports and latency in a single request, and then follows the live updates. When no sample is available, `latency` is `{}` and the list simply shows no number. The older `/api/reverse/server/status/latency` endpoint still exists and returns `{"<port>": rtt_ms}`.
+
+Latency is shown as four bars, like a phone's signal:
+
+| Round trip | Bars | Label |
+|---|---|---|
+| Under 60 ms | 4 green | Excellent |
+| 60–150 ms | 3 green | Good |
+| 150–300 ms | 2 amber | Fair |
+| Over 300 ms | 1 red | Poor (worth checking that nobody installed the device on the Moon) |
+| Couldn't measure | Grey bars and `—` | — |
+
+On the terminal page:
+
+- The title-bar badge draws both hops as a path, `You ●──● Telepy ●──● Device`, with dots flowing along the lines. The first hop is this tab's own ping/pong; the second is the tunnel's number from the status socket. Hover or tap it for the per-hop breakdown and the total.
+- The info dialog, "How the terminal works", writes the same two round trips on its "you ─ Telepy" and "Telepy ─ device" lines (the picture at the top of this page).
+
+The remote desktop's stream stats reuse the tunnel latency as one of their segments, too. See [Remote desktop](./remote-desktop.md).
+
+Every number that changes sits in a fixed-width cell with tabular figures, so `72ms` growing into `115ms` doesn't shift the layout.
+
+## The whole trip in five steps
+
+1. Every 15 seconds the gateway knocks down every reverse tunnel and times how long the first byte of the device's SSH banner takes to come back.
+2. The result goes straight into the backend's memory. Two missed knocks in a row mark the tunnel Degraded.
+3. Every 5 seconds a backend loop picks the results up, holds back the boring ones and sends the rest to the people allowed to see them.
+4. Your browser draws the signal bars and the path badge, and times its own hop to the server with ping/pong (binary!).
+5. The two hops added up come close to the real-world distance between you and your device.
+
+The design in one sentence: don't trust hearsay (the kernel, a proxy); trust only the byte that made the whole trip itself.
+
+## Under the hood
+
+These two sections are for people reading the source or curious about the history. Nothing in them changes how Telepy behaves for you.
+
+<details>
+<summary>Names in the code, for contributors</summary>
+
+- The probe is `Gateway::probe_latency`, with a 4-second `PROBE_TIMEOUT` and the interval from `GATEWAY_PROBE_INTERVAL_SECS` (default 15). Results go into `StatusState::record_probes`, which keeps the RTT and the consecutive-failure count per port.
+- A port that couldn't be measured is absent from the latency table, not 0. When the gateway isn't running, `StatusState::latency()` returns `None` and that round isn't broadcast.
+- The broadcast loop is the backend's port monitor (one round every 5 seconds). Its constants: `FLAP_THRESHOLD` 2 (online / offline debounce), a 5 ms change threshold, a 6-round keep-alive, and `DEGRADED_AFTER` 2.
+- Messages: `UPDATE-TUNNEL-LATENCY {latency: {"<port>": rtt_ms}}` on `/ws/notifications/`; `latency_update {tunnel_id, reverse_port, rtt_ms}` on `/ws/tunnel_connection/{id}/`; `UPDATE-TUNNEL-HEALTH {tunnel_id, name, port, health}` for health changes.
+- Health is `online` / `degraded` / `offline` / `never`, modelled on Cloudflare Tunnel. The gateway writes `degraded` / `recovered` events. List items carry `health`, and the frontend merges it with the live port state.
+- On the frontend, the title-bar badge, the signal bars and the info diagram are `TerminalLatencyBadge`, `LatencyIndicator` and `TerminalFlow`. The remote desktop's stream stats call the tunnel segment `tunnel_ms`.
+- Ports are always string keys in these payloads. See the int-key story below for why.
+
+</details>
+
+<details>
+<summary>The Django-era version</summary>
+
+Before the backend was rewritten in Rust (October 2026), the same idea took more moving parts: a Bash script in the SSH container, Redis in the middle, and a Django command doing the broadcasting. The measurement itself was the same.
+
+**The probe:** the script used `ss -tln` to find the reverse-tunnel ports sshd had bound on `127.0.0.1`. For each one it opened a TCP connection with Bash's built-in `/dev/tcp` (no nc, no ICMP), took the time with `$EPOCHREALTIME` (microsecond resolution) and read one byte:
 
 ```bash
 s=$EPOCHREALTIME
@@ -106,129 +172,21 @@ exec 3<>/dev/tcp/127.0.0.1/$port
 IFS= read -r -N1 _b <&3        # wait for the first byte of the target device's sshd banner
 e=$EPOCHREALTIME
 ```
-That 1 byte is the banner of the remote device's sshd (the `S` of `SSH-2.0-...`).
-The point is this:
-the connection request travels along the **already established reverse tunnel** to the device, and the banner swims back along the tunnel. One trip out and one trip back is a real network round trip.
 
-docker-proxy can fool the kernel, but it can't conjure the device's banner.
-The byte has to really make the whole trip, and physics doesn't take bribes.
+Probes ran in parallel (`&` + `wait`) with a 4-second timeout each, so the total time was roughly the slowest device, not the sum. The script was deliberately kept apart from the 3-second sampling that tracked port usage, so a slow probe could never hold up the online / offline decision.
 
-### Parallelism: a slow device only slows itself down
-
-Probes are fired in parallel (`&` + `wait`), each with a 4-second timeout. A dead-asleep device only burns its own 4 seconds; it doesn't take the other 20 down with it. Total time ≈ the slowest one, not the sum of all.
-
-That is also why this script is deliberately kept **separate** from the 3-second monitoring script that updates port usage (the update_ports mentioned below): however much the latency probe times out, it must never block the online/offline decision. One nurse takes the pulse and another takes the blood pressure.
-
-### Now: the same trick, with the gateway knocking itself
-
-The Rust gateway is itself the other end of the reverse tunnels, so there is no need to go around through ports on `127.0.0.1` any more. `Gateway::probe_latency`
-(`src/backend-api/src/gateway/mod.rs`) opens a forwarded-tcpip channel directly on every forward, the kind `ssh -R` opens when it receives an outside connection.
-The ssh client on the device connects it to its own sshd, and the probe again **reads just 1 byte**, timed to 0.1 ms.
-
-- Parallel (`join_all`), a 4-second timeout per probe (`PROBE_TIMEOUT`), one round every 15 seconds (`GATEWAY_PROBE_INTERVAL_SECS`).
-- Taking the pulse and taking the blood pressure are still two nurses: online / offline comes from forward register / release events, and no amount of probe timeouts will take a tunnel offline.
-  But consecutive failures make it **degraded** (Bonus 2 in section 5).
-- It stays accurate with an L4 proxy in front, or with Docker rewriting the source address: the byte travels inside the tunnel, not over the TCP connection the kernel sees.
-
----
-
-## 4. Redis: The Handover Counter Between Two Worlds (Django Era)
-
-The script aggregates the results into multiple lines of `port rtt_ms` and overwrites them into Redis in one go:
+**The handover:** the script collected the results as `port rtt_ms` lines and overwrote them in Redis in one go:
 
 ```bash
 cat "$TMPDIR"/* | redis-cli -x SET ss_probe_latency
 ```
 
-There is a small trap on the backend side: this key is written raw by `redis-cli`, **without** the Django cache key prefix, so `cache.get("ss_probe_latency")` only ever returns an honest `None`.
-Our code therefore reads it with a direct redis-py connection (which also saves the cost of spawning a `redis-cli` subprocess every round, as we used to).
+That key was written raw, without the Django cache's key prefix, so `cache.get("ss_probe_latency")` only ever returned `None`. The backend read it over a direct redis-py connection instead, which also saved starting a `redis-cli` subprocess every round.
 
-> Returning `None` when it can't be read is fine, but know that "this round's sample is unavailable" and "latency is 0" are two different things. A system that conflates them will eventually wake you up in the middle of the night.
+**The broadcaster:** `update_ports --loop`, a resident Django management command running every 5 seconds. An earlier version cold-started a whole Django process every 5 seconds. The rules above (latency before the no-change exit, the 5 ms threshold, the 6-round keep-alive, the two routes) come from it unchanged.
 
-**Now:** there is no handover counter. Probe results go straight into memory through `StatusState::record_probes` (`monitor/mod.rs`), and a port that couldn't be measured
-is simply absent from the table (not 0). The distinction between "unavailable" and "0" survives: when the gateway isn't running, `StatusState::latency()` returns `None` and that round isn't broadcast.
+**The int-key incident:** the channel layer serialized messages with msgpack, and newer msgpack versions default to `strict_map_key=True`, which raises `ValueError` on the unpacking side when a map key is an integer. Because channels_redis shares one receive loop per worker, a single latency payload with integer port keys could break every consumer on that worker, including people in the middle of a terminal session. One `str(port)` fixed it.
 
----
+The channel layer is gone now (notifications go through an in-process hub as JSON), but the keys are still strings, because that is what the frontend and JSON expect anyway.
 
-## 5. update_ports --loop: The Resident Broadcaster (Django Era; Now `monitor/runner.rs`)
-
-> **Now:** `monitor::runner::run` is the Rust version of the same broadcaster, one round every 5 seconds. The steps, throttling and two-way broadcast below are carried over as they were,
-> except that step 1 no longer needs to collect from Redis and reads `StatusState` directly.
-
-`update_ports` is a resident Django management command that runs one round every 5 seconds (`--loop` mode; it used to cold-start a whole Django every 5 seconds, which gave the CPU a regular arrhythmic spike).
-
-Each round goes like this:
-1. Read `ss_probe_latency` from Redis and write it into the cache as `ports_latency`.
-2. Broadcast the latency, and deliberately do so **before the "return early if nothing changed" exit**.
-   > Otherwise a tunnel with a stable connection (whose state never changes) would have its latency stuck at the first number forever, a museum exhibit.
-
-### Throttling: not every heartbeat deserves a press release
-
-RTT naturally jitters a few milliseconds: 87, 89, 86, 88... If every round were broadcast, every frontend would re-render every 5 seconds
-for a number nobody can tell apart. So:
-
-- If any port changes by **≥ 5ms**, or a port appears or disappears → broadcast.
-- Otherwise stay silent, but hold back for at most 6 rounds before forcing a broadcast (keep-alive), to look after a frontend that just connected and missed the last train.
-
-### Two broadcast routes
-
-- **Main page**: push latency to every user, with a payload that contains only the ports **that user has permission for** (owner + people it is shared with).
-  Today this is the notification `UPDATE-TUNNEL-LATENCY {latency: {"<port>": rtt_ms}}`, delivered over `/ws/notifications/`.
-  > You can't see the latency of other people's tunnels. That is privacy, and also politeness.
-- **Terminal page**: real-time updates for a single tunnel. In the Django era this was pushed to the web terminal group; now it is the hub's `tunnel_update` →
-  `latency_update {tunnel_id, reverse_port, rtt_ms}` on `/ws/tunnel_connection/{id}/` (both the terminal page and the create wizard subscribe to it).
-
-### Aside: an int as a key takes the whole site down
-
-The ports in the payload must be converted to **string** keys. The channel layer serializes with msgpack, and newer versions default to `strict_map_key=True`: an int as a map key blows up with `ValueError` on the **unpacking side**.
-
-Even better, channels_redis's shared receive loop lets this landmine go off in **any** consumer on the same worker, including innocent users in the middle of a terminal session: everyone disconnected.
-
-> One `str(port)` is the difference between "working fine" and "a paranormal mass-disconnect incident".
-
-There is no channel layer any more (notifications go through the in-process hub, serialized as JSON), but the keys are still strings, because that is what the frontend and JSON expect anyway.
-
-### Bonus 2: Not Being Able to Measure Is Also a Measurement
-
-The Rust version computes one more thing: the forward is still there, but the banner never comes back, because the device's sshd has stopped, is firewalled, or is hung.
-The tunnel looks online but nothing can actually get through. So every round `StatusState::record_probes` records "how many failures in a row" for each port (reset on success),
-and `DEGRADED_AFTER` (2) consecutive failures means **degraded** (`monitor::health`: online / degraded / offline / never, after Cloudflare Tunnel):
-
-- The gateway writes `degraded` / `recovered` events (visible on the tunnel's Logs page).
-- Before the "return early if nothing changed" exit, the runner compares the degraded ports; on a change it pushes `UPDATE-TUNNEL-HEALTH {tunnel_id, name, port, health}` to the people who can see it,
-  and also feeds the webhooks subscribed to status events (each with its own delay timer).
-- List items carry `health`, and the frontend's `lib/tunnelHealth.liveHealth` merges it with the live port state: an amber dot, an open button that looks offline,
-  and a warning toast when a tunnel degrades.
-
-A single failure doesn't count: a device that is occasionally too busy to return the banner within 4 seconds is perfectly normal.
-
----
-
-## 6. Frontend: Dressing the Number
-
-- **Home page** (the tunnel list) uses one REST call (`/api/reverse/server/dashboard`, a single request returning `{tunnels, ports, latency}`; it used to be three parallel requests,
-  one of which was the still-existing `/api/reverse/server/status/latency`) to get a `{port: rtt_ms}` baseline, and after that it is fed entirely by `UPDATE-TUNNEL-LATENCY`.
-  When sampling is unavailable, `latency` is `{}`, and the home page just shows no numbers.
-- **`LatencyIndicator`**: a 4-bar indicator in the style of a phone signal. <60ms is four green bars (excellent), 60–150 three green (good), 150–300 two amber (fair), >300 one red (poor; consider checking whether you deployed the device on the moon). Can't measure? Gray bars plus `—`, never a made-up 0ms.
-- **`TerminalLatencyBadge`**: the two-hop flow path in the terminal page title bar (`TerminalHeader`):
-      `You ●──● Telepy ●──● Device`, with data-flow dots animating along the lines. You → Telepy is this tab's own ping/pong,
-      Telepy → Device comes from the `rtt_ms` on `/ws/tunnel_connection/{id}/`; hover or tap for the per-hop breakdown.
-- **Path diagram**: the terminal page's info dialog (`TerminalFlow`) labels the same two round-trip times on the "you ─ Telepy" and "Telepy ─ device" lines;
-  the remote desktop stream stats ([`remote-desktop.md`](./remote-desktop.md)) also use the tunnel latency measured by the monitor as one segment (`tunnel_ms`).
-- **Health status**: the status dot / label in the list is online (green), degraded (amber), offline (gray) or never (dashed ring); see Bonus 2 in section 5.
-- **Layout-shift OCD**: every number that changes lives in a fixed-width cell with `tabular-nums`.
-  When `72ms` grows into `115ms` the layout doesn't budge. Nothing is more ironic than a latency badge that jumps around because the latency went up.
-
----
-
-## 7. Summary: A Byte's Résumé
-
-1. Every 15 seconds the gateway sends a "knock" down every reverse tunnel (a forwarded-tcpip channel) and starts the stopwatch, waiting for the first byte of the banner to swim back.
-2. The score goes straight into memory (`StatusState`); a port that fails twice in a row is recorded as degraded.
-3. The resident `monitor/runner.rs` collects it every 5 seconds, throttles it, and distributes it through the in-process hub to the people with permission (keys are still strings).
-4. The frontend draws it as signal bars and a flow path, and separately measures the browser-to-server segment with its own ping/pong (binary!).
-5. The two segments added up ≈ the real-world distance between you and your device.
-
-(The Django-era version: step 1 was Bash in the SSH container, step 2 was Redis's `ss_probe_latency`, step 3 was `update_ports` + the channel layer.)
-
-The design philosophy in one sentence: **trust no hearsay (kernel, proxy); trust only the byte that ran the whole way itself.**
+</details>
