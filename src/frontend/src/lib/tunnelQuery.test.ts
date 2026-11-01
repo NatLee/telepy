@@ -161,5 +161,12 @@ test("make me a sandwich (xkcd 149)", () => {
     assert.deepEqual(parseQuery("sudo make me a sandwich").text, []);
     // 只認整句；放在別的詞旁邊就是一般文字。/ Only the whole query counts.
     assert.equal(parseQuery("sandwich").reply, undefined);
+    // 找 Tapi：叫它出來，不篩選。/ Looking for Tapi: calls it, filters nothing.
+    assert.equal(parseQuery("tapi").reply, "tapi");
+    assert.equal(parseQuery("  Where is Tapi?").reply, "tapi");
+    assert.equal(parseQuery("where's tapi").reply, "tapi");
+    assert.deepEqual(parseQuery("tapi").text, []);
+    assert.equal(parseQuery("tapioca").reply, undefined);
+    assert.equal(parseQuery("tapi status:online").reply, undefined);
     assert.equal(parseQuery("sudo make me a sandwich status:online").reply, undefined);
 });

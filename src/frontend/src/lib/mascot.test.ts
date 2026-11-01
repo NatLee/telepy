@@ -81,4 +81,16 @@ test("festive outfits", async () => {
     const bday = dressTapi(MASCOT_POSES.idle, { clip: "#8de6cf", festival: "birthday" });
     assert.ok(bday.sprite[0].includes("Y") && bday.sprite[3].includes("ZZZ"));
     assert.deepEqual(dressTapi(MASCOT_POSES.sideA, { clip: "#8de6cf", festival: "birthday" }).sprite, [...MASCOT_POSES.sideA]);
+
+    // 萬聖節：床單蓋住臉與身體，下擺露出橘色，兩個眼洞，十字照舊；轉過身（沒有臉）就沒有洞。
+    // Halloween: a sheet over the face and body, the orange hem below, two eye holes, clips kept; no face = no holes.
+    const boo = dressTapi(MASCOT_POSES.idle, { clip: "#8de6cf", festival: "halloween" });
+    const top = boo.sprite.slice(0, 19).join("");
+    assert.ok(!/[OSHPTE]/.test(top));
+    assert.equal([...top].filter((c) => c === "K").length, 12);
+    assert.ok(boo.sprite.slice(19).join("").includes("O"));
+    assert.equal([...boo.sprite.join("")].filter((c) => c === "F").length, [...MASCOT_POSES.idle.join("")].filter((c) => c === "F").length);
+    const faceless = MASCOT_POSES.idle.map((r) => r.replace(/[EPTH]/g, "O"));
+    assert.ok(!dressTapi(faceless, { clip: "#8de6cf", festival: "halloween" }).sprite.join("").includes("K"));
+    assert.ok(dressTapi(MASCOT_POSES.sideA, { clip: "#8de6cf", festival: "halloween" }).sprite.join("").includes("K"));
 });

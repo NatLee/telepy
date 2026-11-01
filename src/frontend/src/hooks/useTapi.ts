@@ -20,7 +20,7 @@ function festivalKey(): string {
     const day = now.toDateString();
     if (festivalCache?.day !== day) {
         const f = festivalOn(now);
-        festivalCache = { day, key: f ? (f.kind === "birthday" ? `birthday:${f.age}` : "lunarNewYear") : "" };
+        festivalCache = { day, key: f ? (f.kind === "birthday" ? `birthday:${f.age}` : f.kind) : "" };
     }
     return festivalCache.key;
 }
@@ -29,7 +29,7 @@ const noSubscribe = () => () => {};
 /** 今天的節日（伺服器端 render 時是 null）。/ Today's festival (null while server rendering). */
 export function useFestival(enabled = true): Festival | null {
     const key = useSyncExternalStore(noSubscribe, () => (enabled ? festivalKey() : ""), () => "");
-    if (key === "lunarNewYear") return { kind: "lunarNewYear" };
+    if (key === "lunarNewYear" || key === "halloween") return { kind: key };
     if (key.startsWith("birthday:")) return { kind: "birthday", age: Number(key.slice(9)) };
     return null;
 }
@@ -39,19 +39,21 @@ export interface TapiState extends TapiLook {
     choice: string;
     unlocked: boolean;
     dailyUnlocked: boolean;
+    /** 讓 Tapi 偶爾自己來串門子。/ Let Tapi drop by now and then. */
+    visits: boolean;
     /** 存設定（畫面馬上換；失敗會退回並回 false）。/ Save (shown at once; a failure reverts and resolves false). */
     save: (patch: TapiPatch) => Promise<boolean>;
 }
 
-const EMPTY_PREFS: TapiPrefs = { color: "", daily: false };
+const EMPTY_PREFS: TapiPrefs = { color: "", daily: false, visits: true };
 
 /** 送到 /api/user/settings，回存好的值。/ Posts to /api/user/settings and returns what was stored. */
 async function sendTapi(patch: TapiPatch): Promise<TapiPrefs | null> {
     const res = await apiFetch("/api/user/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
     if (!res.ok) return null;
-    const data = (await res.json().catch(() => null)) as { tapi_color?: unknown; tapi_daily?: unknown } | null;
+    const data = (await res.json().catch(() => null)) as { tapi_color?: unknown; tapi_daily?: unknown; tapi_visits?: unknown } | null;
     if (!data || typeof data.tapi_color !== "string") return null;
-    return { color: data.tapi_color, daily: data.tapi_daily === true };
+    return { color: data.tapi_color, daily: data.tapi_daily === true, visits: data.tapi_visits !== false };
 }
 
 export function useTapi(): TapiState {
@@ -64,6 +66,7 @@ export function useTapi(): TapiState {
         choice: prefs.color,
         unlocked: prefs.color !== "",
         dailyUnlocked: prefs.daily,
+        visits: prefs.visits,
         save,
     };
 }

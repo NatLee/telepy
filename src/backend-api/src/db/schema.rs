@@ -1213,6 +1213,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("user_management_usersettings", "tapi_color", "varchar(16) NOT NULL DEFAULT ''"),
     // 「每天換一個」解鎖了沒（看完片尾名單）。/ Whether "a new colour every day" is unlocked (watched the credits).
     ("user_management_usersettings", "tapi_daily", "bool NOT NULL DEFAULT 0"),
+    // Tapi 偶爾自己來串門子（探頭、節日）；預設開。/ Whether Tapi drops by now and then (peeks, festivals); on by default.
+    ("user_management_usersettings", "tapi_visits", "bool NOT NULL DEFAULT 1"),
     // 網頁終端機 / agent shell 打的指令要不要寫進裝置的 shell 歷史檔（keep = 照常，skip = 不寫；每條隧道可個別覆寫）。
     // Whether web terminal / agent shell commands go into the device's shell history (keep / skip; per-tunnel override).
     ("user_management_usersettings", "shell_history", "varchar(8) NOT NULL DEFAULT 'keep'"),

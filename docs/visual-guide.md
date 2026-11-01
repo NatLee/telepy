@@ -240,6 +240,14 @@ Only the word "Telepy", a moving background and the lines you write, typed out o
 
 ![The discreet sign-in page: the word Telepy, a moving field and typed lines](images/en/discreet-signin.gif)
 
+### The Tapi sign-in page
+
+Find it: **Site settings → Sign-in → Sign-in page look → Tapi** (the sign-in, app connection and CLI pages; the approval page stays plain).
+
+The page becomes a cup of bubble tea with Tapi floating in it, saying your lines in a speech bubble. Tapi watches you type your username, turns around while you type the password, and is visibly startled if you show the password anyway. A wrong password gets a surprised look, a right one a little jump. Click the background and a handful of pearls floats up; poke Tapi and it giggles.
+
+![The Tapi sign-in page: Tapi turned around while the password is typed, pearls rising behind](images/en/tapi-signin.png)
+
 ## Running the server
 
 ### Server health

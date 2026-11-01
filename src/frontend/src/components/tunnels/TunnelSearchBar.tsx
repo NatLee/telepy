@@ -4,8 +4,8 @@
  * Tunnel list search bar: the input (with `status:` / `lastseen:` filters, see lib/tunnelQuery), a menu of filter
  * examples that append to the query, a hint for terms it could not understand, sort and the view toggle.
  */
-import React from "react";
-import { ListFilter, Sandwich, Search, X } from "lucide-react";
+import React, { useEffect } from "react";
+import { Ghost, ListFilter, Sandwich, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
+import { summonTapi } from "@/lib/tapiCameos";
 import { TUNNEL_SORTS, type TunnelSort } from "@/lib/tunnelQuery";
 import type { TranslationKey } from "@/locales/en";
 
@@ -50,8 +51,8 @@ interface TunnelSearchBarProps {
     query: string;
     onQueryChange: (q: string) => void;
     invalid: string[];
-    /** 彩蛋：make me a sandwich 的回答（lib/tunnelQuery）。/ Easter egg reply. */
-    reply?: "okay" | "makeItYourself";
+    /** 彩蛋：make me a sandwich 的回答、找 Tapi（lib/tunnelQuery）。/ Easter egg replies. */
+    reply?: "okay" | "makeItYourself" | "tapi";
     sort: TunnelSort;
     onSortChange: (s: TunnelSort) => void;
     shown: number;
@@ -64,6 +65,11 @@ interface TunnelSearchBarProps {
 
 export function TunnelSearchBar({ query, onQueryChange, invalid, reply, sort, onSortChange, shown, total, viewToggle, groupControls }: TunnelSearchBarProps) {
     const { t } = useI18n();
+    // 搜尋 tapi：叫 Tapi 從畫面底下探頭（每打一次叫一次）。/ Searching for tapi calls it up from the bottom edge (once per search).
+    const lookingForTapi = reply === "tapi";
+    useEffect(() => {
+        if (lookingForTapi) summonTapi("peek");
+    }, [lookingForTapi]);
     const add = (term: string) => {
         const base = query.trim();
         onQueryChange(base ? `${base} ${term}` : term);
@@ -131,7 +137,8 @@ export function TunnelSearchBar({ query, onQueryChange, invalid, reply, sort, on
             {reply && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
                     {reply === "okay" && <Sandwich size={14} aria-hidden />}
-                    {t(reply === "okay" ? "eggs.sandwich.okay" : "eggs.sandwich.makeItYourself")}
+                    {reply === "tapi" && <Ghost size={14} aria-hidden />}
+                    {t(reply === "okay" ? "eggs.sandwich.okay" : reply === "tapi" ? "eggs.search.tapi" : "eggs.sandwich.makeItYourself")}
                 </p>
             )}
             {invalid.length > 0 && (

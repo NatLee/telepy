@@ -108,13 +108,13 @@ pub struct SetupStatus {
 /// 登入頁的樣子（公開）。/ How the sign-in pages look (public).
 #[derive(ToSchema)]
 pub struct SignInPage {
-    /// The sign-in page: standard | discreet
+    /// The sign-in page: standard | discreet | tapi
     #[schema(example = "discreet")]
     pub style: String,
-    /// The OAuth (app connection) sign-in page: standard | discreet
+    /// The OAuth (app connection) sign-in page: standard | discreet | tapi
     #[schema(example = "standard")]
     pub oauth_style: String,
-    /// The page `telepy login` (the CLI's browser sign-in) shows a signed-out browser: standard | discreet
+    /// The page `telepy login` (the CLI's browser sign-in) shows a signed-out browser: standard | discreet | tapi
     #[schema(example = "discreet")]
     pub cli_style: String,
     /// The approval (consent) page `/oauth/authorize`, and the page `telepy login` shows once signed in: standard | discreet
@@ -193,6 +193,8 @@ pub struct UserProfile {
     pub tapi_color: String,
     /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
     pub tapi_daily: bool,
+    /// Tapi 偶爾自己來串門子（網頁的探頭與節日；預設 true）。/ Tapi drops by now and then (the web's peeks and festivals; default true).
+    pub tapi_visits: bool,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
     /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
@@ -1422,6 +1424,8 @@ pub struct UserSettings {
     pub tapi_color: String,
     /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
     pub tapi_daily: bool,
+    /// Tapi 偶爾自己來串門子（網頁的探頭與節日；預設 true）。/ Tapi drops by now and then (the web's peeks and festivals; default true).
+    pub tapi_visits: bool,
     /// keep = commands typed in Telepy's shells (web terminal, your agents' shells) go into the device's shell
     /// history as usual; skip = Telepy turns the history file off in each new shell (per-tunnel override:
     /// `/api/reverse/server/{id}/shell-history`)
@@ -1466,6 +1470,8 @@ pub struct UserSettingsPatch {
     pub tapi_color: Option<String>,
     /// 解鎖「每天換一個」（只能是 true）。/ Unlock "daily" (true only).
     pub tapi_daily: Option<bool>,
+    /// 讓 Tapi 偶爾自己來串門子。/ Let Tapi drop by now and then.
+    pub tapi_visits: Option<bool>,
     /// keep | skip
     #[schema(example = "skip")]
     pub shell_history: Option<String>,

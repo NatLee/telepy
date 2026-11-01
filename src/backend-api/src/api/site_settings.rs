@@ -76,9 +76,9 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard Limit", description: "剪貼簿最多能開到哪個方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。每個人在桌面頁或偏好設定裡自己選方向，實際用的是兩者較窄的那個；RDP / VNC 由伺服器（guacd）把關，RustDesk 由瀏覽器裡的核心套用。下次開桌面時生效。" },
     FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "Telepy 向遠端要的桌面大小上限（長邊，像素，640–16384）。瀏覽器視窗或選的固定大小比較大時，等比縮到這個值，畫面仍塞滿視窗、在瀏覽器裡放大。適用 RDP 與會跟著改大小的 VNC；其他 VNC 與 RustDesk 維持遠端自己的解析度。對新開的 session 生效。" },
     FieldMeta { name: "desktop_file_transfer", kind: Kind::Bool, label: "Remote Desktop File Transfer (RustDesk)", description: "允許在網頁內的 RustDesk 連線裡上傳 / 下載檔案（桌面頁的「檔案」面板）。關閉後面板不出現，中繼也會拒絕 RustDesk 的檔案傳輸登入。RDP / VNC 不經這裡傳檔。下次開面板時生效。" },
-    FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面。變更後立即生效。" },
-    FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
-    FieldMeta { name: "signin_cli_style", kind: Kind::Str(16), label: "CLI sign-in page look", description: "在終端機打 telepy login、瀏覽器還沒登入時看到的那一頁:standard = 跟應用程式連接頁一樣的流程與權限;discreet = 同樣的低調畫面,只寫 telepy CLI 與它從哪台電腦登入(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
+    FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面;tapi = 吉祥物 Tapi 在一杯珍奶裡陪你登入(會對表單有反應),不列產品介紹。變更後立即生效。" },
+    FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出);tapi = Tapi 版畫面,卡片上照樣列出應用程式、回到哪裡與權限。變更後立即生效。" },
+    FieldMeta { name: "signin_cli_style", kind: Kind::Str(16), label: "CLI sign-in page look", description: "在終端機打 telepy login、瀏覽器還沒登入時看到的那一頁:standard = 跟應用程式連接頁一樣的流程與權限;discreet = 同樣的低調畫面,只寫 telepy CLI 與它從哪台電腦登入(權限仍會在登入後的同意頁列出);tapi = Tapi 版畫面,卡片上照樣列出 CLI 與權限。變更後立即生效。" },
     FieldMeta { name: "signin_consent_style", kind: Kind::Str(16), label: "Approval page look", description: "登入後允許 MCP 應用程式或 telepy login 的授權頁(/oauth/authorize):standard = 連接流程面板與步驟;discreet = 只寫 Telepy 的低調外框。兩種都列出應用程式、導回哪裡、權限與通道。telepy login 登入完成後顯示的那一頁也跟著它。變更後立即生效。" },
     FieldMeta { name: "client_ip_hops", kind: Kind::Str(8), label: "Trusted proxy hops", description: "How Telepy finds a visitor's address in X-Forwarded-For. auto = every internal address at the right end is a proxy (Traefik, a Nginx Proxy Manager in front) and the first public one is the visitor; a number from 0 to 10 = skip exactly that many entries from the right, Traefik included (1 = Traefik only, 2 = plus a TLS proxy or load balancer with a public address). Too high a number lets visitors choose their own address. Applies at once. TRUSTED_PROXY_HOPS in .env takes over." },
     FieldMeta { name: "client_ip_header", kind: Kind::Opt(64), label: "Client address header", description: "Take the visitor's address from this header instead (for example CF-Connecting-IP or X-Real-IP). Only set it when the proxy in front always overwrites the header, otherwise visitors can choose their own address. Blank = not used. Applies at once. CLIENT_IP_HEADER in .env takes over." },
@@ -304,8 +304,10 @@ pub fn normalize_domains(raw: &str, max: usize) -> Result<String, String> {
     Ok(joined)
 }
 
-/// 登入頁的兩種樣子。/ The two sign-in page looks.
-pub const SIGNIN_STYLES: [&str; 2] = ["standard", "discreet"];
+/// 登入頁（一般 / 應用程式 / CLI）的三種樣子。/ The three looks of the sign-in pages (sign-in, app, CLI).
+pub const SIGNIN_STYLES: [&str; 3] = ["standard", "discreet", "tapi"];
+/// 授權頁只有兩種（Tapi 版只給登入頁：授權頁要看清楚權限）。/ The approval page has two (the Tapi look is for sign-in pages only).
+pub const CONSENT_STYLES: [&str; 2] = ["standard", "discreet"];
 /// 低調登入頁的句子：一行一句，最多幾句、每句幾個字。/ The discreet page's lines: how many, and characters per line.
 const SIGNIN_MESSAGE_LINES: usize = 6;
 const SIGNIN_LINE_MAX: usize = 80;
@@ -418,8 +420,11 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
             Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
         }
-        ("signin_page_style" | "signin_oauth_style" | "signin_cli_style" | "signin_consent_style", SettingValue::Str(s)) if !SIGNIN_STYLES.contains(&s.as_str()) => {
+        ("signin_page_style" | "signin_oauth_style" | "signin_cli_style", SettingValue::Str(s)) if !SIGNIN_STYLES.contains(&s.as_str()) => {
             Err(ApiError::field(name, format!("Must be one of: {}.", SIGNIN_STYLES.join(", "))))
+        }
+        ("signin_consent_style", SettingValue::Str(s)) if !CONSENT_STYLES.contains(&s.as_str()) => {
+            Err(ApiError::field(name, format!("Must be one of: {}.", CONSENT_STYLES.join(", "))))
         }
         ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
         ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),

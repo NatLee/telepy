@@ -14,6 +14,7 @@ import { Clapperboard, ExternalLink, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/Toast";
 import { DisclaimerButton } from "@/components/brand/Disclaimer";
 import { Tapi } from "@/components/brand/Tapi";
@@ -223,6 +224,17 @@ function YourTapi() {
                     {tapi.choice === DAILY ? t("about.tapiDailyHint") : t("about.tapiHint")}
                     {!tapi.dailyUnlocked && <span className="block">{t("about.tapiDailyLocked")}</span>}
                 </p>
+                {/* 讓 Tapi 偶爾自己來串門子（探頭、節日）；自己叫的（搜尋、Konami）照樣來。/ Unprompted visits; asked ones still come. */}
+                <div className="space-y-1 pt-1">
+                    <Switch
+                        size="sm"
+                        checked={tapi.visits}
+                        onCheckedChange={(on) => void tapi.save({ tapi_visits: on }).then((ok) => !ok && showError(t("about.tapiSaveFailed")))}
+                    >
+                        <span className="text-sm text-foreground">{t("about.tapiVisits")}</span>
+                    </Switch>
+                    <p className="text-xs leading-relaxed text-muted-foreground">{t("about.tapiVisitsHint")}</p>
+                </div>
             </div>
         </div>
     );

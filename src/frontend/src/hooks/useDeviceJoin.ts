@@ -12,6 +12,7 @@ import { useNotificationHandlers, useTunnelConnectionWebSocket } from "@/lib/web
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificationActions";
 import { useI18n } from "@/lib/i18n";
 import type { JoinFacts, JoinPhase, JoinTransport } from "@/lib/joinScript";
+import { summonTapi } from "@/lib/tapiCameos";
 
 export type { JoinPhase } from "@/lib/joinScript";
 
@@ -114,6 +115,11 @@ export function useDeviceJoin() {
     // 進行中：每 2 秒查一次，倒數每秒更新。/ While in progress: poll every 2 s and tick the countdown.
     const ticketId = ticket?.id ?? null;
     const finished = !ticket || expired || DONE.includes(ticket.phase);
+    // 驗證成功：Tapi 出來恭喜一次（一個瀏覽器一次、找到 Tapi 之後才有）。/ Verified: Tapi cheers once.
+    const verified = ticket?.phase === "verified";
+    useEffect(() => {
+        if (verified) summonTapi("tunnelUp");
+    }, [verified]);
     useEffect(() => {
         if (!ticketId || finished) return;
         const poll = setInterval(() => void refresh(ticketId), 2000);

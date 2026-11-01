@@ -212,7 +212,7 @@ export function clipHex(name: ClipColor): string {
     return CLIP_COLORS.find(([n]) => n === name)?.[1] ?? CLIP_COLORS[0][1];
 }
 
-export type TapiFestival = "lunarNewYear" | "birthday" | null;
+export type TapiFestival = "lunarNewYear" | "birthday" | "halloween" | null;
 
 export interface TapiLook {
     /** 十字髮夾的顏色。/ The clip colour. */
@@ -221,16 +221,24 @@ export interface TapiLook {
     festival: TapiFestival;
 }
 
-// 節日換裝用的顏色（終端機沒有，所以不在 mascot.rs）。/ Festive colours (web only, so not in mascot.rs).
-const FESTIVE: Record<string, string> = { R: "#e8433a", Y: "#ffd36b", Z: "#ff7aa8", Q: "#ffffff" };
+// 節日換裝用的顏色（終端機沒有，所以不在 mascot.rs）；W / G / K = 萬聖節的床單、床單陰影、眼洞。
+// Festive colours (web only, so not in mascot.rs); W / G / K = the Halloween sheet, its shade and the eye holes.
+const FESTIVE: Record<string, string> = { R: "#e8433a", Y: "#ffd36b", Z: "#ff7aa8", Q: "#ffffff", W: "#f6f2ea", G: "#d8cfc1", K: "#2a1d1f" };
 // 生日的派對帽（放在兩個十字中間、頭頂上）。/ The birthday party hat, on the head between the clips.
 const PARTY_HAT = ["...Y...", "..DZD..", "..DQD..", ".DZZZD.", ".DQQQD.", "DZZZZZD"];
 const HAT_AT = { x: 9, y: 0 };
+// 萬聖節：幽靈扮成幽靈——披一條床單，挖兩個眼洞，下擺露出一截橘色（看得出是 Tapi 躲在裡面），十字從床單上露出來。
+// Halloween: the ghost dresses up as a ghost — a bedsheet with two eye holes, the orange hem showing below (so it is
+// clearly Tapi under there), the clips poking through. Holes and hem row per sprite width (front 26, side 12).
+const SHEET = {
+    front: { hem: 19, holes: [8, 9, 15, 16].flatMap((x) => [11, 12, 13].map((y) => [x, y] as const)) },
+    side: { hem: 9, holes: [2, 3, 6, 7].map((x) => [x, 5] as const) },
+};
 
 /**
- * 依外觀換色、換裝：十字 → 選的顏色；新年 = 紅十字、金色中心；生日 = 戴派對帽（只套在正面的大圖）。
+ * 依外觀換色、換裝：十字 → 選的顏色；新年 = 紅十字、金色中心；生日 = 戴派對帽（只套在正面的大圖）；萬聖節 = 披床單。
  * 回傳像素格與這張圖要用的色票。/ Apply a look: clips in the chosen colour; Lunar New Year = red crosses with
- * gold centres; birthday = a party hat (front poses only). Returns the grid and the palette to draw it with.
+ * gold centres; birthday = a party hat (front poses only); Halloween = a bedsheet costume. Returns the grid and the palette to draw it with.
  */
 export function dressTapi(sprite: readonly string[], look: TapiLook): { sprite: string[]; palette: Record<string, string> } {
     const rows = sprite.map((r) => [...r]);
@@ -245,6 +253,19 @@ export function dressTapi(sprite: readonly string[], look: TapiLook): { sprite: 
     }
     if (look.festival === "birthday" && front) {
         PARTY_HAT.forEach((r, j) => [...r].forEach((c, i) => c !== "." && (rows[HAT_AT.y + j][HAT_AT.x + i] = c)));
+    }
+    if (look.festival === "halloween") {
+        const sheet = front ? SHEET.front : SHEET.side;
+        // 轉過身（沒有臉）就沒有眼洞。/ Turned around (no face) = no eye holes.
+        const face = rows.some((r) => r.includes("E"));
+        rows.forEach((r, y) => {
+            if (y >= sheet.hem) return;
+            r.forEach((c, x) => {
+                if ("OHPTE".includes(c)) r[x] = "W";
+                else if (c === "S") r[x] = "G";
+            });
+        });
+        if (face) for (const [x, y] of sheet.holes) if (rows[y]?.[x] && rows[y][x] !== ".") rows[y][x] = "K";
     }
     return { sprite: rows.map((r) => r.join("")), palette };
 }

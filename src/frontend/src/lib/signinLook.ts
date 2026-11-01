@@ -9,7 +9,8 @@
  */
 import { cliHost } from "./cliClient.ts";
 
-export type SignInStyle = "standard" | "discreet";
+/** 一般 / 低調 / Tapi 版（Tapi 版只給三個登入頁，授權頁沒有）。/ Standard / discreet / Tapi (the Tapi look is for the three sign-in pages, not the approval page). */
+export type SignInStyle = "standard" | "discreet" | "tapi";
 /**
  * 哪一頁：一般登入頁 / 應用程式（MCP）的 OAuth 登入頁 / `telepy login` 打開的那一頁（同一個 /oauth/login，要求的 app 是 CLI）/
  * 登入後的授權（同意）頁 /oauth/authorize（應用程式與 CLI 共用；CLI 登入完成的那一頁也跟著它）。
@@ -39,7 +40,9 @@ export interface SignInLook {
     publicUrl: string | null;
 }
 
-export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
+export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet", "tapi"];
+/** 授權頁能選的樣子。/ The looks the approval page offers. */
+export const CONSENT_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
 export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null, webHost: null, sshHost: null, publicUrl: null };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
@@ -47,7 +50,12 @@ export const LINE_MAX = 80;
 /** 整段的上限（永遠不會比逐行的限制先碰到）。/ The whole text (never reached before the per-line limits). */
 export const MESSAGE_MAX = MESSAGE_LINES * (LINE_MAX + 1);
 
-const asStyle = (v: unknown): SignInStyle | null => (v === "standard" || v === "discreet" ? v : null);
+const asStyle = (v: unknown): SignInStyle | null => (v === "standard" || v === "discreet" || v === "tapi" ? v : null);
+/** 授權頁沒有 Tapi 版：萬一收到就當一般。/ The approval page has no Tapi look: treat one as standard. */
+const asConsentStyle = (v: unknown): SignInStyle | null => {
+    const style = asStyle(v);
+    return style === "tapi" ? "standard" : style;
+};
 
 /**
  * 公開端點（`{style, oauth_style, cli_style, consent_style, message}`）或快取（同名的 camelCase）→ SignInLook；
@@ -62,7 +70,7 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
     const oauthStyle = asStyle(o.oauth_style ?? o.oauthStyle);
     if (!style || !oauthStyle) return null;
     const cliStyle = asStyle(o.cli_style ?? o.cliStyle) ?? oauthStyle;
-    const consentStyle = asStyle(o.consent_style ?? o.consentStyle) ?? "standard";
+    const consentStyle = asConsentStyle(o.consent_style ?? o.consentStyle) ?? "standard";
     const google = o.google_client_id !== undefined ? o.google_client_id : o.googleClientId;
     return {
         style,
@@ -111,7 +119,7 @@ export function effectiveGoogleClientId(look: SignInLook | null, buildTime: stri
 export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle =>
     page === "consent" ? look.consentStyle : page === "cli" ? look.cliStyle : page === "oauth" ? look.oauthStyle : look.style;
 
-/** 四頁都用一般樣子（低調的句子用不到）。/ Every page uses the standard look (the discreet lines are unused). */
+/** 四頁都用一般樣子（句子只有低調與 Tapi 版會用到）。/ Every page uses the standard look (only the discreet and Tapi looks use the lines). */
 export const allStandard = (look: SignInLook) => (["signin", "oauth", "cli", "consent"] as const).every((p) => styleOf(look, p) === "standard");
 
 /** OAuth 登入頁上要求的 app → 用哪一頁的設定。/ The app asking on the OAuth page → which page's setting applies. */

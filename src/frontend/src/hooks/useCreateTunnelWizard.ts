@@ -15,6 +15,7 @@ import { useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { useI18n } from "@/lib/i18n";
 import { tunnelNameProblem } from "@/lib/tunnelName";
 import { useTunnelNameError } from "@/components/tunnels/TunnelNameHelp";
+import { summonTapi } from "@/lib/tapiCameos";
 import {
     bareKey,
     checkPublicKey,
@@ -438,6 +439,8 @@ export function useCreateTunnelWizard() {
             const data = await readJson<{ shell?: string }>(res);
             if (res.ok) {
                 setChecks((c) => ({ ...c, [username]: { state: "ok", shell: data?.shell } }));
+                // 通道通了：Tapi 出來恭喜一次（一個瀏覽器一次、找到 Tapi 之後才有）。/ The tunnel works: Tapi cheers once.
+                summonTapi("tunnelUp");
             } else {
                 const message = responseError(res, data, t("wizard.verify.loginFailed"));
                 setChecks((c) => ({ ...c, [username]: { state: "fail", failure: classifyLoginError(message), message } }));
