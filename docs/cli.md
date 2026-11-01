@@ -2,7 +2,7 @@
 
 <p align="center"><b>English</b> | <a href="./cli.zh-TW.md">繁體中文</a> | <a href="./cli.ja.md">日本語</a></p>
 
-`telepy` is Telepy in your terminal. It lists your tunnels, takes `ssh`, `scp` and `sftp` straight to a device, runs a command on one device or on every device with a label, copies files, shows and ends live sessions, plays terminal recordings and runs toolbox snippets.
+`telepy` is Telepy in your terminal. It lists your tunnels, takes `ssh`, `scp` and `sftp` straight to a device, runs a command on one device or on every device with a label, copies files, shows and ends live sessions, plays terminal recordings and runs toolbox snippets. It's for anyone who finds opening a web page a lot of ceremony for one `uptime`.
 
 Scripts and CI use the same commands. Instead of a browser sign-in, they carry a **personal API token**.
 

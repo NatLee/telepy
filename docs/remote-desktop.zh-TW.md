@@ -109,7 +109,7 @@ RDP 連線時用 `security=any` 和 `ignore-cert=true`。如果那台 Windows �
 
 ## 多螢幕只看其中一個（VNC）
 
-VNC 伺服器會把所有螢幕拼成一張大畫面送過來（macOS 螢幕共享、x11vnc、TightVNC 都是這樣），而 guacd 沒辦法挑螢幕。所以 Telepy 改在瀏覽器裡裁切，滑鼠點下去的位置一樣準。
+VNC 伺服器會把所有螢幕拼成一張大畫面送過來（macOS 螢幕共享、x11vnc、TightVNC 都是這樣）。三個螢幕的話，就是一張超寬、字超小的桌面。guacd 又沒辦法挑螢幕，所以 Telepy 改在瀏覽器裡裁切，滑鼠點下去的位置一樣準。
 
 工具列的「螢幕」選單有：
 
@@ -137,7 +137,7 @@ RDP / VNC 用「貼上」按鈕送文字。RustDesk 則是分頁在前景時，�
 
 ## 聲音
 
-RDP 和 RustDesk 有聲音。VNC 永遠沒有：這個協定只認得畫面和輸入。macOS 的螢幕共享就是 VNC，所以想聽 Mac 的聲音請用 RustDesk。
+RDP 和 RustDesk 有聲音。VNC 永遠沒有：這個協定只認得畫面和輸入，天生就是一部默片。macOS 的螢幕共享就是 VNC，所以想聽 Mac 的聲音請用 RustDesk。
 
 在連線表單打開「聲音」。預設是關的，因為聲音多吃頻寬，選擇也存在帳號上。
 

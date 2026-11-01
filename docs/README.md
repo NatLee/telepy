@@ -30,7 +30,7 @@ New here? The [project README](../README.md) covers what Telepy is and how to in
 
 ## Engineering notes
 
-Some notes are kept the way they were written, in Traditional Chinese only:
+Some notes are kept the way they were written, in Traditional Chinese only, including the parts we got wrong:
 
 - [Rust backend migration plan](./engineering/rust-migration-plan.md)
 - RustDesk research: [the first spike](./engineering/rustdesk-spike.md) and [Telepy as an ID / relay server](./engineering/rustdesk-id-server.md)

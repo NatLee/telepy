@@ -326,7 +326,7 @@ Before this, Dropbear simply closed the channel and Telepy reported `the script 
 
 ## 8. When it fails
 
-The script stops with a message that says what to do next. Here are the usual ones, quoted the way the script prints them, by when they happen.
+The script stops with a message that says what to do next. It would rather stop and explain than leave you a half-installed service and a mystery. Here are the usual ones, quoted the way the script prints them, by when they happen.
 
 ### Before the token is used
 
