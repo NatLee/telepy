@@ -270,6 +270,15 @@ pub struct SshSpec {
     /// `user@host`
     pub dest: String,
     pub proxy_command: Option<String>,
+    /// 舊指令的 `ServerAliveInterval` / `TCPKeepAlive`（新服務照用）：一鍵加入在 ppoll 有問題的路由器（OpenWrt #12574，
+    /// 例如 GL-AR750S）上裝的是相容模式 `ServerAliveInterval=0` + `TCPKeepAlive=yes`，換成 30 秒那台的 ssh 會在交換金鑰時
+    /// 就逾時。/ The old command's `ServerAliveInterval` / `TCPKeepAlive`, kept by the new service: on routers whose ppoll
+    /// is broken (OpenWrt #12574, e.g. the GL-AR750S) the join installs compat mode `ServerAliveInterval=0` +
+    /// `TCPKeepAlive=yes`, and 30 s makes their ssh time out during the key exchange.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_alive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp_keep_alive: Option<String>,
     /// 不是 ssh，是 `telepy-carrier tunnel`（內建的 SSH client）：它自己的連線設定。/ Not ssh but the built-in client
     /// (`telepy-carrier tunnel`): its own connection settings.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,6 +391,8 @@ fn parse_builtin(program: &str, args: &[&str]) -> Option<SshSpec> {
         target: target.unwrap_or_else(|| "127.0.0.1:22".into()),
         dest: format!("{user}@{host}"),
         proxy_command: None,
+        server_alive: None,
+        tcp_keep_alive: None,
         builtin: Some(b),
     })
 }
@@ -401,6 +412,7 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
         return None;
     }
     let (mut key, mut port, mut target, mut dest, mut proxy, mut login) = (None, None, None, None, None, None);
+    let (mut server_alive, mut tcp_keep_alive) = (None, None);
     let mut i = 1;
     while i < words.len() {
         let w = words[i];
@@ -437,6 +449,9 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
                         "port" => port = Some(v.parse::<u16>().ok()?),
                         "identityfile" => key = Some(v.to_string()),
                         "user" => login = Some(v.to_string()),
+                        // 只收認得的值：它們會寫進服務檔。/ Only known values: they end up in the service file.
+                        "serveraliveinterval" if !v.is_empty() && v.len() <= 6 && v.bytes().all(|b| b.is_ascii_digit()) => server_alive = Some(v.to_string()),
+                        "tcpkeepalive" if matches!(v.to_ascii_lowercase().as_str(), "yes" | "no") => tcp_keep_alive = Some(v.to_ascii_lowercase()),
                         "proxycommand" => {
                             // 指令裡的空白在 /proc 裡分不出來：接著讀到下一個選項為止（最後一個字是目的地）。
                             // Spaces inside it are lost in /proc: read on until the next option (the last word is the destination).
@@ -463,7 +478,7 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
     if !dest.contains('@') {
         dest = format!("{}@{dest}", login?);
     }
-    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy, builtin: None })
+    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy, server_alive, tcp_keep_alive, builtin: None })
 }
 
 /// 為什麼不能自動改名（前端用 `deviceInstall.block.<code>` 翻譯）。/ Why an automatic rename is not possible.
@@ -653,7 +668,14 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
         return builtin_args(plan, b, names, pinned);
     }
     let ssh_dir = format!("{}/.ssh", plan.home);
-    let mut a: Vec<String> = ["-NT", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "BatchMode=yes"].map(String::from).to_vec();
+    // keepalive 照舊（路由器的相容模式不能丟）；舊指令沒寫就是 30 秒。/ Keepalive as before (a router's compat mode must
+    // survive); 30 s when the old command did not say.
+    let alive = plan.spec.server_alive.as_deref().unwrap_or("30");
+    let mut a: Vec<String> = vec!["-NT".into(), "-o".into(), "ExitOnForwardFailure=yes".into(), "-o".into(), format!("ServerAliveInterval={alive}"), "-o".into(), "ServerAliveCountMax=3".into()];
+    if let Some(k) = &plan.spec.tcp_keep_alive {
+        a.extend(["-o".into(), format!("TCPKeepAlive={k}")]);
+    }
+    a.extend(["-o".into(), "BatchMode=yes".into()]);
     if pinned {
         a.extend(["-o".into(), "StrictHostKeyChecking=yes".into(), "-o".into(), format!("UserKnownHostsFile={ssh_dir}/{}", names.known_hosts()), "-o".into(), format!("HostKeyAlias={alias}")]);
     } else {
@@ -1045,6 +1067,13 @@ mod tests {
         // 一鍵加入走 WebSocket 時的 ProxyCommand。/ The join's WebSocket ProxyCommand.
         let s = parse_ssh("ssh -NT -o ProxyCommand=/home/pi/.ssh/telepy-ws-12.sh -i /home/pi/.ssh/telepy_tunnel_ed25519 -p 443 -R 0:localhost:22 telepy@h").unwrap();
         assert_eq!(s.proxy_command.as_deref(), Some("/home/pi/.ssh/telepy-ws-12.sh"));
+        // keepalive：讀得懂的值才留（會寫進服務檔），沒寫 = 沒有。/ Keepalive: only known values are kept (they go into
+        // the service file); unset = none.
+        let s = parse_ssh("ssh -NT -o ServerAliveInterval=0 -o TCPKeepAlive=Yes -R 0:localhost:22 telepy@h").unwrap();
+        assert_eq!((s.server_alive.as_deref(), s.tcp_keep_alive.as_deref()), (Some("0"), Some("yes")));
+        let s = parse_ssh("ssh -o ServerAliveInterval=30;reboot -o TCPKeepAlive=maybe -R 0:localhost:22 telepy@h").unwrap();
+        assert_eq!((s.server_alive, s.tcp_keep_alive), (None, None));
+        assert_eq!((parse_ssh(HDRE).unwrap().server_alive.as_deref(), parse_ssh(HDRE).unwrap().tcp_keep_alive), (Some("30"), None));
         // 不是 ssh、沒有 -R 目標、只有 SOCKS 的 -R。/ Not ssh, no -R target, a dynamic -R.
         assert!(parse_ssh("1 autossh -M 0 -NR 0:localhost:22 telepy@h").is_none());
         assert!(parse_ssh("1 ssh -N telepy@h").is_none());
@@ -1337,6 +1366,10 @@ mod procd_tests {
         p.route = Some(Route { dest: "telepy@telepy-ssh.natlee.info".into(), port: 56767, carrier: Some(RouteCarrier { args: "--tcp telepy-ssh.natlee.info:56767 wss://telepy.natlee.info/ws/gateway/".into(), carrier_url: "https://telepy.natlee.info/api/join/carrier".into(), program: "#!/usr/bin/env python3\n".into() }) });
         let args = ssh_args(&p, &names, "telepy-telepy.natlee.info-56767", true);
         assert!(args.contains(&"telepy@telepy-ssh.natlee.info".to_string()) && args.contains(&"ProxyCommand=/root/.ssh/telepy-q7h3m2ka-ws.sh".to_string()), "{args:?}");
+        // 這台在相容模式（ppoll 壞掉，30 秒會讓 ssh 在交換金鑰時逾時）：新服務照舊，不能換回 30。
+        // This router runs in compat mode (broken ppoll: 30 s times ssh out during the key exchange); the new service keeps it.
+        let compat = |a: &[String]| a.contains(&"ServerAliveInterval=0".to_string()) && a.contains(&"TCPKeepAlive=yes".to_string()) && !a.contains(&"ServerAliveInterval=30".to_string());
+        assert!(compat(&args), "{args:?}");
         let (path, init) = service_file(&p, &names, &args);
         assert_eq!(path, "/etc/init.d/telepy-q7h3m2ka");
         assert!(init.starts_with("#!/bin/sh /etc/rc.common\n") && init.contains("USE_PROCD=1\nSTART=99") && init.contains("procd_set_param respawn 3600 10 0") && init.contains("procd_set_param env HOME='/root'") && !init.contains("procd_set_param user"), "{init}");
@@ -1348,6 +1381,11 @@ mod procd_tests {
         q.route.as_mut().unwrap().carrier = None;
         let plain = ssh_args(&q, &names, "telepy-telepy.natlee.info-56767", true);
         assert!(!plain.iter().any(|a| a.contains("ProxyCommand")), "{plain:?}");
+        assert!(compat(&plain), "{plain:?}");
+        // 改名也一樣。/ A rename too.
+        let mut r = plan(&router(), &names).unwrap();
+        r.route = None;
+        assert!(compat(&ssh_args(&r, &names, "telepy-telepy.natlee.info-56767", true)));
         let script = install_script(&p, &names, &args, "telepy-telepy.natlee.info-56767 ssh-ed25519 AAAA\n", Some(&plain));
         assert!(script.contains("WS_URL='https://telepy.natlee.info/api/join/carrier'") && script.contains("fetch \"$WS_URL/$WS_TARGET/sha256?soft=1\"") && script.contains("Linux/armv7l|Linux/armv7|Linux/armv8l) WS_TARGET=armv7-unknown-linux-musleabihf ;;"), "{script}");
         assert!(script.contains("$S mv -f \"$WS_TMP/bin\" '/root/.ssh/telepy-q7h3m2ka-ws.bin'") && script.contains("elif PY=$(command -v python3 2>/dev/null); then") && script.contains("put '/root/.ssh/telepy-q7h3m2ka-ws.py'"), "{script}");
