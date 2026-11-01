@@ -270,6 +270,24 @@ pub struct SshSpec {
     /// `user@host`
     pub dest: String,
     pub proxy_command: Option<String>,
+    /// 不是 ssh，是 `telepy-carrier tunnel`（內建的 SSH client）：它自己的連線設定。/ Not ssh but the built-in client
+    /// (`telepy-carrier tunnel`): its own connection settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<Builtin>,
+}
+
+/// `telepy-carrier tunnel` 指令列裡的連線設定（`program` 是那個 binary；金鑰、目標、gateway 在 [`SshSpec`] 共用的欄位）。
+/// The connection settings of a `telepy-carrier tunnel` command line (`program` is the binary; key, target and gateway
+/// sit in the shared [`SshSpec`] fields).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Builtin {
+    /// `--server host:port`：gateway 的 SSH port。/ The gateway's SSH port.
+    pub server: Option<String>,
+    /// `--ws <url>`：網頁 port 的 WebSocket。/ The web port's WebSocket.
+    pub ws: Option<String>,
+    pub proxy: Option<String>,
+    pub known_hosts: Option<String>,
+    pub keepalive: Option<String>,
 }
 
 /// 帶值的短選項（`man ssh`）。/ Short options that take a value.
@@ -292,13 +310,93 @@ fn forward_target(spec: &str) -> Option<String> {
     Some(format!("{host}:{port}"))
 }
 
-/// 讀 `<pid> <args>`（/proc 或 ps 的形式，引號已經沒了）。/ Read a `<pid> <args>` line (quotes already gone).
+/// `ws://host[:port]/…` / `wss://…` 的主機。/ The host of a ws:// or wss:// URL.
+fn ws_host(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("wss://").or_else(|| url.strip_prefix("ws://"))?;
+    let authority = rest.split('/').next()?;
+    let authority = authority.rsplit('@').next()?;
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next()?.to_string(),
+        None => authority.split(':').next()?.to_string(),
+    };
+    (!host.is_empty()).then_some(host)
+}
+
+/// `telepy-carrier tunnel …`（內建的 SSH client）：跟 ssh 一樣讀出金鑰、gateway、轉到哪裡。`--probe` 不是隧道。
+/// `telepy-carrier tunnel …` (the built-in client): key, gateway and target like an ssh line. A `--probe` is no tunnel.
+fn parse_builtin(program: &str, args: &[&str]) -> Option<SshSpec> {
+    let mut b = Builtin::default();
+    let (mut key, mut target, mut user) = (None, None, "telepy".to_string());
+    let mut i = 0;
+    while i < args.len() {
+        let (name, inline) = match args[i].split_once('=') {
+            Some((n, v)) if n.starts_with("--") => (n, Some(v.to_string())),
+            _ => (args[i], None),
+        };
+        let mut value = || -> Option<String> {
+            match &inline {
+                Some(v) => Some(v.clone()),
+                None => {
+                    i += 1;
+                    args.get(i).map(|s| s.to_string())
+                }
+            }
+        };
+        match name {
+            "--identity" | "-i" => key = Some(value()?),
+            "--server" | "--tcp" => b.server = Some(value()?),
+            "--ws" => b.ws = Some(value()?),
+            "--proxy" => b.proxy = Some(value()?),
+            "--known-hosts" => b.known_hosts = Some(value()?),
+            "--keepalive" => b.keepalive = Some(value()?),
+            "--user" => user = value()?,
+            "--forward" => {
+                let v = value()?;
+                // `0:host:port`，或省略遠端號碼的 `host:port`。/ `0:host:port`, or `host:port` without the remote number.
+                target = Some(forward_target(&v).or_else(|| forward_target(&format!("0:{v}")))?);
+            }
+            // `--host-key` 的值在 /proc 裡是兩個字（`type base64`）。/ In /proc a host key is two words.
+            "--host-key" => {
+                let _ = value()?;
+                if inline.is_none() && args.get(i + 1).is_some_and(|w| !w.starts_with('-')) {
+                    i += 1;
+                }
+            }
+            "--probe" | "--help" | "-h" => return None,
+            _ => {}
+        }
+        i += 1;
+    }
+    let host = match &b.server {
+        Some(s) => s.rsplit_once(':').map(|(h, _)| h.trim_start_matches('[').trim_end_matches(']').to_string())?,
+        None => ws_host(b.ws.as_deref()?)?,
+    };
+    let port = match &b.server {
+        Some(s) => Some(s.rsplit_once(':')?.1.parse::<u16>().ok()?),
+        None => None,
+    };
+    Some(SshSpec {
+        program: program.to_string(),
+        key: Some(key?),
+        port,
+        target: target.unwrap_or_else(|| "127.0.0.1:22".into()),
+        dest: format!("{user}@{host}"),
+        proxy_command: None,
+        builtin: Some(b),
+    })
+}
+
+/// 讀 `<pid> <args>`（/proc 或 ps 的形式，引號已經沒了）：ssh，或內建 client 的 `telepy-carrier tunnel`。
+/// Read a `<pid> <args>` line (quotes already gone): ssh, or the built-in client's `telepy-carrier tunnel`.
 pub fn parse_ssh(line: &str) -> Option<SshSpec> {
     let mut words: Vec<&str> = line.split_whitespace().collect();
     if words.first().is_some_and(|w| w.bytes().all(|b| b.is_ascii_digit())) {
         words.remove(0);
     }
     let program = (*words.first()?).to_string();
+    if words.get(1) == Some(&"tunnel") {
+        return parse_builtin(&program, &words[2..]);
+    }
     if base_name(&program) != "ssh" {
         return None;
     }
@@ -365,7 +463,7 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
     if !dest.contains('@') {
         dest = format!("{}@{dest}", login?);
     }
-    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy })
+    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy, builtin: None })
 }
 
 /// 為什麼不能自動改名（前端用 `deviceInstall.block.<code>` 翻譯）。/ Why an automatic rename is not possible.
@@ -441,7 +539,7 @@ impl Plan {
     }
     /// 會裝小程式：換成經小程式的連線，或沿用舊的一鍵加入載具。/ Whether carrier files get installed.
     fn has_carrier(&self) -> bool {
-        self.route_carrier().is_some() || (self.route.is_none() && carrier(self).is_some())
+        self.spec.builtin.is_some() || self.route_carrier().is_some() || (self.route.is_none() && carrier(self).is_some())
     }
 }
 
@@ -529,6 +627,12 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
     if spec.proxy_command.as_deref().is_some_and(|p| p.contains(['\'', '"', '\\', '`', '$', '\n', '<', '>', '&', ';', '|'])) {
         return Err(Blocker::OddCommand);
     }
+    if let Some(b) = &spec.builtin {
+        let words = [&b.server, &b.ws, &b.proxy, &b.known_hosts, &b.keepalive];
+        if words.iter().any(|w| w.as_deref().is_some_and(|w| !safe_word(w))) || !spec.program.starts_with('/') {
+            return Err(Blocker::OddCommand);
+        }
+    }
     let method = services.iter().map(|(m, _, _)| *m).max_by_key(|m| m.rank()).unwrap_or(Method::Loop);
     let (account, sudo) = if method.system() {
         let roots: Vec<&AccountResult> = accounts.iter().filter(|a| platform_of(a).0).collect();
@@ -545,6 +649,9 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
 
 /// 新服務的 ssh 參數（不含程式本身）。/ The new service's ssh arguments (without the program).
 pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<String> {
+    if let Some(b) = &plan.spec.builtin {
+        return builtin_args(plan, b, names, pinned);
+    }
     let ssh_dir = format!("{}/.ssh", plan.home);
     let mut a: Vec<String> = ["-NT", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "BatchMode=yes"].map(String::from).to_vec();
     if pinned {
@@ -581,6 +688,65 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
     a
 }
 
+/// 內建 client 的新參數（`tunnel …`，程式本身是新名稱的那個 binary）：同一把金鑰、同一個目標；換連線方式時照新的
+/// 路線（只有 SSH 的 port / 只有網頁 port / 兩者都給 = 自動），否則照舊。
+/// The built-in client's new arguments (`tunnel …`; the program is the binary under the new name): the same key and
+/// target; when switching, the new route (the SSH port / the web port / both = automatic), else as before.
+fn builtin_args(plan: &Plan, b: &Builtin, names: &Names, pinned: bool) -> Vec<String> {
+    let ssh_dir = format!("{}/.ssh", plan.home);
+    let key = plan.spec.key.as_deref().unwrap_or_default();
+    let key = match key.strip_prefix("~/") {
+        Some(rest) => format!("{}/{rest}", plan.home),
+        None => key.to_string(),
+    };
+    let known = if pinned || b.known_hosts.is_none() { format!("{ssh_dir}/{}", names.known_hosts()) } else { b.known_hosts.clone().unwrap_or_default() };
+    let dest = plan.route.as_ref().map_or(plan.spec.dest.as_str(), |r| r.dest.as_str());
+    let (user, host) = dest.split_once('@').unwrap_or(("telepy", dest));
+    let mut a: Vec<String> = ["tunnel", "--identity", &key, "--known-hosts", &known, "--user", user].map(String::from).to_vec();
+    match &plan.route {
+        Some(r) => {
+            let server = format!("{host}:{}", r.port);
+            match &r.carrier {
+                None => a.extend(["--server".into(), server]),
+                Some(c) => {
+                    if c.args.contains("--tcp") {
+                        a.extend(["--server".into(), server]);
+                    }
+                    a.extend(["--ws".into(), c.args.split_whitespace().last().unwrap_or_default().to_string()]);
+                }
+            }
+        }
+        None => {
+            if let Some(s) = &b.server {
+                a.extend(["--server".into(), s.clone()]);
+            }
+            if let Some(w) = &b.ws {
+                a.extend(["--ws".into(), w.clone()]);
+            }
+        }
+    }
+    match &b.proxy {
+        Some(p) => a.extend(["--proxy".into(), p.clone()]),
+        None => a.push("--no-proxy".into()),
+    }
+    a.extend(["--forward".into(), format!("0:{}", plan.spec.target), "--keepalive".into(), b.keepalive.clone().unwrap_or_else(|| "30".into())]);
+    a
+}
+
+/// 新服務跑的程式：ssh（絕對路徑；`ps` 只顯示 `ssh` 時用系統的），或內建 client 新名稱的 binary。
+/// The program the new service runs: ssh (absolute; the system's when `ps` only showed `ssh`), or the built-in
+/// client's binary under the new name.
+fn service_program(plan: &Plan, names: &Names) -> String {
+    if plan.spec.builtin.is_some() {
+        return format!("{}/.ssh/{}", plan.home, names.ws_bin());
+    }
+    if plan.spec.program.starts_with('/') {
+        plan.spec.program.clone()
+    } else {
+        "/usr/bin/ssh".to_string()
+    }
+}
+
 /// 一鍵加入的 WebSocket 載具（`telepy-ws-<id>.sh`）換成新名稱；其他 ProxyCommand 原樣保留。
 /// The join's WebSocket carrier gets the new name; any other ProxyCommand stays as it is.
 fn carrier(plan: &Plan) -> Option<(String, String)> {
@@ -612,8 +778,8 @@ fn xml(s: &str) -> String {
 
 /// 新服務的檔案路徑與內容。/ The new service file's path and content.
 pub fn service_file(plan: &Plan, names: &Names, args: &[String]) -> (String, String) {
-    // systemd / launchd 要絕對路徑；`ps` 只顯示 `ssh` 時用系統的。/ Units and plists need an absolute path.
-    let program = if plan.spec.program.starts_with('/') { plan.spec.program.clone() } else { "/usr/bin/ssh".to_string() };
+    // systemd / launchd 要絕對路徑。/ Units and plists need an absolute path.
+    let program = service_program(plan, names);
     let exec = std::iter::once(program.clone()).chain(args.iter().cloned()).map(|a| systemd_quote(&a)).collect::<Vec<_>>().join(" ");
     match plan.method {
         Method::Systemd => (
@@ -659,7 +825,7 @@ pub fn service_file(plan: &Plan, names: &Names, args: &[String]) -> (String, Str
             )
         }
         Method::Loop => {
-            let line = std::iter::once(plan.spec.program.clone()).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
+            let line = std::iter::once(if plan.spec.builtin.is_some() { program.clone() } else { plan.spec.program.clone() }).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
             (
                 format!("{}/.ssh/{}", plan.home, names.runner()),
                 format!("#!/bin/sh\n# {}: reconnects forever.\nwhile :; do\n    {line} >> {} 2>&1\n    sleep 10\ndone\n", names.description(), sh_quote(&format!("{}/.ssh/{}", plan.home, names.log()))),
@@ -686,7 +852,20 @@ pub fn install_script(plan: &Plan, names: &Names, args: &[String], known_hosts: 
     if !known_hosts.is_empty() {
         s.push_str(&format!("put {} {} 644\n", sh_quote(&kh), sh_quote(known_hosts)));
     }
-    if let Some(c) = plan.route_carrier() {
+    if plan.spec.builtin.is_some() {
+        // 內建的 client 就是它自己的載體：把現在跑的那個 binary 複製到新名稱（不必再下載，舊的也還在跑）。
+        // The built-in client is its own carrier: copy the running binary to the new name (no download; the old one
+        // keeps running).
+        let from = &plan.spec.program;
+        let to = format!("{ssh_dir}/{}", names.ws_bin());
+        if *from != to {
+            s.push_str(&format!(
+                "[ -f {f} ] || {{ out failed carrier {f}; exit 0; }}\n$S cp -f {f} {t}.telepy-new && $S chmod 700 {t}.telepy-new && $S mv -f {t}.telepy-new {t} && out wrote file {t} || {{ out failed file {t}; exit 0; }}\n",
+                f = sh_quote(from),
+                t = sh_quote(&to),
+            ));
+        }
+    } else if let Some(c) = plan.route_carrier() {
         // 新的載體：先在裝置上下載這台機器的預編 telepy-carrier（curl / wget / uclient-fetch，核對 Telepy 給的 sha256，
         // 跑一次 --version），沒有再用 python3（程式內容由這裡帶過去）；兩者都沒有就看 `plain`：裝沒有載體的版本（只走
         // SSH 的 port，回報 note no_carrier）或停下來（舊服務完全沒動）。包裝腳本寫死路徑（服務的 PATH 可能很短）。
@@ -1184,5 +1363,77 @@ mod procd_tests {
         assert!(undo.contains("telepy-q7h3m2ka-ws.bin"), "the undo removes the binary too: {undo}");
         // 盤點的呈現：init 腳本是一個服務。/ In the view the init script is a service.
         assert!(parts(&router(), &names).iter().any(|x| x.kind == "service" && x.name == "telepy-47xzwr2e" && !x.private));
+    }
+
+    fn builtin_router() -> Vec<AccountResult> {
+        vec![AccountResult {
+            account: "root".into(),
+            platform: Some(Platform::Posix),
+            os: Some("Linux".into()),
+            error: None,
+            items: vec![
+                item("platform", "Linux", "root root=1"),
+                item("found", "process", "2210 /root/.ssh/telepy-47xzwr2e-ws.bin tunnel --identity /root/.ssh/telepy_tunnel_ed25519 --known-hosts /root/.ssh/telepy-47xzwr2e.known_hosts --user telepy --server telepy-ssh.natlee.info:56767 --no-proxy --forward 0:192.168.1.1:22 --keepalive 30"),
+                item("found", "owner", "2210 root /root"),
+                item("found", "initd", "/etc/init.d/telepy-47xzwr2e"),
+                item("found", "key", "/root/.ssh/telepy_tunnel_ed25519"),
+            ],
+        }]
+    }
+
+    /// 內建 client 的指令列：跟 ssh 一樣讀出金鑰、gateway、目標；`--probe` 與沒有金鑰的不算。
+    /// The built-in client's command line is read like ssh's; a probe or a line without a key is not a tunnel.
+    #[test]
+    fn built_in_client_lines_are_read_like_ssh() {
+        let s = parse_ssh("2210 /root/.ssh/telepy-ab-ws.bin tunnel --identity /root/.ssh/k --known-hosts=/root/.ssh/kh --server h.example:56767 --ws wss://w.example/ws/gateway/ --forward 0:192.168.1.1:2222").unwrap();
+        assert_eq!((s.program.as_str(), s.key.as_deref(), s.port, s.target.as_str(), s.dest.as_str()), ("/root/.ssh/telepy-ab-ws.bin", Some("/root/.ssh/k"), Some(56767), "192.168.1.1:2222", "telepy@h.example"));
+        let b = s.builtin.unwrap();
+        assert_eq!((b.server.as_deref(), b.ws.as_deref(), b.known_hosts.as_deref()), (Some("h.example:56767"), Some("wss://w.example/ws/gateway/"), Some("/root/.ssh/kh")));
+        // 只走網頁 port：主機從網址來、沒有 port；目標省略時是 127.0.0.1:22；`--host-key` 的兩個字不會被當成別的。
+        let w = parse_ssh("7 /x/telepy-carrier tunnel --host-key ssh-ed25519 AAAA --identity /k --ws wss://w.example:8443/ws/gateway/ --user tp").unwrap();
+        assert_eq!((w.dest.as_str(), w.port, w.target.as_str(), w.key.as_deref()), ("tp@w.example", None, "127.0.0.1:22", Some("/k")));
+        assert_eq!(parse_ssh("7 /x/telepy-carrier tunnel --probe --server h:1"), None);
+        assert_eq!(parse_ssh("7 /x/telepy-carrier tunnel --server h:1 --forward 0:127.0.0.1:22"), None, "no key");
+        assert_eq!(parse_ssh("7 /x/telepy-carrier --tcp h:1 wss://h/ws/gateway/"), None, "the ProxyCommand mode is no tunnel");
+    }
+
+    /// 內建 client 的服務可以改名 / 換連線方式：新服務跑新名稱的 binary（從現在跑的那個複製過去），同一把金鑰與目標，
+    /// 換成自動時 `--server` 與 `--ws` 都給。/ A built-in client's service can be renamed / switched: the new service runs
+    /// the binary under the new name (copied from the running one), same key and target; automatic gives both ways.
+    #[test]
+    fn a_built_in_client_service_is_renamed_and_switched() {
+        let names = Names::new("q7h3m2ka");
+        let p = plan(&builtin_router(), &names).unwrap();
+        assert_eq!((p.method, p.account.as_str(), p.old.clone()), (Method::Procd, "root", vec!["telepy-47xzwr2e".to_string()]));
+        let args = ssh_args(&p, &names, "telepy-telepy.natlee.info-56767", true);
+        assert_eq!(
+            args.join(" "),
+            "tunnel --identity /root/.ssh/telepy_tunnel_ed25519 --known-hosts /root/.ssh/telepy-q7h3m2ka.known_hosts --user telepy --server telepy-ssh.natlee.info:56767 --no-proxy --forward 0:192.168.1.1:22 --keepalive 30"
+        );
+        let (path, init) = service_file(&p, &names, &args);
+        assert_eq!(path, "/etc/init.d/telepy-q7h3m2ka");
+        assert!(init.contains("procd_set_param command '/root/.ssh/telepy-q7h3m2ka-ws.bin' 'tunnel' '--identity'"), "{init}");
+        let script = install_script(&p, &names, &args, "telepy-telepy.natlee.info-56767 ssh-ed25519 AAAA\n", None);
+        assert!(script.contains("$S cp -f '/root/.ssh/telepy-47xzwr2e-ws.bin' '/root/.ssh/telepy-q7h3m2ka-ws.bin'.telepy-new"), "{script}");
+        assert!(!script.contains("WS_URL=") && !script.contains("out failed carrier 'no prebuilt"), "nothing to download: {script}");
+        assert!(undo_script(&p, &names).contains("telepy-q7h3m2ka-ws.bin"), "the undo removes the copy");
+        // 換成自動 / 只走網頁 port / 只走 SSH 的 port。/ Switching to automatic, the web port only, the SSH port only.
+        let carrier = |args: &str| Some(RouteCarrier { args: args.into(), carrier_url: "https://t/api/join/carrier".into(), program: String::new() });
+        let mut q = p.clone();
+        q.route = Some(Route { dest: "telepy@ssh.example".into(), port: 2222, carrier: carrier("--tcp ssh.example:2222 wss://t.example/ws/gateway/") });
+        let a = ssh_args(&q, &names, "x", true).join(" ");
+        assert!(a.contains("--ws wss://t.example/ws/gateway/") && a.contains("--server ssh.example:2222"), "{a}");
+        q.route.as_mut().unwrap().carrier = carrier("wss://t.example/ws/gateway/");
+        let a = ssh_args(&q, &names, "x", true).join(" ");
+        assert!(a.contains("--ws wss://t.example/ws/gateway/") && !a.contains("--server"), "{a}");
+        q.route.as_mut().unwrap().carrier = None;
+        let a = ssh_args(&q, &names, "x", true).join(" ");
+        assert!(a.contains("--server ssh.example:2222") && !a.contains("--ws"), "{a}");
+        let auto_script = install_script(&q, &names, &args, "", Some(&args));
+        assert!(!auto_script.contains("no_carrier"), "the built-in client always has its carrier: {auto_script}");
+        // 盤點：它是這條隧道正在跑的程序，init 腳本是服務。/ In the view: the running process and the init script.
+        let parts = parts(&builtin_router(), &Names::new("47xzwr2e"));
+        assert!(parts.iter().any(|x| x.kind == "process" && x.private) && parts.iter().any(|x| x.kind == "service" && x.private));
+        assert_eq!(plan(&builtin_router(), &Names::new("47xzwr2e")).unwrap_err(), Blocker::NothingToRename);
     }
 }

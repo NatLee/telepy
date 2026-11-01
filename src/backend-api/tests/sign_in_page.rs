@@ -13,7 +13,7 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     // 預設：兩頁都是一般樣子、沒有自訂的句子；不用登入。/ Defaults, read without a sign-in.
     let r = app.get("/api/auth/sign-in-page", None).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"style": "standard", "oauth_style": "standard", "cli_style": "standard", "consent_style": "standard", "message": "", "google_client_id": app.state.config.google_client().unwrap_or_default()}));
+    assert_eq!(r.json, json!({"style": "standard", "oauth_style": "standard", "cli_style": "standard", "consent_style": "standard", "message": "", "google_client_id": app.state.config.google_client().unwrap_or_default(), "web_host": null, "ssh_host": null, "public_url": null}));
 
     let (admin, bob) = app.admin_and_user("admin", "bob").await;
     let r = app.get("/api/site/settings", Some(&admin)).await;
@@ -24,7 +24,7 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_style": "discreet", "signin_oauth_style": "discreet", "signin_cli_style": "discreet", "signin_consent_style": "discreet", "signin_page_message": "  Welcome to the lab \r\nSee you inside  "})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let r = app.get("/api/auth/sign-in-page", None).await;
-    assert_eq!(r.json, json!({"style": "discreet", "oauth_style": "discreet", "cli_style": "discreet", "consent_style": "discreet", "message": "Welcome to the lab\nSee you inside", "google_client_id": app.state.config.google_client().unwrap_or_default()}));
+    assert_eq!(r.json, json!({"style": "discreet", "oauth_style": "discreet", "cli_style": "discreet", "consent_style": "discreet", "message": "Welcome to the lab\nSee you inside", "google_client_id": app.state.config.google_client().unwrap_or_default(), "web_host": null, "ssh_host": null, "public_url": null}));
 
     // 清空 = 回到內建的句子。/ Clearing it brings the built-in lines back.
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": ""})).await;
@@ -56,7 +56,7 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_oauth_style": "standard"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let r = app.get("/api/auth/sign-in-page", None).await;
-    assert_eq!(r.json, json!({"style": "discreet", "oauth_style": "standard", "cli_style": "discreet", "consent_style": "discreet", "message": "", "google_client_id": app.state.config.google_client().unwrap_or_default()}));
+    assert_eq!(r.json, json!({"style": "discreet", "oauth_style": "standard", "cli_style": "discreet", "consent_style": "discreet", "message": "", "google_client_id": app.state.config.google_client().unwrap_or_default(), "web_host": null, "ssh_host": null, "public_url": null}));
     // 授權頁也是自己一個設定。/ The approval page has its own setting too.
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_consent_style": "standard"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);

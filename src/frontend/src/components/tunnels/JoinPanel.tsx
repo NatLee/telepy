@@ -212,7 +212,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                             <span className="flex flex-wrap items-center gap-1">
                                 {hostInfo && <span>{hostInfo}</span>}
                                 {chips.map((c) => (
-                                    <Chip key={c.key} title={t(c.label)}>{c.value}</Chip>
+                                    <Chip key={c.key} title={t(c.label)}>{c.text ? t(c.text.key, c.text.vars) : c.value}</Chip>
                                 ))}
                             </span>
                         ) : undefined

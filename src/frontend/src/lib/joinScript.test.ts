@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carrierLabel, compatNoServerAlive, factChips, joinCommands, scriptProgress, SCRIPT_STEPS } from "./joinScript.ts";
+import { builtinClient, carrierLabel, compatNoServerAlive, factChips, joinCommands, scriptProgress, SCRIPT_STEPS } from "./joinScript.ts";
 
 test("command variants carry the token once and the download forms check syntax first", () => {
     const c = joinCommands("https://t.example/api/join/install.sh", "tpj_abc", { sudo: true, transport: "ssh" });
@@ -31,6 +31,13 @@ test("facts become chips, compat mode is detected", () => {
     const chips = factChips({ shell: "ash (BusyBox v1.36.1)", client: "dbclient 2022.82", server: "Dropbear 2022.82", init: "procd", keepalive: "ssh (-K 30)", http: "uclient-fetch" });
     assert.deepEqual(chips.map((c) => `${c.key}=${c.value}`), ["client=dbclient 2022.82", "server=Dropbear 2022.82", "init=procd", "shell=ash (BusyBox v1.36.1)", "keepalive=ssh (-K 30)"]);
     assert.equal(factChips({ init: "loop" })[0].value, "reconnect loop");
+    // 內建的 SSH client：翻譯成「內建 client」，括號裡的版本照樣帶著。/ The built-in client is translated, its version kept.
+    const bi = factChips({ client: "builtin (telepy-carrier 2.12.0 (mips-unknown-linux-musl, checksum verified))" })[0];
+    assert.deepEqual(bi.text, { key: "join.facts.clientBuiltinOf", vars: { carrier: "telepy-carrier 2.12.0 (mips-unknown-linux-musl, checksum verified)" } });
+    assert.equal(builtinClient("builtin"), "");
+    assert.equal(builtinClient("OpenSSH_9.6"), undefined);
+    assert.equal(factChips({ client: "builtin" })[0].text?.key, "join.facts.clientBuiltin");
+    assert.equal(factChips({ client: "dbclient 2022.82" })[0].text, undefined);
     // 小幫手：預編的寫成 telepy-carrier (target)，python3 照樣，none 不列。/ The helper chip: prebuilt as telepy-carrier (target), python3 as is, none hidden.
     assert.equal(carrierLabel("binary x86_64-unknown-linux-musl"), "telepy-carrier (x86_64-unknown-linux-musl)");
     assert.equal(carrierLabel("python3"), "python3");

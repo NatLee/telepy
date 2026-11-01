@@ -628,7 +628,7 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, onChanged }
                     <Property label={t("deviceInstall.joinLabel")}>
                         <span className="flex flex-wrap items-center gap-1">
                             {factChips(v.join.facts).map((c) => (
-                                <Chip key={c.key} title={t(c.label)}>{c.value}</Chip>
+                                <Chip key={c.key} title={t(c.label)}>{c.text ? t(c.text.key, c.text.vars) : c.value}</Chip>
                             ))}
                             {v.join.at && <span className="text-xs text-muted-foreground">{t("deviceInstall.joinAt", { time: formatRelativeTime(v.join.at, locale, now) })}</span>}
                         </span>

@@ -19,8 +19,20 @@ path = "src/main.rs"
 name = "telepy_carrier"
 path = "src/lib.rs"
 
+[features]
+default = ["client"]
+# 內建的 SSH client（`telepy-carrier tunnel` / `keygen`）：裝置沒有可用的 ssh（例如 OpenWrt 的 dbclient 連不上 gateway）
+# 時由它自己跑反向隧道。`telepy` CLI 只用轉接的部分，關掉這個 feature（它的 binary 不必多帶一份 SSH）。
+# The built-in SSH client (`telepy-carrier tunnel` / `keygen`): runs the reverse tunnel itself on devices without a usable
+# ssh. The `telepy` CLI only uses the relay and turns this off.
+client = ["dep:russh", "dep:ring", "tokio/signal"]
+
 [dependencies]
 anyhow = "1"
+# 只用 ring（跟 rustls 同一份）；不要 aws-lc-rs（交叉編譯到路由器很麻煩、binary 也大）。
+# ring only (the one rustls already uses); no aws-lc-rs (hard to cross-compile for routers, and bigger).
+russh = { version = "0.64", default-features = false, features = ["ring"], optional = true }
+ring = { version = "0.17", optional = true }
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # 只用 ring（路由器也編得過、二進位小）；根憑證 = 系統的 + webpki 內建的，私有 CA 與沒裝 ca-certificates 的機器都行。

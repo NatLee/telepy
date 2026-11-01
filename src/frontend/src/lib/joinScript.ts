@@ -97,6 +97,8 @@ export interface FactChip {
     key: "shell" | "client" | "server" | "init" | "keepalive" | "http" | "carrier";
     label: TranslationKey;
     value: string;
+    /** 要翻譯的顯示文字（例如內建 client），沒有就照 `value`。/ Translated text to show instead of `value` (e.g. the built-in client). */
+    text?: { key: TranslationKey; vars: Record<string, string> };
 }
 
 const CHIP_LABEL: Record<FactChip["key"], TranslationKey> = {
@@ -119,12 +121,22 @@ export function factChips(facts: JoinFacts | null | undefined): FactChip[] {
         if (value) out.push({ key, label: CHIP_LABEL[key], value });
     };
     push("client", facts.client);
+    const builtin = builtinClient(facts.client);
+    if (builtin !== undefined && out.length > 0) out[out.length - 1].text = { key: builtin ? "join.facts.clientBuiltinOf" : "join.facts.clientBuiltin", vars: { carrier: builtin } };
     push("server", facts.server);
     push("init", facts.init ? INIT_NAME[facts.init] ?? facts.init : undefined);
     push("shell", facts.shell);
     push("keepalive", facts.keepalive);
     push("carrier", carrierLabel(facts.carrier));
     return out;
+}
+
+/** 內建的 SSH client（`builtin (telepy-carrier 2.12.0 (x86_64-unknown-linux-musl, checksum verified))`）：括號裡的部分；
+ *  不是內建的回 undefined。/ The built-in SSH client: what is in its parentheses ("" when nothing); undefined otherwise. */
+export function builtinClient(client: string | undefined): string | undefined {
+    if (!client || !/^builtin\b/.test(client)) return undefined;
+    const inner = client.slice("builtin".length).trim();
+    return inner.startsWith("(") && inner.endsWith(")") ? inner.slice(1, -1) : inner;
 }
 
 /** `binary x86_64-unknown-linux-musl` → `telepy-carrier (x86_64-unknown-linux-musl)`；`python3` 照樣；`none` / 空 = 不列。

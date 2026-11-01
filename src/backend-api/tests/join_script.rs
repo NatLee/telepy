@@ -242,3 +242,121 @@ async fn the_join_script_checks_joins_and_uninstalls_for_real() {
     assert!(ssh_dir.join("telepy_tunnel_ed25519").exists(), "the key is kept");
     assert!(!std::fs::read_to_string(dir.join("crontab.txt")).unwrap().contains("@reboot"), "the crontab line is gone");
 }
+
+/// PATH 裡沒有任何 ssh 工具（`ssh`、`ssh-keygen`、`ssh-keyscan`、`dbclient`）：系統目錄的其他程式都連過來，只拿掉它們。
+/// A PATH without any ssh tool: every other program of the system directories is linked in, the ssh ones left out.
+fn path_without_ssh(dir: &Path) -> PathBuf {
+    let tools = dir.join("no-ssh-bin");
+    std::fs::create_dir_all(&tools).unwrap();
+    for sys in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        let Ok(entries) = std::fs::read_dir(sys) else { continue };
+        for e in entries.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("ssh") || name.starts_with("dbclient") || name == "dropbearkey" || tools.join(&name).exists() {
+                continue;
+            }
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink(e.path(), tools.join(&name));
+        }
+    }
+    tools
+}
+
+fn run_with_path(script: &Path, path: &str, args: &[&str]) -> Run {
+    let o = Command::new("/bin/sh").arg(script).args(args).env("PATH", path).env_remove("SUDO_USER").env_remove("HTTPS_PROXY").env_remove("https_proxy").stdin(Stdio::null()).output().unwrap();
+    let out = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    Run { status: o.status.code().unwrap_or(-1), out }
+}
+
+/// 裝置上沒有任何 SSH client（也沒有 ssh-keygen / ssh-keyscan），但 Telepy 有這台機器的 telepy-carrier：腳本選內建的
+/// client，用它自己的 `keygen` 做金鑰、用 `tunnel --probe` 讀與驗 host key、探 gateway，服務直接跑 `telepy-carrier
+/// tunnel`，Telepy 真的經它登入裝置；`--check --client builtin` 也走同一條。
+/// No SSH client on the device (no ssh-keygen / ssh-keyscan either) but Telepy has a telepy-carrier for it: the script
+/// picks the built-in client, makes the key with its `keygen`, reads and verifies the host key and probes the gateway
+/// with `tunnel --probe`, the service runs `telepy-carrier tunnel`, and Telepy really logs in through it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_any_ssh_client_the_join_uses_the_built_in_one() {
+    let Some(lab) = Lab::start().await else { return };
+    if !Path::new("/bin/sh").exists() || Command::new("curl").arg("--version").output().is_err() {
+        eprintln!("skipping: needs /bin/sh and curl");
+        return;
+    }
+    let Some(target) = cache_carrier(&lab.app) else {
+        eprintln!("skipping: no built telepy-carrier (cargo build in src/carrier) or no carrier for this platform");
+        return;
+    };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let me = String::from_utf8_lossy(&Command::new("id").arg("-un").output().unwrap().stdout).trim().to_string();
+    let pi = lab.machine("wrt", &[(me.as_str(), &[])], false).await;
+    let auth_keys = pi.account_home(&me).join(".ssh").join("authorized_keys");
+    let base = lab.ws_base().await.replacen("ws://", "http://", 1);
+    let dir = lab.dir.path().join("join-builtin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("telepy-join.sh");
+    assert!(Command::new("curl").args(["-fsS", "-o", script.to_str().unwrap(), &format!("{base}/api/join/install.sh")]).status().unwrap().success());
+    let stubs = stub_bin(&dir);
+    let tools = path_without_ssh(&dir);
+    let path = format!("{}:{}", stubs.display(), tools.display());
+    assert!(Command::new("/bin/sh").args(["-c", "command -v ssh || command -v ssh-keygen || command -v dbclient"]).env("PATH", &path).output().unwrap().stdout.is_empty(), "no ssh tool on that PATH");
+    let ssh_dir = dir.join("ssh");
+    let pi_port = pi.port.to_string();
+    let common_args = ["--ssh-port", &pi_port, "--ssh-dir", ssh_dir.to_str().unwrap(), "--authorized-keys", auth_keys.to_str().unwrap(), "--service", "loop"];
+
+    // --check：選了內建的 client，host key 由它讀、由它嚴格驗證；gateway 也由它探，沒有 compat 模式。
+    // --check: the built-in client is chosen, reads and strictly verifies the host key, probes the gateway; no compat mode.
+    for extra in [&[][..], &["--client", "builtin"][..]] {
+        let r = run_with_path(&script, &path, &[&["--check"][..], extra, &common_args[..]].concat());
+        assert_eq!(r.status, 0, "{}", r.out);
+        assert!(r.out.contains("ssh client       builtin (telepy-carrier") && r.out.contains(target), "{}", r.out);
+        assert!(r.out.contains("from telepy-carrier tunnel --probe: verified by a strict handshake"), "{}", r.out);
+        assert!(r.out.contains("key tool: telepy-carrier keygen") && r.out.contains("handshake completed over the ssh port"), "{}", r.out);
+        assert!(!r.out.contains("compat mode"), "{}", r.out);
+    }
+    assert!(!ssh_dir.exists(), "--check writes nothing");
+    // 指定 OpenSSH 卻沒有：說清楚。/ Asking for OpenSSH without one says so.
+    let r = run_with_path(&script, &path, &[&["--check", "--client", "openssh"][..], &common_args[..]].concat());
+    assert!(r.status != 0 && r.out.contains("no OpenSSH client found"), "{}", r.out);
+
+    // 真的加入。/ The real join.
+    let ticket = app.post("/api/reverse/join", Some(&alice.token), json!({"name": "wrt-builtin", "key_list": "empty"})).await;
+    let token = ticket.json["token"].as_str().unwrap().to_string();
+    let r = run_with_path(&script, &path, &[&["--token", &token][..], &common_args[..]].concat());
+    assert_eq!(r.status, 0, "{}", r.out);
+    for needle in ["created", "(telepy-carrier keygen)", "registered as wrt-builtin", "the built-in client runs from", "login verified         yes", "process running        yes"] {
+        assert!(r.out.contains(needle), "missing {needle:?} in:\n{}", r.out);
+    }
+    let st = app.get(&format!("/api/join/{token}/status"), None).await;
+    assert!(st.text.contains("PHASE=verified"), "{}", st.text);
+    let tunnel_id: i64 = st.text.lines().find_map(|l| l.strip_prefix("TUNNEL_ID=")).unwrap().parse().unwrap();
+    let ticket_now = app.get(&format!("/api/reverse/join/{}", ticket.json["id"].as_str().unwrap()), Some(&alice.token)).await;
+    assert!(ticket_now.json["facts"]["client"].as_str().unwrap_or("").starts_with("builtin"), "{}", ticket_now.text);
+    let view = app.get(&format!("/api/reverse/server/{tunnel_id}/device-install"), Some(&alice.token)).await;
+    assert!(view.json["join"]["facts"]["client"].as_str().unwrap_or("").starts_with("builtin"), "{}", view.text);
+    assert!(view.json["join"]["facts"]["compat"].is_null(), "no compat mode: {}", view.text);
+    let names: Vec<String> = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let rec = std::fs::read_to_string(ssh_dir.join(names.iter().find(|n| n.ends_with(".install")).unwrap())).unwrap();
+    for needle in ["CLIENT=builtin", "KEY_FORMAT=openssh", "KEEPALIVE=ssh (built-in, 30 s)", "TRANSPORT=ssh"] {
+        assert!(rec.contains(needle), "missing {needle:?} in record:\n{rec}");
+    }
+    assert!(names.iter().any(|n| n.ends_with("-ws.bin")) && !names.iter().any(|n| n.ends_with("-ws.sh")), "the client binary, no wrapper: {names:?}");
+    let runner = std::fs::read_to_string(ssh_dir.join(names.iter().find(|n| n.ends_with(".sh") && !n.ends_with("-uninstall.sh")).unwrap())).unwrap();
+    assert!(runner.contains("-ws.bin tunnel --identity ") && runner.contains(&format!("--server 127.0.0.1:{}", lab.gw_port)) && runner.contains(&format!("--forward 0:127.0.0.1:{}", pi.port)), "{runner}");
+    // 金鑰是 OpenSSH 格式（之後裝了 OpenSSH 也讀得懂）。/ The key is OpenSSH format.
+    assert!(std::fs::read_to_string(ssh_dir.join("telepy_tunnel_ed25519")).unwrap().starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+
+    // 腳本寫的 uninstall：隧道斷、內建 client 與紀錄都走。/ The uninstall: the tunnel drops, the client and the record go.
+    let uninstall = ssh_dir.join(names.iter().find(|n| n.ends_with("-uninstall.sh")).unwrap());
+    let r = run_with_path(&uninstall, &path, &[]);
+    assert_eq!(r.status, 0, "{}", r.out);
+    let port = u16::try_from(telepy_server::db::tunnels::by_id(&app.state.db, tunnel_id).await.unwrap().unwrap().reverse_port).unwrap();
+    for _ in 0..100 {
+        if !app.state.status.listen_ports().map(|p| p.contains(&port)).unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!app.state.status.listen_ports().map(|p| p.contains(&port)).unwrap_or(false), "the tunnel dropped after the uninstall");
+    let left: Vec<String> = std::fs::read_dir(&ssh_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!left.iter().any(|n| n.ends_with("-ws.bin") || n.ends_with(".install")), "{left:?}");
+}

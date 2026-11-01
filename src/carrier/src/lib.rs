@@ -33,6 +33,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
+/// 內建的 SSH client：沒有可用 ssh 的裝置由它自己跑反向隧道（`telepy-carrier tunnel`）。
+/// The built-in SSH client: runs the reverse tunnel itself on devices without a usable ssh (`telepy-carrier tunnel`).
+#[cfg(feature = "client")]
+pub mod tunnel;
+
 /// 版本：發行版由 CI 帶 `TELEPY_VERSION`（Telepy 發行的 tag 去掉 `v`）。/ The version: release builds carry `TELEPY_VERSION`.
 pub const VERSION: &str = match option_env!("TELEPY_VERSION") {
     Some(v) => v,
@@ -292,9 +297,22 @@ pub async fn relay_ws<S>(ws: WebSocketStream<S>)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    relay_ws_io(ws, tokio::io::stdin(), tokio::io::stdout()).await
+}
+
+/// 任一對讀寫 ↔ WebSocket 二進位 frame（stdin / stdout，或內建 SSH client 的那一頭）。讀的那邊結束 = 送 Close；
+/// WebSocket 結束 = 寫的那邊關掉（對方讀到 EOF）。
+/// Any reader / writer pair ↔ binary frames (stdin / stdout, or the built-in SSH client's end). The reader ending sends
+/// a Close; the WebSocket ending shuts the writer (the other side reads EOF).
+pub async fn relay_ws_io<S, R, W>(ws: WebSocketStream<S>, mut input: R, mut output: W)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::channel::<Message>(64);
-    // 只有一個地方寫：stdin 的資料、Pong 與最後的 Close 都排進同一條。/ One writer: data, pongs and the final close.
+    // 只有一個地方寫：資料、Pong 與最後的 Close 都排進同一條。/ One writer: data, pongs and the final close.
     let writer = tokio::spawn(async move {
         while let Some(m) = rx.recv().await {
             let close = matches!(m, Message::Close(_));
@@ -307,10 +325,9 @@ where
     let up = {
         let tx = tx.clone();
         tokio::spawn(async move {
-            let mut stdin = tokio::io::stdin();
             let mut buf = vec![0u8; 64 * 1024];
             loop {
-                match stdin.read(&mut buf).await {
+                match input.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
@@ -322,16 +339,15 @@ where
             let _ = tx.send(Message::Close(None)).await;
         })
     };
-    let mut stdout = tokio::io::stdout();
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Binary(b)) => {
-                if stdout.write_all(&b).await.is_err() || stdout.flush().await.is_err() {
+                if output.write_all(&b).await.is_err() || output.flush().await.is_err() {
                     break;
                 }
             }
             Ok(Message::Text(t)) => {
-                if stdout.write_all(t.as_bytes()).await.is_err() || stdout.flush().await.is_err() {
+                if output.write_all(t.as_bytes()).await.is_err() || output.flush().await.is_err() {
                     break;
                 }
             }
@@ -344,6 +360,8 @@ where
     }
     up.abort();
     drop(tx);
+    let _ = output.shutdown().await;
+    drop(output);
     let _ = tokio::time::timeout(Duration::from_secs(1), writer).await;
 }
 
@@ -415,27 +433,57 @@ pub fn hex(bytes: &[u8]) -> String {
 
 // ------------------------------------------------------------------ the device's policy
 
-/// 裝置端：有 `tcp` = 自動（SSH 的 port 先，記得網頁 port 走通就反過來），沒有 = 只走網頁 port。連上後把連線接到
-/// stdin / stdout，結束時回 0；兩邊都連不上回 255。`note` 收 stderr 的訊息（服務的 log 會看到走了哪條）。
-/// The device policy: with `tcp` = automatic (the SSH port first, reversed while the web port is remembered), without =
-/// the web port only. Relays until the connection ends (0); 255 when nothing could be reached.
-pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, note: &dyn Fn(&str)) -> i32 {
+/// 連上 Telepy 的一條連線：SSH 的 port（已讀到的 banner 一起帶著），或 `/ws/gateway/` 的 WebSocket。
+/// A connection to Telepy: the SSH port (with the banner already read) or the `/ws/gateway/` WebSocket.
+pub enum Link {
+    Ssh(TcpStream, Vec<u8>),
+    Web(Box<Ws>),
+}
+
+/// 能交給 SSH 函式庫的雙向位元組流。/ A byte stream an SSH library can run over.
+pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
+
+impl Link {
+    /// 走了哪條（給 log 用）。/ Which way it took, for the log.
+    pub fn way(&self) -> &'static str {
+        match self {
+            Link::Ssh(..) => "ssh port",
+            Link::Web(_) => "web port",
+        }
+    }
+
+    /// 變成一條普通的位元組流：SSH 的 port 先吐出已讀的 banner；WebSocket 在背景轉成二進位 frame。
+    /// As a plain byte stream: the SSH port replays the banner already read; the WebSocket is relayed in the background.
+    pub fn into_io(self) -> Box<dyn Io> {
+        match self {
+            Link::Ssh(tcp, seen) => Box::new(Prefixed::new(tcp, seen)),
+            Link::Web(ws) => {
+                let (ours, theirs) = tokio::io::duplex(256 * 1024);
+                let (r, w) = tokio::io::split(theirs);
+                tokio::spawn(relay_ws_io(*ws, r, w));
+                Box::new(ours)
+            }
+        }
+    }
+}
+
+/// 連線策略：`tcp` 與 `url` 都有 = 自動（SSH 的 port 先，記得網頁 port 走通就反過來）；只有 `url` = 只走網頁 port；
+/// 只有 `tcp` = 只走 SSH 的 port。`note` 收 stderr 的訊息（服務的 log 會看到走了哪條）。
+/// The connection policy: `tcp` and `url` = automatic (the SSH port first, reversed while the web port is remembered);
+/// `url` only = the web port only; `tcp` only = the SSH port only. `note` gets the stderr lines (which way it took).
+pub async fn connect_link(tcp: Option<&str>, url: Option<&str>, proxy: Option<&Proxy>, note: &dyn Fn(&str)) -> Result<Link> {
     let Some(tcp) = tcp else {
-        return match connect_ws(url, proxy, WS_TIMEOUT).await {
-            Ok(ws) => {
-                note(&format!("connected through the web port ({url}){}", via(proxy)));
-                relay_ws(ws).await;
-                0
-            }
-            Err(e) => {
-                note(&format!("cannot connect: {e:#}"));
-                255
-            }
-        };
+        let Some(url) = url else { bail!("nothing to connect to: give Telepy's SSH port (host:port) and / or its web port URL") };
+        let ws = connect_ws(url, proxy, WS_TIMEOUT).await?;
+        note(&format!("connected through the web port ({url}){}", via(proxy)));
+        return Ok(Link::Web(Box::new(ws)));
     };
-    let Some((host, port)) = split_host_port(tcp) else {
-        note(&format!("--tcp wants host:port, got {tcp:?}"));
-        return 255;
+    let Some((host, port)) = split_host_port(tcp) else { bail!("--tcp wants host:port, got {tcp:?}") };
+    let Some(url) = url else {
+        let (stream, seen) = connect_ssh_port(&host, port, proxy).await.map_err(|e| anyhow!("the SSH port {host}:{port}: {e:#}"))?;
+        note(&format!("connected on the SSH port {host}:{port}{}", via(proxy)));
+        return Ok(Link::Ssh(stream, seen));
     };
     let memory = Memory::for_route(tcp, url);
     let order: [bool; 2] = if memory.remembers_ws() { [true, false] } else { [false, true] };
@@ -447,8 +495,7 @@ pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, not
                     memory.remember(true);
                     let why = errors.first().map(|e| format!("; the SSH port {host}:{port}: {e}")).unwrap_or_default();
                     note(&format!("connected through the web port ({url}){}{why}", via(proxy)));
-                    relay_ws(ws).await;
-                    return 0;
+                    return Ok(Link::Web(Box::new(ws)));
                 }
                 Err(e) => errors.push(format!("{e:#}")),
             }
@@ -457,18 +504,36 @@ pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, not
                 Ok((stream, seen)) => {
                     memory.remember(false);
                     note(&format!("connected on the SSH port {host}:{port}{}", via(proxy)));
-                    relay_tcp(stream, &seen).await;
-                    return 0;
+                    return Ok(Link::Ssh(stream, seen));
                 }
                 Err(e) => errors.push(format!("{e:#}")),
             }
         }
     }
-    note(&format!("cannot connect: the SSH port {host}:{port} and the web port both failed ({})", errors.join("; ")));
-    255
+    bail!("the SSH port {host}:{port} and the web port both failed ({})", errors.join("; "))
 }
 
-fn via(proxy: Option<&Proxy>) -> String {
+/// 裝置端的 ProxyCommand：有 `tcp` = 自動，沒有 = 只走網頁 port。連上後把連線接到 stdin / stdout，結束時回 0；
+/// 兩邊都連不上回 255。/ The device's ProxyCommand: with `tcp` automatic, without the web port only. Relays stdin /
+/// stdout until the connection ends (0); 255 when nothing could be reached.
+pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, note: &dyn Fn(&str)) -> i32 {
+    match connect_link(tcp, Some(url), proxy, note).await {
+        Ok(Link::Ssh(stream, seen)) => {
+            relay_tcp(stream, &seen).await;
+            0
+        }
+        Ok(Link::Web(ws)) => {
+            relay_ws(*ws).await;
+            0
+        }
+        Err(e) => {
+            note(&format!("cannot connect: {e:#}"));
+            255
+        }
+    }
+}
+
+pub fn via(proxy: Option<&Proxy>) -> String {
     proxy.map(|p| format!(" via the proxy {}:{}", p.host, p.port)).unwrap_or_default()
 }
 
@@ -526,15 +591,22 @@ usage: telepy-carrier [--tcp host:port] [--proxy http://[user:pass@]host:port | 
   --no-proxy        ignore the proxy variables\n\
   --version         print the version\n\n\
 Everything ssh writes to stdin goes to Telepy; everything that comes back goes to stdout. The SSH inside is unchanged:\n\
-the same keys, the same host-key check. Which way it took is written to stderr.\n";
+the same keys, the same host-key check. Which way it took is written to stderr.\n\n\
+Without a usable ssh on the device, `telepy-carrier tunnel` runs the reverse tunnel with its built-in SSH client and\n\
+`telepy-carrier keygen` makes its key (see telepy-carrier tunnel --help).\n";
 
 /// 要用哪個代理：`--no-proxy` 一律不；`--proxy` 指定；否則看環境變數（對網址的主機套 NO_PROXY）。
 /// Which proxy to use: none with `--no-proxy`, `--proxy` when given, else the environment (NO_PROXY against the URL's host).
 pub fn choose_proxy(cli: &Cli, url_host: &str) -> Result<Option<Proxy>, String> {
-    if cli.no_proxy {
+    proxy_choice(cli.no_proxy, cli.proxy.as_deref(), url_host)
+}
+
+/// 同上，給 `tunnel` 子指令用。/ The same, for the `tunnel` subcommand.
+pub fn proxy_choice(no_proxy: bool, proxy: Option<&str>, url_host: &str) -> Result<Option<Proxy>, String> {
+    if no_proxy {
         return Ok(None);
     }
-    match &cli.proxy {
+    match proxy {
         Some(p) => Proxy::parse(p).map(Some).ok_or_else(|| format!("--proxy: not an http proxy URL: {p}")),
         None => Ok(Proxy::from_env(url_host)),
     }

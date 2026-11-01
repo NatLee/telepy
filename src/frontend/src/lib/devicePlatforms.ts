@@ -33,7 +33,7 @@ export interface Platform {
 
 /**
  * 支援的機器（順序 = 畫面順序）。一行指令的細節跟 `templates/join_install.sh` 一致：Linux 有 systemd 就裝服務、
- * 沒有（Alpine 等 BusyBox）就是背景迴圈；OpenWrt 用 procd，ssh 用 OpenSSH 或 Dropbear 的 dbclient（≥ 2016.73）。
+ * 沒有（Alpine 等 BusyBox）就是背景迴圈；OpenWrt 用 procd，ssh 用 OpenSSH，沒有就用 telepy-carrier 內建的 client，再沒有才是 Dropbear 的 dbclient（≥ 2016.73）。
  * Supported devices, in display order; the one-command details follow templates/join_install.sh.
  */
 export const PLATFORMS: Platform[] = [

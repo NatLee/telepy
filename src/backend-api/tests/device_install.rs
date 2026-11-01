@@ -562,3 +562,122 @@ async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
     assert!(ev.iter().any(|e| e == "service_switched") && ev.iter().any(|e| e == "handover"), "{ev:?}");
     assert!(names(&r.json["view"], "older").is_empty(), "{}", r.json["view"]);
 }
+
+/// 編好的 telepy-carrier（共用 target 目錄的 debug 版）。/ The built telepy-carrier (the shared target dir's debug build).
+fn built_carrier() -> Option<PathBuf> {
+    let target = std::env::var("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let p = target.join("debug").join("telepy-carrier");
+    p.is_file().then_some(p)
+}
+
+/// 內建 client 跑的重連迴圈（像一鍵加入在沒有 ssh 的裝置上裝的那種，只是名稱由測試給）。
+/// A reconnect loop running the built-in client (what the join installs on a device without ssh; the names are the test's).
+async fn start_builtin_loop(lab: &Lab, dev: &Device, home: &Path, runner_name: &str, bin_name: &str) -> (PathBuf, Child) {
+    let ssh = home.join(".ssh");
+    let bin = ssh.join(bin_name);
+    std::fs::copy(built_carrier().unwrap(), &bin).unwrap();
+    let kh = ssh.join(format!("{runner_name}.known_hosts"));
+    std::fs::write(&kh, lab.app.state.gateway.host_public_keys().iter().map(|k| format!("telepy-127.0.0.1-{} {k}\n", lab.gw_port)).collect::<String>()).unwrap();
+    let runner = ssh.join(format!("{runner_name}.sh"));
+    let body = format!(
+        "#!/bin/sh\n# Telepy tunnel: the built-in client, reconnects forever.\nwhile :; do\n    {bin} tunnel --identity {key} --known-hosts {kh} --user telepy --server 127.0.0.1:{port} --no-proxy --forward 0:127.0.0.1:{target} --keepalive 30 >> {log} 2>&1\n    sleep 1\ndone\n",
+        bin = bin.display(),
+        key = dev.key.path.display(),
+        kh = kh.display(),
+        port = lab.gw_port,
+        target = dev.target.port,
+        log = ssh.join(format!("{runner_name}.log")).display(),
+    );
+    write_exec(&runner, &body);
+    let child = Command::new("/bin/sh").arg(&runner).env("HOME", home).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true).spawn().unwrap();
+    wait_online(lab, dev, true).await;
+    (runner, child)
+}
+
+/// 內建 client（`telepy-carrier tunnel`）跑的服務：盤點認得它（程序、迴圈、金鑰），改名把 binary 複製到新名稱、先接上
+/// 再拆舊的，換成自動時新服務同時帶 `--server` 與 `--ws`，刪隧道把它整個拿掉。
+/// A service run by the built-in client: the survey recognises it (process, loop, key), a rename copies the binary to
+/// the new name make-before-break, switching to automatic gives the new service both `--server` and `--ws`, and
+/// deleting the tunnel removes all of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_built_in_client_service_is_surveyed_renamed_switched_and_deleted() {
+    let Some(lab) = Lab::start().await else { return };
+    if built_carrier().is_none() {
+        eprintln!("skipping: build src/carrier first (cargo build), the test runs the real telepy-carrier");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let opts = MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("wrt-bi", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let _cleanup = Cleanup(home.clone());
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let dev = lab.device_requesting(&alice, "wrt-bi", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    let id = dev.tunnel_id;
+    lab.disconnect_device(&dev).await;
+    // 手寫名稱的迴圈跑內建 client。/ A hand-named loop running the built-in client.
+    let (old_runner, _old) = start_builtin_loop(&lab, &dev, &home, "telepy-natlee-builtin", "telepy-carrier").await;
+    stub_crontab(&home, &format!("0 3 * * * echo keep-me\n@reboot sh {} >/dev/null 2>&1\n", old_runner.display()));
+
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/survey"), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let v = r.json.clone();
+    let install = v["install_id"].as_str().unwrap().to_string();
+    let parts = v["parts"].as_array().unwrap();
+    assert!(parts.iter().any(|p| p["kind"] == "process" && p["name"].as_str().unwrap_or("").contains("tunnel --identity")), "the built-in client's process is this tunnel's: {v:#}");
+    assert_eq!(names(&v, "older"), vec!["telepy-natlee-builtin.sh".to_string()], "{v:#}");
+    assert_eq!((v["rename"]["possible"].as_bool(), v["rename"]["method"].as_str()), (Some(true), Some("loop")), "{v:#}");
+
+    // 改名。/ Rename.
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/rename"), Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["report"]["ok"], true, "{:#}", r.json["report"]);
+    let runner = home.join(format!(".ssh/telepy-{install}.sh"));
+    let body = std::fs::read_to_string(&runner).unwrap();
+    assert!(body.contains(&format!("'{}/.ssh/telepy-{install}-ws.bin' 'tunnel' '--identity'", home.display())) && body.contains(&format!("'--server' '127.0.0.1:{}'", lab.gw_port)), "{body}");
+    assert!(home.join(format!(".ssh/telepy-{install}-ws.bin")).is_file(), "the binary was copied to the new name");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while old_runner.exists() || alive(&old_runner.to_string_lossy()) {
+        assert!(tokio::time::Instant::now() < deadline, "the old loop was left behind: {:#}", r.json["report"]);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(alive(&format!("telepy-{install}-ws.bin tunnel")), "the new built-in client runs");
+    wait_online(&lab, &dev, true).await;
+
+    // 換成自動：新代號，新服務同時帶 --server 與 --ws。/ Switch to automatic: a fresh id, both ways.
+    let public = lab.ws_base().await.replacen("ws://", "http://", 1);
+    telepy_server::db::users::set_flags(&lab.app.state.db, alice.id, Some(true), Some(true)).await.unwrap();
+    let r = lab.app.post("/api/site/settings", Some(&alice.token), serde_json::json!({"server_public_url": public})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "auto"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rep = &r.json["report"];
+    assert_eq!((rep["ok"].as_bool(), rep["transport"].as_str()), (Some(true), Some("auto")), "{rep:#}");
+    let after = r.json["view"]["install_id"].as_str().unwrap().to_string();
+    assert_ne!(after, install);
+    let new_runner = home.join(format!(".ssh/telepy-{after}.sh"));
+    let body = std::fs::read_to_string(&new_runner).unwrap();
+    assert!(body.contains(&format!("telepy-{after}-ws.bin' 'tunnel'")) && body.contains(&format!("'--server' '127.0.0.1:{}'", lab.gw_port)) && body.contains("'--ws' 'ws://") && body.contains("/ws/gateway/'"), "{body}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while runner.exists() || home.join(format!(".ssh/telepy-{install}-ws.bin")).exists() || alive(&runner.to_string_lossy()) {
+        assert!(tokio::time::Instant::now() < deadline, "the previous install was left behind: {rep:#}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    wait_online(&lab, &dev, true).await;
+    let t = lab.app.get(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await;
+    assert_eq!(t.json["way_in"]["setup"], "auto", "{}", t.text);
+
+    // 刪隧道（連服務）：迴圈、binary、known_hosts、crontab 行與程序都走，金鑰也是。/ Delete with the service: everything goes.
+    let r = lab.app.delete(&format!("/api/reverse/server/keys/{id}?remove_device_keys=true&remove_service=true"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["service"]["stopped"], true, "{}", r.json["service"]);
+    let bin = home.join(format!(".ssh/telepy-{after}-ws.bin"));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while new_runner.exists() || bin.exists() || home.join(format!(".ssh/telepy-{after}.known_hosts")).exists() || alive(&format!("telepy-{after}-ws.bin tunnel")) {
+        assert!(tokio::time::Instant::now() < deadline, "the built-in client's service was left behind: {}", r.json["service"]);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let cron = std::fs::read_to_string(home.join("crontab.txt")).unwrap();
+    assert!(cron.contains("keep-me") && !cron.contains("telepy-"), "{cron}");
+}
