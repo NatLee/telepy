@@ -94,6 +94,19 @@ async fn connection_history_and_uptime() {
     let h = history(&lab, &alice.token, t.id).await;
     assert!(h["sessions"][0]["disconnected_at"].is_null(), "newest first, and it is open: {h}");
     assert!(h["sessions"][1]["seconds"].as_i64().unwrap() >= 0);
+    // gateway 看到的是內部位址（這裡是 loopback）：裝置回報的公網 IP 記在開著的那一列，舊的那列不動；看不到 IP 的人也看不到它。
+    // The peer is internal (loopback here): the device-reported public IP goes on the open row only, and people who
+    // get no IP get none of it either.
+    assert_eq!(h["sessions"][0]["geo"]["scope"], "loopback", "{h}");
+    assert!(h["sessions"][0]["public_ip"].is_null());
+    db::tunnel_sessions::set_public_ip(&lab.app.state.db, t.id, "203.0.113.7", "device").await.unwrap();
+    let h = history(&lab, &alice.token, t.id).await;
+    let (open, closed) = (&h["sessions"][0], &h["sessions"][1]);
+    assert_eq!((open["ip"].as_str(), open["public_ip"].as_str(), open["public_source"].as_str()), (Some("127.0.0.1"), Some("203.0.113.7"), Some("device")), "{h}");
+    assert_eq!(open["public_geo"]["scope"], "public");
+    assert!(closed["public_ip"].is_null(), "an earlier connection keeps what it had: {h}");
+    let c = history(&lab, &carol.token, t.id).await;
+    assert!(c["sessions"][0]["public_ip"].is_null() && c["sessions"][0]["geo"].is_null(), "{c}");
 
     // 重啟：還開著的關掉。/ Startup closes rows left open.
     assert_eq!(db::tunnel_sessions::close_orphans(&lab.app.state.db).await.unwrap(), 1);

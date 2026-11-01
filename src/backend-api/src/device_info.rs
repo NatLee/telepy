@@ -374,6 +374,11 @@ async fn store(state: &AppState, tunnel: &db::tunnels::Tunnel, port: u16, peer_p
             if let (Some(ip), false) = (info.public_ip, peer_public) {
                 let ip = ip.to_string();
                 let source = info.public_source.unwrap_or(SOURCE_DEVICE);
+                // 連線紀錄的這一列也記下來：gateway 只看到內部位址時，這才是這次連線真正的來源。
+                // The open connection-history row too: behind an internal peer this is where the connection really came from.
+                if let Err(e) = db::tunnel_sessions::set_public_ip(&state.db, tunnel_id, &ip, source).await {
+                    tracing::warn!(tunnel_id, error = %e, "device info: cannot store the public ip on the session");
+                }
                 if let Ok(Some(ch)) = db::tunnel_endpoints::update_public_ip(&state.db, tunnel_id, &ip, source, &at).await {
                     state.gateway.announce_ip_change(port, &ch, &ip, None).await;
                 }

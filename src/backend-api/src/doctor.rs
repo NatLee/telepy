@@ -314,11 +314,23 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         Ok(r) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("{health} answered {}", r.status())),
         Err(e) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("cannot reach {health}: {e}. The remote browser will not work")).fp(&["unreachable", &health]),
     });
-    out.push(if crate::geoip::GeoIp::load(&config.geoip_dir).enabled() {
-        check("geoip", "GeoIP", Status::Ok, format!("{}", config.geoip_dir.display()))
-    } else {
-        check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Run telepy-server geoip in the backend container, then restart it")
-    });
+    // GeoIP：裝了沒、多舊（用中的檔的建置時間；DB-IP 看 `.release` 是哪個月）。/ GeoIP: installed, and how old.
+    {
+        let now = chrono::Utc::now();
+        let geo = crate::geoip::GeoIp::load(&config.geoip_dir);
+        let oui = crate::oui::Oui::default();
+        let items = crate::datasets::inspect(&config.geoip_dir, &config.oui_dir, &geo, &oui, now);
+        let release = |id: &str| items.iter().find(|i| i.id == id).and_then(|i| i.release.clone());
+        let (country, asn) = geo.in_use();
+        // DB-IP 的月份只說 Telepy 自己的檔；用中的是 MaxMind 的就看建置日期。/ The month only describes Telepy's own DB-IP file.
+        let own = |u: &Option<crate::geoip::InUse>, id: &str| u.as_ref().filter(|u| u.file == crate::datasets::geoip_file(id)).and_then(|_| release(id));
+        let (rc, ra) = (own(&country, "country"), own(&asn, "asn"));
+        out.push(match crate::datasets::geoip_freshness(country.as_ref(), asn.as_ref(), (rc.as_deref(), ra.as_deref()), &config.geoip_dir, now) {
+            crate::datasets::Freshness::Missing => check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Download it on Server health → Companion services (IP and vendor data), or run telepy-server geoip in the backend container"),
+            crate::datasets::Freshness::Fresh(d) => check("geoip", "GeoIP", Status::Ok, d),
+            crate::datasets::Freshness::Stale(d, built) => check("geoip", "GeoIP", Status::Warn, d).fp(&["stale", &built]),
+        });
+    }
 
     // 裝置載體：快取了哪些平台的；沒有的第一次有裝置要時從 release 頁抓。/ Device carriers: which platforms are cached.
     {
@@ -334,10 +346,11 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
     }
 
     let oui = crate::oui::Oui::load(&config.oui_dir);
-    out.push(if oui.enabled() {
-        check("oui", "OUI vendors", Status::Ok, format!("{} vendors from {}", oui.len(), config.oui_dir.display()))
-    } else {
-        check("oui", "OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Run telepy-server oui in the backend container, then restart it")
+    let oui_modified = std::fs::metadata(config.oui_dir.join(crate::oui::FILE)).ok().and_then(|m| m.modified().ok()).map(chrono::DateTime::<chrono::Utc>::from);
+    out.push(match crate::datasets::oui_freshness(oui.len(), oui_modified, &config.oui_dir, chrono::Utc::now()) {
+        crate::datasets::Freshness::Missing => check("oui", "OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Download it on Server health → Companion services (IP and vendor data), or run telepy-server oui in the backend container"),
+        crate::datasets::Freshness::Fresh(d) => check("oui", "OUI vendors", Status::Ok, d),
+        crate::datasets::Freshness::Stale(d, date) => check("oui", "OUI vendors", Status::Warn, d).fp(&["stale", &date]),
     });
 
     // 最近登入記到的來源 IP：全是內部位址 = 前面的代理把真實位址弄丟了（或層數設錯）。

@@ -233,8 +233,8 @@ docker compose exec backend telepy-server <コマンド>
 | `doctor`           | 鍵、データベース、設定、連携サービスを確認                 |
 | `create-superuser` | 管理者アカウントを作成（`--username` と `--password` を指定） |
 | `keygen`           | 足りない SSH 鍵を作成。既存の鍵は決して置き換えません      |
-| `geoip`            | オフラインの IP 位置情報をダウンロード。そのあとバックエンドを再起動 |
-| `oui`              | LAN ホストに表示する NIC メーカー一覧をダウンロード。そのあとバックエンドを再起動 |
+| `geoip`            | オフラインの IP 位置情報をダウンロード（サーバーの状態ページの「ダウンロード」でも可）。以後は Telepy が再起動なしで最新に保つ |
+| `oui`              | LAN ホストに表示する NIC メーカー一覧をダウンロード。以後は同じく最新に保たれる |
 | `migrate`          | データベースを最新の構造に。起動時にも自動で実行           |
 
 ログを追うときは `docker compose logs -f backend` です。

@@ -43,6 +43,8 @@ pub struct Inner {
     pub oui: Arc<Oui>,
     /// 裝置端載體（`telepy-carrier`）的快取。/ The device carrier cache.
     pub carriers: Arc<crate::carriers::Carriers>,
+    /// GeoIP 與廠商表的更新（每月自動、伺服器健康頁的面板）。/ Keeping the GeoIP and vendor data current.
+    pub datasets: Arc<crate::datasets::Datasets>,
     /// 憑證庫的加解密（金鑰由 SECRET_KEY 衍生）。/ Credential vault cipher (key derived from SECRET_KEY).
     pub vault: Vault,
     pub gateway: Arc<Gateway>,
@@ -139,6 +141,7 @@ impl AppState {
             geoip: Arc::new(GeoIp::load(&config.geoip_dir)),
             oui: Arc::new(Oui::load(&config.oui_dir)),
             carriers,
+            datasets: Arc::new(crate::datasets::Datasets::new(config.geoip_dir.clone(), config.oui_dir.clone())),
             vault: Vault::new(&config.secret_key),
             presence,
             gateway,

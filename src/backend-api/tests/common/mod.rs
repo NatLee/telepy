@@ -35,6 +35,9 @@ pub async fn spawn_with(customize: impl FnOnce(&mut Config)) -> TestApp {
     // 測試不碰網路：載體只從暫存目錄來，release 頁指到沒人聽的位址（測試要的話自己改）。
     // No network: carriers from the temp dir only, the release page unreachable (a test may point it elsewhere).
     config.carrier_dir = dir.path().join("carriers");
+    // GeoIP / 廠商表也只在暫存目錄（更新會寫檔，不能寫進原始碼樹的 ./data）。/ GeoIP and vendor data in the temp dir too.
+    config.geoip_dir = dir.path().join("geoip");
+    config.oui_dir = dir.path().join("oui");
     config.releases_url = "http://127.0.0.1:9/releases".to_string();
     customize(&mut config);
     config.data_dir = dir.path().to_path_buf();

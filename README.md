@@ -233,8 +233,8 @@ docker compose exec backend telepy-server <command>
 | `doctor`           | Checks keys, database, configuration and companion services          |
 | `create-superuser` | Creates an administrator (`--username` and `--password`)             |
 | `keygen`           | Creates any missing SSH keys. Existing keys are never replaced       |
-| `geoip`            | Downloads the offline IP-location database. Restart the backend after |
-| `oui`              | Downloads the network-vendor list for LAN hosts. Restart the backend after |
+| `geoip`            | Downloads the offline IP-location database (or press Download on the Server health page). Telepy keeps it current after that, no restart |
+| `oui`              | Downloads the network-vendor list for LAN hosts. Kept current the same way |
 | `migrate`          | Brings the database up to date. Also runs on every start             |
 
 To follow the logs, run `docker compose logs -f backend`.
