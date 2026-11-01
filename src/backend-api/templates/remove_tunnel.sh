@@ -28,8 +28,9 @@ out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
 PORT_RE="(^|[^0-9])$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
 # A -R forward in a process or crontab line (never a -L with the same number).
 PROC_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
-# Any -R forward at all (new scripts ask for 0, so the number cannot tell; the key does).
-ANY_R_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?[0-9]+:"
+# Any -R forward at all (new scripts ask for 0, so the number cannot tell; the key does), or the built-in client's
+# `telepy-carrier tunnel --forward 0:<host>:<port>`.
+ANY_R_RE="(-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?[0-9]+:|--forward['\"]?[ =])"
 
 # Expand a leading ~ or $HOME.
 expand_path() {
@@ -66,8 +67,9 @@ key_matches() {
     return 1
 }
 # Key files a text (file contents or a command line) refers to: -i <path> (also quoted word by word: '-i' '/k'),
-# IdentityFile, docker's KEY_FILE= and <path>:/id_rsa.
+# IdentityFile, docker's KEY_FILE=, <path>:/id_rsa and the built-in client's --identity <path>.
 key_paths() {
+    printf '%s\n' "$1" | grep -oE -- "--identity['\"]?[ =]['\"]?[^ '\"]+" | sed -E "s/^--identity['\"]?[ =]['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "-i['\"]? ?['\"]?[^ '\"]+" | sed -E "s/^-i['\"]? ?['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "IdentityFile[ =]['\"]?[^ '\"]+" | sed -E "s/^IdentityFile[ =]['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "KEY_FILE=['\"]?[^ '\"]+" | sed -E "s/^KEY_FILE=['\"]?//"
@@ -84,8 +86,10 @@ kept_new() {
     case "$1" in *"telepy-$KEEP_ID"*|*"tunnel.$KEEP_ID"*) return 0 ;; esac
     return 1
 }
-# Ports a text dials: -p N (also -pN and '-p' 'N'), Port=N, SSH_REMOTE_PORT=N. Nothing = it does not say.
+# Ports a text dials: -p N (also -pN and '-p' 'N'), Port=N, SSH_REMOTE_PORT=N, the carrier's --server / --tcp host:N.
+# Nothing = it does not say.
 dial_ports() {
+    printf '%s\n' "$1" | grep -oE -- "--(server|tcp)['\"]?[ =]['\"]?[^ '\"]+:[0-9]+" | grep -oE '[0-9]+$'
     printf '%s\n' "$1" | grep -oE -- "(^|[ '\"=])-p['\"]? ?['\"]?[0-9]+" | grep -oE '[0-9]+$'
     printf '%s\n' "$1" | grep -oE -- "(Port[= ]['\"]?|SSH_REMOTE_PORT[=:] ?['\"]?)[0-9]+" | grep -oE '[0-9]+$'
 }
@@ -201,7 +205,7 @@ latelog() {
 # known_hosts files the removed parts used (UserKnownHostsFile=…); deleted at the end when nothing else uses them.
 OLD_KH=""
 note_kh() {
-    for nk in $(printf '%s\n' "$1" | grep -oE -- "UserKnownHostsFile[= ]['\"]?[^ '\"]+" | sed -E "s/^UserKnownHostsFile[= ]['\"]?//"); do
+    for nk in $(printf '%s\n' "$1" | grep -oE -- "(UserKnownHostsFile[= ]|--known-hosts['\"]?[ =])['\"]?[^ '\"]+" | sed -E "s/^(UserKnownHostsFile[= ]|--known-hosts['\"]?[ =])['\"]?//"); do
         nk=$(expand_path "$nk")
         case "$nk" in /dev/null) continue ;; esac
         case "$(basename "$nk")" in *telepy*) ;; *) continue ;; esac
@@ -364,9 +368,9 @@ if [ -r /proc/1/cmdline ]; then
 else
     ALL=$(ps -A -o pid= -o args= 2>/dev/null)
 fi
-MATCHED=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do line_is_mine "$l" && printf '%s\n' "$l"; done)
+MATCHED=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh|telepy' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do line_is_mine "$l" && printf '%s\n' "$l"; done)
 # A running tunnel to another server with this key: keep the key (and that tunnel).
-ELSEWHERE=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do foreign "$l" && uses_key "$l" && printf '%s\n' "$l"; done)
+ELSEWHERE=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh|telepy' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do foreign "$l" && uses_key "$l" && printf '%s\n' "$l"; done)
 if [ -n "$ELSEWHERE" ]; then
     KEY_ELSEWHERE="$KEY_ELSEWHERE (a running ssh)"
     printf '%s\n' "$ELSEWHERE" | while IFS= read -r l; do

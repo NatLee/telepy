@@ -4,7 +4,7 @@
 #   curl -fsSL ${server_url}/api/join/install.sh | sudo sh -s -- --token TOKEN
 #
 # What it does, in order (every step prints what it found and why it chose what it chose):
-#   1. looks at what this machine has: shell, HTTP tool, SSH client (OpenSSH or Dropbear's dbclient), the SSH
+#   1. looks at what this machine has: shell, HTTP tool, SSH client (OpenSSH, Telepy's built-in one, or Dropbear's dbclient), the SSH
 #      server that listens on the SSH port, the key tool, and the service manager (procd / systemd / launchd)
 #   2. reads this machine's SSH host key and checks it with a strict handshake (never trusted just because a
 #      file exists; never with host-key checking turned off)
@@ -21,6 +21,12 @@
 # com.telepy.tunnel.<id>, ~/.ssh/telepy-<id>.*): no user, server or tunnel name, and Telepy knows what to clean up.
 # A small record of what was installed goes to ~/.ssh/telepy-<id>.install (no secrets), the uninstall script next to it.
 #
+# The built-in client: without a real OpenSSH client (stock OpenWrt only has Dropbear's dbclient, which cannot talk to
+# Telepy's gateway; some boxes have no SSH client at all) the tunnel is run by telepy-carrier itself
+# (`telepy-carrier tunnel`), downloaded from Telepy for this CPU and checked against its sha256. It speaks SSH to the
+# gateway, pins the gateway's host keys like ssh would, keeps the link alive itself, and forwards Telepy's connections
+# to this machine's SSH server. Its key is made by ssh-keygen when there is one, else by `telepy-carrier keygen`.
+#
 # Options:
 #   --token TOKEN            join token from Telepy (required unless --check; single use, expires after 30 minutes)
 #   --check                  preflight only: detect, check the SSH server and the gateway, print a report; uses no token
@@ -28,7 +34,8 @@
 #   --ssh-port PORT          port of this machine's SSH server (default: detected, else 22)
 #   --ssh-host ADDR          address the SSH server listens on (default: detected; 127.0.0.1 when it listens everywhere)
 #   --authorized-keys PATH   where this SSH server reads this account's keys (default: resolved from the server)
-#   --client openssh|dbclient  which SSH client runs the tunnel (default: OpenSSH when it is really OpenSSH, else dbclient)
+#   --client openssh|builtin|dbclient  which SSH client runs the tunnel (default: OpenSSH when it is really OpenSSH, else
+#                            the built-in client of telepy-carrier when Telepy has one for this CPU, else dbclient)
 #   --service procd|systemd|launchd|loop  how the tunnel is kept running (default: what the machine has)
 #   --name NAME              tunnel name (default: the name set in Telepy, else this machine's hostname)
 #   --compat-no-server-alive use TCP keepalive instead of SSH ServerAlive (see --check; applied automatically
@@ -67,7 +74,8 @@ Join this machine to Telepy as a device.
   --ssh-port PORT         port of this machine's SSH server (default: detected, else 22)
   --ssh-host ADDR         address the SSH server listens on (default: detected)
   --authorized-keys PATH  where this SSH server reads this account's keys (default: resolved from the server)
-  --client openssh|dbclient         SSH client for the tunnel (default: OpenSSH if real, else dbclient)
+  --client openssh|builtin|dbclient SSH client for the tunnel (default: OpenSSH if real, else the built-in one of
+                          telepy-carrier when Telepy has it for this CPU, else dbclient)
   --service procd|systemd|launchd|loop  how the tunnel is kept running (default: detected)
   --name NAME             tunnel name (default: the name set in Telepy, else this machine's hostname)
   --compat-no-server-alive          TCP keepalive instead of SSH ServerAlive (see --check)
@@ -261,12 +269,39 @@ fetch_carrier() {
     [ -n "$CARRIER_WHY" ] || CARRIER_WHY="no prebuilt telepy-carrier for $OS/$ARCH and no python3 on this machine (installing python3 would do)"
     return 1
 }
+# The built-in client: the same prebuilt telepy-carrier (fetched and checked as above) runs the tunnel itself with
+# `telepy-carrier tunnel`. Sets CLIENT=builtin, SSH_BIN and CLIENT_DESC; on failure CARRIER_WHY says why. A carrier too
+# old to know `tunnel` stays usable as a web-port carrier.
+builtin_client() {
+    [ "$CARRIER_OPT" != python ] || { CARRIER_WHY="--carrier python leaves no telepy-carrier to run the tunnel"; return 1; }
+    [ -n "$CARRIER_TARGET" ] || { CARRIER_WHY="Telepy builds no telepy-carrier for $OS/$ARCH"; return 1; }
+    if [ "$CARRIER" != binary ]; then
+        bc_opt=$CARRIER_OPT; CARRIER_OPT=binary
+        fetch_carrier && bc_rc=0 || bc_rc=$?
+        CARRIER_OPT=$bc_opt
+        [ "$bc_rc" -eq 0 ] || return 1
+    fi
+    if ! "$WS_BIN" tunnel --help 2>/dev/null | grep -q 'telepy-carrier tunnel'; then
+        CARRIER_WHY="the telepy-carrier this Telepy serves is older and has no built-in client (update Telepy)"
+        return 1
+    fi
+    CLIENT=builtin; SSH_BIN=$WS_BIN
+    CLIENT_DESC="builtin ($CARRIER_DESC)"
+    return 0
+}
+# The built-in client's view of an SSH server: `tunnel --probe` does a full key exchange without offering a key. Prints
+# the probe's lines (PROBE= / HOST_KEY= / FINGERPRINT= / WAY=, its messages start with "telepy-carrier:"); returns its
+# exit code (0 = handshake done, 3 = another host key, 4 = nothing reachable).
+builtin_probe() {
+    with_timeout 40 "$SSH_BIN" tunnel --probe "$@" 2>&1 </dev/null
+}
 values() { printf '%s\n' "$HTTP_BODY" | sed -n "s/^$1=//p"; }
 
 # --- host key verification -----------------------------------------------------------------------------------
 # verify_host_key TYPE BASE64 → 0 when a strict handshake with exactly this key succeeds (the connection gets past
 # the host-key check; authentication is not attempted, so "Permission denied" is the success marker for OpenSSH).
-# 1 = mismatch (the server has another key), 2 = no server / cannot connect, 3 = could not tell.
+# 1 = mismatch (the server has another key), 2 = no server / cannot connect, 3 = could not tell, 4 = a key kind this
+# client does not check.
 verify_host_key() {
     vh_type=$1; vh_key=$2
     vh_kh="$TMP/verify.known_hosts"
@@ -295,6 +330,17 @@ verify_host_key() {
                 *"host key mismatch"*|*"Didn't validate host key"*|*"not in the trusted hosts"*) return 1 ;;
                 *"Connect failed"*|*"Connection refused"*|*"timed out"*|*"Remote closed the connection"*) return 2 ;;
                 *"exited: "*) return 0 ;;
+                *) return 3 ;;
+            esac ;;
+        builtin)
+            # It checks ed25519 / ecdsa host keys (no RSA code in it, to stay small): an RSA candidate is skipped (4).
+            case "$vh_type" in ssh-rsa|ssh-dss|rsa-*) return 4 ;; esac
+            # Only that key is trusted (and only its kind is negotiated); no key is offered.
+            builtin_probe --no-proxy --user telepy-probe --server "$SSH_HOST:$SSH_PORT" --host-key "$vh_type $vh_key" >/dev/null && vh_rc=0 || vh_rc=$?
+            case "$vh_rc" in
+                0) return 0 ;;
+                3) return 1 ;;
+                4) return 2 ;;
                 *) return 3 ;;
             esac ;;
     esac
@@ -341,6 +387,14 @@ probe_gateway() {
                 "") GW_PROBE=timeout ;;
                 *) GW_PROBE=other ;;
             esac ;;
+        builtin)
+            # The same way the service will connect (BI_NET: the SSH port and / or the web port), no key offered.
+            # shellcheck disable=SC2086
+            bp_out=$(builtin_probe --user "$GATEWAY_USER" --known-hosts "$KNOWN_HOSTS" $BI_NET $BI_PROXY) || true
+            GW_PROBE=$(printf '%s\n' "$bp_out" | sed -n 's/^PROBE=//p' | head -n 1)
+            GW_WAY=$(printf '%s\n' "$bp_out" | sed -n 's/^WAY=//p' | head -n 1)
+            GW_PROBE_OUT=$(printf '%s\n' "$bp_out" | grep '^telepy-carrier:' || true)
+            [ -n "$GW_PROBE" ] || GW_PROBE=timeout ;;
     esac
 }
 gw_last() {
@@ -359,7 +413,8 @@ write_uninstall() {
             printf 'if [ -f %s ]; then grep -vxF' "$DB_KH" ; printf '%s\n' "$DB_KH_LINES" | while IFS= read -r l; do if [ -n "$l" ]; then printf " -e '%s'" "$l"; fi; done
             printf ' %s > %s.telepy-tmp; cat %s.telepy-tmp > %s; rm -f %s.telepy-tmp; fi\n' "$DB_KH" "$DB_KH" "$DB_KH" "$DB_KH" "$DB_KH"
         fi
-        printf 'rm -f %s %s %s\n' "$KNOWN_HOSTS" "$RECORD" "$UNINSTALL"
+        # The web-port carrier / built-in client and its wrapper go too (named after the install id, this tunnel's only).
+        printf 'rm -f %s %s %s%s%s\n' "$KNOWN_HOSTS" "$RECORD" "$UNINSTALL" "${WS_FILES:+ $WS_FILES}" "${WS_SH_FINAL:+ $WS_SH_FINAL}"
         printf 'echo "Stopped the tunnel. The key %s and the Telepy line in %s were kept; delete them if you no longer need them."\n' "$KEY" "$AUTH_KEYS"
     } > "$UNINSTALL"
     chmod 700 "$UNINSTALL"
@@ -380,6 +435,7 @@ start_background() {
     # file (OpenSSH) or key file (dbclient): -R asks for 0, so the number cannot identify it.
     PATTERN="UserKnownHostsFile=$KNOWN_HOSTS "
     [ "$CLIENT" = dbclient ] && PATTERN="-i $KEY "
+    [ "$CLIENT" = builtin ] && PATTERN="tunnel --identity $KEY "
     pkill -f "$RUNNER" 2>/dev/null || true
     pkill -f "$PATTERN" 2>/dev/null || true
     nohup "$RUNNER" > "$LOG_FILE" 2>&1 &
@@ -650,7 +706,7 @@ main() {
     case "$NAME" in *[!A-Za-z0-9._-]*) die "--name may only use letters, digits, '.', '_' and '-'" ;; esac
     case "$SSH_PORT" in ""|*[!0-9]*) [ -z "$SSH_PORT" ] || die "--ssh-port must be a number" ;; esac
     case "$SSH_HOST" in *[!A-Za-z0-9.:_-]*) die "--ssh-host must be an address" ;; esac
-    case "$CLIENT_OPT" in ""|openssh|dbclient) ;; *) die "--client must be openssh or dbclient" ;; esac
+    case "$CLIENT_OPT" in ""|openssh|builtin|dbclient) ;; *) die "--client must be openssh, builtin or dbclient" ;; esac
     case "$SERVICE_OPT" in ""|procd|systemd|launchd|loop) ;; *) die "--service must be procd, systemd, launchd or loop" ;; esac
     case "$CARRIER_OPT" in auto|binary|python) ;; *) die "--carrier must be auto, binary or python" ;; esac
 
@@ -706,35 +762,46 @@ main() {
     if [ -n "$TIMEOUT_BIN" ]; then note "http: $HTTP_TOOL; timeout: $TIMEOUT_BIN"; else note "http: $HTTP_TOOL; timeout: built-in watchdog"; fi
 
     # The SSH client that will run the tunnel. "ssh" is not always OpenSSH: stock OpenWrt's /usr/bin/ssh is dbclient.
+    # Order: a real OpenSSH, else Telepy's built-in client (telepy-carrier, when Telepy has it for this CPU), else dbclient.
     CLIENT=""; SSH_BIN=""; CLIENT_DESC=""
+    OSSH_BIN=""; OSSH_DESC=""; DB_BIN=""; DB_DESC=""
     for cand in ssh dbclient; do
         have "$cand" || continue
         bin=$(command -v "$cand")
         ver=$("$bin" -V 2>&1 | head -n 1)
         case "$ver" in
             OpenSSH_*)
-                [ "$CLIENT_OPT" = dbclient ] && continue
-                CLIENT=openssh; SSH_BIN=$bin; CLIENT_DESC=$(printf '%s' "$ver" | sed 's/,.*//; s/ .*//')
-                break ;;
+                [ -n "$OSSH_BIN" ] || { OSSH_BIN=$bin; OSSH_DESC=$(printf '%s' "$ver" | sed 's/,.*//; s/ .*//'); } ;;
             *[Dd]ropbear*)
-                [ "$CLIENT_OPT" = openssh ] && continue
-                # Prefer a real OpenSSH further down the PATH (e.g. dbclient first, OpenSSH installed later).
                 # The service must name the dbclient binary itself, never the `ssh` link: installing openssh-client later
                 # repoints /usr/bin/ssh, and OpenSSH would then be started with dbclient's options.
-                if [ -z "$CLIENT" ]; then
-                    CLIENT=dbclient
-                    SSH_BIN=$(command -v dbclient 2>/dev/null || printf '%s' "$bin")
-                    CLIENT_DESC="dbclient $(printf '%s' "$ver" | sed 's/.*v\([0-9.]*\).*/\1/')"
-                fi ;;
+                [ -n "$DB_BIN" ] || { DB_BIN=$(command -v dbclient 2>/dev/null || printf '%s' "$bin"); DB_DESC="dbclient $(printf '%s' "$ver" | sed 's/.*v\([0-9.]*\).*/\1/')"; } ;;
         esac
     done
-    if [ -z "$CLIENT" ]; then
-        case "$CLIENT_OPT" in
-            openssh) die "no OpenSSH client found (ssh -V does not say OpenSSH): $(pkg_hint openssh)" ;;
-            dbclient) die "no dbclient found: $(pkg_hint dropbear)" ;;
-            *) die "no SSH client found: $(pkg_hint openssh), or Dropbear's dbclient ($(pkg_hint dropbear))" ;;
-        esac
-    fi
+    # The web-port carrier and the built-in client come from the same prebuilt telepy-carrier.
+    PYTHON=$(command -v python3 || true)
+    CARRIER=""; CARRIER_DESC=""; CARRIER_FACT=none; WS_BIN=""; WS_PY=""; WS_CMD=""; CARRIER_WHY=""
+    carrier_target
+    case "$CLIENT_OPT" in
+        openssh) [ -n "$OSSH_BIN" ] || die "no OpenSSH client found (ssh -V does not say OpenSSH): $(pkg_hint openssh)"
+                 CLIENT=openssh ;;
+        dbclient) [ -n "$DB_BIN" ] || die "no dbclient found: $(pkg_hint dropbear)"
+                  CLIENT=dbclient ;;
+        builtin) builtin_client || die "--client builtin: $CARRIER_WHY" ;;
+        *)
+            if [ -n "$OSSH_BIN" ]; then CLIENT=openssh
+            elif builtin_client; then :
+            elif [ -n "$DB_BIN" ]; then
+                note "the built-in client is not available ($CARRIER_WHY); trying dbclient"
+                CLIENT=dbclient
+            else
+                die "no SSH client: no OpenSSH, no built-in client ($CARRIER_WHY) and no dbclient. Install one ($(pkg_hint openssh)), or ask the Telepy admin to make telepy-carrier available (telepy-server fetch-carriers)."
+            fi ;;
+    esac
+    case "$CLIENT" in
+        openssh) SSH_BIN=$OSSH_BIN; CLIENT_DESC=$OSSH_DESC ;;
+        dbclient) SSH_BIN=$DB_BIN; CLIENT_DESC=$DB_DESC ;;
+    esac
     case "$CLIENT" in
         openssh)
             # Every option the tunnel will use must be accepted by this build (-G parses without connecting).
@@ -745,7 +812,13 @@ main() {
                 warn "$SSH_BIN ($CLIENT_DESC) did not accept the tunnel options with -G; a very old OpenSSH may still work, but this is unverified"
                 note "ssh client: $CLIENT_DESC at $SSH_BIN (options NOT verified)"
             fi
-            have ssh-keygen || die "ssh-keygen is missing ($(pkg_hint openssh)), or run with --client dbclient" ;;
+            have ssh-keygen || die "ssh-keygen is missing ($(pkg_hint openssh)), or run with --client builtin" ;;
+        builtin)
+            why="no OpenSSH client here"
+            [ -z "$DB_BIN" ] || why="$why; $DB_DESC is not used (stock dbclient cannot finish a key exchange with Telepy's gateway)"
+            [ "$CLIENT_OPT" != builtin ] || why="--client builtin"
+            note "ssh client: built-in, $CARRIER_DESC ($why): it speaks SSH to Telepy itself, pins the gateway's host keys and forwards Telepy's connections to this machine's SSH server"
+            if have ssh-keygen; then note "key tool: ssh-keygen"; else note "key tool: telepy-carrier keygen (no ssh-keygen here)"; fi ;;
         dbclient)
             # dbclient ignores unknown -o options and still exits 0, so the capability list (-o help) decides, not the exit code.
             dbclient -o help 2>&1 | grep -q 'ExitOnForwardFailure' || die "$SSH_BIN ($CLIENT_DESC) has no ExitOnForwardFailure option (Dropbear 2016.73 or newer is needed)"
@@ -754,11 +827,9 @@ main() {
             have dropbearkey || die "dropbearkey is missing ($(pkg_hint dropbear))"
             note "ssh client: $CLIENT_DESC at $SSH_BIN (has -R, -K, ExitOnForwardFailure; host key via ~/.ssh/known_hosts)" ;;
     esac
-    # The web-port carrier: which ones this machine could use (the download happens once the gateway is known).
-    PYTHON=$(command -v python3 || true)
-    CARRIER=""; CARRIER_DESC=""; CARRIER_FACT=none; WS_BIN=""; WS_PY=""; WS_CMD=""
-    carrier_target
-    if [ "$VIA_WEB" -ne 0 ]; then
+    # The web-port carrier: which ones this machine could use (the download happens once the gateway is known). The
+    # built-in client is its own carrier.
+    if [ "$VIA_WEB" -ne 0 ] && [ "$CLIENT" != builtin ]; then
         case "$CARRIER_OPT" in
             python) [ -n "$PYTHON" ] || { [ "$VIA_WEB" -eq 1 ] && die "--carrier python: no python3 on this machine"; note "no python3 here (--carrier python): the tunnel uses the SSH port only"; VIA_WEB=0; } ;;
             binary) [ -n "$CARRIER_TARGET" ] || { [ "$VIA_WEB" -eq 1 ] && die "--carrier binary: no prebuilt telepy-carrier for $OS/$ARCH"; note "no prebuilt telepy-carrier for $OS/$ARCH (--carrier binary): the tunnel uses the SSH port only"; VIA_WEB=0; } ;;
@@ -937,6 +1008,12 @@ main() {
             -p "$SSH_PORT" "telepy-probe@$SSH_HOST" true >/dev/null 2>&1 </dev/null || true
         while read -r h ty k rest; do if [ -n "$k" ]; then add_candidate "$ty" "$k" "learned over loopback"; fi; done < "$TMP/learn.known_hosts"
     fi
+    if [ "$CLIENT" = builtin ] && ! have ssh-keyscan; then
+        # What ssh-keyscan would do, with the built-in client: the key the server shows over loopback (the same trust:
+        # nothing but root can sit between this process and 127.0.0.1), then verified strictly like the others.
+        lo_key=$(builtin_probe --no-proxy --user telepy-probe --server "$SSH_HOST:$SSH_PORT" | sed -n 's/^HOST_KEY=//p' | head -n 1 || true)
+        if [ -n "$lo_key" ]; then add_candidate "${lo_key%% *}" "${lo_key#* }" "telepy-carrier tunnel --probe"; fi
+    fi
     HOST_KEYS_JSON=""
     HOST_KEY_SOURCE=""
     MISMATCHED=""
@@ -953,6 +1030,7 @@ main() {
                note "host key ${pair%% *} from $src: verified by a strict handshake" ;;
             1) MISMATCHED="$MISMATCHED $src"; note "host key ${pair%% *} from $src: the server on $SSH_HOST:$SSH_PORT has a DIFFERENT key (ignored)" ;;
             2) NO_SERVER=1 ;;
+            4) note "host key ${pair%% *} from $src: not checked (the built-in client checks ed25519 and ecdsa host keys only)" ;;
             *) note "host key ${pair%% *} from $src: could not be verified (the handshake ended in an unexpected way)" ;;
         esac
     done < "$TMP/verified"
@@ -1029,7 +1107,7 @@ main() {
         done
         note "gateway: $GATEWAY_USER@$GATEWAY_HOST:$GATEWAY_PORT, $(printf '%s\n' "$GW_HOST_KEYS" | grep -c .) host key(s) pinned"
     else
-        [ "$CLIENT" = openssh ] || die "Telepy sent no gateway host keys, and dbclient cannot pin on first use non-interactively (the backend creates them when it starts; ask the admin to check GATEWAY_HOST_KEYS_DIR)"
+        [ "$CLIENT" = openssh ] || die "Telepy sent no gateway host keys, and $CLIENT_DESC cannot pin on first use non-interactively (the backend creates them when it starts; ask the admin to check GATEWAY_HOST_KEYS_DIR)"
         STRICT=accept-new
         "$SSH_BIN" -G -o StrictHostKeyChecking=accept-new localhost >/dev/null 2>&1 || STRICT=no
         warn "Telepy sent no gateway host keys (the server has none configured): the key is accepted on first use ($STRICT)"
@@ -1048,7 +1126,8 @@ main() {
     [ -z "${HTTPS_PROXY:-${https_proxy:-}}" ] || WS_PROXY="--proxy ${HTTPS_PROXY:-$https_proxy} "
     if [ "$VIA_WEB" -ne 0 ]; then
         case "$WS_URL" in
-            ws://*|wss://*) fetch_carrier || true ;;
+            # The built-in client is its own carrier (downloaded and checked already).
+            ws://*|wss://*) [ "$CLIENT" = builtin ] || fetch_carrier || true ;;
             *) [ "$VIA_WEB" -eq 1 ] && die "Telepy sent no WebSocket address"; note "Telepy sent no WebSocket address: the tunnel uses the SSH port only"; VIA_WEB=0 ;;
         esac
     fi
@@ -1057,7 +1136,20 @@ main() {
         note "cannot get a web-port carrier ($CARRIER_WHY): the tunnel uses the SSH port only"
         VIA_WEB=0
     fi
-    if [ "$VIA_WEB" -ne 0 ]; then
+    # The built-in client's way to Telepy: the SSH port, the web port, or both (the SSH port first, like the carrier).
+    # A proxy only matters for the web port; without one the variables of a service-less environment are ignored.
+    BI_NET="--server $GATEWAY_HOST:$GATEWAY_PORT"
+    BI_PROXY="--no-proxy"
+    if [ "$CLIENT" = builtin ] && [ "$VIA_WEB" -ne 0 ]; then
+        [ "$VIA_WEB" -eq 1 ] && BI_NET="--ws $WS_URL"
+        [ "$VIA_WEB" -eq 2 ] && BI_NET="--server $GATEWAY_HOST:$GATEWAY_PORT --ws $WS_URL"
+        [ -z "${HTTPS_PROXY:-${https_proxy:-}}" ] || BI_PROXY="--proxy ${HTTPS_PROXY:-$https_proxy}"
+        if [ "$VIA_WEB" -eq 2 ]; then
+            note "transport: automatic, the SSH port $GATEWAY_HOST:$GATEWAY_PORT first, else the web port ($WS_URL), chosen by the built-in client${WS_PROXY:+; via the proxy ${HTTPS_PROXY:-$https_proxy}}"
+        else
+            note "transport: WebSocket on the web port ($WS_URL), spoken by the built-in client${WS_PROXY:+; via the proxy ${HTTPS_PROXY:-$https_proxy}}"
+        fi
+    elif [ "$VIA_WEB" -ne 0 ]; then
         WS_SH="$TMP/telepy-ws.sh"
         printf '#!/bin/sh\nexec %s %s%s\n' "$WS_CMD" "$WS_PROXY" "$WS_ARGS" > "$WS_SH"
         chmod 700 "$WS_SH"
@@ -1119,6 +1211,17 @@ main() {
                 *) die "cannot complete an SSH handshake with $GATEWAY_HOST:$GATEWAY_PORT ($GW_PROBE): $(gw_last). Outbound TCP to that port must be allowed." ;;
             esac
             [ "$COMPAT_OPT" = force ] && note "--compat-no-server-alive does not apply to dbclient (its -K keepalive is not affected)" ;;
+        builtin)
+            # One probe is enough: the built-in client keeps its own timers (the ppoll bug of some OpenWrt builds that
+            # breaks ssh's ServerAliveInterval does not touch it), so there is no compat mode.
+            probe_gateway
+            case "$GW_PROBE" in
+                ok) KEEPALIVE="ssh (built-in, 30 s)"; KEEPALIVE_WHY="handshake completed over the ${GW_WAY:-ssh} port; the built-in client sends an SSH keepalive after 30 s without traffic" ;;
+                hostkey) die "the gateway's host key does not match what Telepy announced: $(gw_last)" ;;
+                unreachable) die "cannot connect to Telepy ($BI_NET): $(gw_last). Outbound TCP to $GATEWAY_HOST:$GATEWAY_PORT must be allowed (or use --via-web / --auto)." ;;
+                *) die "cannot complete an SSH handshake with Telepy ($GW_PROBE): $(gw_last)" ;;
+            esac
+            [ "$COMPAT_OPT" != force ] || note "--compat-no-server-alive does not apply to the built-in client (it has its own keepalive)" ;;
     esac
     if [ -n "$COMPAT" ]; then
         warn "compat mode: SSH keepalives are OFF (ServerAliveInterval=0, TCPKeepAlive=yes). Why: $KEEPALIVE_WHY. A dead link is noticed later (TCP keepalive, often 2+ hours unless the kernel is tuned), and the service restarts ssh only when it exits."
@@ -1150,7 +1253,7 @@ main() {
     KEY_DROPBEAR="$SSH_DIR/telepy_tunnel_dropbear"
     KEY_FORMAT=openssh
     case "$CLIENT" in
-        openssh)
+        openssh|builtin)
             KEY=$KEY_OPENSSH
             if [ ! -f "$KEY" ] && [ -f "$KEY_DROPBEAR" ]; then
                 if have dropbearconvert && dropbearconvert dropbear openssh "$KEY_DROPBEAR" "$KEY" >/dev/null 2>&1; then
@@ -1160,14 +1263,23 @@ main() {
                 fi
             fi
             if [ ! -f "$KEY" ]; then
-                ssh-keygen -q -t ed25519 -N '' -C "telepy-tunnel@$HOST_NAME" -f "$KEY" </dev/null 2>/dev/null \
-                    || ssh-keygen -q -t rsa -b 3072 -N '' -C "telepy-tunnel@$HOST_NAME" -f "$KEY" </dev/null \
-                    || die "could not create $KEY"
-                say "created $KEY"
+                if have ssh-keygen; then
+                    ssh-keygen -q -t ed25519 -N '' -C "telepy-tunnel@$HOST_NAME" -f "$KEY" </dev/null 2>/dev/null \
+                        || ssh-keygen -q -t rsa -b 3072 -N '' -C "telepy-tunnel@$HOST_NAME" -f "$KEY" </dev/null \
+                        || die "could not create $KEY"
+                    say "created $KEY"
+                else
+                    # Only the built-in client gets here (OpenSSH needs ssh-keygen, checked above).
+                    "$SSH_BIN" keygen -C "telepy-tunnel@$HOST_NAME" "$KEY" >/dev/null || die "could not create $KEY (telepy-carrier keygen)"
+                    say "created $KEY (telepy-carrier keygen)"
+                fi
             else
                 say "using $KEY"
             fi
-            [ -f "$KEY.pub" ] || ssh-keygen -y -f "$KEY" > "$KEY.pub"
+            if [ ! -f "$KEY.pub" ]; then
+                if have ssh-keygen; then ssh-keygen -y -f "$KEY" > "$KEY.pub"
+                else "$SSH_BIN" keygen -y "$KEY" > "$KEY.pub" || die "cannot read the public key of $KEY"; fi
+            fi
             PUBLIC_KEY=$(tr -d '"\\\r\n' < "$KEY.pub") ;;
         dbclient)
             KEY=$KEY_DROPBEAR
@@ -1305,7 +1417,14 @@ main() {
 
     # --- SSH over WebSocket: move the carrier next to the key ---------------------------------------------------
     WS_FILES=""
-    if [ "$VIA_WEB" -ne 0 ]; then
+    if [ "$CLIENT" = builtin ]; then
+        # The built-in client runs from next to the key, named after the install id like everything else.
+        BI_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.bin"
+        cp "$SSH_BIN" "$BI_FINAL.telepy-new" && chmod 700 "$BI_FINAL.telepy-new" && mv -f "$BI_FINAL.telepy-new" "$BI_FINAL" || die "cannot write $BI_FINAL"
+        [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$BI_FINAL"
+        SSH_BIN=$BI_FINAL; WS_FILES=$BI_FINAL
+        say "the built-in client runs from $BI_FINAL"
+    elif [ "$VIA_WEB" -ne 0 ]; then
         WS_SH_FINAL="$SSH_DIR/telepy-$INSTALL_ID-ws.sh"
         case "$CARRIER" in
             binary)
@@ -1334,11 +1453,15 @@ main() {
         dbclient)
             # -K: a keepalive every 30 s, the session ends after three unanswered. -I 0: no idle timeout. Host key: ~/.ssh/known_hosts (pinned above).
             SSH_ARGS="-N -T -K 30 -I 0 -o ExitOnForwardFailure=yes ${PROXY_J}-i $KEY -p $GATEWAY_PORT -R 0:$SSH_HOST:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST" ;;
+        builtin)
+            # The same forward as ssh's -R 0:<addr>:<port>: Telepy assigns the tunnel's own number from the key.
+            SSH_ARGS="tunnel --identity $KEY --known-hosts $KNOWN_HOSTS --user $GATEWAY_USER $BI_NET $BI_PROXY --forward 0:$SSH_HOST:$SSH_PORT --keepalive 30" ;;
     esac
 
     # --- run the tunnel -----------------------------------------------------------------------------
     FILES="$KEY $KEY.pub $KNOWN_HOSTS $RECORD $UNINSTALL"
-    [ "$VIA_WEB" -ne 0 ] && FILES="$FILES $WS_FILES $WS_SH"
+    if [ "$CLIENT" = builtin ]; then FILES="$FILES $WS_FILES"
+    elif [ "$VIA_WEB" -ne 0 ]; then FILES="$FILES $WS_FILES $WS_SH"; fi
     LOGS=""
     RUNNING=unknown; BOOT=unknown; SERVICE_KIND=""; SERVICE_NAME=""; SERVICE_FILE=""
     step "Starting the tunnel ($SERVICE_DESC)"

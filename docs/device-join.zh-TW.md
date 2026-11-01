@@ -19,10 +19,10 @@ Docker 的真平台驗證在第五節。
 |---|---|---|
 | shell | `sh --help` 第一行有 BusyBox → ash；否則 bash / dash / sh | 腳本本身只用 POSIX sh（BusyBox ash 驗過），不是用 shell 來分支 |
 | HTTP 工具 | `curl` → `wget`（要支援 `--post-data`）→ `uclient-fetch` | 原廠 OpenWrt 沒有 curl，`wget` 是 uclient-fetch：沒有 `--header`，看不到狀態碼，錯誤時連 body 都不存。所以裝置端點都用 `?soft=1`：一律 200、第一行 `STATUS=<原狀態碼>`；註冊也不看 Content-Type |
-| SSH client | 對 `ssh`、`dbclient` 各跑 `-V`：印 `OpenSSH_` 才是 OpenSSH，印 `Dropbear` 就是 dbclient | 原廠 OpenWrt 的 `/usr/bin/ssh` 是 dropbear 的連結；`command -v ssh` 成功不代表是 OpenSSH |
+| SSH client | 對 `ssh`、`dbclient` 各跑 `-V`：印 `OpenSSH_` 才是 OpenSSH，印 `Dropbear` 就是 dbclient。順序：真的 OpenSSH，沒有就用 **Telepy 內建的 client**（`telepy-carrier tunnel`，Telepy 有這台 CPU 的 `telepy-carrier` 時；下載後核對 sha256，見第一之二節），再沒有才是 dbclient。`--client openssh\|builtin\|dbclient` 可指定 | 原廠 OpenWrt 的 `/usr/bin/ssh` 是 dropbear 的連結，`command -v ssh` 成功不代表是 OpenSSH。原廠 dbclient 跟 Telepy 的 gateway 完成不了金鑰交換（第三之二節），所以排最後 |
 | OpenSSH 的選項 | `ssh -G` 帶著通道會用的全部選項解析一次 | 不認得的選項會直接報錯，而不是連上以後才發現 |
 | dbclient 的能力 | `dbclient -o help` 要列出 `ExitOnForwardFailure`（2016.73+）、`-h` 要有 `-K` 與 `-R` | dbclient 對不認得的 `-o` 只印一行 `Ignoring unknown configuration option` 然後**照常執行、exit 0**（2022.82 實測），不能靠退出碼 |
-| 金鑰工具 | OpenSSH → `ssh-keygen`；dbclient → `dropbearkey` | dbclient 2022.82 讀不了 OpenSSH 格式的私鑰（`Exited: String too long`，實測）；兩種 client 的金鑰檔分開：`telepy_tunnel_ed25519`（OpenSSH）、`telepy_tunnel_dropbear`（Dropbear）。有 `dropbearconvert` 時互轉，沿用同一條通道；沒有時新金鑰 = Telepy 眼中的新裝置，腳本會說 |
+| 金鑰工具 | OpenSSH → `ssh-keygen`；內建 client → 有 `ssh-keygen` 就用它，沒有就 `telepy-carrier keygen`（ed25519、OpenSSH 格式、0600、旁邊放 `.pub`）；dbclient → `dropbearkey` | dbclient 2022.82 讀不了 OpenSSH 格式的私鑰（`Exited: String too long`，實測）；兩種 client 的金鑰檔分開：`telepy_tunnel_ed25519`（OpenSSH）、`telepy_tunnel_dropbear`（Dropbear）。有 `dropbearconvert` 時互轉，沿用同一條通道；沒有時新金鑰 = Telepy 眼中的新裝置，腳本會說 |
 | SSH server | 先從 `/proc/net/tcp` 看誰在聽那個 port、聽在哪個位址；再用 `nc -w 3` 讀 banner（`SSH-2.0-dropbear_2022.82` / `OpenSSH_9.6`）；沒有 nc 就用 `ssh -v` 的 `remote software version` | Dropbear 若只綁 LAN 介面（`option Interface 'lan'`），127.0.0.1 不會回應：host key 的核對與通道的回送目標 `-R 0:<位址>:<port>` 都改用那個 LAN 位址（同一個端點） |
 | host key | 候選來源：root 的 `dropbearkey -y /etc/dropbear/*_host_key`、`/etc/ssh/ssh_host_*_key.pub`、`ssh-keyscan`（**不帶 `-T`**）、最後 OpenSSH 經 loopback `accept-new` 學一次。每個候選都用 `StrictHostKeyChecking=yes` + 只放那把金鑰的 known_hosts 握手一次，只有握手成功（走到 `Permission denied`）才接受 | 檔案存在不等於是現在在聽的那個 server 的金鑰；`ssh-keyscan -T` 在有 ppoll 問題的機器上一個金鑰都印不出來（事件 A）。沒有任何候選通過時，訊息說的是「連得到但讀不到金鑰 / 沒有東西在聽」，不再叫人裝 openssh-server |
 | authorized_keys 位置 | OpenWrt + Dropbear + root → `/etc/dropbear/authorized_keys`（OpenWrt 的 patch）；OpenSSH 且 `sshd -T` 讀得到 → `AuthorizedKeysFile` 第一個（展開 `%h` `%u`）；否則 `~/.ssh/authorized_keys`；`--authorized-keys` 可覆寫 | 「~/.ssh」只是候選，不是事實 |
@@ -32,6 +32,29 @@ Docker 的真平台驗證在第五節。
 
 超時：有 `timeout` 就用，沒有（原廠 OpenWrt、macOS）就用自帶的 watchdog（背景執行 + 計時殺掉，watchdog 自己的輸出關掉，
 否則 `$(...)` 會等它）。等待驗證用迴圈次數（60 × 2 s）而不是牆上時鐘：路由器開機後 NTP 校時不會讓它等到天荒地老或立刻放棄。
+
+用內建 client 時，host key 候選改由 `telepy-carrier tunnel --probe --host-key '<那把金鑰>'` 核對（完整的金鑰交換、只信那一把、自己不送金鑰）；沒有 ssh-keyscan 時，同一個探測會先經 loopback 讀出金鑰，跟 ssh-keyscan 做的事一樣。
+
+## 一之二、內建的 SSH client（`telepy-carrier tunnel`）
+
+有 SSH server、卻沒有能用的 SSH client 的裝置，以前得 `opkg install openssh-client`：原廠 OpenWrt 只有 Dropbear 的 dbclient，跟 Telepy 的 gateway 完成不了金鑰交換（第三之二節）；有些版本的 ssh 一設 ServerAliveInterval 就逾時（第二節）；dbclient 也讀不了 OpenSSH 格式的金鑰。現在預編的 `telepy-carrier`（就是走網頁 port 的那個小幫手）可以自己跑反向通道：
+
+```sh
+~/.ssh/telepy-<代號>-ws.bin tunnel --identity ~/.ssh/telepy_tunnel_ed25519 --known-hosts ~/.ssh/telepy-<代號>.known_hosts \
+    --user telepy --server <SSH 主機>:<port> [--ws wss://<主機>/ws/gateway/] --no-proxy --forward 0:127.0.0.1:22 --keepalive 30
+```
+
+它做的事：
+- 用通道金鑰登入 gateway（OpenSSH 格式、不能有 passphrase；沒有 ssh-keygen 時由 `telepy-carrier keygen` 產生）；
+- 用腳本寫的檔案（`GET /api/join/gateway` 宣告的金鑰）核對 gateway 的 host key；不是那幾把就拒絕連線（結束碼 3），什麼都不會登記；
+- 要 `tcpip-forward` 0（Telepy 依金鑰給這條通道自己的號碼，跟 `ssh -R 0:…` 一樣），把 Telepy 開過來的每條連線接到這台機器的 SSH server（`--forward 0:<位址>:<port>`；Dropbear 只聽 LAN 位址時就用那個位址）；
+- 連 Telepy 的方式跟小幫手相同：SSH 的 port、網頁 port（`--via-web`），或兩者都給、SSH 的 port 先（`--auto`）；安裝時有設 `HTTPS_PROXY` 就經 HTTP CONNECT 代理；
+- 沒有流量 30 秒就送一次 SSH keepalive，三次沒回應就放棄。計時器是它自己的、不是 ssh 的，所以第二節的 ppoll 問題碰不到它：只探一次，沒有 compat 模式；
+- 連線結束就退出（非 0），由服務管理器重新啟動（procd `respawn`、systemd `Restart=always`、launchd `KeepAlive`、背景迴圈）；SIGTERM 乾淨地結束。
+
+它不做的事：沒有 shell、不轉送 agent 或 X11、不讀 `~/.ssh/config`、只有一個 forward；有 passphrase 的金鑰會被拒絕。Telepy 只為 x86-64、aarch64、armv7、armv6 的 Linux 與 macOS 編 `telepy-carrier`：MIPS 路由器（例如 GL-AR750S）沒有，仍然需要 OpenSSH client。
+
+在裝置上它是 `~/.ssh/telepy-<代號>-ws.bin`，服務直接執行它（沒有包裝腳本）；安裝紀錄寫 `CLIENT=builtin (…)`，加入時回報的事實是 `client: builtin (…)`（網頁顯示「內建 client」）。盤點、改名、換連線方式與刪除通道都像認 `ssh -R` 一樣認得它的指令列：金鑰看 `--identity`、forward 看 `--forward`、伺服器看 `--server`（別台伺服器的 port 一律不碰）、known_hosts 看 `--known-hosts`。
 
 ## 二、gateway 預檢與 keepalive（事件 B / C）
 
@@ -53,6 +76,7 @@ Docker 的真平台驗證在第五節。
 compat 模式的限制會印在裝置上、記在 `facts` 與安裝紀錄裡：SSH 層心跳關了，斷線要等 TCP keepalive（內核預設常是 2 小時）才發現，
 procd / systemd 只會在 ssh 結束後重啟它，程序存在不代表通道可用。這不是底層套件的修法，是避開它。
 dbclient 走自己的 `-K 30`（三次沒回應就斷），不受這個問題影響，也不套 compat。
+內建 client 只探一次（`telepy-carrier tunnel --probe`：不送金鑰的完整金鑰交換，走的路跟服務一樣），也永遠不需要 compat（第一之二節）。
 
 ## 三、裝置上留下什麼、怎麼恢復、怎麼移除
 
@@ -90,7 +114,8 @@ dbclient 走自己的 `-K 30`（三次沒回應就斷），不受這個問題影
   用這個修補的 gateway 在 Docker 的原廠 OpenWrt 上實測 dbclient 2022.82 connected → verified。Telepy **不**自己揹這份修補
   （不 fork、不 vendor），等上游釋出；在上游釋出前，**純 dbclient 的裝置列為「等 gateway 修正」**：腳本在消耗 token
   之前的 gateway 預檢會拿到 `closed`，印出「gateway 在金鑰交換時關閉連線；請更新 Telepy，或裝 OpenSSH client 後用 `--client openssh`」。
-  有 OpenSSH client 的 OpenWrt（兩台 GL 路由器都是）不受影響。
+  有 OpenSSH client 的 OpenWrt（兩台 GL 路由器都是）不受影響；x86 與 ARM 的裝置上，腳本現在改用內建 client 跑通道、不用 dbclient
+  （第一之二節），原廠 OpenWrt 不必再裝任何套件。
 - **`/usr/bin/ssh` 不是固定的**：原廠 OpenWrt 的 `ssh` 是 dropbear 的連結；之後 `opkg install openssh-client` 會把它換成 OpenSSH。
   dbclient 的服務必須寫 `/usr/bin/dbclient` 本尊，否則裝了 OpenSSH 之後 procd 用 dbclient 的參數去跑 OpenSSH（`-K 30 -I 0` 被
   解讀成別的選項，連到 `0.0.0.30`）。
@@ -124,6 +149,7 @@ dbclient 走自己的 `-K 30`（三次沒回應就斷），不受這個問題影
   init.d / rc.d / 程序都沒了、金鑰留著、gateway 的 forward 釋放。
 - 同一個 rootfs 加 `opkg install openssh-client openssh-keygen`（Dropbear server + OpenSSH 9.8 client，沒有 ssh-keyscan）：`--check` 通過，
   host key 一樣來自 `dropbearkey -y`，keepalive 用 OpenSSH 的 ServerAlive。
+- **內建 client（2026-11-01）**：原廠 rootfs、**沒有** `openssh-client`（沒有 ssh、ssh-keygen、ssh-keyscan，只有 dbclient），`CARRIER_DIR` 裡手動放一份 `x86_64-unknown-linux-musl` 的 `telepy-carrier`（`/api/join/carrier/<target>` 照原樣提供）：`--check` 選了內建 client（`dropbearkey -y` 的 ed25519 host key 用 `tunnel --probe` 驗過、gateway 探測經 SSH 的 port 成功、沒有 compat）；真的加入用 `telepy-carrier keygen` 產生金鑰，**connected → verified**，procd 服務 `telepy-<代號>` 跑 `telepy-<代號>-ws.bin tunnel …`（RSS 約 7 MB）；容器重開後 procd 自己把它帶回來；「換成自動」先接上再拆舊的，換到新的安裝代號、同時帶 `--server` 與 `--ws`；連服務與服務金鑰一起刪通道後，`/etc/init.d` 與 `/root/.ssh` 沒有任何 Telepy 的檔案，也沒有程序。
 - Alpine 3.20（ash + Dropbear 2024.85 server + OpenSSH 9.7 client，沒有 procd）：`--check` 通過（keyscan 與 dropbearkey 兩種來源都驗過），
   真的加入成背景迴圈 + crond 的 `@reboot` → **verified**，uninstall 後程序與 crontab 行都沒了。
 - cargo：`tests/join_script.rs`（macOS /bin/sh、OpenSSH 10.3、lab gateway）全程通過，含壞檔案、錯 port、`--check` 不寫檔不註冊、真的加入、
@@ -144,13 +170,13 @@ Docker 配方（`~/Library/Caches/telepy-join-e2e/env.sh` 起一個原生 telepy
 ```sh
 docker run -d --platform linux/amd64 --privileged --cgroupns=host --name telepy-wrt openwrt/rootfs:x86-64-23.05.5 /sbin/init
 docker exec telepy-wrt sh -c 'wget -O /root/j.sh http://host.docker.internal:18872/api/join/install.sh && sh /root/j.sh --check'
-docker exec telepy-wrt sh /root/j.sh --token tpj_…        # 原廠：dbclient + procd
+docker exec telepy-wrt sh /root/j.sh --token tpj_…        # 原廠：內建 client（CARRIER_DIR 裡有 telepy-carrier）+ procd
 docker exec telepy-wrt sh -c 'opkg update && opkg install openssh-client openssh-keygen' && docker exec telepy-wrt sh /root/j.sh --check
 ```
 
 ## 六、已知限制
 
-- **純 dbclient（沒有 OpenSSH client）的裝置暫時連不上 gateway**：russh 的 strict-kex 序號檢查不容許 Dropbear 的猜測封包（第三之二節）。
+- **純 dbclient（沒有 OpenSSH client）的裝置**在 x86-64 / aarch64 / armv7 / armv6 上改用內建 client（第一之二節）。Telepy 沒有 `telepy-carrier` 的平台（MIPS 路由器）上，dbclient 暫時仍連不上 gateway：russh 的 strict-kex 序號檢查不容許 Dropbear 的猜測封包（第三之二節）。
   腳本在消耗 token 前就會偵測並說明（裝 OpenSSH client 即可）；等上游 russh 修正釋出、Telepy 升版後，腳本不用改就能用 dbclient。
 - Windows 原生（PowerShell、排程工作、ACL）仍是「逐步設定」；一鍵加入腳本不在 Windows 上執行。尚未實作或驗證的能力不宣稱支援。
 - dbclient：known_hosts 只比主機名稱，同一個主機名稱不能有兩把同類型的金鑰；沒有 `UserKnownHostsFile` / `HostKeyAlias`；OpenWrt 原廠沒有

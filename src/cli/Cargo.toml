@@ -40,7 +40,7 @@ sha2 = "0.10"
 terminal_size = "0.4"
 # `telepy ssh` 經網頁 port 連 Telepy（自己當 ProxyCommand，不需要 python3）：連線、代理、轉接都在 telepy-carrier 這個共用 crate。
 # `telepy ssh` through the web port, no python3: the connection, proxy and relay live in the shared telepy-carrier crate.
-telepy-carrier = { path = "../carrier" }
+telepy-carrier = { path = "../carrier", default-features = false }
 tokio = { version = "1", features = ["rt", "io-std", "io-util", "net", "time", "macros", "sync"] }
 unicode-width = "0.2"
 url = "2"

@@ -501,6 +501,51 @@ mod tests {
         assert!(ps.contains("$PSCommandPath") && ps.contains("$_.Execute"));
     }
 
+    /// 刪除腳本的判斷函式（只取定義，跑在真的 `/bin/sh`）：內建 client 的 `telepy-carrier tunnel` 指令列跟 `ssh -R`
+    /// 一樣認得——金鑰（`--identity`）、forward（`--forward`）、它連的 port（`--server`）、它的 known_hosts。
+    /// The removal script's helpers (definitions only, in a real `/bin/sh`): the built-in client's
+    /// `telepy-carrier tunnel` command line is recognised like `ssh -R` — its key, forward, port and known_hosts.
+    #[test]
+    fn the_built_in_clients_command_line_is_recognised() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("telepy_tunnel_ed25519");
+        std::fs::write(&key, "private").unwrap();
+        std::fs::write(dir.path().join("telepy_tunnel_ed25519.pub"), "ssh-ed25519 AAAAC3Nza+/= telepy-tunnel@pi\n").unwrap();
+        let ctx = Context { install_id: Some("k7m2q9xd".into()), gateway_port: "24242".into(), old_install: None };
+        let sh = render(Platform::Posix, &tunnel(), Mode::Survey, &ctx);
+        let helpers = &sh[..sh.find("\nOS=$(uname").expect("helpers end before the first command")];
+        let kh_at = sh.find("note_kh() {").expect("note_kh");
+        let note_kh = &sh[kh_at..kh_at + sh[kh_at..].find("\n}\n").unwrap() + 3];
+        let k = key.display();
+        let mine = format!("4242 /root/.ssh/telepy-k7m2q9xd-ws.bin tunnel --identity {k} --known-hosts /root/.ssh/telepy-k7m2q9xd.known_hosts --user telepy --server t.example:24242 --no-proxy --forward 0:127.0.0.1:22 --keepalive 30");
+        let web = format!("4243 /root/.ssh/telepy-k7m2q9xd-ws.bin tunnel --identity={k} --known-hosts /x --ws wss://t.example/ws/gateway/ --forward 0:192.168.1.1:22");
+        let other = format!("4244 /root/.ssh/telepy-k7m2q9xd-ws.bin tunnel --identity {k} --known-hosts /x --server other.example:2222 --forward 0:127.0.0.1:22");
+        // 一個 procd init 腳本 / 服務檔寫的形式：每個字都加了引號。/ How a procd init script or unit writes it: every word quoted.
+        let quoted = format!("    procd_set_param command '/root/.ssh/telepy-k7m2q9xd-ws.bin' 'tunnel' '--identity' '{k}' '--known-hosts' '/kh' '--server' 't.example:24242' '--forward' '0:127.0.0.1:22'");
+        let probe = format!("4245 /tmp/telepy-ws.bin tunnel --probe --server t.example:24242 --identity {k}");
+        let test = format!(
+            "{helpers}\n{note_kh}SUDO=\nHOME=/nonexistent\nfor l in {m} {w} {o} {p}; do if printf '%s' \"$l\" | grep -Eq -- \"$ANY_R_RE\" && line_is_mine \"$l\"; then echo mine; else echo no; fi; done\n\
+             dial_ports {o}\nOLD_KH=\nKEEP_ID=\nnote_kh {m}\necho \"kh:$OLD_KH\"\n\
+             if uses_key {q} && printf '%s' {q} | grep -Eq -- \"$ANY_R_RE\"; then echo quoted-mine; fi\ndial_ports {q}\nkey_paths {w}\n",
+            q = sh_quote(&quoted),
+            m = sh_quote(&mine),
+            w = sh_quote(&web),
+            o = sh_quote(&other),
+            p = sh_quote(&probe),
+        );
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg(&test).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(&lines[..4], ["mine", "mine", "no", "no"], "this gateway's tunnel (SSH port / web port) is ours, another server's and a probe are not:\n{text}{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(lines[4], "2222", "{text}");
+        assert_eq!(lines[5], "kh: /root/.ssh/telepy-k7m2q9xd.known_hosts", "{text}");
+        assert_eq!((lines[6], lines[7]), ("quoted-mine", "24242"), "{text}");
+        assert!(lines[8..].contains(&key.display().to_string().as_str()), "{text}");
+    }
+
     #[test]
     fn commands_quote_and_encode() {
         assert_eq!(sh_quote("a'b"), "'a'\\''b'");

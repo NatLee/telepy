@@ -19,10 +19,10 @@ Docker による実プラットフォームでの検証は第 5 節にありま�
 |---|---|---|
 | shell | `sh --help` の 1 行目に BusyBox とあれば ash、なければ bash / dash / sh | スクリプト自体は POSIX sh だけを使い（BusyBox ash で検証済み）、shell の種類では分岐しません |
 | HTTP ツール | `curl` → `wget`（`--post-data` に対応していること）→ `uclient-fetch` | 標準の OpenWrt には curl がなく、`wget` の実体は uclient-fetch です。`--header` がなく、ステータスコードが見えず、エラー時には body も保存されません。そのためデバイス向けのエンドポイントはすべて `?soft=1`（常に 200、1 行目が `STATUS=<元のステータスコード>`）を受け付け、登録も Content-Type を見ません |
-| SSH client | `ssh` と `dbclient` のそれぞれに `-V` を実行：`OpenSSH_` と出れば OpenSSH、`Dropbear` と出れば dbclient | 標準の OpenWrt の `/usr/bin/ssh` は dropbear へのリンクです。`command -v ssh` が成功しても OpenSSH とは限りません |
+| SSH client | `ssh` と `dbclient` のそれぞれに `-V` を実行：`OpenSSH_` と出れば OpenSSH、`Dropbear` と出れば dbclient。順番は、本物の OpenSSH、なければ **Telepy の内蔵クライアント**（`telepy-carrier tunnel`。Telepy にこの CPU 向けの `telepy-carrier` がある場合。ダウンロード後に sha256 を検証、第 1b 節）、それもなければ dbclient。`--client openssh\|builtin\|dbclient` で指定できます | 標準の OpenWrt の `/usr/bin/ssh` は dropbear へのリンクで、`command -v ssh` が成功しても OpenSSH とは限りません。標準の dbclient は Telepy の gateway と鍵交換を完了できないため（第 3b 節）、最後の選択肢です |
 | OpenSSH のオプション | トンネルが使うオプションすべてを付けて `ssh -G` で一度解析する | 未知のオプションは、接続後に気づくのではなく、その場でエラーになります |
 | dbclient の機能 | `dbclient -o help` に `ExitOnForwardFailure`（2016.73 以降）が載っていること、`-h` に `-K` と `-R` があること | dbclient は未知の `-o` に対して `Ignoring unknown configuration option` を 1 行出すだけで、**そのまま実行して exit 0 になります**（2022.82 で確認）。終了コードは当てになりません |
-| 鍵ツール | OpenSSH → `ssh-keygen`、dbclient → `dropbearkey` | dbclient 2022.82 は OpenSSH 形式の秘密鍵を読めません（`Exited: String too long`、実測）。2 種類の client の鍵ファイルは別です：`telepy_tunnel_ed25519`（OpenSSH）、`telepy_tunnel_dropbear`（Dropbear）。`dropbearconvert` があれば相互に変換して同じトンネルを使い続けます。なければ新しい鍵は Telepy から見て新しいデバイスになり、スクリプトがそう伝えます |
+| 鍵ツール | OpenSSH → `ssh-keygen`、内蔵クライアント → `ssh-keygen` があればそれ、なければ `telepy-carrier keygen`（ed25519、OpenSSH 形式、0600、隣に `.pub`）、dbclient → `dropbearkey` | dbclient 2022.82 は OpenSSH 形式の秘密鍵を読めません（`Exited: String too long`、実測）。2 種類の client の鍵ファイルは別です：`telepy_tunnel_ed25519`（OpenSSH）、`telepy_tunnel_dropbear`（Dropbear）。`dropbearconvert` があれば相互に変換して同じトンネルを使い続けます。なければ新しい鍵は Telepy から見て新しいデバイスになり、スクリプトがそう伝えます |
 | SSH server | まず `/proc/net/tcp` で、そのポートを誰がどのアドレスで待ち受けているかを見る。次に `nc -w 3` でバナー（`SSH-2.0-dropbear_2022.82` / `OpenSSH_9.6`）を読む。nc がなければ `ssh -v` の `remote software version` を使う | Dropbear が LAN インターフェースだけに bind している場合（`option Interface 'lan'`）、127.0.0.1 は応答しません。host key の確認も、トンネルの折り返し先 `-R 0:<アドレス>:<ポート>` も、その LAN アドレス（同じエンドポイント）を使います |
 | host key | 候補：root の `dropbearkey -y /etc/dropbear/*_host_key`、`/etc/ssh/ssh_host_*_key.pub`、`ssh-keyscan`（**`-T` は付けない**）、最後に OpenSSH が loopback 経由で `accept-new` により一度だけ学習。どの候補も、`StrictHostKeyChecking=yes` とその鍵だけを入れた known_hosts で一度ハンドシェイクし、`Permission denied` まで進んだものだけを採用します | ファイルがあることは、今待ち受けているサーバの鍵であることを意味しません。また ppoll に問題のある機器では `ssh-keyscan -T` が鍵を 1 つも出力しません（事例 A）。どの候補も通らなかったときのメッセージは「到達できるが鍵を読めない／何も待ち受けていない」であり、openssh-server のインストールを勧めることはなくなりました |
 | authorized_keys の場所 | OpenWrt + Dropbear + root → `/etc/dropbear/authorized_keys`（OpenWrt のパッチ）。`sshd -T` を読める OpenSSH → 最初の `AuthorizedKeysFile`（`%h` `%u` を展開）。それ以外は `~/.ssh/authorized_keys`。`--authorized-keys` で上書き可能 | 「~/.ssh」は候補にすぎず、事実ではありません |
@@ -31,6 +31,29 @@ Docker による実プラットフォームでの検証は第 5 節にありま�
 | パッケージマネージャ | PATH 上にあるもの：opkg / apk / apt / dnf / yum / zypper / pacman / brew / pkg（tailscale の install.sh と同様、ディストリビューション名は見ない） | 「X がありません」というメッセージを、そのマシンでそのままコピーできるコマンド（`opkg install dropbear && /etc/init.d/dropbear start`、`apk add openssh-client openssh-keygen` など）で書くためだけに使います。スクリプト自身は何もインストールしません |
 
 タイムアウト：`timeout` があればそれを使い、なければ（標準の OpenWrt、macOS）自前の watchdog を使います（バックグラウンドで実行してタイマーで kill。watchdog 自身の出力は閉じます。閉じないと `$(...)` がそれを待ち続けます）。検証待ちは実時間ではなくループ回数（60 × 2 秒）で数えます。ルーターが起動後に NTP で時刻が飛んでも、いつまでも待ち続けたり、すぐ諦めたりしません。
+
+内蔵クライアントの場合、host key の候補は `telepy-carrier tunnel --probe --host-key '<その鍵>'`（その鍵だけを信頼し、自分の鍵は送らない完全な鍵交換）で検証します。ssh-keyscan がなければ、同じプローブがまず loopback 経由で鍵を読み取ります（ssh-keyscan と同じことです）。
+
+## 1b. 内蔵 SSH クライアント（`telepy-carrier tunnel`）
+
+SSH サーバーはあっても使える SSH クライアントがないデバイスでは、これまで `opkg install openssh-client` が必要でした。標準の OpenWrt には Dropbear の dbclient しかなく、Telepy の gateway と鍵交換を完了できません（第 3b 節）。ServerAliveInterval を設定した途端にタイムアウトするビルドもあり（第 2 節）、dbclient は OpenSSH 形式の鍵も読めません。今はビルド済みの `telepy-carrier`（Web ポート経由で SSH を運ぶのと同じバイナリ）が、リバーストンネルを自分で張れます。
+
+```sh
+~/.ssh/telepy-<id>-ws.bin tunnel --identity ~/.ssh/telepy_tunnel_ed25519 --known-hosts ~/.ssh/telepy-<id>.known_hosts \
+    --user telepy --server <SSH ホスト>:<ポート> [--ws wss://<ホスト>/ws/gateway/] --no-proxy --forward 0:127.0.0.1:22 --keepalive 30
+```
+
+すること：
+- トンネル鍵で gateway にログインします（OpenSSH 形式、パスフレーズなし。ssh-keygen がなければ `telepy-carrier keygen` が作ります）。
+- スクリプトが書いたファイル（`GET /api/join/gateway` が申告した鍵）で gateway の host key を検証します。違う鍵なら接続を拒否し（終了コード 3）、何も登録されません。
+- `tcpip-forward` 0 を要求し（`ssh -R 0:…` と同じく、Telepy が鍵からこのトンネル自身の番号を割り当てます）、Telepy が開く各接続をこのマシンの SSH サーバーにつなぎます（`--forward 0:<アドレス>:<ポート>`。Dropbear が LAN アドレスだけで待ち受けていればそのアドレス）。
+- Telepy への経路はヘルパーと同じです：SSH ポート、Web ポート（`--via-web`）、または両方で SSH ポートが先（`--auto`）。インストール時に `HTTPS_PROXY` が設定されていれば HTTP CONNECT プロキシ経由です。
+- 30 秒通信がなければ SSH キープアライブを送り、3 回応答がなければ諦めます。タイマーは ssh のものではなく自前なので、第 2 節の ppoll の問題の影響を受けません。プローブは 1 回だけで、compat モードはありません。
+- 接続が切れると（0 以外で）終了し、サービス管理（procd の `respawn`、systemd の `Restart=always`、launchd の `KeepAlive`、ループ）が再起動します。SIGTERM ではきれいに終了します。
+
+しないこと：シェルなし、agent / X11 転送なし、`~/.ssh/config` は読まない、forward は 1 本だけ。パスフレーズ付きの鍵は拒否します。Telepy が `telepy-carrier` をビルドするのは x86-64、aarch64、armv7、armv6 の Linux と macOS だけです。MIPS のルーター（GL-AR750S など）にはなく、OpenSSH クライアントが引き続き必要です。
+
+デバイス上では `~/.ssh/telepy-<id>-ws.bin` で、サービスが直接実行します（ラッパーなし）。インストール記録は `CLIENT=builtin (…)`、join の facts は `client: builtin (…)`（Web では「内蔵クライアント」と表示）。調査・名前の変更・接続方法の切り替え・トンネルの削除は、`ssh -R` と同じようにこのコマンドラインを認識します：鍵は `--identity`、forward は `--forward`、サーバーは `--server`（別のサーバーのポートには一切触れません）、known_hosts は `--known-hosts`。
 
 ## 2. gateway の事前チェックと keepalive（事例 B / C）
 
@@ -50,6 +73,7 @@ Docker による実プラットフォームでの検証は第 5 節にありま�
 
 compat モードの制約はデバイス上に表示され、`facts` とインストール記録にも残ります。SSH 層のハートビートが無効なので、切断は TCP keepalive（カーネルのデフォルトは 2 時間であることが多い）でしか検知されません。procd / systemd は ssh が終了した後にしか再起動しないため、プロセスが存在していてもトンネルが使えるとは限りません。これは下層パッケージの修正ではなく、回避策です。
 dbclient は独自の `-K 30`（3 回応答がなければ切断）を使い、この問題の影響を受けないため、compat も適用しません。
+内蔵クライアントはプローブ 1 回だけ（`telepy-carrier tunnel --probe`：鍵を送らない完全な鍵交換、サービスと同じ経路）で、compat も必要ありません（第 1b 節）。
 
 ## 3. デバイスに残るもの、復旧方法、削除方法
 
@@ -65,7 +89,7 @@ dbclient は独自の `-K 30`（3 回応答がなければ切断）を使い、�
 ## 3b. 実機テストで初めて分かった 2 つの落とし穴（どちらも対処済み）
 
 - **Dropbear は exec コマンドを 9000 バイトに制限しています（`MAX_CMD_LEN`）**：棚卸し／削除スクリプト（`remove_tunnel.sh`、約 25 KB）を `sh -c '…'` に入れると、Dropbear が channel をそのまま閉じます（Telepy 側では `the script stopped early (exit None)` と表示）。長い POSIX スクリプトは、現在は分割してデバイスの一時ファイルに書き込んでから実行します（`ssh::exec::script_commands` / `run_script`：各コマンドは `MAX_COMMAND` = 6000 文字以下、`printf '%s' … >> "${TMPDIR:-/tmp}/telepy-script-<tag>.sh"`、`umask 077`、最後のコマンドが `sh` で実行して削除。短いスクリプトは従来どおり 1 回の `sh -c`）。鍵リストを exec で書き込む場合も同様に分割します（`exec::upload_commands` → `device_keys::remote::write_commands`）。lab の偽 sshd は `sh -c` しか扱えないので、この経路は cargo のテストでも通ります。
-- **russh（gateway）が Dropbear の strict kex を誤判定する**：OpenWrt 23.05 は Terrapin 対策（`kex-strict-c-v00@openssh.com`）を Dropbear 2022.82 にバックポートしました。一方、Dropbear の kex リストは `kexguess2@matt.ucc.asn.au` で始まり、常に `first_kex_packet_follows` の推測パケットを付けます。russh 0.64.1 は外れた推測パケットを無視した後、本物の `KEX_ECDH_INIT` がシーケンス番号 2 に来るため、`validate_client_msg_strict_kex` が strict kex 違反と判断して（`strict kex violated at sequence no. 2, message type: 30`）切断します。**どの** Dropbear クライアントも（新しい 2024.86 も推測し、strict kex にも対応）russh サーバには接続できません。OpenSSH クライアントは推測しないので、これまで問題になりませんでした。これは russh のバグです（RFC 4253 §7.1 は推測を許可しており、OpenSSH サーバは常に Dropbear を受け入れてきました）。修正は、推測パケットを飛ばした後にシーケンス番号の検査を 1 つずらすことで、約 20 行です。上流に [Eugeny/russh PR #805](https://github.com/Eugeny/russh/pull/805)（issue [#804](https://github.com/Eugeny/russh/issues/804)）として提出済みで、この修正を当てた gateway で、Docker 上の標準 OpenWrt の dbclient 2022.82 が connected → verified になることを確認しました。Telepy はこの修正を**自前では抱えず**（fork も vendor もしない）、上流のリリースを待ちます。上流が修正を出すまでは、**dbclient だけのデバイスは「gateway の修正待ち」**です。token を消費する前の gateway 事前チェックが `closed` を受け取り、「gateway が鍵交換中に接続を閉じました。Telepy を更新するか、OpenSSH client をインストールして `--client openssh` を使ってください」と表示します。OpenSSH client を持つ OpenWrt（2 台の GL ルーターとも）は影響を受けません。
+- **russh（gateway）が Dropbear の strict kex を誤判定する**：OpenWrt 23.05 は Terrapin 対策（`kex-strict-c-v00@openssh.com`）を Dropbear 2022.82 にバックポートしました。一方、Dropbear の kex リストは `kexguess2@matt.ucc.asn.au` で始まり、常に `first_kex_packet_follows` の推測パケットを付けます。russh 0.64.1 は外れた推測パケットを無視した後、本物の `KEX_ECDH_INIT` がシーケンス番号 2 に来るため、`validate_client_msg_strict_kex` が strict kex 違反と判断して（`strict kex violated at sequence no. 2, message type: 30`）切断します。**どの** Dropbear クライアントも（新しい 2024.86 も推測し、strict kex にも対応）russh サーバには接続できません。OpenSSH クライアントは推測しないので、これまで問題になりませんでした。これは russh のバグです（RFC 4253 §7.1 は推測を許可しており、OpenSSH サーバは常に Dropbear を受け入れてきました）。修正は、推測パケットを飛ばした後にシーケンス番号の検査を 1 つずらすことで、約 20 行です。上流に [Eugeny/russh PR #805](https://github.com/Eugeny/russh/pull/805)（issue [#804](https://github.com/Eugeny/russh/issues/804)）として提出済みで、この修正を当てた gateway で、Docker 上の標準 OpenWrt の dbclient 2022.82 が connected → verified になることを確認しました。Telepy はこの修正を**自前では抱えず**（fork も vendor もしない）、上流のリリースを待ちます。上流が修正を出すまでは、**dbclient だけのデバイスは「gateway の修正待ち」**です。token を消費する前の gateway 事前チェックが `closed` を受け取り、「gateway が鍵交換中に接続を閉じました。Telepy を更新するか、OpenSSH client をインストールして `--client openssh` を使ってください」と表示します。OpenSSH client を持つ OpenWrt（2 台の GL ルーターとも）は影響を受けません。また x86 と ARM のデバイスでは、スクリプトは dbclient の代わりに内蔵クライアントでトンネルを張るようになったため（第 1b 節）、標準の OpenWrt に追加パッケージは要りません。
 - **`/usr/bin/ssh` は固定ではありません**：標準の OpenWrt では `ssh` は dropbear へのリンクですが、後から `opkg install openssh-client` すると OpenSSH に置き換わります。dbclient のサービスには `/usr/bin/dbclient` 自体を書く必要があります。そうしないと、OpenSSH をインストールした後に procd が dbclient の引数で OpenSSH を起動してしまいます（`-K 30 -I 0` が別のオプションと解釈され、`0.0.0.30` に接続しようとする）。
 
 ## 4. 追加した後：この種のデバイスでの他の機能
@@ -90,6 +114,7 @@ dbclient は独自の `-K 30`（3 回応答がなければ切断）を使い、�
 **実プラットフォーム（Docker、手動。コマンドは下記）** — 2026-10-30 の結果：
 - 標準の OpenWrt 23.05.5 rootfs（x86-64 を OrbStack 上でエミュレート。ash、BusyBox 1.36、Dropbear 2022.82 の server + dbclient、uclient-fetch、procd を `/sbin/init` として起動、`--privileged`）：`--check` が通過（host key は `dropbearkey -y` 由来で、2 つとも厳格なハンドシェイクで検証済み。gateway の 2 つの host key を固定）。実際の追加は **connected → verified**（root、`/etc/dropbear/authorized_keys` 経由）。**コンテナ再起動後は procd が自力でトンネルを復帰**させました。サーバ再起動後は、dbclient が `-K 30` で約 1 分以内に切断を検知し、procd が 10 秒後に再接続。鍵リスト（共有時の鍵インストール）は exec のフォールバックを通り、`installed` / `verified`、パネルには `/etc/dropbear/authorized_keys` が表示されました。棚卸しは `procd` のサービス、プロセス、鍵、記録を見つけました。uninstall 後は init.d / rc.d とプロセスが消え、鍵は残り、gateway の forward は解放されました。
 - 同じ rootfs に `opkg install openssh-client openssh-keygen` を追加（Dropbear server + OpenSSH 9.8 client、ssh-keyscan なし）：`--check` が通過し、host key は同じく `dropbearkey -y` 由来で、keepalive には OpenSSH の ServerAlive を使いました。
+- **内蔵クライアント（2026-11-01）**：`openssh-client` の**ない**標準 rootfs（ssh・ssh-keygen・ssh-keyscan なし、dbclient のみ）と、`CARRIER_DIR` に手で置いた `x86_64-unknown-linux-musl` 向け `telepy-carrier`（`/api/join/carrier/<target>` がそのまま配信）で：`--check` は内蔵クライアントを選択（`dropbearkey -y` の ed25519 host key を `tunnel --probe` で検証、gateway のプローブは SSH ポートで成功、compat なし）。実際の参加では `telepy-carrier keygen` で鍵を作り、procd サービス `telepy-<id>` が `telepy-<id>-ws.bin tunnel …` を実行して **connected → verified**（RSS 約 7 MB）。コンテナ再起動後は procd が自動で戻しました。「自動に切り替え」は先につないでから古いものを外し、新しいインストール ID で `--server` と `--ws` の両方を持つサービスに移りました。サービスとサービス鍵ごとトンネルを削除すると、`/etc/init.d` と `/root/.ssh` に Telepy のファイルは残らず、プロセスもありませんでした。
 - Alpine 3.20（ash + Dropbear 2024.85 server + OpenSSH 9.7 client、procd なし）：`--check` が通過（keyscan と dropbearkey の両方のソースを検証）。バックグラウンドのループ + crond の `@reboot` として実際に追加して **verified**。uninstall 後はプロセスと crontab の行が消えました。
 - cargo：`tests/join_script.rs`（macOS /bin/sh、OpenSSH 10.3、lab gateway）が全件通過。壊れたファイル、間違ったポート、`--check` がファイルを書かず登録もしないこと、実際の追加、記録、uninstall を含みます。`tests/join_api.rs` の 2 つのテストも通過。
 
@@ -103,13 +128,13 @@ Docker での手順（`~/Library/Caches/telepy-join-e2e/env.sh` がネイティ�
 ```sh
 docker run -d --platform linux/amd64 --privileged --cgroupns=host --name telepy-wrt openwrt/rootfs:x86-64-23.05.5 /sbin/init
 docker exec telepy-wrt sh -c 'wget -O /root/j.sh http://host.docker.internal:18872/api/join/install.sh && sh /root/j.sh --check'
-docker exec telepy-wrt sh /root/j.sh --token tpj_…        # 標準：dbclient + procd
+docker exec telepy-wrt sh /root/j.sh --token tpj_…        # 標準：内蔵クライアント（CARRIER_DIR に telepy-carrier）+ procd
 docker exec telepy-wrt sh -c 'opkg update && opkg install openssh-client openssh-keygen' && docker exec telepy-wrt sh /root/j.sh --check
 ```
 
 ## 6. 既知の制限
 
-- **dbclient だけのデバイス（OpenSSH client なし）は、当面 gateway に接続できません**：russh の strict-kex のシーケンス検査が Dropbear の推測パケットを許容しないためです（第 3b 節）。スクリプトは token を消費する前にこれを検出して説明します（OpenSSH client をインストールすれば解決します）。上流の russh が修正を出し、Telepy がそれに更新されれば、スクリプトを変えなくても dbclient が使えるようになります。
+- **dbclient だけのデバイス（OpenSSH client なし）**は、x86-64 / aarch64 / armv7 / armv6 では内蔵クライアントを使います（第 1b 節）。Telepy に `telepy-carrier` がないプラットフォーム（MIPS のルーター）では、dbclient は当面 gateway に接続できません：russh の strict-kex のシーケンス検査が Dropbear の推測パケットを許容しないためです（第 3b 節）。スクリプトは token を消費する前にこれを検出して説明します（OpenSSH client をインストールすれば解決します）。上流の russh が修正を出し、Telepy がそれに更新されれば、スクリプトを変えなくても dbclient が使えるようになります。
 - Windows ネイティブ（PowerShell、タスクスケジューラ、ACL）は引き続き「手順を追って設定」です。ワンコマンド追加のスクリプトは Windows では動きません。未実装または未検証の機能は、対応しているとは謳いません。
 - dbclient：known_hosts はホスト名だけを比較するため、同じホスト名に同じ種類の鍵を 2 つ持てません。`UserKnownHostsFile` / `HostKeyAlias` もありません。標準の OpenWrt には `dropbearconvert` がないので、client を切り替えるときに鍵を相互変換できません。WebSocket 経由は `-J` で同じヘルパーのラッパーを使います（ビルド済み `telepy-carrier`、なければ python3）。
 - compat モードは回避策であって修正ではありません：SSH のハートビートが無効なので、切断の検知が遅くなります。
