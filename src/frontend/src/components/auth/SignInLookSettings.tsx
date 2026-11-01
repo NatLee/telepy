@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁、應用程式連接頁、CLI 登入頁（`telepy login`）與登入後的授權頁各自選一般 / 低調、
+ * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁、應用程式連接頁、CLI 登入頁（`telepy login`）各自選一般 / 低調 / Tapi 版，登入後的授權頁選一般 / 低調、
  * 低調頁上輪流打出來的句子（SignInLinesEditor）、即時預覽（PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個；
  * 正在編輯的那句會被釘住；授權頁用範例資料），以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
- * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in, app connection, CLI (`telepy
- * login`) and approval pages, the discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame
+ * Site settings → Sign-in → "Sign-in page look": standard / discreet / Tapi for the sign-in, app connection and CLI (`telepy
+ * login`) pages, standard / discreet for the approval page, the discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame
  * renders the real page components, desktop and phone; the line being edited is pinned; the approval page uses
  * sample data) and the "How it works" dialog (path diagram + a comparison of the two looks).
  */
 import React, { useState } from "react";
-import { CornerDownLeft, Eye, EyeOff, Globe, Info, ScanEye, SquareDashed, SquareTerminal, UserCheck } from "lucide-react";
+import { CornerDownLeft, Eye, EyeOff, Ghost, Globe, Info, ScanEye, SquareDashed, SquareTerminal, UserCheck } from "lucide-react";
 import { LoginFormPreview } from "@/components/auth/LoginForm";
 import { OAuthSignInScreen, SignInScreen } from "@/components/auth/SignInScreens";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
@@ -28,7 +28,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ConsentInfo } from "@/hooks/useOAuthConsent";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_LOOK, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, previewHeight, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { CONSENT_STYLES, DEFAULT_LOOK, SIGNIN_STYLES, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, previewHeight, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
 import { LOGIN_SCOPES } from "@/lib/cliGuide";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -66,18 +66,26 @@ function lookFrom(values: Record<string, unknown>): SignInLook {
     );
 }
 
-function useStyleOptions() {
+/** 每個樣子的名字、說明與圖示。/ Each look's name, hint and icon. */
+const STYLE_META: Record<SignInStyle, { name: TranslationKey; hint: TranslationKey; icon: typeof Eye }> = {
+    standard: { name: "signinLook.standard", hint: "signinLook.standardHint", icon: Eye },
+    discreet: { name: "signinLook.discreet", hint: "signinLook.discreetHint", icon: EyeOff },
+    tapi: { name: "signinLook.tapi", hint: "signinLook.tapiHint", icon: Ghost },
+};
+
+/** 這一頁能選的樣子：授權頁沒有 Tapi 版。/ The looks a page offers: the approval page has no Tapi look. */
+function useStyleOptions(page: SignInPageKind) {
     const { t } = useI18n();
-    return [
-        { value: "standard" as const, label: t("signinLook.standard"), icon: <Eye size={14} />, title: t("signinLook.standardHint") },
-        { value: "discreet" as const, label: t("signinLook.discreet"), icon: <EyeOff size={14} />, title: t("signinLook.discreetHint") },
-    ];
+    return (page === "consent" ? CONSENT_STYLES : SIGNIN_STYLES).map((value) => {
+        const { name, hint, icon: Icon } = STYLE_META[value];
+        return { value, label: t(name), icon: <Icon size={14} />, title: t(hint) };
+    });
 }
 
 /** 選哪一頁（標籤附上那頁目前的樣子）。/ Page choices, each labelled with its current look. */
 function usePageOptions(look: SignInLook) {
     const { t } = useI18n();
-    const name = (s: SignInStyle) => t(s === "discreet" ? "signinLook.discreet" : "signinLook.standard");
+    const name = (s: SignInStyle) => t(STYLE_META[s].name);
     return PAGES.map((p) => ({ value: p, label: `${t(PAGE_NAME[p])} · ${name(styleOf(look, p))}` }));
 }
 
@@ -216,17 +224,20 @@ export function SignInPreview({ page, look, pin = null }: { page: SignInPageKind
 function StyleRow({ page, value, onChange }: { page: SignInPageKind; value: SignInStyle; onChange: (v: SignInStyle) => void }) {
     const { t } = useI18n();
     const key = STYLE_KEY[page];
-    const options = useStyleOptions();
+    const options = useStyleOptions(page);
     return (
         <li className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:px-6 sm:py-5">
             <div className="min-w-0 flex-1">
                 <h4 className="text-[1rem] text-foreground">{t(`siteSettings.${key}.label` as TranslationKey)}</h4>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t(`siteSettings.${key}.description` as TranslationKey)}</p>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    {t(`siteSettings.${key}.description` as TranslationKey)}
+                    {page === "consent" && ` ${t("signinLook.tapiNoConsent")}`}
+                </p>
                 <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80">{key}</p>
             </div>
             <div className="shrink-0 sm:pt-0.5 sm:text-right">
                 <Segmented kind="toggle" size="sm" options={options} value={value} onChange={onChange} aria-label={t(`siteSettings.${key}.label` as TranslationKey)} />
-                <p className="mt-1.5 text-xs text-muted-foreground">{t(value === "discreet" ? "signinLook.discreetHint" : "signinLook.standardHint")}</p>
+                <p className="mt-1.5 text-xs text-muted-foreground">{t(STYLE_META[value].hint)}</p>
             </div>
         </li>
     );
@@ -342,16 +353,17 @@ const SIGN_IN_PAGES: readonly SignInPageKind[] = ["signin", "oauth", "cli"];
 const APP_PAGES: readonly SignInPageKind[] = ["oauth", "cli", "consent"];
 
 /** 每一列只出現在相關的頁面（授權頁是登入之後，所以沒有登入方式、權限一律列出）。/ Each row only on the pages it is about. */
-const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; pages: readonly SignInPageKind[] }[] = [
-    { label: "signinLook.cmp.name", standard: "shown", discreet: "shown", pages: PAGES },
-    { label: "signinLook.cmp.product", standard: "shown", discreet: "hidden", pages: PAGES },
-    { label: "signinLook.cmp.methods", standard: "shown", discreet: "shown", pages: SIGN_IN_PAGES },
-    { label: "signinLook.cmp.app", standard: "shown", discreet: "shown", pages: APP_PAGES },
-    { label: "signinLook.cmp.scopes", standard: "shown", discreet: "afterSignIn", pages: ["oauth", "cli"] },
+/** `tapi` 只在登入頁（授權頁沒有 Tapi 版）。/ `tapi` only on the sign-in pages (the approval page has no Tapi look). */
+const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; tapi?: Cell; pages: readonly SignInPageKind[] }[] = [
+    { label: "signinLook.cmp.name", standard: "shown", discreet: "shown", tapi: "shown", pages: PAGES },
+    { label: "signinLook.cmp.product", standard: "shown", discreet: "hidden", tapi: "hidden", pages: PAGES },
+    { label: "signinLook.cmp.methods", standard: "shown", discreet: "shown", tapi: "shown", pages: SIGN_IN_PAGES },
+    { label: "signinLook.cmp.app", standard: "shown", discreet: "shown", tapi: "shown", pages: APP_PAGES },
+    { label: "signinLook.cmp.scopes", standard: "shown", discreet: "afterSignIn", tapi: "shown", pages: ["oauth", "cli"] },
     { label: "signinLook.cmp.choices", standard: "shown", discreet: "shown", pages: ["consent"] },
     { label: "signinLook.cmp.cliDone", standard: "inFull", discreet: "brief", pages: ["consent"] },
-    { label: "signinLook.cmp.html", standard: "emptyFrame", discreet: "emptyFrame", pages: PAGES },
-    { label: "signinLook.cmp.after", standard: "unchanged", discreet: "unchanged", pages: SIGN_IN_PAGES },
+    { label: "signinLook.cmp.html", standard: "emptyFrame", discreet: "emptyFrame", tapi: "emptyFrame", pages: PAGES },
+    { label: "signinLook.cmp.after", standard: "unchanged", discreet: "unchanged", tapi: "unchanged", pages: SIGN_IN_PAGES },
 ];
 
 const CELL_TEXT: Record<Cell, TranslationKey> = {
@@ -383,8 +395,10 @@ function CellText({ cell }: { cell: Cell }) {
 export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { isOpen: boolean; onClose: () => void; look: SignInLook; page: SignInPageKind; onPage: (p: SignInPageKind) => void }) {
     const { t, tn } = useI18n();
     const style = styleOf(look, page);
-    const styleName = t(style === "discreet" ? "signinLook.discreet" : "signinLook.standard");
+    const styleName = t(STYLE_META[style].name);
     const rows = ROWS.filter((r) => r.pages.includes(page));
+    const columns = page === "consent" ? CONSENT_STYLES : SIGNIN_STYLES;
+    const LookIcon = STYLE_META[style].icon;
     const cli = page === "cli";
     const consent = page === "consent";
 
@@ -417,9 +431,9 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                         <FlowNode icon={SquareDashed} title={t("signinLook.flow.frame")} sub={t("signinLook.flow.frameSub")} state="ok" stateText={t("signinLook.flow.noCopy")} />
                         <FlowLink label={t("signinLook.flow.asks")} state="ok" />
                         <FlowNode
-                            icon={style === "discreet" ? EyeOff : Eye}
+                            icon={LookIcon}
                             title={t("signinLook.flow.look", { look: styleName })}
-                            sub={t(style === "discreet" ? "signinLook.discreetHint" : "signinLook.standardHint")}
+                            sub={t(STYLE_META[style].hint)}
                             state="ok"
                             stateText={t("signinLook.flow.now")}
                             className="border-primary/60"
@@ -449,23 +463,22 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                 <div>
                     <h4 className="mb-2 text-sm text-foreground">{t(consent ? "signinLook.cmp.titleConsent" : "signinLook.cmp.title")}</h4>
                     <div className="overflow-hidden rounded-lg border border-border">
-                        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] text-sm">
+                        <div className={cn("grid text-sm", columns.length === 3 ? "grid-cols-[minmax(0,1fr)_auto_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto_auto]")}>
                             <div className="bg-surface px-3 py-2 text-xs text-muted-foreground">{t("signinLook.cmp.item")}</div>
-                            {(["standard", "discreet"] as const).map((s) => (
+                            {columns.map((s) => (
                                 <div key={s} className={cn("flex items-center gap-1.5 px-3 py-2 text-xs", s === style ? "bg-primary/10 text-foreground" : "bg-surface text-muted-foreground")}>
-                                    {t(s === "discreet" ? "signinLook.discreet" : "signinLook.standard")}
+                                    {t(STYLE_META[s].name)}
                                     {s === style && <Chip tone="primary">{t("signinLook.flow.now")}</Chip>}
                                 </div>
                             ))}
                             {rows.map((r) => (
                                 <React.Fragment key={r.label}>
                                     <div className="border-t border-border px-3 py-2 leading-snug text-foreground">{t(r.label)}</div>
-                                    <div className={cn("border-t border-border px-3 py-2", style === "standard" && "bg-primary/5")}>
-                                        <CellText cell={r.standard} />
-                                    </div>
-                                    <div className={cn("border-t border-border px-3 py-2", style === "discreet" && "bg-primary/5")}>
-                                        <CellText cell={r.discreet} />
-                                    </div>
+                                    {columns.map((s) => (
+                                        <div key={s} className={cn("border-t border-border px-3 py-2", style === s && "bg-primary/5")}>
+                                            <CellText cell={r[s] ?? r.standard} />
+                                        </div>
+                                    ))}
                                 </React.Fragment>
                             ))}
                         </div>

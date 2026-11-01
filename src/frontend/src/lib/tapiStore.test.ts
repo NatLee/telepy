@@ -12,7 +12,7 @@ function fakeServer(initial: TapiPrefs) {
         return new Promise<TapiPrefs | null>((resolve) =>
             queue.push((ok) => {
                 if (!ok) return resolve(null);
-                stored = { color: patch.tapi_color ?? stored.color, daily: patch.tapi_daily ?? stored.daily };
+                stored = { color: patch.tapi_color ?? stored.color, daily: patch.tapi_daily ?? stored.daily, visits: patch.tapi_visits ?? stored.visits };
                 resolve(stored);
             }),
         );
@@ -26,8 +26,8 @@ function fakeServer(initial: TapiPrefs) {
 
 test("a click shows at once, before the server answers", async () => {
     const s = createTapiStore();
-    s.seed({ color: "teal", daily: false });
-    const server = fakeServer({ color: "teal", daily: false });
+    s.seed({ color: "teal", daily: false, visits: true });
+    const server = fakeServer({ color: "teal", daily: false, visits: true });
     let changes = 0;
     s.subscribe(() => changes++);
     const done = s.save({ tapi_color: "pink" }, server.send);
@@ -41,8 +41,8 @@ test("a click shows at once, before the server answers", async () => {
 
 test("rapid clicks are coalesced and sent in order; the last one wins", async () => {
     const s = createTapiStore();
-    s.seed({ color: "teal", daily: true });
-    const server = fakeServer({ color: "teal", daily: true });
+    s.seed({ color: "teal", daily: true, visits: true });
+    const server = fakeServer({ color: "teal", daily: true, visits: true });
     const first = s.save({ tapi_color: "pink" }, server.send);
     const second = s.save({ tapi_color: "blue" }, server.send);
     const third = s.save({ tapi_color: "gold" }, server.send);
@@ -59,8 +59,8 @@ test("rapid clicks are coalesced and sent in order; the last one wins", async ()
 
 test("a failed save goes back to the last confirmed value", async () => {
     const s = createTapiStore();
-    s.seed({ color: "teal", daily: false });
-    const server = fakeServer({ color: "teal", daily: false });
+    s.seed({ color: "teal", daily: false, visits: true });
+    const server = fakeServer({ color: "teal", daily: false, visits: true });
     const done = s.save({ tapi_color: "pink" }, server.send);
     assert.equal(s.get().color, "pink");
     await server.answer(false);
@@ -70,7 +70,7 @@ test("a failed save goes back to the last confirmed value", async () => {
 
 test("a thrown send counts as a failure", async () => {
     const s = createTapiStore();
-    s.seed({ color: "teal", daily: false });
+    s.seed({ color: "teal", daily: false, visits: true });
     const ok = await s.save({ tapi_color: "pink" }, () => Promise.reject(new Error("offline")));
     assert.equal(ok, false);
     assert.equal(s.get().color, "teal");
@@ -78,15 +78,26 @@ test("a thrown send counts as a failure", async () => {
 
 test("the profile does not overwrite a save in flight, and seeds afterwards", async () => {
     const s = createTapiStore();
-    s.seed({ color: "teal", daily: false });
-    const server = fakeServer({ color: "teal", daily: false });
+    s.seed({ color: "teal", daily: false, visits: true });
+    const server = fakeServer({ color: "teal", daily: false, visits: true });
     const done = s.save({ tapi_color: "pink", tapi_daily: true }, server.send);
-    s.seed({ color: "teal", daily: false }); // 送出前就發出的 profile 請求 / a profile fetched before the save
-    assert.deepEqual(s.get(), { color: "pink", daily: true });
+    s.seed({ color: "teal", daily: false, visits: true }); // 送出前就發出的 profile 請求 / a profile fetched before the save
+    assert.deepEqual(s.get(), { color: "pink", daily: true, visits: true });
     await server.answer();
     await done;
-    s.seed({ color: "blue", daily: true }); // 另一個分頁改的 / changed in another tab
-    assert.deepEqual(s.get(), { color: "blue", daily: true });
+    s.seed({ color: "blue", daily: true, visits: true }); // 另一個分頁改的 / changed in another tab
+    assert.deepEqual(s.get(), { color: "blue", daily: true, visits: true });
     s.reset();
-    assert.deepEqual(s.get(), { color: "", daily: false });
+    assert.deepEqual(s.get(), { color: "", daily: false, visits: true });
+});
+
+test("turning visits off is a save like any other", async () => {
+    const s = createTapiStore();
+    s.seed({ color: "teal", daily: false, visits: true });
+    const server = fakeServer({ color: "teal", daily: false, visits: true });
+    const done = s.save({ tapi_visits: false }, server.send);
+    assert.equal(s.get().visits, false);
+    await server.answer();
+    assert.equal(await done, true);
+    assert.deepEqual(server.stored(), { color: "teal", daily: false, visits: false });
 });

@@ -34,9 +34,9 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     // 不認得的樣子、太長、太多行都拒絕。/ Unknown looks, long or many-line text are refused.
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_style": "neon"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    assert_eq!(r.json, json!({"signin_page_style": ["Must be one of: standard, discreet."]}));
+    assert_eq!(r.json, json!({"signin_page_style": ["Must be one of: standard, discreet, tapi."]}));
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_cli_style": "neon"})).await;
-    assert_eq!(r.json, json!({"signin_cli_style": ["Must be one of: standard, discreet."]}));
+    assert_eq!(r.json, json!({"signin_cli_style": ["Must be one of: standard, discreet, tapi."]}));
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_consent_style": "neon"})).await;
     assert_eq!(r.json, json!({"signin_consent_style": ["Must be one of: standard, discreet."]}));
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "x".repeat(81)})).await;
@@ -64,6 +64,16 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     let r = app.get("/api/site/settings", Some(&admin)).await;
     assert_eq!(r.json["values"]["signin_cli_style"], "discreet");
     assert_eq!(r.json["meta"]["signin_cli_style"]["type"], "string");
+
+    // Tapi 版：三個登入頁都可以選，授權頁不行（那頁要看清楚權限）。/ The Tapi look: the three sign-in pages, not the approval page.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_style": "tapi", "signin_oauth_style": "tapi", "signin_cli_style": "tapi"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app.get("/api/auth/sign-in-page", None).await;
+    assert_eq!((r.json["style"].as_str(), r.json["oauth_style"].as_str(), r.json["cli_style"].as_str()), (Some("tapi"), Some("tapi"), Some("tapi")));
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_consent_style": "tapi"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json, json!({"signin_consent_style": ["Must be one of: standard, discreet."]}));
+    assert_eq!(app.get("/api/auth/sign-in-page", None).await.json["consent_style"], "standard");
 }
 
 /// CLI 的登入頁以前跟著 OAuth 登入頁：升級時抄一次那時的樣子，之後各管各的。

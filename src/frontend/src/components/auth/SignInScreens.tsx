@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * 兩個登入頁的組成，依網站設定的樣子（一般 / 低調）畫外框。表單由呼叫端給：真的頁面用 LoginForm（會登入），
+ * 兩個登入頁的組成，依網站設定的樣子（一般 / 低調 / Tapi）畫外框。表單由呼叫端給：真的頁面用 LoginForm（會登入），
  * 網站設定的預覽用 LoginFormPreview（不登入、不導向）——所以預覽就是訪客看到的同一組元件。
- * How the two sign-in pages are put together for each look (standard / discreet). The caller supplies the form:
+ * How the two sign-in pages are put together for each look (standard / discreet / Tapi). The caller supplies the form:
  * the real pages pass LoginForm (signs in), the settings preview passes LoginFormPreview (inert), so the preview
  * is built from exactly the components a visitor gets.
  */
@@ -12,6 +12,7 @@ import { AppWindow, CornerDownLeft, SquareTerminal } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AuthHighlights } from "@/components/auth/AuthPanels";
 import { DiscreetShell } from "@/components/auth/DiscreetShell";
+import { TapiShell } from "@/components/auth/TapiShell";
 import type { LoginFormProps } from "@/components/auth/LoginForm";
 import { AppRequestCard, ConnectAppAside, ConnectProgress, ReturnsTo } from "@/components/oauth/ConnectFlow";
 import { useI18n } from "@/lib/i18n";
@@ -28,6 +29,13 @@ export function SignInScreen({ style, message, Form, pin }: { style: SignInStyle
             <DiscreetShell message={message} pin={pin}>
                 <Form title={t("discreet.signIn")} description={t("discreet.signInBody")} />
             </DiscreetShell>
+        );
+    }
+    if (style === "tapi") {
+        return (
+            <TapiShell message={message} pin={pin}>
+                <Form title={t("login.title")} description={t("tapiLook.signInBody")} />
+            </TapiShell>
         );
     }
     return (
@@ -121,6 +129,20 @@ export function OAuthSignInScreen({
                 <Form title={t("discreet.oauthTitle")} description={t("discreet.oauthBody")} googleText="continue_with" intro={<DiscreetAppNote app={app} />} />
                 {cancel}
             </DiscreetShell>
+        );
+    }
+    // Tapi 版不是低調：卡片上照樣列出應用程式、回到哪裡與權限。/ The Tapi look isn't discreet: the card lists the app, its return host and scopes.
+    if (style === "tapi") {
+        return (
+            <TapiShell message={message} pin={pin}>
+                <Form
+                    title={t(cli ? "oauth.cli.signInTitle" : "oauth.signInTitle")}
+                    description={cli ? t("oauth.cli.signInSubtitle", { host: host || t("oauth.cli.thisComputer") }) : t("oauth.signInSubtitle", { app: app.name ?? t("oauth.theApp") })}
+                    googleText="continue_with"
+                    intro={<AppRequestCard loading={app.loading} name={app.name ?? undefined} host={app.host} scopes={app.scopes} />}
+                />
+                {cancel}
+            </TapiShell>
         );
     }
     return (

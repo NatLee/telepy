@@ -205,6 +205,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser, d: cra
         // Tapi（彩蛋吉祥物）：十字髮夾顏色（空 = 還沒找到）與「每天換一個」解鎖了沒。/ Tapi's clip colour and the daily unlock.
         "tapi_color": settings.as_ref().map(|s| s.tapi_color.clone()).unwrap_or_default(),
         "tapi_daily": settings.as_ref().is_some_and(|s| s.tapi_daily),
+        "tapi_visits": settings.as_ref().is_none_or(|s| s.tapi_visits),
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
         "mfa_missing": super::mfa::enrollment_missing(&state, user.id).await?,
         "features": features,

@@ -222,10 +222,11 @@ export function UserSettingsSync() {
     const signedIn = !!user;
     const tapiColor = user?.tapi_color ?? "";
     const tapiDaily = !!user?.tapi_daily;
+    const tapiVisits = user?.tapi_visits !== false;
     useEffect(() => {
-        if (signedIn) tapiStore.seed({ color: tapiColor, daily: tapiDaily });
+        if (signedIn) tapiStore.seed({ color: tapiColor, daily: tapiDaily, visits: tapiVisits });
         else tapiStore.reset();
-    }, [signedIn, tapiColor, tapiDaily]);
+    }, [signedIn, tapiColor, tapiDaily, tapiVisits]);
 
     return null;
 }

@@ -49,6 +49,7 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "ssh_alias_prefix": s.ssh_alias_prefix,
         "tapi_color": s.tapi_color,
         "tapi_daily": s.tapi_daily,
+        "tapi_visits": s.tapi_visits,
         "shell_history": crate::shell_history::Mode::parse(&s.shell_history).unwrap_or(crate::shell_history::Mode::Keep).as_str(),
     }))
 }
@@ -225,6 +226,12 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             None => None,
             Some(Value::Bool(true)) => Some(true),
             Some(_) => return Err(ApiError::field("tapi_daily", "Can only be true.")),
+        },
+        // Tapi 偶爾自己來串門子（網頁）。/ Whether Tapi drops by now and then (the web).
+        tapi_visits: match body.get("tapi_visits") {
+            None => None,
+            Some(Value::Bool(b)) => Some(*b),
+            Some(_) => return Err(ApiError::field("tapi_visits", "Must be a boolean.")),
         },
         // 網頁終端機 / agent shell 的指令寫不寫進裝置的歷史檔。/ Whether Telepy's shells write the device's shell history.
         shell_history: match body.get("shell_history") {

@@ -15,6 +15,7 @@ import { mfaErrorMessage, type MfaMethod } from "@/lib/mfa";
 import { loginErrorMessage } from "@/lib/loginErrors";
 import { isSafePath } from "@/lib/oauthFlow";
 import { conditionalMediationAvailable, getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
+import { announceSignIn } from "@/lib/signInSignal";
 
 /**
  * 登入後要回去的路徑（?next=）：只接受站內路徑，避免 open redirect。OAuth 同意頁沒登入時會經 /oauth/login 帶著自己的 URL 過來。
@@ -59,7 +60,15 @@ export function useLoginPage() {
     const [passkeyAvailable, setPasskeyAvailable] = useState(false);
     const conditional = useRef<AbortController | null>(null);
     const { login, isAuthenticated } = useAuth();
-    const { showSuccess, showError } = useToast();
+    const { showSuccess, showError: toastError } = useToast();
+    // 每個失敗也告訴登入頁的外框（Tapi 版會驚訝一下）。/ Every failure also tells the page frame (the Tapi look reacts).
+    const showError = useCallback(
+        (message: string) => {
+            announceSignIn("error");
+            toastError(message);
+        },
+        [toastError],
+    );
     const { t } = useI18n();
     const router = useRouter();
 
@@ -74,6 +83,7 @@ export function useLoginPage() {
     const finish = useCallback(
         (data: LoginResult, successKey: TranslationKey) => {
             stopAutofill();
+            announceSignIn("success");
             login(data.access_token!, data.refresh_token!);
             showSuccess(t(successKey));
             router.push(safeNextPath());
@@ -89,6 +99,7 @@ export function useLoginPage() {
             } else if (res.ok && data?.mfa_required && data.mfa_token) {
                 stopAutofill();
                 const methods = data.methods ?? [];
+                announceSignIn("mfa");
                 setMfa({ token: data.mfa_token, methods });
                 setMfaMethod(methods.includes("totp") ? "totp" : "recovery_code");
                 setMfaCode("");

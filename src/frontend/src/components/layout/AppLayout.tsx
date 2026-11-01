@@ -11,6 +11,7 @@ import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { SessionEndedNotice } from "@/components/layout/SessionEndedNotice";
 import { NewSignInNotice } from "@/components/layout/NewSignInNotice";
 import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
+import { TapiVisits } from "@/components/brand/TapiVisits";
 import { CarrierNotice } from "@/components/health/CarrierNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
@@ -99,6 +100,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <CarrierNotice />
                 {/* 等你核准的指令（任何頁面右下角）。/ Commands waiting for your approval, bottom right on any page. */}
                 <CommandApprovalCenter />
+                {/* Tapi 偶爾來串門子（彩蛋）。/ Tapi drops by now and then (easter eggs). */}
+                <TapiVisits />
                 <Sidebar />
                 <div className="relative flex flex-col flex-1 w-full min-w-0">
                     <Header />

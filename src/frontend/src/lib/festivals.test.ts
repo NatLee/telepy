@@ -27,3 +27,10 @@ test("leap months and ordinary days are not festivals", () => {
     assert.equal(festivalOn(at("2025-07-25"), TZ), null);
     assert.equal(festivalOn(at("2026-10-28"), TZ), null);
 });
+
+test("Halloween", () => {
+    assert.deepEqual(festivalOn(at("2026-10-31"), TZ), { kind: "halloween" });
+    assert.deepEqual(festivalOn(at("2031-10-31"), TZ), { kind: "halloween" });
+    assert.equal(festivalOn(at("2026-11-01"), TZ), null);
+    assert.equal(festivalOn(at("2026-10-30"), TZ), null);
+});

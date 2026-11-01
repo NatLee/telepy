@@ -3,11 +3,11 @@
 /**
  * Telepy 品牌標誌：漸層圖示 + 字標，側邊欄與手機選單共用。全站唯一保留品牌漸層的地方（logo 方塊），不加光暈。
  * `playful`（只有登入後的側邊欄 / 手機頂列）才有彩蛋：連點 7 次 logo 會沿著折返線重畫、Tapi 跳出來打招呼；
- * 農曆新年方塊長出柿蒂（柿柿如意）、Telepy 生日戴派對帽（lib/festivals）。登入、兩步驟設定等頁面不給。
+ * 農曆新年方塊長出柿蒂（柿柿如意）、Telepy 生日戴派對帽、萬聖節披著床單的 Tapi 坐在方塊上（lib/festivals）。登入、兩步驟設定等頁面不給。
  * Telepy brand mark (gradient tile + wordmark), shared by the sidebar and the mobile menu. The logo tile is the
  * one place that keeps the brand gradient — no glow. Only `playful` marks (the signed-in sidebar / mobile bar) carry
  * the easter eggs: seven clicks redraw the glyph and Tapi pops up; at Lunar New Year the tile grows a persimmon
- * calyx, on Telepy's birthday it wears a party hat. Sign-in and enrolment screens never get them.
+ * calyx, on Telepy's birthday it wears a party hat, and at Halloween Tapi sits on it in a bedsheet. Sign-in and enrolment screens never get them.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -110,7 +110,14 @@ export function BrandMark({ collapsed = false, className, playful = false }: { c
         if (r) setCard({ left: Math.max(8, Math.min(r.left, window.innerWidth - 264)), top: r.bottom + 10, first, banked: tapi.dailyUnlocked });
     }, [playful, tapi]);
 
-    const title = festival?.kind === "lunarNewYear" ? t("eggs.lunarNewYear") : festival?.kind === "birthday" ? t("eggs.birthday", { age: festival.age }) : undefined;
+    const title =
+        festival?.kind === "lunarNewYear"
+            ? t("eggs.lunarNewYear")
+            : festival?.kind === "birthday"
+              ? t("eggs.birthday", { age: festival.age })
+              : festival?.kind === "halloween"
+                ? t("eggs.halloween")
+                : undefined;
 
     return (
         <span className={cn("flex items-center gap-2.5 min-w-0", className)}>
@@ -118,6 +125,8 @@ export function BrandMark({ collapsed = false, className, playful = false }: { c
                 {drawing > 0 ? <TelepyGlyphDrawing key={drawing} size={18} className="text-white" /> : <TelepyGlyph size={18} className="text-white" />}
                 {festival?.kind === "lunarNewYear" && <PersimmonCalyx className="pointer-events-none absolute -top-[7px] left-1/2 -translate-x-1/2" />}
                 {festival?.kind === "birthday" && <PartyHat className="pointer-events-none absolute -right-1.5 -top-3 rotate-[18deg]" />}
+                {/* 萬聖節：披著床單的 Tapi 坐在方塊上。/ Halloween: Tapi in its bedsheet sits on the tile. */}
+                {festival?.kind === "halloween" && <Tapi pose="sideA" size={18} className="pointer-events-none absolute -top-[15px] left-1/2 -translate-x-1/2" />}
             </span>
             {!collapsed && (
                 <span className="flex flex-col min-w-0 leading-none">

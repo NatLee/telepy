@@ -29,6 +29,8 @@ export interface UserProfile {
     tapi_color?: string;
     /** 「每天換一個」解鎖了（看完片尾名單）。/ "Daily" is unlocked (watched the credits). */
     tapi_daily?: boolean;
+    /** Tapi 偶爾自己來串門子（預設 true）。/ Tapi drops by now and then (default true). */
+    tapi_visits?: boolean;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
     /** 已設定任一第二因素。/ A passkey or an authenticator app is set up. */
