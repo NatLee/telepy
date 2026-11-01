@@ -1,103 +1,170 @@
-# 那個「ms」是怎麼來的？—— Telepy 延遲偵測小元件
+# 那個「ms」是怎麼來的？
 
 <p align="center"><a href="./latency-deep-dive.md">English</a> | <b>繁體中文</b> | <a href="./latency-deep-dive.ja.md">日本語</a></p>
 
-> **2026-10 更新：** 後端改寫為 Rust 後，第三、四、五節描述的「Bash 探測 → Redis → update_ports 輪詢」
-> 供應鏈已被內建 SSH gateway 取代（那三節標了「Django 時代」，保留原文作為設計脈絡）。現在的樣子：
->
-> - **上線 / 離線**是連線事件：gateway 收到 `tcpip-forward` 註冊或釋放時就更新 `StatusState`（`monitor/mod.rs`），不再取樣 `ss -tln`。
-> - **延遲**：`Gateway::probe_latency`（`gateway/mod.rs`）每 15 秒（`GATEWAY_PROBE_INTERVAL_SECS`）對每條 forward 開一條
->   forwarded-tcpip channel、讀裝置 sshd banner 的第一個 byte —— 同樣的量法，零子程序、零 Redis；全部平行、單一探測 4 秒逾時。
->   結果經 `StatusState::record_probes` 直接進記憶體。
-> - **常駐播報員**是 `monitor/runner.rs`（每 5 秒一輪，`main.rs` 啟動）：去彈跳與節流規則原樣移植自 `update_ports`
->   （`monitor/ports.rs`：`FLAP_THRESHOLD` 2、5 ms / 6 輪 keep-alive）。
-> - **量不到也是資訊**：forward 還在、但連續 2 次（`DEGRADED_AFTER`）讀不到 banner = 通道 **degraded**（見第五節末的番外二）。
->
-> 第一、二、六節描述的前端與 ping/pong 仍是現況（檔名已更新）。
-
-> 一位 byte 的環球旅行，以及我們如何幫它計時。
-
-你在 Telepy 終端機標題列看到的那個小徽章：
+終端機頁面的標題列上，有個小小的延遲徽章：
 
 ```
 You ●──23ms──● Telepy ●──87ms──● Device   Σ 110ms
 ```
 
-看起來人畜無害，對吧？背後其實是一條橫跨瀏覽器、Django、Redis、SSH 容器、
-以及一段用 Bash 寫的「窮人版 ping」的完整供應鏈。
-（那是 Django 時代；現在中間那幾站縮成一個 Rust 程序和它內建的 SSH gateway，但 byte 走的路一樣。）
+看起來很簡單。這篇說明每個數字從哪裡來、多久量一次，以及 Telepy 為了讓它是「真的」花了哪些功夫。
 
----
-
-## 一、世界被切成兩段
+## 兩段路，分開量
 
 ![終端機的說明圖顯示每一段的來回時間](images/zh-TW/terminal-flow.png)
 
-端到端延遲被拆成兩個 hop，各自量測、各自負責：
+沒辦法一次量完整趟：瀏覽器碰不到裝置，裝置也不知道你的瀏覽器存在。所以 Telepy 把兩段分開計時，最後再加起來（就是那個 Σ）。
 
-| Hop | 量什麼 | 誰量的 | 多久一次 |
+| 區段 | 量什麼 | 誰來量 | 多久一次 |
 |---|---|---|---|
-| You → Telepy | 瀏覽器 ↔ 伺服器的 WebSocket RTT | 前端 `useTerminalPage` | 每 5 秒 |
-| Telepy → Device | SSH gateway ↔ 遠端裝置 sshd 的通道 RTT | 後端 `Gateway::probe_latency`（Django 時代：SSH 容器的 `probe_latency.sh`） | 每 15 秒 |
+| 你 → Telepy | 瀏覽器和伺服器之間的 WebSocket 來回時間 | 瀏覽器裡的終端機頁面 | 每 5 秒 |
+| Telepy → 裝置 | 經過通道、到裝置 SSH 伺服器的來回時間 | 後端內建的 SSH gateway | 每 15 秒 |
 
-為什麼不直接量端到端？
-因為量不到——瀏覽器碰不到裝置，裝置也不知道瀏覽器的存在。
-所以我們採用會計師的做法：分開記帳，最後加總（Σ）。
-兩個數字都是**往返** RTT，不是單程，請不要拿去跟光速吵架。
+兩個數字都是來回時間（RTT），不是單程。加起來之後，就很接近你和裝置之間真正的一趟來回。
 
----
+## 第一段：你的瀏覽器到 Telepy
 
-## 二、Hop 1：ping/pong，以及「為什麼 pong 是二進位的」
-
-前端每 5 秒往終端機 WebSocket 丟一句：
+終端機頁面每 5 秒會透過 WebSocket 送出一行：
 
 ```json
 { "action": "ping" }
 ```
 
-後端（`src/backend-api/src/ws/terminal.rs`；Django 時代是 `tunnels/consumers.py`）回一個 `pong`。注意：是 **binary frame**，不是文字。
+後端回一個 `pong`，用的是 binary frame，不是文字 frame。頁面算一下花了多久，更新徽章。
 
-這不是工程師的行為藝術。
-終端機的 `onmessage` 有一條鐵律：
-> **所有文字 frame 一律用 `term.write()` 進畫面**——那是 PTY 輸出的高速公路。
-如果 pong 用文字回，你的 vim 裡每 5 秒就會憑空出現一個 `pong`，像鬧鬼一樣。
-改用 binary，前端一看「哦，不是字，是控制訊息」，接著看手錶、算 `Date.now() - pingSentAt`，更新 state，畫面毫髮無傷。
+為什麼要用 binary？終端機頁面會把每個文字 frame 直接寫到畫面上，因為 shell 的輸出就是走文字 frame。如果 pong 用文字回，你的 vim 裡每 5 秒就會冒出一個 `pong`，像有個非常準時的阿飄。用 binary frame，頁面就知道「這是控制訊息，不是輸出」，畫面完全不受影響。
 
-一個 frame 型別，救了無數次 code review。
+終端機連線上的其他控制訊息也照這個規矩：斷線後保留 shell 的訊息、命令規則的提示、「誰在看」的名單，全都是 binary JSON。頁面收到 binary frame 時，先看內容是不是剛好 `pong`，不是才當 JSON 解析。
 
-後來這條「binary = 控制訊息」的規矩也被其他功能沿用：斷線保留的 `shell` 訊息、命令規則的 `command` 通知、
-「誰在看」的 `watchers` 都是 binary JSON。前端（`lib/commandRules.ts` 的 `parseTerminalFrame`）先看內容是不是剛好 `pong`，
-不是再當 JSON 解；文字 frame 照舊全進 `term.write()`。
+另外兩件事：
 
-其他幾條 WebSocket（通知、單一通道狀態、檔案管理）的應用層 ping 回的是文字 `{"type":"pong"}`，因為它們沒有 xterm 要保護。
-終端機、檔案管理、遠端瀏覽器另有伺服器端的 WebSocket Ping 心跳（`ws::Heartbeat`，20 秒一次、40 秒沒回應就斷）抓「人走了卻沒送
-close」的連線 —— 那是存活偵測，不拿來量延遲。
+- 其他 WebSocket（通知、單一通道狀態、檔案管理）的 ping，回的是文字 `{"type":"pong"}`。它們沒有終端機畫面要保護。
+- 伺服器也會每 20 秒對終端機、檔案管理和遠端瀏覽器的連線送一次 WebSocket Ping，40 秒都沒回應就斷線，用來抓那些沒說再見就消失的瀏覽器。這是存活檢查，不拿來量延遲。
 
----
+## 第二段：Telepy 到裝置
 
-## 三、Hop 2：kernel 說謊的那一天
+### 為什麼不直接問 kernel？
 
-最直覺的做法是問 kernel：`ss -ti` 本來就會回報每條 TCP 連線的 RTT，免費又即時。
-我們一開始也這麼想。
+最省事的做法是問 kernel：`ss -ti` 本來就會回報每條 TCP 連線的 RTT，免費又即時。一開始的想法也是這樣。
 
-然後 docker-proxy 出現了。
+問題出在伺服器前面擋了 docker-proxy 或 L4 負載平衡器的時候。裝置的 TCP 連線其實在這個 proxy 就終止了，而 proxy 就在同一台機器上，於是 kernel 很有自信的回報：RTT 大約 0 ms。
 
-當裝置的 control TCP 在前面被 docker-proxy 或 L4 load balancer **終結**時，
-kernel 看到的「對端」其實是同一台機器上的 proxy。於是它自信滿滿地報告：
+實際上，裝置可能在幾百公里外的機房，隔著三層 NAT 跟你揮手。kernel 的數字很精確，只是量錯了距離。
 
-> RTT ≈ 0ms。這位裝置就住在隔壁！
+### 敲門，然後只讀一個 byte
 
-實際上裝置在幾百公里外的一間機房，透過三層 NAT 跟你揮手。用 kernel RTT 量延遲，
-等於用「你家到你家大門」的距離估算「你家到火車站」——精確地測量了錯誤的東西。
+所以 Telepy 直接在通道裡量：
 
-### 解法：主動探測（Active Probe），主演：Bash（Django 時代）
+1. gateway 沿著裝置的反向通道開一條 channel，就是有人連到轉發埠時，`ssh -R` 會開的那種。
+2. 裝置上的 ssh client 把這條 channel 接到裝置自己的 SSH 伺服器。
+3. gateway 按下碼錶，只讀一個 byte：SSH 伺服器 banner 的第一個 byte（`SSH-2.0-...` 的那個 `S`）。
 
-`ssh/custom_scripts/custom-services.d/probe_latency.sh` 的做法流氓但正確：
+這個 byte 一定得沿著通道去一趟再回來，所以量到的是真正的網路來回。proxy 騙得了 kernel，卻變不出裝置的 banner。物理是不收紅包的。
 
-1. 用 `ss -tln` 找出所有反向通道埠（sshd 綁在 `127.0.0.1` 的 `-R` 轉發埠）。
-2. 對每個埠，用 Bash 的隱藏技 `/dev/tcp` 直接開 TCP 連線——不用裝 nc，不用 ICMP，
-   Bash 本人就是網路工具。
-3. 用 `$EPOCHREALTIME`（微秒級）看手錶，然後**只讀 1 個 byte**。
+也因為這樣，前面有 L4 proxy、或 Docker 改寫了來源位址，照樣量得準：byte 走的是通道裡面，不是 kernel 看到的那條連線。
+
+細節：
+
+- 每 15 秒一輪。進階的後端變數 `GATEWAY_PROBE_INTERVAL_SECS` 可以改這個間隔。
+- 所有通道同時探測，每個 4 秒逾時。睡著的裝置只會用掉自己的 4 秒，不會拖累其他裝置。
+- 碼錶精度到 0.1 ms。
+
+探測只負責量。通道上線或離線，看的是通道本身：裝置註冊或釋放它的 forward。探測逾時再多次，都不會讓通道變成離線。不過連續失敗會改變一件事，下一節說明。
+
+## 敲了沒人應：降級
+
+有時候 forward 還在，banner 卻一直沒回來：裝置的 sshd 停了、被防火牆擋住，或卡死了。通道看起來在線上，其實什麼都連不進去。
+
+所以 Telepy 會替每條通道記錄探測失敗的次數。連續失敗兩次，通道就標成「降級」；成功一次就歸零。只失敗一次不算：裝置偶爾忙到 4 秒內回不了 banner，很正常。
+
+通道列表會顯示四種狀態：
+
+| 狀態 | 顯示 | 意思 |
+|---|---|---|
+| 上線 | 綠點 | 通道開著，裝置的 sshd 也透過它回應 |
+| 降級 | 琥珀色點 | 通道開著，但 sshd 連續兩次探測都沒回應 |
+| 離線 | 灰點 | 裝置以前連過，現在沒有通道 |
+| 從未連線 | 虛線圈 | 沒有任何連線紀錄 |
+
+通道降級或恢復時：
+
+- 這條通道的日誌頁會記下「SSH 無回應」或「SSH 已恢復」事件。
+- 看得到這條通道的人都會收到通知：列表亮起琥珀色的點，通道的開啟按鈕看起來像離線。降級時還會跳出警告訊息。
+- 訂閱了狀態事件的 webhook 也會收到，各自照自己設定的延遲送出。
+
+「量不到」絕不會顯示成 0。探測失敗的通道就是沒有數字，徽章顯示灰格加 `—`，不會編一個 0 ms 出來。gateway 根本沒在跑的時候，那一輪就不送延遲。
+
+## 把數字送到你的畫面
+
+後端有個迴圈每 5 秒跑一輪，收走最新的探測結果，送給有權限看的瀏覽器。
+
+- **有變才送**：RTT 本來就會抖個幾毫秒（87、89、86、88…）。為了這種差異讓每個頁面每 5 秒重畫一次太浪費，所以只有某條通道變動 5 ms 以上，或有通道出現、消失時才送。其他時候保持安靜，但最多安靜 6 輪就一定送一次，剛連上的頁面不用等太久。
+- **其他都沒變也照送**：延遲是在迴圈「沒變化就收工」的檢查之前送出的。不然一條穩定得不得了的通道，會永遠停在第一次量到的數字。
+- **上線／離線有防彈跳**：通道狀態要連續兩輪都不一樣，才會宣布變更。
+- **只送你的通道**：每個人只會收到自己擁有、或分享給自己的通道延遲。別人通道的延遲，你看不到。
+
+數字分兩條路送：
+
+- 通道列表從通知連線 `/ws/notifications/` 收到。
+- 終端機頁面和「建立通道」精靈，訂閱單一通道的狀態連線 `/ws/tunnel_connection/{id}/`，即時拿到這條通道的數字。
+
+## 數字怎麼畫出來
+
+通道列表先從 `GET /api/reverse/server/dashboard` 載入一次（通道、連接埠、延遲一個請求全拿），之後跟著即時更新走。沒有取樣時 `latency` 是 `{}`，列表就只是不顯示數字。舊的 `/api/reverse/server/status/latency` 端點還在，回傳 `{"<port>": rtt_ms}`。
+
+延遲用四格顯示，像手機的訊號：
+
+| 來回時間 | 格數 | 標籤 |
+|---|---|---|
+| 60 ms 以下 | 4 格綠 | 極佳 |
+| 60–150 ms | 3 格綠 | 良好 |
+| 150–300 ms | 2 格琥珀色 | 普通 |
+| 超過 300 ms | 1 格紅 | 不佳（建議確認一下，裝置是不是被裝到月球上了） |
+| 量不到 | 灰格加 `—` | — |
+
+在終端機頁面上：
+
+- 標題列的徽章把兩段畫成一條路徑 `You ●──● Telepy ●──● Device`，線上有光點流動。第一段是這個分頁自己的 ping/pong，第二段是狀態連線送來的通道數字。滑鼠移上去或點一下，可以看到每段的明細和總和。
+- 說明對話框「終端機怎麼運作」也在「你 ─ Telepy」和「Telepy ─ 裝置」兩段線上，標出同樣的兩個來回時間（就是本頁最上面那張圖）。
+
+遠端桌面的串流統計，也把通道延遲當成其中一段。請看[遠端桌面](./remote-desktop.zh-TW.md)。
+
+所有會變的數字，都放在固定寬度、等寬數字的格子裡，`72ms` 變成 `115ms` 時版面一動也不動。
+
+## 一趟旅程，五個步驟
+
+1. gateway 每 15 秒沿著每條反向通道敲一次門，計時裝置 SSH banner 的第一個 byte 多久回來。
+2. 結果直接放進後端的記憶體。連續兩次敲門沒人應，通道就標成降級。
+3. 後端迴圈每 5 秒來收一次，略過沒意思的變化，把其他的送給有權限看的人。
+4. 你的瀏覽器畫出訊號格和路徑徽章，另外用 ping/pong（binary！）自己量到伺服器那一段。
+5. 兩段相加，就很接近你和裝置之間在真實世界的距離。
+
+設計理念一句話：不信轉述（kernel、proxy），只信親自跑完全程的那個 byte。
+
+## 底層細節
+
+下面兩段是給讀原始碼、或對歷史好奇的人看的，內容不會改變 Telepy 對你的任何行為。
+
+<details>
+<summary>程式裡的名字（給貢獻者）</summary>
+
+- 探測是 `Gateway::probe_latency`，逾時 `PROBE_TIMEOUT` 4 秒，間隔取自 `GATEWAY_PROBE_INTERVAL_SECS`（預設 15）。結果寫進 `StatusState::record_probes`，它替每個連接埠記下 RTT 和連續失敗次數。
+- 量不到的連接埠不會出現在延遲表裡，而不是 0。gateway 沒在跑時，`StatusState::latency()` 回 `None`，那一輪就不廣播。
+- 廣播迴圈是後端的連接埠監控（每 5 秒一輪）。常數：`FLAP_THRESHOLD` 2（上線／離線防彈跳）、5 ms 變動門檻、6 輪 keep-alive、`DEGRADED_AFTER` 2。
+- 訊息：`/ws/notifications/` 上的 `UPDATE-TUNNEL-LATENCY {latency: {"<port>": rtt_ms}}`；`/ws/tunnel_connection/{id}/` 上的 `latency_update {tunnel_id, reverse_port, rtt_ms}`；健康狀態變化是 `UPDATE-TUNNEL-HEALTH {tunnel_id, name, port, health}`。
+- 健康狀態有 `online` / `degraded` / `offline` / `never`，參考 Cloudflare Tunnel 的分法。gateway 會寫 `degraded` / `recovered` 事件。列表項目帶 `health`，前端再把它和即時的連接埠狀態合起來。
+- 前端的標題列徽章、訊號格和說明圖，分別是 `TerminalLatencyBadge`、`LatencyIndicator` 和 `TerminalFlow`。遠端桌面的串流統計把通道那一段叫做 `tunnel_ms`。
+- 這些 payload 裡的連接埠一律是字串 key，原因見下面 int key 的故事。
+
+</details>
+
+<details>
+<summary>Django 時代的做法</summary>
+
+後端在 2026 年 10 月改寫成 Rust 之前，同一個點子要動用更多零件：SSH 容器裡的一支 Bash 腳本、中間的 Redis，再加上負責廣播的 Django 指令。量法本身是一樣的。
+
+**探測**：腳本用 `ss -tln` 找出 sshd 綁在 `127.0.0.1` 上的反向通道連接埠，對每一個用 Bash 內建的 `/dev/tcp` 開 TCP 連線（不用 nc，也不用 ICMP），用 `$EPOCHREALTIME`（微秒級）計時，然後讀一個 byte：
 
 ```bash
 s=$EPOCHREALTIME
@@ -105,129 +172,21 @@ exec 3<>/dev/tcp/127.0.0.1/$port
 IFS= read -r -N1 _b <&3        # 等目標裝置 sshd banner 的第一個 byte
 e=$EPOCHREALTIME
 ```
-這 1 個 byte 是遠端裝置 sshd 的 banner（`SSH-2.0-...` 的那個 `S`）。
-關鍵在於：
-連線請求沿著**已建立的反向通道**送到裝置，banner 再沿著通道游回來——一去一回，就是一個真實的網路往返。
 
-docker-proxy 可以騙 kernel，但它變不出裝置的 banner。
-byte 必須真的跑完全程，物理不接受賄賂。
+探測平行執行（`&` + `wait`），每個 4 秒逾時，所以總耗時大約是最慢的那台，而不是全部相加。這支腳本也刻意跟 3 秒一次、記錄連接埠使用狀況的取樣分開，探測再慢，都卡不住上線／離線的判定。
 
-### 平行化：慢的裝置只准拖累自己
-
-探測是平行發射的（`&` + `wait`），單一探測 4 秒逾時。一台睡死的裝置只會吃掉自己那 4 秒，不會讓其他 20 台陪葬——總耗時 ≈ 最慢的一台，而不是全部相加。
-
-也因此，這支腳本刻意跟 3 秒週期的更新port使用狀況的監控腳本（也就是下面會提到的 update_ports）取樣**分家**：延遲探測再怎麼逾時，都不准卡住 online/offline 的判定。也就是量心跳的和量血壓的，是兩個不同的護理師。
-
-### 現在：同一招，由 gateway 親自敲門
-
-Rust 版的 gateway 本身就是反向通道的另一端，所以不必再繞 `127.0.0.1` 上的埠：`Gateway::probe_latency`
-（`src/backend-api/src/gateway/mod.rs`）對每條 forward 直接開一條 forwarded-tcpip channel —— 就是 `ssh -R` 收到外部連線時
-會開的那種 —— 裝置上的 ssh client 把它接到自己的 sshd，然後一樣**只讀 1 個 byte**，計時到 0.1 ms。
-
-- 平行（`join_all`）、單一探測 4 秒逾時（`PROBE_TIMEOUT`）、每 15 秒一輪（`GATEWAY_PROBE_INTERVAL_SECS`）。
-- 量心跳和量血壓還是兩個護理師：上線 / 離線看的是 forward 註冊 / 釋放事件，探測再怎麼逾時都不會讓通道變離線 ——
-  但連續失敗會讓它變 **degraded**（第五節的番外二）。
-- 前面有 L4 proxy、Docker 改寫來源位址也一樣量得準：byte 走的是通道裡面，不是 kernel 看到的那條 TCP。
-
----
-
-## 四、Redis：兩個世界的交接櫃檯（Django 時代）
-
-腳本把結果彙整成多行 `port rtt_ms`，一口氣覆寫進 Redis：
+**交接**：腳本把結果整理成多行 `port rtt_ms`，一口氣覆寫進 Redis：
 
 ```bash
 cat "$TMPDIR"/* | redis-cli -x SET ss_probe_latency
 ```
 
-後端這邊有個小陷阱：這個 key 是 `redis-cli` 裸寫的，**沒有** Django cache 的 key 前綴包裝，所以 `cache.get("ss_probe_latency")` 只會得到一個誠實的 `None`。
-我們程式中因此用 redis-py 直連去讀（順便省下以前每輪 spawn 一個 `redis-cli` subprocess 的開銷）。
+這個 key 是直接寫進去的，沒有 Django cache 的 key 前綴，所以 `cache.get("ss_probe_latency")` 永遠只會拿到 `None`。後端因此改用 redis-py 直連去讀，順便省掉每輪啟動一個 `redis-cli` 子程序的開銷。
 
-> 這邊讀不到就回 `None`——但你要知道「這輪取樣不可用」和「延遲是 0」是兩件事，混為一談的系統遲早會半夜叫醒你。
+**播報員**：`update_ports --loop`，一個每 5 秒跑一輪的常駐 Django management command。更早的版本是每 5 秒冷啟動一整個 Django。上面那些規則（延遲排在「沒變化就收工」之前、5 ms 門檻、6 輪 keep-alive、兩條路線）都是從它原封不動搬過來的。
 
-**現在：** 沒有交接櫃檯了。探測結果由 `StatusState::record_probes`（`monitor/mod.rs`）直接放進記憶體，量不到的 port
-就不在表裡（不是 0）。「不可用」和「0」的區分還在：gateway 沒啟動時 `StatusState::latency()` 回 `None`，那一輪就不廣播。
+**int key 事件**：channel layer 用 msgpack 序列化，新版 msgpack 預設 `strict_map_key=True`，map 的 key 是整數時，會在解包那一端丟出 `ValueError`。channels_redis 每個 worker 共用一個接收迴圈，所以只要一份延遲 payload 用了整數連接埠當 key，同一個 worker 上的所有 consumer 都會出事，包括正在用終端機的人。一個 `str(port)` 就修好了。
 
----
+現在已經沒有 channel layer（通知走程序內的 hub，序列化成 JSON），但 key 照樣是字串，因為前端和 JSON 本來就這樣期待。
 
-## 五、update_ports --loop：常駐播報員（Django 時代；現在是 `monitor/runner.rs`）
-
-> **現在：** `monitor::runner::run` 是同一個播報員的 Rust 版，每 5 秒一輪；下面的步驟、節流與兩路廣播都照搬，
-> 只是第 1 步不必再從 Redis 收件，直接讀 `StatusState`。
-
-`update_ports` 是個每 5 秒跑一輪的常駐 Django management command（`--loop` 模式；以前每 5 秒冷啟動一整個 Django，CPU 會準時出現心律不整的尖峰）。
-
-每輪步驟如下：
-1. 從 Redis 讀 `ss_probe_latency`，寫入 cache `ports_latency`。
-2. 廣播延遲——而且**刻意排在「狀態沒變就早退」之前**
-   > 不然一條穩定連線的通道（狀態永遠不變）延遲就永遠停在第一次的數字，成為博物館展品。
-
-### 節流：不是每次心跳都值得發新聞稿
-
-RTT 天生會抖個幾毫秒。87、89、86、88……如果每輪都廣播，等於全體前端每 5 秒
-為了一個沒人看得出差異的數字 re-render 一次。所以：
-
-- 有任何 port 變化 **≥ 5ms**，或有 port 出生/失蹤 → 廣播。
-- 否則沉默，但最多憋 6 輪就強制廣播一次（keep-alive）——照顧剛連上、錯過上一班車的前端。
-
-### 廣播分兩路
-
-- **主頁面**：往每位使用者推送延遲，payload 只含**該使用者有權限**的 port（擁有者 + 分享對象）。
-  現在是通知 `UPDATE-TUNNEL-LATENCY {latency: {"<port>": rtt_ms}}`，走 `/ws/notifications/`。
-  > 你看不到別人通道的延遲，這是隱私，也是禮貌。
-- **終端機頁**：單條通道即時更新。Django 時代是往 web terminal 群組推；現在是 hub 的 `tunnel_update` →
-  `/ws/tunnel_connection/{id}/` 上的 `latency_update {tunnel_id, reverse_port, rtt_ms}`（終端機頁和建立精靈都訂這條）。
-
-### 本節番外：int 當 key，全站陪葬
-
-payload 裡的 port 必須轉成**字串** key。channel layer 用 msgpack 序列化，新版預設 `strict_map_key=True`——int 當 map key 會在**解包端**炸出 `ValueError`。
-
-更精彩的是，channels_redis 的共用接收迴圈會讓這顆雷在同一個 worker 的**任意** consumer 身上引爆，包括正在用終端機的無辜使用者：全面斷線。
-
-> 一個 `str(port)` 的差距，介於「功能正常」和「靈異集體掉線事件」之間。
-
-現在沒有 channel layer 了（通知走行程內的 hub，序列化成 JSON），但 key 照樣是字串 —— 前端和 JSON 本來就這麼期待。
-
-### 番外二：量不到，也是一種量到
-
-Rust 版多算了一件事：forward 明明還在，banner 卻一直不回來 —— 裝置的 sshd 停了、被防火牆擋了或卡住了。
-通道看起來上線，其實什麼都連不進去。所以 `StatusState::record_probes` 每輪替每個 port 記「連續失敗幾次」（成功歸零），
-連續 `DEGRADED_AFTER`（2）次失敗就是 **degraded**（`monitor::health`：online / degraded / offline / never，參考 Cloudflare Tunnel）：
-
-- gateway 寫 `degraded` / `recovered` 事件（通道的 Logs 頁看得到）。
-- runner 在「狀態沒變就早退」之前比對降級的 port，變了就推 `UPDATE-TUNNEL-HEALTH {tunnel_id, name, port, health}` 給看得到的人，
-  也餵給訂了狀態事件的 webhook（各自的延遲計時）。
-- 列表項目帶 `health`，前端 `lib/tunnelHealth.liveHealth` 把它和即時的 port 狀態合起來：琥珀色的點、開啟按鈕看起來像離線、
-  降級時跳一個警告 toast。
-
-一次失敗不算：裝置偶爾忙到 4 秒內回不了 banner 很正常。
-
----
-
-## 六、前端：把數字穿上衣服
-
-- **首頁**（通道列表）用一次 REST（`/api/reverse/server/dashboard`，一個請求拿 `{tunnels, ports, latency}`；以前是三個平行請求，
-  其中之一是還在的 `/api/reverse/server/status/latency`）拿一份 `{port: rtt_ms}` 墊底，之後全靠 `UPDATE-TUNNEL-LATENCY` 餵；
-  取樣不可用時 `latency` 是 `{}`，也只是首頁沒數字。
-- **`LatencyIndicator`**：手機訊號風格的 4 格條。<60ms 四格綠（極佳）、60–150 三格綠（良好）、150–300 兩格琥珀（普通）、>300 一格紅（不佳，建議檢查是不是把裝置部署到月球）。量不到怎辦？就用灰格 + `—`，絕不直接亂寫 0ms。
-- **`TerminalLatencyBadge`**：終端機頁標題列（`TerminalHeader`）的雙 hop 流程路徑：
-      `You ●──● Telepy ●──● Device`，線上跑著資料流光點動畫。You → Telepy 是這個分頁自己的 ping/pong，
-      Telepy → Device 來自 `/ws/tunnel_connection/{id}/` 的 `rtt_ms`；hover / 點一下看分段明細。
-- **路徑圖**：終端機頁的 info 對話框（`TerminalFlow`）在「你 ─ Telepy」與「Telepy ─ 裝置」兩段線上標同樣兩個往返時間；
-  遠端桌面的串流統計（[`remote-desktop.zh-TW.md`](./remote-desktop.zh-TW.md)）也把 monitor 量到的通道延遲當成其中一段（`tunnel_ms`）。
-- **健康狀態**：列表的狀態點 / 標籤分 online（綠）、degraded（琥珀）、offline（灰）、never（虛線圈），見第五節番外二。
-- **防跑版強迫症**：所有會變的數字都住在固定寬度 + `tabular-nums` 的格子裡。
-  `72ms` 長成 `115ms` 時版面一動不動——沒有什麼比一個因為延遲變高而跳來跳去的延遲徽章更諷刺的了。
-
----
-
-## 七、總結：一個 byte 的履歷表
-
-1. gateway 每 15 秒沿著每條反向通道寄出一次「敲門」（一條 forwarded-tcpip channel），掐錶等 banner 的第一個 byte 游回來。
-2. 成績單直接進記憶體（`StatusState`）；連續兩次沒回來的，記成 degraded。
-3. 常駐的 `monitor/runner.rs` 每 5 秒來收件，節流後透過行程內的 hub 分發給有權限的人（key 照樣是字串）。
-4. 前端把它畫成訊號格與流程路徑，另外自己用 ping/pong（binary！）量瀏覽器到伺服器那段。
-5. 兩段相加 ≈ 你和你的裝置之間，真實世界的距離。
-
-（Django 時代的版本：第 1 步是 SSH 容器裡的 Bash、第 2 步是 Redis 的 `ss_probe_latency`、第 3 步是 `update_ports` + channel layer。）
-
-設計哲學一句話：**不信任何轉述（kernel、proxy），只信親自跑完全程的 byte。**
+</details>
