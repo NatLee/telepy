@@ -270,15 +270,19 @@ pub struct SshSpec {
     /// `user@host`
     pub dest: String,
     pub proxy_command: Option<String>,
-    /// 舊指令的 `ServerAliveInterval` / `TCPKeepAlive`（新服務照用）：一鍵加入在 ppoll 有問題的路由器（OpenWrt #12574，
-    /// 例如 GL-AR750S）上裝的是相容模式 `ServerAliveInterval=0` + `TCPKeepAlive=yes`，換成 30 秒那台的 ssh 會在交換金鑰時
-    /// 就逾時。/ The old command's `ServerAliveInterval` / `TCPKeepAlive`, kept by the new service: on routers whose ppoll
-    /// is broken (OpenWrt #12574, e.g. the GL-AR750S) the join installs compat mode `ServerAliveInterval=0` +
-    /// `TCPKeepAlive=yes`, and 30 s makes their ssh time out during the key exchange.
+    /// `-J` / `ProxyJump`：經跳板機連到 Telepy。改名時照舊（路線不變），換連線方式時換成新的路線。
+    /// `-J` / `ProxyJump`: a jump host on the way to Telepy. Kept by a rename (same route); a switch sets a new route.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub server_alive: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tcp_keep_alive: Option<String>,
+    pub proxy_jump: Option<String>,
+    /// 舊指令裡不歸 Telepy 管的設定，原樣帶進新服務（參數一個一個：`-o` `Key=Value`、`-4`、`-c` `aes128-ctr`…）。
+    /// 現在跑得動的指令就是這台機器要什麼的證據：keepalive（一鍵加入在 ppoll 壞掉的機器上裝的 `ServerAliveInterval=0`）、
+    /// 舊機器要的演算法、位址家族、設定檔都在這裡；Telepy 自己管的（路線、金鑰、主機金鑰鎖定、轉發）見 [`OWNED_OPTIONS`]。
+    /// The old command's settings that Telepy does not own, carried into the new service as they are (argument by
+    /// argument). The command that runs now is the evidence of what this machine needs: keepalive (the join's
+    /// `ServerAliveInterval=0` on machines with a broken ppoll), algorithms an old peer needs, address family, a config
+    /// file. What Telepy owns (route, key, host-key pinning, forwarding) is in [`OWNED_OPTIONS`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<String>,
     /// 不是 ssh，是 `telepy-carrier tunnel`（內建的 SSH client）：它自己的連線設定。/ Not ssh but the built-in client
     /// (`telepy-carrier tunnel`): its own connection settings.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -301,6 +305,24 @@ pub struct Builtin {
 
 /// 帶值的短選項（`man ssh`）。/ Short options that take a value.
 const VALUE_FLAGS: &str = "BbcDEeFIiJLlmOoPpQRSWw";
+
+/// 不帶值、照舊保留的短選項（位址家族、壓縮）。/ Value-less short options that are kept (address family, compression).
+const KEPT_FLAGS: &str = "46C";
+
+/// 帶值、照舊保留的短選項：加密、MAC、綁定的位址 / 介面、設定檔。/ Short options with a value that are kept: cipher,
+/// MAC, bind address / interface, config file.
+const KEPT_VALUE_FLAGS: &str = "cmbBF";
+
+/// Telepy 自己決定的 `-o` 選項（小寫）：路線、金鑰、主機金鑰鎖定、轉發、服務該有的行為。其他的都是這台機器自己的設定，
+/// 換服務時照舊（[`SshSpec::keep`]）。/ The `-o` options Telepy decides (lower case): route, key, host-key pinning,
+/// forwarding, how a service must behave. Everything else is the machine's own and survives a replacement.
+pub const OWNED_OPTIONS: &[&str] = &[
+    "hostname", "port", "user", "proxycommand", "proxyjump", "identityfile", "identitiesonly", "certificatefile", "identityagent", "addkeystoagent",
+    "hostkeyalias", "userknownhostsfile", "globalknownhostsfile", "stricthostkeychecking", "updatehostkeys", "batchmode", "exitonforwardfailure",
+    "remoteforward", "localforward", "dynamicforward", "clearallforwardings", "gatewayports", "forwardagent", "forwardx11", "forwardx11trusted",
+    "tunnel", "tunneldevice", "controlmaster", "controlpath", "controlpersist", "forkafterauthentication", "sessiontype", "stdinnull",
+    "requesttty", "remotecommand", "localcommand", "permitlocalcommand",
+];
 
 /// `-R` 的值 → 目標 `host:port`（`*:0:localhost:22`、`0:[::1]:22`、`40001:127.0.0.1:2222`）。
 fn forward_target(spec: &str) -> Option<String> {
@@ -391,8 +413,8 @@ fn parse_builtin(program: &str, args: &[&str]) -> Option<SshSpec> {
         target: target.unwrap_or_else(|| "127.0.0.1:22".into()),
         dest: format!("{user}@{host}"),
         proxy_command: None,
-        server_alive: None,
-        tcp_keep_alive: None,
+        proxy_jump: None,
+        keep: vec![],
         builtin: Some(b),
     })
 }
@@ -412,7 +434,7 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
         return None;
     }
     let (mut key, mut port, mut target, mut dest, mut proxy, mut login) = (None, None, None, None, None, None);
-    let (mut server_alive, mut tcp_keep_alive) = (None, None);
+    let (mut jump, mut keep): (Option<String>, Vec<String>) = (None, vec![]);
     let mut i = 1;
     while i < words.len() {
         let w = words[i];
@@ -429,6 +451,9 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
         let mut handled = false;
         for (pos, c) in flags.char_indices() {
             if !VALUE_FLAGS.contains(c) {
+                if KEPT_FLAGS.contains(c) {
+                    keep.push(format!("-{c}"));
+                }
                 continue;
             }
             let inline = &flags[pos + c.len_utf8()..];
@@ -443,15 +468,25 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
                 'p' => port = Some(value.parse::<u16>().ok()?),
                 'R' => target = forward_target(&value).or(target),
                 'l' => login = Some(value),
+                'J' => jump = Some(value),
+                c if KEPT_VALUE_FLAGS.contains(c) => keep.extend([format!("-{c}"), value]),
                 'o' => {
-                    let (k, v) = value.split_once(['=', ' ']).unwrap_or((value.as_str(), ""));
+                    let (k, v) = match value.split_once(['=', ' ']) {
+                        Some((k, v)) => (k.to_string(), v.to_string()),
+                        // `-o "Key value"`：引號在 /proc 裡沒了，值是下一個字（最後一個字是目的地，不拿）。
+                        // `-o "Key value"`: the quotes are gone in /proc, the value is the next word (never the last
+                        // word, the destination).
+                        None if i + 2 < words.len() && !words[i + 1].starts_with('-') => {
+                            i += 1;
+                            (value.clone(), words[i].to_string())
+                        }
+                        None => (value.clone(), String::new()),
+                    };
+                    let (k, v) = (k.as_str(), v.as_str());
                     match k.to_ascii_lowercase().as_str() {
                         "port" => port = Some(v.parse::<u16>().ok()?),
                         "identityfile" => key = Some(v.to_string()),
                         "user" => login = Some(v.to_string()),
-                        // 只收認得的值：它們會寫進服務檔。/ Only known values: they end up in the service file.
-                        "serveraliveinterval" if !v.is_empty() && v.len() <= 6 && v.bytes().all(|b| b.is_ascii_digit()) => server_alive = Some(v.to_string()),
-                        "tcpkeepalive" if matches!(v.to_ascii_lowercase().as_str(), "yes" | "no") => tcp_keep_alive = Some(v.to_ascii_lowercase()),
                         "proxycommand" => {
                             // 指令裡的空白在 /proc 裡分不出來：接著讀到下一個選項為止（最後一個字是目的地）。
                             // Spaces inside it are lost in /proc: read on until the next option (the last word is the destination).
@@ -463,7 +498,11 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
                             }
                             proxy = Some(pc);
                         }
-                        _ => {}
+                        "proxyjump" => jump = Some(v.to_string()),
+                        owned if OWNED_OPTIONS.contains(&owned) => {}
+                        // 沒有值的選項 ssh 本來就不接受。/ ssh refuses an option without a value anyway.
+                        _ if v.is_empty() => {}
+                        _ => keep.extend(["-o".to_string(), format!("{k}={v}")]),
                     }
                 }
                 _ => {}
@@ -478,7 +517,7 @@ pub fn parse_ssh(line: &str) -> Option<SshSpec> {
     if !dest.contains('@') {
         dest = format!("{}@{dest}", login?);
     }
-    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy, server_alive, tcp_keep_alive, builtin: None })
+    Some(SshSpec { program, key, port, target: target?, dest, proxy_command: proxy, proxy_jump: jump, keep, builtin: None })
 }
 
 /// 為什麼不能自動改名（前端用 `deviceInstall.block.<code>` 翻譯）。/ Why an automatic rename is not possible.
@@ -556,6 +595,11 @@ impl Plan {
     fn has_carrier(&self) -> bool {
         self.spec.builtin.is_some() || self.route_carrier().is_some() || (self.route.is_none() && carrier(self).is_some())
     }
+}
+
+/// `keep` 裡有沒有設這個 `-o` 選項（不分大小寫）。/ Whether `keep` sets this `-o` option (case-insensitive).
+fn sets_option(keep: &[String], option: &str) -> bool {
+    keep.windows(2).any(|w| w[0] == "-o" && w[1].split('=').next().is_some_and(|k| k.eq_ignore_ascii_case(option)))
 }
 
 fn safe_word(s: &str) -> bool {
@@ -639,6 +683,11 @@ pub fn plan(accounts: &[AccountResult], names: &Names) -> Result<Plan, Blocker> 
     if !words.iter().all(|w| safe_word(w)) || spec.key.as_deref().is_some_and(|k| !k.starts_with('/') && !k.starts_with("~/")) {
         return Err(Blocker::OddCommand);
     }
+    // 帶過去的設定要能原樣寫進服務檔；寫不進去就不換（絕不默默丟掉一個設定）。/ Kept settings must go into the service
+    // file as they are; if one cannot, nothing is replaced (a setting is never dropped silently).
+    if !spec.keep.iter().chain(&spec.proxy_jump).all(|w| safe_word(w)) {
+        return Err(Blocker::OddCommand);
+    }
     if spec.proxy_command.as_deref().is_some_and(|p| p.contains(['\'', '"', '\\', '`', '$', '\n', '<', '>', '&', ';', '|'])) {
         return Err(Blocker::OddCommand);
     }
@@ -668,13 +717,15 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
         return builtin_args(plan, b, names, pinned);
     }
     let ssh_dir = format!("{}/.ssh", plan.home);
-    // keepalive 照舊（路由器的相容模式不能丟）；舊指令沒寫就是 30 秒。/ Keepalive as before (a router's compat mode must
-    // survive); 30 s when the old command did not say.
-    let alive = plan.spec.server_alive.as_deref().unwrap_or("30");
-    let mut a: Vec<String> = vec!["-NT".into(), "-o".into(), "ExitOnForwardFailure=yes".into(), "-o".into(), format!("ServerAliveInterval={alive}"), "-o".into(), "ServerAliveCountMax=3".into()];
-    if let Some(k) = &plan.spec.tcp_keep_alive {
-        a.extend(["-o".into(), format!("TCPKeepAlive={k}")]);
+    // 這台機器自己的設定照舊（[`SshSpec::keep`]）；keepalive 只有舊指令沒寫時才用預設。/ The machine's own settings
+    // stay ([`SshSpec::keep`]); keepalive defaults only apply when the old command did not set them.
+    let mut a: Vec<String> = vec!["-NT".into(), "-o".into(), "ExitOnForwardFailure=yes".into()];
+    for (option, default) in [("ServerAliveInterval", "30"), ("ServerAliveCountMax", "3")] {
+        if !sets_option(&plan.spec.keep, option) {
+            a.extend(["-o".into(), format!("{option}={default}")]);
+        }
     }
+    a.extend(plan.spec.keep.iter().cloned());
     a.extend(["-o".into(), "BatchMode=yes".into()]);
     if pinned {
         a.extend(["-o".into(), "StrictHostKeyChecking=yes".into(), "-o".into(), format!("UserKnownHostsFile={ssh_dir}/{}", names.known_hosts()), "-o".into(), format!("HostKeyAlias={alias}")]);
@@ -692,6 +743,8 @@ pub fn ssh_args(plan: &Plan, names: &Names, alias: &str, pinned: bool) -> Vec<St
         None => {
             if let Some(pc) = proxy_for(plan, names) {
                 a.extend(["-o".into(), format!("ProxyCommand={pc}")]);
+            } else if let Some(j) = &plan.spec.proxy_jump {
+                a.extend(["-J".into(), j.clone()]);
             }
         }
     }
@@ -1067,13 +1120,18 @@ mod tests {
         // 一鍵加入走 WebSocket 時的 ProxyCommand。/ The join's WebSocket ProxyCommand.
         let s = parse_ssh("ssh -NT -o ProxyCommand=/home/pi/.ssh/telepy-ws-12.sh -i /home/pi/.ssh/telepy_tunnel_ed25519 -p 443 -R 0:localhost:22 telepy@h").unwrap();
         assert_eq!(s.proxy_command.as_deref(), Some("/home/pi/.ssh/telepy-ws-12.sh"));
-        // keepalive：讀得懂的值才留（會寫進服務檔），沒寫 = 沒有。/ Keepalive: only known values are kept (they go into
-        // the service file); unset = none.
-        let s = parse_ssh("ssh -NT -o ServerAliveInterval=0 -o TCPKeepAlive=Yes -R 0:localhost:22 telepy@h").unwrap();
-        assert_eq!((s.server_alive.as_deref(), s.tcp_keep_alive.as_deref()), (Some("0"), Some("yes")));
-        let s = parse_ssh("ssh -o ServerAliveInterval=30;reboot -o TCPKeepAlive=maybe -R 0:localhost:22 telepy@h").unwrap();
-        assert_eq!((s.server_alive, s.tcp_keep_alive), (None, None));
-        assert_eq!((parse_ssh(HDRE).unwrap().server_alive.as_deref(), parse_ssh(HDRE).unwrap().tcp_keep_alive), (Some("30"), None));
+        // 不歸 Telepy 管的設定照舊（一個一個參數）；Telepy 自己的（路線、金鑰、鎖定、轉發、-E 記錄檔）不在裡面。
+        // Settings Telepy does not own are kept (argument by argument); its own (route, key, pinning, forwarding, the -E
+        // log) are not.
+        let s = parse_ssh("1 /usr/bin/ssh -NT4C -c aes128-ctr -m hmac-sha2-256 -F /dev/null -E /tmp/old.log -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 -o ControlMaster=no -o UserKnownHostsFile=/k/kh -o ExitOnForwardFailure=yes -o BatchMode=yes -i /k/id -p 22 -R 0:localhost:22 telepy@h").unwrap();
+        assert_eq!(s.keep, ["-4", "-C", "-c", "aes128-ctr", "-m", "hmac-sha2-256", "-F", "/dev/null", "-o", "HostKeyAlgorithms=+ssh-rsa", "-o", "KexAlgorithms=+diffie-hellman-group14-sha1"]);
+        assert_eq!((s.key.as_deref(), s.port, s.dest.as_str()), (Some("/k/id"), Some(22), "telepy@h"));
+        // `-o "Key value"`（autossh 範本的寫法）：/proc 裡沒有引號，值是下一個字，目的地還是最後一個字。
+        // `-o "Key value"` (the autossh template's form): no quotes in /proc, the value is the next word, the
+        // destination is still the last word.
+        let s = parse_ssh("7 /usr/bin/ssh -N -o ServerAliveInterval 30 -o ServerAliveCountMax 3 -i /k/id -p 24242 -R 0:localhost:22 telepy@h").unwrap();
+        assert_eq!((s.dest.as_str(), s.keep.as_slice()), ("telepy@h", ["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3"].map(String::from).as_slice()));
+        assert_eq!(parse_ssh(HDRE).unwrap().keep, ["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3"]);
         // 不是 ssh、沒有 -R 目標、只有 SOCKS 的 -R。/ Not ssh, no -R target, a dynamic -R.
         assert!(parse_ssh("1 autossh -M 0 -NR 0:localhost:22 telepy@h").is_none());
         assert!(parse_ssh("1 ssh -N telepy@h").is_none());
@@ -1326,6 +1384,11 @@ mod tests {
         let odd = HDRE.replace("/home/pi/.ssh/id_ed25519", "id_ed25519");
         let s = vec![account("root", true, vec![item("found", "systemd", "/etc/systemd/system/x.service"), item("found", "process", &odd), item("found", "owner", "4242 pi /home/pi")])];
         assert_eq!(plan(&s, &names), Err(Blocker::OddCommand), "a relative key path cannot be resolved");
+        // 帶不過去的設定（寫不進服務檔的字元）：不換，也不默默丟掉。/ A setting that cannot be written into the service
+        // file: no replacement, and never silently dropped.
+        let odd = HDRE.replace("-o ServerAliveInterval=30", "-o SetEnv=A=$(id)");
+        let s = vec![account("root", true, vec![item("found", "systemd", "/etc/systemd/system/x.service"), item("found", "process", &odd), item("found", "owner", "4242 pi /home/pi")])];
+        assert_eq!(plan(&s, &names), Err(Blocker::OddCommand));
     }
 }
 
@@ -1355,6 +1418,38 @@ mod procd_tests {
         }]
     }
 
+    /// 新的 ssh = 舊指令裡這台機器自己的設定 + Telepy 自己管的部分（路線、金鑰、鎖定、轉發）；預設只補沒寫的。
+    /// The new ssh = the machine's own settings from the old command + what Telepy owns; defaults only fill gaps.
+    #[test]
+    fn the_new_ssh_keeps_the_machines_own_settings() {
+        let names = Names::new("q7h3m2ka");
+        let with = |cmd: &str| {
+            let mut r = router();
+            r[0].items[1] = item("found", "process", cmd);
+            ssh_args(&plan(&r, &names).unwrap(), &names, "telepy-telepy.natlee.info-56767", true)
+        };
+        let has = |a: &[String], w: &str| a.iter().any(|x| x == w);
+        let count = |a: &[String], p: &str| a.iter().filter(|x| x.starts_with(p)).count();
+        // 什麼都沒寫：Telepy 的預設，各一次。/ Nothing set: Telepy's defaults, once each.
+        let a = with("12574 /usr/bin/ssh -NT -i /root/.ssh/telepy_tunnel_ed25519 -p 56767 -R 0:127.0.0.1:22 telepy@telepy.natlee.info");
+        assert!(has(&a, "ServerAliveInterval=30") && has(&a, "ServerAliveCountMax=3") && count(&a, "ServerAlive") == 2, "{a:?}");
+        // 舊機器要的演算法、位址家族、自己的 keepalive：照舊；不安全的鎖定方式：換成 Telepy 的。
+        // An old peer's algorithms, the address family, its own keepalive: kept; loose pinning: replaced by Telepy's.
+        let a = with("12574 /usr/bin/ssh -NT -4 -o ServerAliveInterval=15 -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/telepy_tunnel_ed25519 -p 56767 -R 0:127.0.0.1:22 telepy@telepy.natlee.info");
+        assert!(has(&a, "ServerAliveInterval=15") && !has(&a, "ServerAliveInterval=30") && has(&a, "ServerAliveCountMax=3"), "{a:?}");
+        assert!(has(&a, "-4") && has(&a, "HostKeyAlgorithms=+ssh-rsa"), "{a:?}");
+        assert!(has(&a, "StrictHostKeyChecking=yes") && !has(&a, "StrictHostKeyChecking=no") && has(&a, "UserKnownHostsFile=/root/.ssh/telepy-q7h3m2ka.known_hosts") && !a.iter().any(|x| x.contains("/dev/null")), "{a:?}");
+        // 跳板機：改名照舊（路線不變），換連線方式換成新路線。/ A jump host: kept by a rename, replaced by a switch.
+        let mut r = router();
+        r[0].items[1] = item("found", "process", "12574 /usr/bin/ssh -NT -J admin@bastion.lan:2222 -i /root/.ssh/telepy_tunnel_ed25519 -p 56767 -R 0:127.0.0.1:22 telepy@telepy.natlee.info");
+        let mut p = plan(&r, &names).unwrap();
+        let a = ssh_args(&p, &names, "x", true);
+        assert!(a.windows(2).any(|w| w[0] == "-J" && w[1] == "admin@bastion.lan:2222"), "{a:?}");
+        p.route = Some(Route { dest: "telepy@telepy-ssh.natlee.info".into(), port: 56767, carrier: None });
+        assert!(!ssh_args(&p, &names, "x", true).contains(&"-J".to_string()));
+        assert_eq!(parse_ssh("1 ssh -o ProxyJump=j@b -o Compression -R 0:localhost:22 telepy@h").map(|s| (s.proxy_jump, s.keep)), Some((Some("j@b".into()), vec![])));
+    }
+
     /// 換連線方式：新代號看現在的 procd 服務是「舊的」，計畫出 procd 方法；init 腳本、安裝與復原腳本都照 OpenWrt 的做法。
     /// A switch plans a procd service from the router's current one; the init script and the install / undo scripts follow OpenWrt.
     #[test]
@@ -1368,7 +1463,7 @@ mod procd_tests {
         assert!(args.contains(&"telepy@telepy-ssh.natlee.info".to_string()) && args.contains(&"ProxyCommand=/root/.ssh/telepy-q7h3m2ka-ws.sh".to_string()), "{args:?}");
         // 這台在相容模式（ppoll 壞掉，30 秒會讓 ssh 在交換金鑰時逾時）：新服務照舊，不能換回 30。
         // This router runs in compat mode (broken ppoll: 30 s times ssh out during the key exchange); the new service keeps it.
-        let compat = |a: &[String]| a.contains(&"ServerAliveInterval=0".to_string()) && a.contains(&"TCPKeepAlive=yes".to_string()) && !a.contains(&"ServerAliveInterval=30".to_string());
+        let compat = |a: &[String]| a.contains(&"ServerAliveInterval=0".to_string()) && a.contains(&"TCPKeepAlive=yes".to_string()) && a.iter().filter(|x| x.starts_with("ServerAlive")).count() == 2;
         assert!(compat(&args), "{args:?}");
         let (path, init) = service_file(&p, &names, &args);
         assert_eq!(path, "/etc/init.d/telepy-q7h3m2ka");
