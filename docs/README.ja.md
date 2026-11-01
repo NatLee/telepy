@@ -2,39 +2,40 @@
 
 <p align="center"><a href="./README.md">English</a> | <a href="./README.zh-TW.md">繁體中文</a> | <b>日本語</b></p>
 
-Telepy とは何か、どうインストールするかは、まず[プロジェクトの README](../README.ja.md)をご覧ください。以下のドキュメントでは
-さらに詳しく説明します。どれも英語・繁体字中国語・日本語で用意されています。
+はじめての方は、まず[プロジェクトの README](../README.ja.md) で Telepy とは何か、どうインストールするかをご覧ください。以下のドキュメントはさらに詳しい内容で、どれも英語・繁体字中国語・日本語でそろっています。
 
 ## まず図で見る
 
-- **[図で見る Telepy](./visual-guide.ja.md)** — アプリの情報ボタンの先にある図と、いくつかの録画：デバイスの追加と削除、
-  ターミナル、ファイル、リモートデスクトップとブラウザ、共有、コマンドルール、キーと SSH 設定、通知、CLI・API・MCP、
-  サインイン、サーバーの状態。
+[**図で見る Telepy**](./visual-guide.ja.md) には、アプリの情報ボタンの先にある図といくつかの録画をまとめています。デバイスの追加、ターミナル、ファイル、リモートデスクトップ、共有、コマンドルール、鍵、通知、CLI、サーバーの状態を扱っています。
 
 ## Telepy を使う
 
 | ドキュメント | 内容 |
 | --- | --- |
-| [1 行コマンドでのデバイス追加](./device-join.ja.md) | 追加スクリプトの動作、対応デバイス（Linux、macOS、OpenWrt）、残るもの、診断のしかた |
-| [リモートデスクトップ](./remote-desktop.ja.md) | guacd 経由の RDP / VNC とブラウザ内の RustDesk：画質、表示、クリップボード、サウンド、画面、ファイル、保存したログイン |
-| [リモートブラウザ](./remote-browser.ja.md) | KasmVNC 上の Chromium で、通信はデバイスから出ていきます。セッション、制限、トラブルシューティング |
-| [`telepy` コマンドラインと API トークン](./cli.ja.md) | インストールとサインイン、全コマンド、トークンとスコープ、呼び出しログ |
-| [MCP](./mcp.ja.md) | MCP クライアントの接続、承認フロー、ツール、対話シェル、ブラウザ、コマンドルール、監査 |
-| [Webhooks](./webhooks.ja.md) | 個人用とサイト全体の webhook、イベント、形式、署名、再試行、対象外 |
+| [1 行のコマンドでデバイスを追加](./device-join.ja.md) | スクリプトが何をするか、対応デバイス、残るもの、失敗したときの対処 |
+| [リモートデスクトップ](./remote-desktop.ja.md) | ブラウザで使う RDP・VNC・RustDesk：画質、クリップボード、音声、画面、ファイル |
+| [リモートブラウザ](./remote-browser.ja.md) | デバイス側からネットに出る Chromium、その制限とトラブルシューティング |
+| [コマンドラインと API トークン](./cli.ja.md) | インストール、サインイン、全コマンド、トークンにできること |
+| [MCP](./mcp.ja.md) | MCP クライアントの接続と承認、エージェントにできること・できないこと |
+| [Webhook](./webhooks.ja.md) | 個人用とサイト全体の Webhook：イベント、形式、署名、再試行 |
 
 ## 内部のしくみ
 
 | ドキュメント | 内容 |
 | --- | --- |
-| [バックエンドがデバイスに届くしくみ](./device-connections.ja.md) | 共有接続、ポート、ホストキーの固定、マシンの識別、トンネルごとのサービスキー、TCP / WebSocket / PROXY protocol、インストール名 |
-| [レイテンシの数字の出どころ](./latency-deep-dive.ja.md) | 各区間の往復時間をどう測り、どう表示するか |
-| [ベンチマーク：Django 対 Rust](./benchmarks.ja.md) | バックエンド書き換えの実測値 |
-| [README のスクリーンショットの作り方](./screenshots/README.ja.md) | これらのドキュメントの図の元になっているデモサーバー |
+| [バックエンドがデバイスに接続する仕組み](./device-connections.ja.md) | 共有接続、ホスト鍵の確認、マシンの識別、2 つの接続方法（SSH と WebSocket） |
+| [レイテンシの数字の出どころ](./latency-deep-dive.ja.md) | 各区間をどう測り、どう表示するか |
+| [ベンチマーク：Django 対 Rust](./benchmarks.ja.md) | バックエンドを書き直したときの実測値 |
+| [README のスクリーンショットの作り方](./screenshots/README.ja.md) | すべての画像の元になっているデモサーバー |
 
 ## エンジニアリングノート
 
-書かれた当時のまま繁体字中国語で [`engineering/`](./engineering/) に残してあります：[Rust バックエンド移行計画](./engineering/rust-migration-plan.md)、
-RustDesk の調査（[spike](./engineering/rustdesk-spike.md)、[ID / リレーサーバー](./engineering/rustdesk-id-server.md)）、そして[記事](./engineering/articles/)。
-Dropbear クライアントを strict kex で通す russh の修正は上流に提出済みです：[Eugeny/russh#804](https://github.com/Eugeny/russh/issues/804) / [PR #805](https://github.com/Eugeny/russh/pull/805)。
+書かれた当時のまま、繁体字中国語だけで残しているノートもあります。
+
+- [Rust バックエンド移行計画](./engineering/rust-migration-plan.md)
+- RustDesk の調査：[最初の試作](./engineering/rustdesk-spike.md)と [Telepy を ID／リレーサーバーにする案](./engineering/rustdesk-id-server.md)
+- [記事](./engineering/articles/)
+
+上流の対応を待っている修正が 1 つあります。Dropbear クライアントを russh の厳格な鍵交換に通すためのものです（[issue #804](https://github.com/Eugeny/russh/issues/804)、[PR #805](https://github.com/Eugeny/russh/pull/805)）。
 
 リリースノートは [GitHub Releases](https://github.com/NatLee/telepy/releases) にあります。

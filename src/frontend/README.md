@@ -1,44 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Telepy frontend
 
-## Environment
+The web interface of Telepy, built with Next.js, TypeScript and Tailwind CSS.
 
-To sync environment variables from the repo root `.env` into `src/frontend/.env.local` (e.g. `SOCIAL_GOOGLE_CLIENT_ID` → `NEXT_PUBLIC_GOOGLE_CLIENT_ID`), run from the frontend directory:
+You usually don't run it on its own. `docker compose up` at the top of the repository builds it and serves it behind Traefik. Run it here when you are working on the interface.
 
-```bash
-npm run env:sync
-```
+## Run it locally
 
-## Getting Started
-
-First, run the development server:
+You need Node.js 22.18 or newer and a running Telepy backend. The Docker stack is fine for that.
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- API calls are passed through to the backend on `localhost:8787`. Set `NEXT_DEV_BACKEND_URL` if yours lives somewhere else.
+- WebSockets can't go through that pass-through, so in development they connect to the backend directly.
+- `npm run dev` first copies a few values from the repository's `.env`, such as the Google client ID and the backend address. `npm run env:sync` does only that step.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Checks
 
-## Learn More
+```bash
+npm test         # unit tests for the pure helpers
+npm run lint
+npm run build    # production build, type check included
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Good to know
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Every piece of text on screen is translated into English, Traditional Chinese and Japanese. Add the English text first. If the other two languages are missing a key, the build fails, which is annoying exactly once per string.
+- In Traditional Chinese a tunnel is always 通道. A test checks this.
+- If a style change seems to be ignored while the dev server runs, delete the `.next` folder. The dev server sometimes keeps serving an older compiled theme.

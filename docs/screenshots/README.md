@@ -2,48 +2,45 @@
 
 <p align="center"><b>English</b> | <a href="./README.zh-TW.md">繁體中文</a> | <a href="./README.ja.md">日本語</a></p>
 
-The README in each language shows the screenshots in `en/`, `zh-TW/` and `ja/` — the same thirteen screens, each taken
-with the interface in that language.
+Each README shows the same thirteen screens, taken with the interface in that README's language. There is one folder per language here, and the file names are the same in all three.
 
-| File            | Screen                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------- |
-| `tunnels.png`   | Tunnels page in the list view, one list sorted by status (degraded first; pinned tunnels lead) |
-| `terminal.png`  | Web terminal on `web-01` with the file manager side panel                                 |
-| `network.png`   | Network page, `office-gw`'s LAN with the NAS selected                                    |
-| `desktop.png`   | Remote desktop: a VNC session to `design-ws` (XFCE)                                       |
-| `browser.png`   | Remote browser through `office-gw`                                                       |
-| `create.png`    | Create Tunnel → One command, a fresh command and what the script does                    |
-| `commands.png`  | Command rules in force on `db-primary` (personal and site-wide) with the tester          |
-| `sessions.png`  | Live sessions                                                                            |
-| `access.png`    | Admin → Users & access → Feature permissions for a person in the Contractors group        |
-| `sshconfig.png` | SSH config editor with its example config, Simplify tab                                  |
-| `health.png`    | Admin → Server health, overview                                                          |
-| `api.png`       | API page → Your tokens                                                                   |
-| `activity.png`  | Agent activity (MCP tool calls)                                                          |
+| File            | Screen                                                                 |
+| --------------- | ---------------------------------------------------------------------- |
+| `tunnels.png`   | Tunnels page, list view, sorted by status (pinned first, then degraded) |
+| `terminal.png`  | Web terminal on `web-01` with the file panel open                      |
+| `network.png`   | Network page: the LAN behind `office-gw`, with the NAS selected        |
+| `desktop.png`   | Remote desktop: VNC to `design-ws`                                     |
+| `browser.png`   | Remote browser through `office-gw`                                     |
+| `create.png`    | Create Tunnel → One command, with a fresh command                      |
+| `commands.png`  | Command rules in force on `db-primary`, with the tester                |
+| `sessions.png`  | Live sessions                                                          |
+| `access.png`    | Feature permissions for someone in the Contractors group               |
+| `sshconfig.png` | SSH config editor with its example config, Simplify tab                |
+| `health.png`    | Server health, overview                                                |
+| `api.png`       | API page, Your tokens                                                  |
+| `activity.png`  | Agent activity (MCP tool calls)                                        |
 
 ## How they are made
 
-Everything on them is a throwaway demo, not real data: a separate Telepy stack built from the repository (its own
-`PROJECT_NAME`, ports and data directory), nine Debian containers as devices that joined with the real one-command join,
-an `office.lan` network of small containers with real vendor MAC prefixes (IEEE OUI list) scanned through `office-gw`,
-and users, labels, groups, shares, rules, snippets, API tokens, MCP calls and terminal sessions created through the
-REST API, the MCP endpoint and the terminal WebSocket. Public addresses come from the documentation ranges: devices
-get `203.0.113.0/24` (a fake lookup answers their public-IP question) and visitors `198.51.100.0/24` (sent as
-X-Forwarded-For, which the default `auto` proxy rule takes as the visitor), the server is called `telepy.example.com`,
-and each device reports its own memory, uptime and load through bind-mounted `/proc` files, so the device facts are
-not the host's. The Server health screen's storage numbers are the demo machine's real disk.
+Nothing on them is real data. They come from a throwaway demo:
 
-Shots are taken with headless Chromium (Playwright) at 1680 × 1050 (the tunnels page at 1680 × 1260) and a device
-scale factor of 2, light theme, time zone Asia/Taipei, then resized to 1920 px wide and saved as palette PNGs.
+- A separate Telepy stack built from this repository, with its own ports and data.
+- Nine Debian containers playing devices, each added with the real one-command join.
+- A small office network of containers with real vendor MAC prefixes, scanned through `office-gw`.
+- Users, labels, groups, shares, rules, snippets, tokens, MCP calls and terminal sessions, all created through the API, MCP and the terminal, the same way a person would.
 
-When the interface changes enough that a screenshot is misleading, retake all three languages of it so the READMEs
-stay in step.
+The addresses come from the ranges reserved for documentation: `203.0.113.x` for devices, `198.51.100.x` for visitors, and `telepy.example.com` for the server. Each device reports made-up memory, uptime and load, so the device health isn't just the demo machine's. The disk numbers on Server health are real, though. We didn't have the heart to fake those.
 
-## The diagrams and recordings in the docs
+## Taking them
 
-`docs/images/<lang>/` holds what the documents embed, from the same demo server: each info dialog (path diagrams,
-timelines, impact maps) opened by a script and captured at 1440 px wide with a device scale factor of 2, then resized to
-at most 1200 px; the GIFs are timed screenshots of a real run (a device running the one command, a tunnel being deleted,
-a remote browser starting, the create page's network scene, the API page's "Four ways in", the discreet sign-in page),
-assembled with sharp at about 8–10 frames a second. The file names are the same in every language, so a changed dialog
-is retaken in all three.
+- Headless Chromium (Playwright), light theme, time zone Asia/Taipei.
+- 1680 × 1050 at 2× scale (the tunnels page 1680 × 1260), then resized to 1920 px wide and saved as palette PNGs.
+- When a screen changes enough to be misleading, retake it in all three languages so the READMEs stay in step.
+
+## Diagrams and recordings in the docs
+
+The pictures inside the documents come from the same demo server:
+
+- Info dialogs (path diagrams, timelines, impact maps) are opened by a script, captured 1440 px wide at 2× scale, then resized to at most 1200 px.
+- The GIFs are timed screenshots of real runs, such as a device running the one command, a tunnel being deleted, or a remote browser starting. They play at about 8 to 10 frames a second.
+- File names are the same in every language, so a changed dialog gets retaken in all three.

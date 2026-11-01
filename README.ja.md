@@ -2,112 +2,75 @@
 
 <p align="center"><a href="./README.md">English</a> | <a href="./README.zh-TW.md">繁體中文</a> | <b>日本語</b></p>
 
-Telepy は、直接つなげないマシンのためのセルフホスト型 Web コンソールです。NAT の内側のサーバー、自宅の
-Raspberry Pi、ファイアウォールの奥にあるオフィスの PC、OpenWrt のルーターなど。各デバイスが Telepy サーバーへ**リバース SSH トンネルを
-1 本**張るだけで、あとはブラウザから操作できます——ターミナル、ファイル、リモートデスクトップ、デバイス経由で
-インターネットに出るブラウザ、そしてデバイスの LAN にある他のマシンまで。デバイスは細かな権限でチームと共有でき、
-すべての操作を `telepy` コマンドライン、REST API、MCP で自動化できます。デバイス側のネットワークでは、その 1 本の
-外向き SSH 接続以外にポートを開けることも、何かをインストールすることも不要です。
+Telepy は、直接つなげないマシンのためのセルフホスト型 Web コンソールです。NAT の内側のサーバー、自宅の Raspberry Pi、ファイアウォールの奥にあるオフィスの PC、OpenWrt のルーターなどが対象です。
 
-![トンネル一覧：状態、レイテンシ、各デバイスの接続方法、パブリック／LAN アドレス、OS、ラベル、利用中のユーザー](./docs/screenshots/ja/tunnels.png)
+各デバイスが Telepy サーバーへリバース SSH トンネルを 1 本張るだけで、あとはブラウザから操作できます。ターミナル、ファイル、リモートデスクトップ、デバイス側からネットに出るブラウザ、そしてデバイスと同じ LAN にある他のマシンまで。
+
+ポート開放も VPN もパブリック IP も要りません。デバイスがインターネットに出られれば十分です。毎日あれだけアップデートを落としているのだから、出られないはずがありません。
+
+![トンネル一覧：状態、レイテンシ、各デバイスの接続方法、アドレスと OS、利用中のユーザー](./docs/screenshots/ja/tunnels.png)
 
 ## できること
 
 ### デバイスをつなぐ
 
-- **Linux・macOS・OpenWrt は 1 行のコマンド。**デバイスで `curl … | sudo sh` を貼り付けるだけ。スクリプトはまず
-  デバイスにあるもの（シェル、HTTP ツール、OpenSSH か Dropbear、systemd / launchd / procd）を調べ、トンネル鍵の作成、
-  デバイスの登録、Telepy の承認、Telepy のホスト鍵のピン留め、サービスの登録を行い、Telepy がトンネル経由で実際に
-  ログインできるまで待ちます。`--check` を付ければチェックだけを先に実行できます。それ以外の環境（Windows、Docker、
-  アプライアンス）では 5 ステップのウィザードが SSH、AutoSSH、systemd、PowerShell、Docker run、Docker Compose の
-  スクリプトを生成します。
-- **SSH ポート、ふさがれていれば Web ポート。**デバイスはまずゲートウェイの SSH ポートを試し、つながらなければ
-  Web ポートの WebSocket に SSH を通します。各トンネルにどの方法で接続しているか（SSH / SSH over WSS）が表示され、
-  インストール済みのデバイスもトンネルを切らずに自動へ切り替えられます。Web の名前が Web の通信しか通さない
-  プロキシの後ろにあるなら、SSH に別の名前を付けられます。
-- **デバイス上のインストールを整理。**各トンネルのサービスには中身の分からないインストール名が付き、Telepy は
-  何がどこに入っているかを表示します。古いインストールの名前変更や余分なコピーの削除も、デバイスをオフラインに
-  せずに行えます。
-- **状態がひと目でわかる。**オンライン／低下／オフライン／未接続、区間ごとのレイテンシ、稼働率と接続履歴、
-  デバイスのパブリック／LAN アドレス（IP が変わると通知）、毎日取得するデバイス情報（OS、メモリ、ディスク、負荷、
-  再起動待ち）と警告。
-- **数百台でも整理できる。**コンパクトな一覧かカード、ラベル、ピン留め、個人用グループ、`status:down`・
-  `label:env=prod`・`os:openwrt`・`lastseen:>1d` などの条件で絞り込める検索。
+- **1 行のコマンドで追加**：Linux・macOS・OpenWrt なら 1 行貼り付けるだけ。スクリプトがデバイスの環境を調べて設定し、Telepy が実際にログインできるまで見届けます。
+- **それ以外はウィザードで**：Windows、Docker、各種アプライアンスは、ステップごとのガイドと用意されたスクリプトで設定できます。
+- **出られる道を自分で選ぶ**：普段は SSH ポートを使い、HTTPS しか通らないネットワークでは Web ポートの WebSocket に SSH を通します。
+- **状態がひと目でわかる**：オンライン・低下・オフライン、区間ごとのレイテンシ、稼働率、パブリック／LAN アドレス。ディスク、メモリ、負荷も毎日チェックします。
+- **数百台でも迷わない**：ラベル、ピン留め、個人用グループ、そして `status:down` や `label:env=prod` のような条件がわかる検索。
 
 ### デバイスで作業する
 
-- **Web ターミナル**：タブ、Nerd Font、組み込み／カスタムの配色、接続が切れてもシェルを残す設定（許可した場合）、
-  操作の録画、コマンドをデバイスのシェル履歴に残さない設定（任意）、変数付きのコマンドスニペットを保存できる
-  **ツールボックス**。
-- **ファイルマネージャー**（SFTP）：ドラッグ＆ドロップでのアップロード、移動／コピー／名前変更／削除／権限、
-  zip でのダウンロード、画像プレビュー、ファイルを中途半端に壊さないブラウザ内エディタ。
-- **リモートデスクトップ**：トンネル経由の RDP / VNC をブラウザで（guacd）、または RustDesk をタブ内でデコード。
-  音声、クリップボードの制御、ファイル転送、マルチモニターの切り出し、ウィンドウに合わせた拡大縮小と解像度に対応。
-- **リモートブラウザ**：本物の Chromium（KasmVNC）で、通信はデバイスから出ていきます。デバイスのネットワークからしか
-  開けない管理画面に。
-- **ネットワークトポロジー**：何もインストールせずにデバイスの LAN をスキャンし、メーカーと開いているポートを表示。
-  デバイス経由で LAN 内のホストにターミナルやリモートデスクトップを開いたり、`ssh -J`／`ProxyJump` の設定を
-  コピーしたりできます。
-- **手元のコンピューターから**：1 つのコマンドで全デバイスを `~/.ssh/config` に追加（各デバイス自身のホスト鍵も
-  確認）。コマンド早見表には `ssh -L`／`-R`／`-D`／`-J`、`scp`、`rsync` がそのまま使える形で並びます。
-  **SSH config エディター**は設定ファイルの各ホストが実際に使う値を一覧にし、効かない行を直し、ファイルを簡潔に
-  します——どの変更も ssh の読み方どおりに検証済み（ターミナルでは `telepy config tidy` で同じことができます）。
+- **Web ターミナル**：タブ、Nerd Font、配色、よく使うコマンドを保存できるツールボックス、必要なら録画も。
+- **ファイル**：ドラッグ＆ドロップでアップロード、移動、コピー、名前変更、権限変更、zip でダウンロード。内蔵エディタは中途半端な保存をしません。
+- **リモートデスクトップ**：トンネル経由の RDP と VNC、またはタブの中で動く RustDesk。音声、クリップボードの制御、マルチモニターに対応。
+- **リモートブラウザ**：本物の Chromium で、通信はデバイス側から出ていきます。そのネットワークでしか開けない管理画面に便利です。
+- **デバイスの向こうの LAN**：何もインストールせずにデバイスの LAN をスキャンし、そこにあるホストにターミナルやデスクトップを開けます。
+- **手元のパソコンから**：1 つのコマンドで全デバイスを SSH の設定に追加。コマンド早見表には `ssh -L`、`scp`、`rsync` がそのまま使える形で並びます。
 
 ### チームと管理
 
-- **共有**：VIEW／EDIT／ADMIN の権限、使えるログインアカウントの個別指定、期限付きの共有、一時的な権限追加の申請。
-  権限を外すと、その人の開いているセッションはすぐに終了します。
-- **機能の権限とユーザーグループ**：ターミナル、ファイル、リモートデスクトップ、LAN スキャン、API トークン、
-  MCP アプリなどを誰が使えるかを、全員・グループ・個人単位で設定。
-- **コマンドルール**：Web ターミナルと MCP エージェントの両方で、コマンドをブロック・承認制にする、またはリマインド
-  を表示します。管理するデバイスには自分のルールを、管理者はサイト全体のルールを設定し、どのサイトルールを各自の
-  デバイスでオフにできるかを決められます。
-- **ライブセッション**：誰がどこに接続しているかを確認し、ターミナルをリアルタイムで見守る（キーボードを渡すことも
-  可能）、またはセッションを終了。
-- **サインインの安全性**：パスキーと認証アプリ、重要なデバイスの前での再確認、サインイン中のブラウザ一覧、新しい
-  デバイスからのサインイン通知、目立たないサインイン画面（任意）。
-- **通知**：画面内の通知とデスクトップ通知をイベントごとに設定。管理者がサイトの既定を決めて強制することもでき、
-  デバイスごとのミュートも可能。個人用・サイト全体の Webhook を Slack・Discord・Google Chat・Teams・Telegram・
-  ntfy・自前のサービスへ。
-- **監査**：改ざん検知付きのログ（ハッシュチェーン）、ターミナル録画、サインイン履歴。
-- **サーバーの状態**：管理セクションで、稼働中のサーバー自身のチェック（設定、鍵、連携サービス、訪問者アドレスの
-  届き方、監査チェーン）を実行し、リアルタイムの数値と並べて表示。既知の問題は確認済みにできます。
+- **共有**：閲覧・編集・管理の権限、使えるログインアカウントの指定、期限付きの共有。外した人の開いているセッションはすぐに終了します。
+- **機能の権限**：ターミナル、ファイル、リモートデスクトップ、API トークンなどを誰が使えるか、全員・グループ・個人単位で決められます。
+- **コマンドルール**：コマンドをブロックする、承認制にする、リマインドだけ出す。Web ターミナルでも MCP エージェントでも同じように効き、`rm -rf /` をうっかりミスから会議の議題に格上げします。
+- **ライブセッション**：誰がどこに接続しているかを確認し、ターミナルを見守ったり、キーボードを渡したり、セッションを終了したりできます。
+- **サインインの安全性**：パスキー、認証アプリ、重要なデバイスの前での再確認。見慣れない場所からサインインがあれば通知します。
+- **通知**：イベントごとに、画面内・デスクトップ・Slack・Discord・Teams・Telegram・ntfy・自前の Webhook へ。
+- **監査**：改ざんを検知できるログ、ターミナルの録画、サインイン履歴。
 
 ### 自動化
 
-- **`telepy` コマンドライン**：`telepy ls`、`telepy ssh web-01`、`telepy exec --label env=prod -- uptime`、
-  `telepy cp`、ライブセッション、録画、スニペット、LAN ホスト、スクリプトから操作するブラウザ。`ssh`／`scp`／`sftp`
-  は Web ポートを通り、`telepy update` で CLI を最新に保てます。
-- **REST API**：個人用 API トークン（スコープ、対象トンネルの限定、有効期限、呼び出し履歴）と自動生成の OpenAPI。
-- **MCP サーバー**（AI エージェント向け：Claude Code、Cursor など）：アプリごとに OAuth で承認し、すべてのツール
-  呼び出しを記録。コマンドルールと権限もそのまま適用されます。
+- **`telepy` コマンドライン**：デバイスの一覧、SSH 接続、20 台まとめてのコマンド実行、ファイルのコピー。
+- **REST API**：スコープ、対象デバイス、有効期限を絞れる個人用トークン。呼び出しはすべて記録されます。
+- **MCP**：Claude Code や Cursor などの AI エージェントにデバイスを任せられます。アプリごとに承認し、呼び出しはすべて記録、コマンドルールもそのまま効きます。
 
 ## スクリーンショット
 
 <table>
   <tr>
-    <td width="50%"><img src="./docs/screenshots/ja/terminal.png" alt="Web ターミナルとファイルマネージャー"><br><sub><b>Web ターミナル + ファイルマネージャー</b>——タブ、SFTP のサイドパネル、区間ごとのレイテンシ。</sub></td>
-    <td width="50%"><img src="./docs/screenshots/ja/network.png" alt="ネットワークトポロジー"><br><sub><b>ネットワーク</b>——デバイスの sshd 経由でスキャンした LAN。メーカーと開いているポート付き。</sub></td>
+    <td width="50%"><img src="./docs/screenshots/ja/terminal.png" alt="Web ターミナルとファイルマネージャー"><br><sub><b>ターミナルとファイル</b>：タブ、ファイルパネル、区間ごとのレイテンシ。</sub></td>
+    <td width="50%"><img src="./docs/screenshots/ja/network.png" alt="ネットワークトポロジー"><br><sub><b>ネットワーク</b>：デバイスの向こうの LAN。メーカーと開いているポート付き。</sub></td>
   </tr>
   <tr>
-    <td><img src="./docs/screenshots/ja/desktop.png" alt="リモートデスクトップ"><br><sub><b>リモートデスクトップ</b>——トンネル経由の VNC デスクトップ。ストリーム統計と画面選択付き。</sub></td>
-    <td><img src="./docs/screenshots/ja/browser.png" alt="リモートブラウザ"><br><sub><b>リモートブラウザ</b>——デバイスからインターネットに出る Chromium。</sub></td>
+    <td><img src="./docs/screenshots/ja/desktop.png" alt="リモートデスクトップ"><br><sub><b>リモートデスクトップ</b>：トンネル経由の VNC。ストリームの統計付き。</sub></td>
+    <td><img src="./docs/screenshots/ja/browser.png" alt="リモートブラウザ"><br><sub><b>リモートブラウザ</b>：デバイス側からネットに出る Chromium。</sub></td>
   </tr>
   <tr>
-    <td><img src="./docs/screenshots/ja/create.png" alt="1 行のコマンドでデバイスを追加"><br><sub><b>デバイスの追加</b>——1 行のコマンド。スクリプトが何をするかを示し、Telepy がログインするまで進捗を表示。</sub></td>
-    <td><img src="./docs/screenshots/ja/commands.png" alt="コマンドルール"><br><sub><b>コマンドルール</b>——自分のルールとサイト全体のルール：ブロック・承認・リマインド・例外。テスターで誰に承認を求めるかがわかります。</sub></td>
+    <td><img src="./docs/screenshots/ja/create.png" alt="1 行のコマンドでデバイスを追加"><br><sub><b>デバイスの追加</b>：1 行のコマンド。Telepy がログインするまで画面で追えます。</sub></td>
+    <td><img src="./docs/screenshots/ja/commands.png" alt="コマンドルール"><br><sub><b>コマンドルール</b>：ブロック、承認、リマインド、例外。</sub></td>
   </tr>
   <tr>
-    <td><img src="./docs/screenshots/ja/sessions.png" alt="ライブセッション"><br><sub><b>ライブセッション</b>——誰がどこから接続しているか。見守る・終了する。</sub></td>
-    <td><img src="./docs/screenshots/ja/access.png" alt="機能の権限"><br><sub><b>機能の権限</b>——個人、ユーザーグループ、全員単位で設定。</sub></td>
+    <td><img src="./docs/screenshots/ja/sessions.png" alt="ライブセッション"><br><sub><b>ライブセッション</b>：誰が、どこから接続しているか。</sub></td>
+    <td><img src="./docs/screenshots/ja/access.png" alt="機能の権限"><br><sub><b>機能の権限</b>：個人、グループ、全員単位で設定。</sub></td>
   </tr>
   <tr>
-    <td><img src="./docs/screenshots/ja/sshconfig.png" alt="SSH config エディター"><br><sub><b>SSH config エディター</b>——<code>~/.ssh/config</code> を貼り付けて、各ホストが使う値を確認し簡潔に。ssh の読み方どおりに検証。</sub></td>
-    <td><img src="./docs/screenshots/ja/health.png" alt="サーバーの状態"><br><sub><b>サーバーの状態</b>——サーバー自身のチェック、リアルタイムの数値、直近 24 時間。</sub></td>
+    <td><img src="./docs/screenshots/ja/sshconfig.png" alt="SSH config エディター"><br><sub><b>SSH config エディター</b>：各ホストが実際に使う値を確かめて、簡潔に。</sub></td>
+    <td><img src="./docs/screenshots/ja/health.png" alt="サーバーの状態"><br><sub><b>サーバーの状態</b>：サーバー自身のチェックとリアルタイムの数値。</sub></td>
   </tr>
   <tr>
-    <td><img src="./docs/screenshots/ja/api.png" alt="API トークン"><br><sub><b>API</b>——スコープ・対象トンネル・トークンごとの呼び出し概要。</sub></td>
-    <td><img src="./docs/screenshots/ja/activity.png" alt="エージェントのアクティビティ"><br><sub><b>エージェントのアクティビティ</b>——承認待ちのコマンドを含む、すべての MCP ツール呼び出し。</sub></td>
+    <td><img src="./docs/screenshots/ja/api.png" alt="API トークン"><br><sub><b>API</b>：個人用トークンと、それぞれの最近の呼び出し。</sub></td>
+    <td><img src="./docs/screenshots/ja/activity.png" alt="エージェントのアクティビティ"><br><sub><b>エージェントのアクティビティ</b>：承認待ちを含む、すべての MCP 呼び出し。</sub></td>
   </tr>
 </table>
 
@@ -122,166 +85,172 @@ Raspberry Pi、ファイアウォールの奥にあるオフィスの PC、OpenW
                                   └──▶ guacd（RDP / VNC）
 ```
 
-デバイスは `ssh -R 0:localhost:22 telepy@<サーバー>` を実行します——ゲートウェイの SSH ポートへ直接、HTTPS しか
-出られなければ Web ポートの WebSocket の中で（1 行のコマンドや生成スクリプトがサービスとして登録します）。バックエンドの内蔵 SSH ゲートウェイがこれを受け、鍵からどのトンネルかを判別し、転送をメモリ上に
-記録します——ホスト側でポートを開くことはありません。Telepy がデバイスで行うすべての操作（ターミナル、ファイル、
-デスクトップ、リモートブラウザ、LAN スキャン）は、この 1 本の接続の中にチャネルを開き、そのトンネル専用のサービス鍵で
-デバイス自身の sshd にログインします。デバイスにパブリック IP もファイアウォールの開放も不要で、Telepy は各デバイスの
-ホスト鍵を、デバイスは Telepy のホスト鍵をピン留めします。
+デバイスが実行するのは普通の `ssh -R` で、接続先は Telepy に内蔵された SSH ゲートウェイです。SSH ポートに直接つなぎ、HTTPS しか通らないときは Web ポートの WebSocket の中を通ります。セットアップ時にサービスとして登録されるので、再起動しても自動でつながり直します。
 
-内部で何が起きているかの図——デバイスの追加、ターミナル、ファイル、リモートデスクトップ、共有、コマンドルール、鍵、通知、CLI、サーバーの状態——は**[図で見る Telepy](./docs/visual-guide.ja.md)**にまとめています。
+Telepy は鍵を見てどのトンネルかを判別し、メモリ上で管理します。サーバー側でポートが増えることはありません。デバイスでの操作はすべてこの 1 本の接続の中で行われ、デバイス自身の SSH サーバーにログインします。
 
-Telepy は 5 つのコンテナで動きます：
+両側が互いのホスト鍵を確かめるので、どちらかがこっそり偽物に入れ替わることはできません。
 
-| サービス       | 役割                                                                                          |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| `traefik`      | リバースプロキシ：`/api/*`、`/ws/*`（デバイスの WebSocket 接続も）、`/mcp`、OAuth ディスカバリはバックエンドへ、それ以外はフロントエンドへ |
-| `frontend`     | Next.js の Web UI                                                                              |
-| `backend`      | 単一の Rust プロセス（axum + russh）：REST API、WebSocket、SSH ゲートウェイ、監視、SQLite       |
-| `kasm-browser` | リモートブラウザ用の KasmVNC + Chromium                                                         |
-| `guacd`        | リモートデスクトップ用の Apache Guacamole RDP / VNC エンジン（内部ネットワークのみ）             |
+中で何が起きているか見てみたい方は、[**図で見る Telepy**](./docs/visual-guide.ja.md) へ。アプリの説明図を使って機能ごとに紹介しています。
+
+<details>
+<summary>5 つのコンテナ</summary>
+
+| サービス       | 役割                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| `traefik`      | 入口：API、WebSocket、MCP はバックエンドへ、それ以外はフロントエンドへ |
+| `frontend`     | Web の画面（Next.js）                                                |
+| `backend`      | 1 つの Rust プロセス：REST API、WebSocket、SSH ゲートウェイ、監視、SQLite |
+| `kasm-browser` | リモートブラウザ用の Chromium（KasmVNC）                             |
+| `guacd`        | リモートデスクトップ用の RDP / VNC エンジン。内部ネットワークのみ    |
+
+</details>
 
 ## クイックスタート
 
 Docker と Compose プラグインが必要です。
 
-1. 環境ファイルを作り、少なくとも `SECRET_KEY`、`INTERNAL_API_TOKEN`、`SERVER_DOMAIN` を設定します（HTTPS プロキシの
-   後ろに置く場合の公開アドレスは `PUBLIC_URL`、または後から**サイト設定 → サーバー**で）：
+1. 設定ファイルの見本をコピーして、少なくとも `SECRET_KEY`、`INTERNAL_API_TOKEN`、`SERVER_DOMAIN` を埋めます。
 
    ```bash
    cp .env.example .env
    ```
 
-2. ビルドして起動します。初回起動時にバックエンドが `ssh/` の下にゲートウェイのホスト鍵とサービス鍵を作ります（既存の鍵は
-   残ります——デバイスがピン留めしているため）：
+2. ビルドして起動します。初回起動時に Telepy が自分の SSH 鍵を作ります。この鍵は大事に取っておいてください。デバイスはこの鍵を覚えているので、作り直すと全デバイスがサーバーを信用しなくなります。
 
    ```bash
    docker compose up -d --build
    ```
 
-3. 確認します。サインイン後は管理セクションの**サーバーの状態**ページがすべてのチェックを実行します。同じチェックは
-   コマンドラインからも実行できます：
+3. `http://localhost:8787`（または設定した `WEB_SERVER_PORT`）を開いてサインインします。
+
+4. 設定を確認します。管理セクションの **サーバーの状態** がすべてのチェックを実行します。同じチェックはコマンドラインからも動かせます。
 
    ```bash
    docker compose exec backend telepy-server doctor
    ```
 
-4. `http://localhost:<WEB_SERVER_PORT>`（既定は `http://localhost:8787`）を開いてサインインします。
+> [!IMPORTANT]
+> 最初にサインインしたアカウントが管理者になります。同僚より先にサインインしましょう。
 
-> [!NOTE]
-> **最初のアカウント**が管理者になります——Google でサインインした場合も、`docker compose exec backend telepy-server create-superuser --username admin --password …`
-> で作成した場合も同じです。
+### 最初のデバイスを追加する
 
-本番環境では Traefik の前に HTTPS プロキシを置き、公開アドレスを設定し、デバイスからゲートウェイのポート
-（`REVERSE_SERVER_SSH_PORT`）に届くようにしてください。Web の名前が Web の通信しか通さないプロキシ（Cloudflare の
-オレンジ色の雲、CDN、HTTP ロードバランサー）を通る場合は、**サイト設定 → サーバー → SSH ホスト**でサーバーを直接
-指す名前を SSH に付けてください——またはデバイスに Web ポートを使わせます。訪問者のアドレス（サインイン履歴、
-ライブセッション）は X-Forwarded-For から取り、既定ではバックエンドの前にある内部プロキシを自動的にスキップします。
-管理セクションの**サーバーの状態**で構成全体をチェックし、自分のリクエストのアドレスがどう求められたかも確認できます。
+- **Linux・macOS・OpenWrt**：**トンネル → トンネルを作成 → 1 行のコマンド** を開き、表示されたコマンドをデバイスで実行します。各ステップにチェックが付いていき、最後に緑になれば完了です。
+- **Windows・Docker・その他**：**ステップごとに設定** を選びます。ウィザードがプラットフォームに合ったスクリプトを用意し、最後にログインを確認します。
 
-### デバイスをつなぐ
+トンネルが **オンライン** になれば、カードのターミナル・ファイル・デスクトップ・ブラウザのボタンが使えます。
 
-- **Linux / macOS / OpenWrt**：**トンネル → トンネルを作成 → 1 行のコマンド**で、コマンドをコピーしてデバイスで
-  実行します。各ステップが画面に表示され、Telepy がトンネル経由でログインできると緑になります。詳しくは
-  [docs/device-join.ja.md](./docs/device-join.ja.md)。
-- **それ以外（Windows、Docker、アプライアンス）**：**ステップごとに設定**——デバイスの公開鍵を貼り付け、ログイン
-  アカウントを選び、Telepy の鍵を承認し、生成されたスクリプトを実行してログインを確認します。
+### 本番で使うとき
 
-トンネルが**オンライン**になれば、カードのターミナル・ファイル・デスクトップ・ブラウザのボタンが使えます。
+- Telepy の前に HTTPS プロキシを置き、公開アドレスを設定します。`.env` に書くか、あとから **サイト設定 → サーバー** で。
+- デバイスから SSH ゲートウェイのポートに届くようにします。
+- Web の名前が Web の通信しか通さないプロキシ（CDN、HTTP ロードバランサー、Cloudflare のオレンジ色の雲）の後ろにあると、SSH は通れません。**サイト設定 → サーバー → SSH ホスト** で SSH に別の名前を付けるか、デバイスに Web ポートを使わせてください。
+- **サーバーの状態** を見れば、訪問者の本当のアドレスがプロキシを抜けて正しく届いているかがわかります。
 
 ## 設定
 
-次の値はスタックの起動前に必要なので `.env` に置きます（詳しいコメントは [`.env.example`](./.env.example)）：
+スタックの起動前に必要な値だけは `.env` に置きます。それ以外のほとんどはサイト設定で、管理者が Web から変更でき、再起動も要りません。各変数の説明は見本の設定ファイルに書いてあります。
 
-| 変数                      | 既定        | 説明                                                                       |
-| ------------------------- | ----------- | -------------------------------------------------------------------------- |
-| `PROJECT_NAME`            | `main`      | コンテナとネットワーク名の接尾辞（同じホストでスタックごとに別の値）      |
-| `DEBUG`                   | `false`     | デバッグログ                                                               |
-| `WEB_SERVER_PORT`         | `8787`      | Traefik が公開する Web UI・API・WebSocket のポート                          |
-| `REVERSE_SERVER_SSH_PORT` | `24242`     | デバイスがリバース SSH トンネルを張るポート                                |
-| `SERVER_DOMAIN`           | `localhost` | このサーバーのホスト名；スクリプト、SSH 設定、ピン留めするホスト鍵に書き込まれます |
-| `SECRET_KEY`              | —           | サインインの署名と保存する秘密情報の暗号化；本番前に長いランダム値を設定  |
-| `INTERNAL_API_TOKEN`      | —           | バックエンドと kasm-browser コンテナの間の秘密値                           |
-| `GEOIP_DIR` / `OUI_DIR`   | `/data/geoip` / `/data/oui` | IP 位置情報データベースと NIC メーカー一覧の場所（コンテナ内のパス。`telepy-server geoip` / `oui` がここに取得） |
+<details>
+<summary><code>.env</code> でしか設定できないもの</summary>
 
-以下は**任意**です。どれも**サイト設定 → サーバー**に同じ項目があり、管理者が Web から再起動なしで変更できます。
-変数を空にしておけば Web で管理し、`.env` に値があればそちらが優先されてその項目はロックされます。
+| 変数                      | 既定        | 用途                                                 |
+| ------------------------- | ----------- | ---------------------------------------------------- |
+| `SECRET_KEY`              | 要設定      | サインインの署名と、保存する秘密情報の暗号化。長いランダム値に |
+| `INTERNAL_API_TOKEN`      | 要設定      | バックエンドとブラウザ用コンテナの間で共有する秘密値 |
+| `SERVER_DOMAIN`           | `localhost` | このサーバーのホスト名。スクリプトや SSH の設定に書き込まれます |
+| `WEB_SERVER_PORT`         | `8787`      | Web の画面、API、WebSocket のポート                  |
+| `REVERSE_SERVER_SSH_PORT` | `24242`     | デバイスがトンネルを張るポート                       |
+| `PROJECT_NAME`            | `main`      | コンテナ名の接尾辞。1 台のホストに複数のスタックを置けます |
+| `DEBUG`                   | `false`     | デバッグログ                                         |
+| `GEOIP_DIR` / `OUI_DIR`   | データフォルダ内 | オフラインの IP 位置情報と NIC メーカー一覧の置き場所 |
 
-| 変数                          | サイト設定                             | 空のとき                                                |
-| ----------------------------- | -------------------------------------- | ------------------------------------------------------- |
-| `PUBLIC_URL`                  | 公開アドレス                           | リクエストから推定（OAuth issuer、パスキーのオリジン、1 行コマンドの URL） |
-| `SSH_SERVER_DOMAIN`           | SSH ホスト                             | `SERVER_DOMAIN` と同じ；Web の名前が Web 専用のプロキシを通るときに設定 |
-| `SOCIAL_GOOGLE_CLIENT_ID`     | Google クライアント ID                 | Google サインインなし                                   |
-| `TRUSTED_PROXY_HOPS`          | 信頼するプロキシ                       | `auto`：X-Forwarded-For の内部アドレスはすべてプロキシ  |
-| `CLIENT_IP_HEADER`            | クライアント IP ヘッダー               | なし（Cloudflare 経由のリクエストではそのヘッダーを自動で使用） |
-| `GATEWAY_PROXY_PROTOCOL_FROM` | SSH ゲートウェイの PROXY protocol 送信元 | オフ                                                  |
-| `DEVICE_PROBE`                | 毎日のデバイス確認                     | オン：1 日 1 回、読み取り専用でデバイスにログインしてアドレスと情報を取得 |
-| `KEEP_SHARED_SERVICE_KEY`     | デバイスの共有サービス鍵を残す         | オフ                                                    |
-| `LOG_LEVEL`                   | ログレベル                             | `info`（`DEBUG=true` なら `debug`）                     |
-| `OPENAPI_ENABLED`             | API リファレンス                       | オン（Swagger UI と OpenAPI ドキュメント、要サインイン） |
+</details>
 
-それ以外——登録、サインインの有効期間と 2 段階認証の必須化、リモートブラウザ／デスクトップの上限、MCP セッション、
-Webhook、通知、ターミナルとコマンドルールの既定値——もサイト設定で、ユーザーと機能の権限は管理セクションの
-**ユーザーとアクセス**にあります。
+<details>
+<summary>任意：サイト設定 → サーバー でも変更できるもの</summary>
+
+空にしておけば Web で管理できます。`.env` に値があればそちらが優先され、その項目はロックされます。
+
+| 変数                          | 空のとき                                                 |
+| ----------------------------- | -------------------------------------------------------- |
+| `PUBLIC_URL`                  | リクエストごとに推定                                     |
+| `SSH_SERVER_DOMAIN`           | `SERVER_DOMAIN` と同じ。Web の名前が Web 専用のプロキシを通るときに設定 |
+| `SOCIAL_GOOGLE_CLIENT_ID`     | Google サインインなし                                    |
+| `TRUSTED_PROXY_HOPS`          | `auto`：バックエンドの前にある内部アドレスはすべてプロキシ扱い |
+| `CLIENT_IP_HEADER`            | なし。Cloudflare 経由のリクエストだけそのヘッダーを使用  |
+| `GATEWAY_PROXY_PROTOCOL_FROM` | オフ                                                     |
+| `DEVICE_PROBE`                | オン：1 日 1 回、読み取り専用でデバイスにログインし、アドレスと状態を取得 |
+| `KEEP_SHARED_SERVICE_KEY`     | オフ                                                     |
+| `LOG_LEVEL`                   | `info`。`DEBUG=true` なら `debug`                        |
+| `OPENAPI_ENABLED`             | オン：API リファレンス。サインインした人だけ見られます   |
+
+</details>
+
+登録、サインインのルール、各種の上限、Webhook などもサイト設定です。ユーザーと機能の権限は管理セクションの **ユーザーとアクセス** にあります。
 
 ## コマンドライン、API、MCP
 
-**`telepy` コマンドライン**——リリース版（macOS、Linux、Windows。Telepy の各リリースに付属）をダウンロードするか
-`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`。Web の **CLI** ページ（サイドバーの「開発者」→ CLI）に、
-このコンピューター用のインストールコマンドと、自分のトンネルで埋めた例があります：
+### `telepy` コマンドライン
+
+Telepy の各リリースには macOS・Linux・Windows 用の CLI が付いています。Web のサイドバー **開発者** にある **CLI** ページを開くと、このパソコン用のインストールコマンドと、自分のデバイスで埋めた例が出てきます。
 
 ```sh
-telepy login https://telepy.example.com        # ブラウザでサインイン、または API ページの --token tpt_…
-telepy ls                                      # トンネル一覧（状態、レイテンシ、アカウント、ラベル）
-telepy ssh web-01                              # システムの ssh でトンネル経由で接続、Telepy のホスト鍵はピン留め済み
-telepy exec --label env=prod -- uptime         # 複数台で一括実行；コマンドルールと監査も適用
+telepy login https://telepy.example.com        # ブラウザでサインイン
+telepy ls                                      # デバイスの一覧、状態、レイテンシ
+telepy ssh web-01                              # 手元の ssh でトンネル経由で接続
+telepy exec --label env=prod -- uptime         # 複数台でまとめて実行
 telepy cp ./app.conf web-01:/etc/app/
-telepy config tidy                             # ~/.ssh/config を簡潔に（ssh の読み方どおりに検証）
-telepy api activity --follow                   # API トークンの呼び出しをリアルタイムで表示
-telepy update                                  # 最新のリリースに置き換え
+telepy update                                  # 最新のリリースに更新
 ```
 
-CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定します。詳細は [docs/cli.ja.md](./docs/cli.ja.md)。
+CI ではサインインの代わりに `TELEPY_URL` と `TELEPY_TOKEN` を設定します。詳しくは [CLI ガイド](./docs/cli.ja.md) へ。
 
-**REST API**——**API** ページで個人用トークンを作成します。トークンで呼べるエンドポイントが `curl` の例付きで一覧
-されます。OpenAPI ドキュメントは `/api/openapi.json`、Swagger UI は `/api/__hidden_swagger`（どちらも要サインイン。
-`telepy-server openapi` でも出力できます）。
+### REST API
 
-**MCP**——MCP クライアントを `https://<ホスト>/mcp` に向けます。例：
-`claude mcp add --transport http telepy https://<ホスト>/mcp`。初回は承認ページが開き、権限と対象トンネルを選べます。
-**MCP** ページにクライアントごとの設定方法があります。詳細は [docs/mcp.ja.md](./docs/mcp.ja.md)。
+**API** ページで個人用トークンを作ります。トークンで呼べるエンドポイントが `curl` の例付きで一覧になっていて、完全なリファレンスへのリンクもあります。
+
+### MCP
+
+MCP クライアントを `https://<ホスト>/mcp` に向けます。Claude Code ならこうです。
+
+```sh
+claude mcp add --transport http telepy https://<ホスト>/mcp
+```
+
+初回は承認ページが開き、そのアプリにどの権限とどのデバイスを渡すかを選べます。詳しくは [MCP ガイド](./docs/mcp.ja.md) へ。
 
 ## 運用
 
-運用作業はすべてバックエンドコンテナ内の `telepy-server` コマンドなので、Linux、macOS、Windows で同じです：
+運用コマンドはバックエンドのコンテナ内で動くので、どの OS でも同じです。
 
-| コマンド                                                     | 内容                                                                 |
-| ------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `docker compose exec backend telepy-server doctor`           | 鍵、データベース、設定、連携サービスを確認（問題があれば 1）         |
-| `docker compose exec backend telepy-server create-superuser --username <名前> --password <パスワード>` | 管理者アカウントを作成                                   |
-| `docker compose exec backend telepy-server keygen`           | 足りないゲートウェイのホスト鍵とサービス鍵を作成（起動時にも実行。既存の鍵は保持） |
-| `docker compose exec backend telepy-server geoip`            | オフラインの IP 位置情報（DB-IP Lite）をダウンロードし、バックエンドを再起動；毎月更新 |
-| `docker compose exec backend telepy-server oui`              | IEEE のメーカー一覧をダウンロードして LAN ホストに NIC のメーカーを表示し、バックエンドを再起動 |
-| `docker compose exec backend telepy-server migrate`          | データベーススキーマを調整（起動時にも自動で実行）                   |
-| `docker compose logs -f backend`                             | バックエンドのログを追う                                             |
+```bash
+docker compose exec backend telepy-server <コマンド>
+```
 
-アップグレードは `git pull && docker compose up -d --build` だけです。スキーマは起動時に自動で調整されます。
+| コマンド           | 内容                                                       |
+| ------------------ | ---------------------------------------------------------- |
+| `doctor`           | 鍵、データベース、設定、連携サービスを確認                 |
+| `create-superuser` | 管理者アカウントを作成（`--username` と `--password` を指定） |
+| `keygen`           | 足りない SSH 鍵を作成。既存の鍵は決して置き換えません      |
+| `geoip`            | オフラインの IP 位置情報をダウンロード。そのあとバックエンドを再起動 |
+| `oui`              | LAN ホストに表示する NIC メーカー一覧をダウンロード。そのあとバックエンドを再起動 |
+| `migrate`          | データベースを最新の構造に。起動時にも自動で実行           |
+
+ログを追うときは `docker compose logs -f backend` です。
+
+アップグレードは `git pull && docker compose up -d --build` だけ。データベースはバックエンドの起動時に自動で追いつきます。
 
 ## ドキュメント
 
-- **[図で見る Telepy](./docs/visual-guide.ja.md)**——アプリの説明図といくつかの録画を機能ごとに
-- [ドキュメント一覧](./docs/README.ja.md)——下記のすべてのドキュメントに英語・繁體中文・日本語版があります
-- [`telepy` コマンドラインと API トークン](./docs/cli.ja.md)
+- [**図で見る Telepy**](./docs/visual-guide.ja.md)：アプリの説明図で機能ごとに紹介
+- [ドキュメント一覧](./docs/README.ja.md)：どれも英語・繁體中文・日本語でそろっています
+- [コマンドラインと API トークン](./docs/cli.ja.md)
 - [MCP：AI エージェントからデバイスを操作](./docs/mcp.ja.md)
-- [Webhook：イベント、形式、署名](./docs/webhooks.ja.md)
-- [1 行のコマンドでデバイスを追加（Linux、macOS、OpenWrt）](./docs/device-join.ja.md)
-- [リモートデスクトップ（RDP / VNC / RustDesk）](./docs/remote-desktop.ja.md)
-- [リモートブラウザ（KasmVNC）](./docs/remote-browser.ja.md)
+- [Webhook](./docs/webhooks.ja.md)
+- [1 行のコマンドでデバイスを追加](./docs/device-join.ja.md)
+- [リモートデスクトップ](./docs/remote-desktop.ja.md)と[リモートブラウザ](./docs/remote-browser.ja.md)
 - [バックエンドがデバイスに接続する仕組み](./docs/device-connections.ja.md)
-- [レイテンシ計測の詳細](./docs/latency-deep-dive.ja.md)
-- [Rust バックエンド移行計画](./docs/engineering/rust-migration-plan.md)（繁體中文） と [ベンチマーク：Django vs Rust](./docs/benchmarks.ja.md)
-- [README のスクリーンショットの作り方](./docs/screenshots/README.ja.md)
-- [記事](./docs/engineering/articles/)（繁體中文）
 - リリースノート：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## コントリビューター
@@ -306,9 +275,6 @@ CI ではサインインせず `TELEPY_URL` と `TELEPY_TOKEN` を設定しま�
 
 ## ライセンス
 
-Telepy は [GNU Affero General Public License v3.0](./LICENSE)（AGPL-3.0）で提供されています。改変した Telepy を他の人に
-サービスとして提供する場合は、その人たちにソースコードを提供する必要があります。この条件が合わない場合は商用ライセンスも
-あります——[@NatLee](https://github.com/NatLee) までご連絡ください。
+Telepy は [GNU Affero General Public License v3.0](./LICENSE)（AGPL-3.0）で提供されています。改変した Telepy を他の人にサービスとして提供する場合は、その人たちにソースコードを提供する必要があります。この条件が合わない場合は商用ライセンスもあるので、[@NatLee](https://github.com/NatLee) までご連絡ください。
 
-2026 年 10 月より前にリリースされたバージョンは MIT ライセンスです（[NOTICE](./NOTICE) を参照）。コントリビューションは
-[コントリビューターライセンス契約](./CONTRIBUTING.md#contributor-license-agreement) に基づきます。
+2026 年 10 月より前にリリースされたバージョンは MIT ライセンスです（[NOTICE](./NOTICE) を参照）。コントリビューションは[コントリビューターライセンス契約](./CONTRIBUTING.md#contributor-license-agreement)に基づきます。
