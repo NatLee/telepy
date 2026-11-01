@@ -14,6 +14,7 @@
 //! whenever the device is online.
 
 pub mod authorized_keys;
+pub mod locate;
 pub mod platform;
 pub mod remote;
 pub mod view;
@@ -53,6 +54,9 @@ pub struct DeviceKeys {
     /// 每台裝置的平台（Windows？哪些帳號是管理員？），探測一次快取 `platform::TTL`。/ Per-device platform, cached.
     platforms: Mutex<HashMap<i64, platform::Cached>>,
     platform_locks: DashMap<i64, Arc<tokio::sync::Mutex<()>>>,
+    /// 每台裝置每個帳號的 authorized_keys 是哪個檔（[`locate`] 的決定），快取 `platform::TTL`。
+    /// Which file each account's authorized keys live in ([`locate`]'s decision), cached for `platform::TTL`.
+    files: Mutex<HashMap<(i64, String), (String, Instant)>>,
 }
 
 /// 最近一次看到的檔案內容。/ The file as Telepy last saw it.
@@ -63,8 +67,8 @@ pub struct FileSnapshot {
     pub at: chrono::DateTime<chrono::Utc>,
     /// 讀取失敗的原因。/ Why the read failed.
     pub error: Option<String>,
-    /// 實際讀 / 寫的檔案路徑（exec 模式下 root 在 OpenWrt 的 Dropbear 是 `/etc/dropbear/authorized_keys`）。
-    /// The file actually read / written (root on OpenWrt's Dropbear: `/etc/dropbear/authorized_keys`).
+    /// 實際讀 / 寫的檔案路徑（[`locate`] 決定；例如有些 Dropbear 的 root 是 `/etc/dropbear/authorized_keys`）。
+    /// The file actually read / written ([`locate`]'s decision; e.g. `/etc/dropbear/authorized_keys` for root on some Dropbear builds).
     pub path: Option<String>,
 }
 
@@ -132,9 +136,56 @@ impl DeviceKeys {
         self.platforms.lock().unwrap().get(&reverse_port).filter(|c| c.fresh(Instant::now())).map(|c| c.platform.clone())
     }
 
-    /// 「立即同步」：下次重新探測。/ Forget the platform so the next open re-probes.
+    /// 「立即同步」：下次重新探測（平台與每個帳號的檔案）。/ Forget the platform and the files so the next open re-probes.
     pub fn forget_platform(&self, reverse_port: i64) {
         self.platforms.lock().unwrap().remove(&reverse_port);
+        self.files.lock().unwrap().retain(|(p, _), _| *p != reverse_port);
+    }
+
+    /// 這個帳號的 authorized_keys 是哪個檔（見 [`locate`]）。`may_probe` = 呼叫者拿著這台裝置的鎖（寫入路徑），好幾個
+    /// 候選都有 Telepy 的金鑰時可以登入試；否則先用第一個、不記住。找不出來（不能跑 shell 等）= None，呼叫者用預設。
+    /// Which file holds this account's authorized keys (see [`locate`]). `may_probe` = the caller holds the device's
+    /// lock (the write path), so an ambiguous case may be settled by a login; otherwise the first holder is used and not
+    /// remembered. None when it cannot be found out (no shell…): the caller uses the default.
+    pub async fn keys_file(&self, state: &AppState, reverse_port: i64, username: &str, may_probe: bool) -> Option<String> {
+        let key = (reverse_port, username.to_string());
+        if let Some((path, at)) = self.files.lock().unwrap().get(&key) {
+            if at.elapsed() < platform::TTL {
+                return Some(path.clone());
+            }
+        }
+        let tunnel_id = db::tunnels::by_port(&state.db, reverse_port).await.ok()?.first()?.id;
+        let cands = match locate::candidates(state, tunnel_id, reverse_port, username).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(reverse_port, account = username, error = %e, "device keys: could not locate authorized_keys; using the default");
+                return None;
+            }
+        };
+        let (path, remember) = match locate::choose(&cands)? {
+            locate::Choice::Held(p) | locate::Choice::Fallback(p) => (p, true),
+            locate::Choice::Ambiguous(holders) if may_probe => match locate::probe(state, reverse_port, username, &holders).await {
+                Ok(Some(p)) => {
+                    tracing::info!(reverse_port, account = username, file = %p, candidates = ?holders, "device keys: several files hold Telepy's key; a login showed which one the server reads");
+                    (p, true)
+                }
+                Ok(None) => (holders[0].clone(), false),
+                Err(e) => {
+                    tracing::warn!(reverse_port, account = username, error = %e, "device keys: could not test which authorized_keys the server reads");
+                    (holders[0].clone(), false)
+                }
+            },
+            // 沒拿鎖：之前登入試出來的那個（就算快取過期）還在候選裡就沿用，否則先用第一個。/ Not locked: an earlier
+            // login-tested answer (even if expired) while it is still a holder, else the first holder.
+            locate::Choice::Ambiguous(holders) => {
+                let earlier = self.files.lock().unwrap().get(&key).map(|(p, _)| p.clone()).filter(|p| holders.contains(p));
+                (earlier.unwrap_or_else(|| holders[0].clone()), false)
+            }
+        };
+        if remember {
+            self.files.lock().unwrap().insert(key, (path.clone(), Instant::now()));
+        }
+        Some(path)
     }
 }
 
@@ -388,7 +439,7 @@ async fn sync_account(
     protected: &BTreeSet<String>,
     stale_shared: &BTreeSet<String>,
 ) -> anyhow::Result<(bool, Vec<String>)> {
-    let file = remote::AuthorizedKeysFile::open(state, account, tunnel.reverse_port, true).await?;
+    let file = remote::AuthorizedKeysFile::open(state, account, tunnel.reverse_port, true, true).await?;
     let content = file.read().await?;
     let mut wanted: Vec<WantedKey> = want.values().map(|d| WantedKey { bare: d.bare.clone(), comment: d.comment.clone() }).collect();
     wanted.push(own.clone());
@@ -539,7 +590,7 @@ pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel, opts: CleanupOptio
 /// 一個帳號：移掉 `managed`（使用者金鑰 + 這條隧道自己的服務金鑰 `own`，`remove_service` 時連共用金鑰），一次寫回。
 /// 回傳（移掉的使用者金鑰數, 有沒有移掉服務金鑰）。/ One account, one rewrite: (user keys removed, any service key removed).
 async fn clean_account(state: &AppState, port: i64, account: &str, managed: &BTreeSet<String>, service: &BTreeSet<String>, own: Option<&str>, remove_service: bool) -> anyhow::Result<(usize, bool)> {
-    let file = remote::AuthorizedKeysFile::open(state, account, port, false).await?;
+    let file = remote::AuthorizedKeysFile::open(state, account, port, false, true).await?;
     if !file.exists() {
         return Ok((0, false));
     }

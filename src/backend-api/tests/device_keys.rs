@@ -621,3 +621,53 @@ async fn a_disabled_accounts_keys_leave_the_devices() {
     assert_eq!(entry["owner_disabled"], false);
     assert_eq!(lab.laptop_exec(&bob, &[(Hop::Tunnel(&d1), "pi")], "whereami").await.stdout, "pi@one");
 }
+
+/// 伺服器讀的不是 `~/.ssh/authorized_keys`（像 GL-MT3000 的 Dropbear 對 root 只讀 `/etc/dropbear/authorized_keys`），而且
+/// Telepy 的金鑰兩個檔都有（舊版在 SFTP 模式寫進伺服器不讀的 `~/.ssh`）：Telepy 用一把臨時金鑰登入，試出伺服器讀的那個
+/// 檔，使用者的金鑰裝到那裡（筆電真的登得進去），臨時那行不留。
+/// The server reads something other than `~/.ssh/authorized_keys` (like the GL-MT3000's Dropbear, which reads only
+/// `/etc/dropbear/authorized_keys` for root) and Telepy's key sits in both files (an older Telepy wrote the unread
+/// `~/.ssh` in SFTP mode): a throwaway-key login finds the file the server reads, the user's key goes there (the laptop
+/// really logs in), and no throwaway line is left behind.
+#[tokio::test]
+async fn keys_go_to_the_file_the_server_reads() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { shell: true, keys_file: Some(".ssh/authorized_keys2"), ..Default::default() };
+    let none: &[&common::lab::LabKey] = &[];
+    let boxm = lab.machine_with("wrt-keys", &[("root", none)], opts).await;
+    let ssh = boxm.account_home("root").join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let dev = lab.device(&alice, "wrt-keys", &boxm).await;
+    let line = lab.tunnel_service_key(&dev).await;
+    std::fs::write(ssh.join("authorized_keys"), format!("{line}\n")).unwrap();
+    std::fs::write(ssh.join("authorized_keys2"), format!("# the server reads this one\n{line}\n")).unwrap();
+    lab.username(&alice, &dev, "root").await;
+    let alice_key = key_id(&lab, &alice).await;
+    let to_root = [(Hop::Tunnel(&dev), "root")];
+    assert!(!lab.laptop_exec(&alice, &to_root, "echo in").await.ok);
+
+    lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key]})).await;
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("root", "installed")]), "{}", r.text);
+    let read = |f: &str| std::fs::read_to_string(ssh.join(f)).unwrap_or_default();
+    let read_by_server = read("authorized_keys2");
+    assert!(read_by_server.starts_with("# the server reads this one\n") && read_by_server.contains(&alice.key.bare()), "{read_by_server}");
+    assert!(!read("authorized_keys").contains(&alice.key.bare()), "not into the file the server ignores: {}", read("authorized_keys"));
+    assert!(!read_by_server.contains("telepy-locate-") && !read("authorized_keys").contains("telepy-locate-"), "the throwaway key is gone");
+    assert!(!ssh.join("authorized_keys2.telepy-locate").exists() && !ssh.join("authorized_keys.telepy-locate").exists());
+    assert_eq!(lab.laptop_exec(&alice, &to_root, "echo in").await.stdout, "in", "the laptop logs in with the installed key");
+    let root = r.json["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == "root").unwrap().clone();
+    assert!(root["file"].as_str().unwrap_or("").ends_with("/.ssh/authorized_keys2"), "the panel names the real file: {root}");
+
+    // 移出清單：從伺服器讀的那個檔拿掉。/ Off the list: removed from the file the server reads.
+    lab.app.delete(&path(dev.tunnel_id, &format!("device-keys/{alice_key}")), Some(&alice.token)).await;
+    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert!(!read("authorized_keys2").contains(&alice.key.bare()), "{}", read("authorized_keys2"));
+    assert!(!lab.laptop_exec(&alice, &to_root, "echo in").await.ok);
+}
