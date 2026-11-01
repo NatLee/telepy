@@ -19,7 +19,13 @@ pub struct SessionRow {
     pub ip: String,
     pub connected_at: String,
     pub disconnected_at: Option<String>,
+    /// gateway 看到的是代理 / Docker 的內部位址時，裝置在這次連線時自己回報的公網 IP（`device_info`）。
+    /// When the gateway saw a proxy's / Docker's internal address: the public IP the device reported during this connection.
+    pub public_ip: Option<String>,
+    pub public_source: Option<String>,
 }
+
+const COLS: &str = "ip, connected_at, disconnected_at, public_ip, public_source";
 
 /// forward 註冊好：先把這條隧道還開著的關掉（新的 forward 代表舊的已經結束），再開一列。
 /// A forward registered: close whatever is still open for the tunnel, then open a row.
@@ -45,6 +51,18 @@ pub async fn open(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::Result<()> {
     .execute(&mut *tx)
     .await?;
     tx.commit().await
+}
+
+/// 裝置回報了公網 IP（gateway 看到的不是公網位址時）：記在這條隧道還開著的那一列。
+/// The device reported its public IP (the gateway's peer was not public): store it on the tunnel's open row.
+pub async fn set_public_ip(db: &Db, tunnel_id: i64, ip: &str, source: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {S} SET public_ip = ?, public_source = ? WHERE tunnel_id = ? AND disconnected_at IS NULL"))
+        .bind(ip)
+        .bind(source)
+        .bind(tunnel_id)
+        .execute(&db.write)
+        .await?;
+    Ok(())
 }
 
 /// forward 釋放。/ The forward went away.
@@ -75,7 +93,7 @@ pub async fn close_orphans(db: &Db) -> sqlx::Result<u64> {
 /// 和 `[since, now]` 有重疊的連線（舊到新）。/ Sessions overlapping `[since, now]`, oldest first.
 pub async fn overlapping(db: &Db, tunnel_id: i64, since: &str) -> sqlx::Result<Vec<SessionRow>> {
     sqlx::query_as(&format!(
-        "SELECT ip, connected_at, disconnected_at FROM {S} WHERE tunnel_id = ? AND (disconnected_at IS NULL OR disconnected_at >= ?) ORDER BY connected_at"
+        "SELECT {COLS} FROM {S} WHERE tunnel_id = ? AND (disconnected_at IS NULL OR disconnected_at >= ?) ORDER BY connected_at"
     ))
     .bind(tunnel_id)
     .bind(since)
@@ -85,7 +103,7 @@ pub async fn overlapping(db: &Db, tunnel_id: i64, since: &str) -> sqlx::Result<V
 
 /// 最近幾次連線（新到舊）。/ The latest sessions, newest first.
 pub async fn recent(db: &Db, tunnel_id: i64, limit: i64) -> sqlx::Result<Vec<SessionRow>> {
-    sqlx::query_as(&format!("SELECT ip, connected_at, disconnected_at FROM {S} WHERE tunnel_id = ? ORDER BY connected_at DESC LIMIT ?"))
+    sqlx::query_as(&format!("SELECT {COLS} FROM {S} WHERE tunnel_id = ? ORDER BY connected_at DESC LIMIT ?"))
         .bind(tunnel_id)
         .bind(limit)
         .fetch_all(&db.read)
@@ -214,8 +232,8 @@ mod tests {
     #[test]
     fn open_rows_run_until_now() {
         let rows = vec![
-            SessionRow { ip: "a".into(), connected_at: "1970-01-01 00:00:10".into(), disconnected_at: Some("1970-01-01 00:00:20".into()) },
-            SessionRow { ip: "b".into(), connected_at: "1970-01-01 00:00:30".into(), disconnected_at: None },
+            SessionRow { ip: "a".into(), connected_at: "1970-01-01 00:00:10".into(), disconnected_at: Some("1970-01-01 00:00:20".into()), public_ip: None, public_source: None },
+            SessionRow { ip: "b".into(), connected_at: "1970-01-01 00:00:30".into(), disconnected_at: None, public_ip: None, public_source: None },
         ];
         assert_eq!(spans(&rows, 50), vec![(10, 20), (30, 50)]);
     }

@@ -192,6 +192,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(telepy_server::device_keys::run(state.clone()));
     // 裝置載體每天檢查一次新版（網站設定可以關）。/ Device carriers: a daily check for a newer release (a site setting).
     tokio::spawn(telepy_server::carriers::run(state.clone()));
+    // GeoIP 與廠商表：檔案換了就重讀，每月自動更新（網站設定可以關）。/ GeoIP and vendor data: reload changed files, refresh monthly.
+    tokio::spawn(telepy_server::datasets::run(state.clone()));
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
     }
@@ -254,7 +256,7 @@ async fn main() -> anyhow::Result<()> {
                         for l in lines {
                             println!("  {l}");
                         }
-                        println!("Done. Restart the backend to load them: docker compose restart backend");
+                        println!("Done. The running backend loads them within an hour; to load them now: docker compose restart backend");
                         println!("{}", telepy_server::datasets::ATTRIBUTION);
                         true
                     }
@@ -293,7 +295,7 @@ async fn main() -> anyhow::Result<()> {
                 match telepy_server::datasets::fetch_oui(&config.oui_dir).await {
                     Ok(line) => {
                         println!("  {line}");
-                        println!("Done. Restart the backend to load it: docker compose restart backend");
+                        println!("Done. The running backend loads it within an hour; to load it now: docker compose restart backend");
                         true
                     }
                     Err(e) => {

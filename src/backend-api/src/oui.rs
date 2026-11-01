@@ -6,12 +6,15 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::RwLock;
 
 pub const FILE: &str = "oui.csv";
 
+/// 表放在鎖裡：資料夾裡的檔案換了（自動更新、`telepy-server oui`）就整張換掉，不必重啟。
+/// The table sits behind a lock, so a new file (automatic update, `telepy-server oui`) replaces it without a restart.
 #[derive(Default)]
 pub struct Oui {
-    map: HashMap<u32, Box<str>>,
+    map: RwLock<HashMap<u32, Box<str>>>,
 }
 
 /// 一行 CSV（支援雙引號與 `""` 跳脫）。/ Split one CSV line (quotes and `""` escapes).
@@ -67,42 +70,56 @@ pub fn is_private(mac: &str) -> bool {
     prefix(mac).is_some_and(|p| (p >> 16) & 0x02 != 0)
 }
 
+fn read(dir: &Path) -> HashMap<u32, Box<str>> {
+    let path = dir.join(FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let map = parse_csv(&text);
+            tracing::info!(path = %path.display(), vendors = map.len(), "OUI vendor table loaded");
+            map
+        }
+        Err(_) => HashMap::new(),
+    }
+}
+
 impl Oui {
     pub fn load(dir: &Path) -> Self {
-        let path = dir.join(FILE);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                let map = parse_csv(&text);
-                tracing::info!(path = %path.display(), vendors = map.len(), "OUI vendor table loaded");
-                Self { map }
-            }
-            Err(_) => Self::default(),
-        }
+        Self { map: RwLock::new(read(dir)) }
+    }
+
+    /// 重讀資料夾裡的檔案（沒有檔案 = 清空）。/ Read the folder again (no file = empty).
+    pub fn reload(&self, dir: &Path) {
+        let map = read(dir);
+        *self.map.write().unwrap_or_else(|e| e.into_inner()) = map;
+    }
+
+    fn table(&self) -> std::sync::RwLockReadGuard<'_, HashMap<u32, Box<str>>> {
+        self.map.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn enabled(&self) -> bool {
-        !self.map.is_empty()
+        !self.table().is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.table().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.table().is_empty()
     }
 
     /// 廠商名稱；私有 MAC 或查不到時 None。/ Vendor name; None for private or unknown MACs.
-    pub fn vendor(&self, mac: &str) -> Option<&str> {
+    pub fn vendor(&self, mac: &str) -> Option<String> {
         if is_private(mac) {
             return None;
         }
-        self.map.get(&prefix(mac)?).map(|s| &**s)
+        self.table().get(&prefix(mac)?).map(|s| s.to_string())
     }
 
     #[cfg(test)]
     pub fn from_csv(text: &str) -> Self {
-        Self { map: parse_csv(text) }
+        Self { map: RwLock::new(parse_csv(text)) }
     }
 }
 
@@ -120,9 +137,9 @@ MA-M,286FB91,Somebody,Somewhere\n";
     fn parses_ieee_csv() {
         let oui = Oui::from_csv(SAMPLE);
         assert_eq!(oui.len(), 3);
-        assert_eq!(oui.vendor("28:6f:b9:00:11:22"), Some("Nokia Shanghai Bell Co., Ltd."));
-        assert_eq!(oui.vendor("B8-27-EB-12-34-56"), Some("Raspberry Pi Foundation"));
-        assert_eq!(oui.vendor("0011.3200.0000"), Some("Synology \"Inc\""));
+        assert_eq!(oui.vendor("28:6f:b9:00:11:22").as_deref(), Some("Nokia Shanghai Bell Co., Ltd."));
+        assert_eq!(oui.vendor("B8-27-EB-12-34-56").as_deref(), Some("Raspberry Pi Foundation"));
+        assert_eq!(oui.vendor("0011.3200.0000").as_deref(), Some("Synology \"Inc\""));
         assert_eq!(oui.vendor("aa:bb:cc:dd:ee:ff"), None);
         assert_eq!(oui.vendor("b8:27"), None);
     }
@@ -135,5 +152,18 @@ MA-M,286FB91,Somebody,Somewhere\n";
         // 私有 MAC 不查廠商（就算前綴碰巧在表裡）。/ No vendor for private MACs.
         let oui = Oui::from_csv("Registry,Assignment,Organization Name\nMA-L,0A0000,Nope\n");
         assert_eq!(oui.vendor("0a:00:00:11:22:33"), None);
+    }
+
+    #[test]
+    fn reload_picks_up_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let oui = Oui::load(dir.path());
+        assert!(!oui.enabled());
+        std::fs::write(dir.path().join(FILE), SAMPLE).unwrap();
+        oui.reload(dir.path());
+        assert_eq!(oui.len(), 3);
+        std::fs::remove_file(dir.path().join(FILE)).unwrap();
+        oui.reload(dir.path());
+        assert!(oui.is_empty());
     }
 }

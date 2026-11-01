@@ -1126,6 +1126,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Telepy 自己看不到裝置的公網來源時，裝置去問的公網 IP 查詢網址（空 = 不問）。/ Where a device asks for its public IP when Telepy cannot tell (empty = never).
     ("site_settings_sitesettings", "device_ip_lookup_url", "varchar(512) NOT NULL DEFAULT 'https://api.ipify.org'"),
     ("site_settings_sitesettings", "carrier_auto_update", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "datasets_auto_update", "bool NOT NULL DEFAULT 1"),
+    // 連線紀錄裡裝置自己回報的公網 IP（gateway 看到的是代理 / Docker 的內部位址時）。/ The public IP the device reported for that connection.
+    ("telepy_tunnel_session", "public_ip", "varchar(64) NULL"),
+    ("telepy_tunnel_session", "public_source", "varchar(16) NULL"),
     // 隧道狀態告警的 webhook（空 = 關閉）與「斷線多久才通知」（秒）。/ Status alert webhook (empty = off) and its delay.
     ("site_settings_sitesettings", "notify_webhook_url", "varchar(512) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "notify_down_delay", "integer NOT NULL DEFAULT 60"),

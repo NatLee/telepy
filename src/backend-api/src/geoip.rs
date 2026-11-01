@@ -8,6 +8,7 @@
 
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::RwLock;
 
 use maxminddb::Reader;
 use serde::Deserialize;
@@ -21,11 +22,35 @@ const COUNTRY_FILES: [(&str, &str); 4] = [
     ("GeoLite2-City.mmdb", "MaxMind"),
 ];
 const ASN_FILES: [(&str, &str); 2] = [("dbip-asn-lite.mmdb", "DB-IP"), ("GeoLite2-ASN.mmdb", "MaxMind")];
+/// 後端會讀的每個檔名（看檔案有沒有換用）。/ Every file name the backend reads (to notice changes).
+pub const FILES: [&str; 6] = [COUNTRY_FILES[0].0, COUNTRY_FILES[1].0, COUNTRY_FILES[2].0, COUNTRY_FILES[3].0, ASN_FILES[0].0, ASN_FILES[1].0];
+
+/// 讀進記憶體的一個資料庫：reader、來源、檔名。/ One loaded database: the reader, its source and file name.
+struct Loaded {
+    reader: Reader<Vec<u8>>,
+    source: &'static str,
+    file: &'static str,
+}
 
 #[derive(Default)]
+struct Readers {
+    country: Option<Loaded>,
+    asn: Option<Loaded>,
+}
+
+/// 兩個 reader 放在鎖裡：資料夾裡的檔案換了（自動更新、`telepy-server geoip`）就整組換掉，不必重啟。
+/// The readers sit behind a lock, so new files (automatic update, `telepy-server geoip`) replace them without a restart.
+#[derive(Default)]
 pub struct GeoIp {
-    country: Option<(Reader<Vec<u8>>, &'static str)>,
-    asn: Option<(Reader<Vec<u8>>, &'static str)>,
+    inner: RwLock<Readers>,
+}
+
+/// 現在用的是哪個檔、哪裡來的、什麼時候建的（mmdb 的 build_epoch）。/ Which file is in use, from whom, built when.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InUse {
+    pub file: &'static str,
+    pub source: &'static str,
+    pub built: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -54,16 +79,16 @@ struct AsnRecord {
     autonomous_system_organization: Option<String>,
 }
 
-fn open(dir: &Path, files: &[(&str, &'static str)]) -> Option<(Reader<Vec<u8>>, &'static str)> {
+fn open(dir: &Path, files: &[(&'static str, &'static str)]) -> Option<Loaded> {
     for (name, source) in files {
         let path = dir.join(name);
         if !path.is_file() {
             continue;
         }
         match Reader::open_readfile(&path) {
-            Ok(r) => {
+            Ok(reader) => {
                 tracing::info!(path = %path.display(), source, "geoip database loaded");
-                return Some((r, source));
+                return Some(Loaded { reader, source, file: name });
             }
             Err(e) => tracing::warn!(path = %path.display(), error = %e, "geoip database cannot be read"),
         }
@@ -71,32 +96,58 @@ fn open(dir: &Path, files: &[(&str, &'static str)]) -> Option<(Reader<Vec<u8>>, 
     None
 }
 
+fn in_use(l: &Loaded) -> InUse {
+    let epoch = l.reader.metadata().build_epoch;
+    InUse { file: l.file, source: l.source, built: i64::try_from(epoch).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)) }
+}
+
 impl GeoIp {
     pub fn load(dir: &Path) -> Self {
-        Self { country: open(dir, &COUNTRY_FILES), asn: open(dir, &ASN_FILES) }
+        Self { inner: RwLock::new(Readers { country: open(dir, &COUNTRY_FILES), asn: open(dir, &ASN_FILES) }) }
+    }
+
+    /// 重讀資料夾裡的檔案（沒有檔案 = 只剩位址範圍）。/ Read the folder again (no files = scope only).
+    pub fn reload(&self, dir: &Path) {
+        let fresh = Readers { country: open(dir, &COUNTRY_FILES), asn: open(dir, &ASN_FILES) };
+        *self.inner.write().unwrap_or_else(|e| e.into_inner()) = fresh;
+    }
+
+    fn readers(&self) -> std::sync::RwLockReadGuard<'_, Readers> {
+        self.inner.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn enabled(&self) -> bool {
-        self.country.is_some() || self.asn.is_some()
+        let r = self.readers();
+        r.country.is_some() || r.asn.is_some()
+    }
+
+    /// 國家 / ASN 現在各用哪個檔。/ The files in use for the country and the ASN.
+    pub fn in_use(&self) -> (Option<InUse>, Option<InUse>) {
+        let r = self.readers();
+        (r.country.as_ref().map(in_use), r.asn.as_ref().map(in_use))
     }
 
     /// 只查公網位址；查不到或沒有資料庫回 None。/ Public addresses only; None without data.
     pub fn lookup(&self, ip: IpAddr) -> Option<Geo> {
-        if scope(ip) != Scope::Public || !self.enabled() {
+        if scope(ip) != Scope::Public {
+            return None;
+        }
+        let r = self.readers();
+        if r.country.is_none() && r.asn.is_none() {
             return None;
         }
         let mut geo = Geo::default();
-        if let Some((r, source)) = &self.country {
-            if let Ok(Some(rec)) = r.lookup(ip).and_then(|l| l.decode::<CountryRecord>()) {
+        if let Some(l) = &r.country {
+            if let Ok(Some(rec)) = l.reader.lookup(ip).and_then(|x| x.decode::<CountryRecord>()) {
                 geo.country = rec.country.or(rec.registered_country).and_then(|c| c.iso_code);
-                geo.source = Some(source);
+                geo.source = Some(l.source);
             }
         }
-        if let Some((r, source)) = &self.asn {
-            if let Ok(Some(rec)) = r.lookup(ip).and_then(|l| l.decode::<AsnRecord>()) {
+        if let Some(l) = &r.asn {
+            if let Ok(Some(rec)) = l.reader.lookup(ip).and_then(|x| x.decode::<AsnRecord>()) {
                 geo.asn = rec.autonomous_system_number;
                 geo.org = rec.autonomous_system_organization;
-                geo.source.get_or_insert(source);
+                geo.source.get_or_insert(l.source);
             }
         }
         (geo.country.is_some() || geo.org.is_some()).then_some(geo)

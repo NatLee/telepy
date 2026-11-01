@@ -296,8 +296,18 @@ pub struct UptimePair {
 
 #[derive(ToSchema)]
 pub struct ConnectionSession {
-    /// 只給能登入裝置的人（同 `endpoint`）。/ Only for people who can log in to the device (like `endpoint`).
+    /// gateway 看到的來源；只給能登入裝置的人（同 `endpoint`）。代理 / Docker 的轉發後面會是內部位址。
+    /// The source the gateway saw; only for people who can log in to the device (like `endpoint`). Behind a proxy /
+    /// Docker port forward it is an internal address.
     pub ip: Option<String>,
+    /// `ip` 的範圍與地點（同 `endpoint.geo`）。/ The scope and place of `ip`.
+    pub geo: Option<serde_json::Value>,
+    /// gateway 看到的不是公網位址時，裝置自己在這次連線時回報的公網 IP。/ When `ip` is not public: the public IP the
+    /// device itself reported during this connection.
+    pub public_ip: Option<String>,
+    /// device（問 Telepy 的 /api/whoami）| lookup（問 device_ip_lookup_url）/ Where `public_ip` came from.
+    pub public_source: Option<String>,
+    pub public_geo: Option<serde_json::Value>,
     pub connected_at: String,
     /// 連著時是 null。/ null while connected.
     pub disconnected_at: Option<String>,
@@ -756,6 +766,95 @@ pub struct CarriersUpdateRequest {
 pub struct CarriersUpdateResponse {
     pub run: CarrierRun,
     pub carriers: CarriersView,
+}
+
+/// GeoIP（DB-IP Lite）與網卡廠商表（IEEE OUI）。/ The GeoIP and NIC vendor data.
+#[derive(ToSchema)]
+pub struct DatasetsView {
+    /// 網站設定 `datasets_auto_update`。/ The `datasets_auto_update` site setting.
+    pub auto_update: bool,
+    /// country、asn、oui 三項。/ The three items: country, asn, oui.
+    pub items: Vec<DatasetItem>,
+    #[schema(example = "/data/geoip")]
+    pub geoip_dir: String,
+    #[schema(example = "/data/oui")]
+    pub oui_dir: String,
+    pub sources: DatasetSources,
+    /// 上次看（自動或手動）。/ The latest check (automatic or manual).
+    pub checked_at: Option<String>,
+    pub next_check_at: Option<String>,
+    pub updating: bool,
+    /// 最近一次更新（重啟後是 null）。/ The latest run (null after a restart).
+    pub last_run: Option<DatasetRun>,
+    pub attribution: String,
+    /// 廠商表幾天重抓一次。/ How many days before the vendor table is fetched again.
+    #[schema(example = 30)]
+    pub refresh_days: i64,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetItem {
+    /// country | asn | oui
+    #[schema(example = "country")]
+    pub id: String,
+    /// Telepy 管的那個檔。/ The file Telepy manages.
+    #[schema(example = "/data/geoip/dbip-country-lite.mmdb")]
+    pub path: String,
+    pub present: bool,
+    pub size: Option<i64>,
+    pub modified: Option<String>,
+    /// DB-IP：哪個月的。/ DB-IP: which month.
+    #[schema(example = "2026-11")]
+    pub release: Option<String>,
+    /// 後端現在用的檔：`{file, source, built}`（可能是 MaxMind 的）；沒資料 = null。/ The file in use (may be MaxMind's).
+    pub in_use: Option<serde_json::Value>,
+    /// 廠商表：讀進來幾個廠商。/ Vendor table: how many vendors are loaded.
+    pub vendors: Option<i64>,
+    /// 自動更新現在會去抓它。/ The automatic update would fetch it now.
+    pub due: bool,
+    /// 最近一次失敗：`{at, error}`。/ The latest failure.
+    pub failure: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetSources {
+    #[schema(example = "https://download.db-ip.com/free")]
+    pub dbip: String,
+    #[schema(example = "https://standards-oui.ieee.org/oui/oui.csv")]
+    pub oui: String,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetRun {
+    pub at: String,
+    /// auto | manual
+    pub trigger: String,
+    pub by: Option<String>,
+    pub items: Vec<DatasetRunItem>,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetRunItem {
+    /// country | asn | oui
+    pub id: String,
+    /// updated | current | failed
+    pub outcome: String,
+    /// 換掉的是哪個月 / 哪天的。/ The month / date it replaced.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetsUpdateRequest {
+    /// 只更新這幾項（country / asn / oui）；沒給 = 全部。/ Only these items; omitted = all three.
+    pub items: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct DatasetsUpdateResponse {
+    pub run: DatasetRun,
+    pub datasets: DatasetsView,
 }
 
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.

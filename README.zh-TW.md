@@ -233,8 +233,8 @@ docker compose exec backend telepy-server <指令>
 | `doctor`           | 檢查金鑰、資料庫、設定與搭配的服務                     |
 | `create-superuser` | 建立管理員帳號（加上 `--username` 與 `--password`）    |
 | `keygen`           | 補上缺少的 SSH 金鑰，已有的絕不會被換掉                |
-| `geoip`            | 下載離線 IP 地理資料庫，之後重啟後端                   |
-| `oui`              | 下載網卡廠牌清單，讓區網主機顯示廠牌，之後重啟後端     |
+| `geoip`            | 下載離線 IP 地理資料庫（也可以在伺服器狀態頁按「下載」），之後 Telepy 自己保持最新，不用重啟 |
+| `oui`              | 下載網卡廠牌清單，讓區網主機顯示廠牌，之後一樣自己保持最新 |
 | `migrate`          | 把資料庫結構更新到最新，每次啟動也會自動做             |
 
 看日誌用 `docker compose logs -f backend`。

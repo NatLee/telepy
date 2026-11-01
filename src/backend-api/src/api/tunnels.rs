@@ -797,8 +797,22 @@ async fn connections(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
         .map(|r| {
             let start = db::tunnel_sessions::unix(&r.connected_at);
             let end = r.disconnected_at.as_deref().and_then(db::tunnel_sessions::unix).unwrap_or(now);
+            // gateway 看到的來源 + 它的範圍；看到的是內部位址時，裝置在那次連線回報的公網 IP。
+            // The source the gateway saw and its scope; behind an internal one, the public IP the device reported then.
+            let (ip, geo, public_ip, public_source, public_geo) = if show_ip {
+                let geo = state.geoip.json(Some(&r.ip));
+                let public = r.public_ip.filter(|p| p != &r.ip);
+                let public_geo = public.as_deref().map(|p| state.geoip.json(Some(p))).unwrap_or(Value::Null);
+                (Value::String(r.ip), geo, json!(public), json!(r.public_source.filter(|_| public_geo != Value::Null)), public_geo)
+            } else {
+                (Value::Null, Value::Null, Value::Null, Value::Null, Value::Null)
+            };
             json!({
-                "ip": if show_ip { Value::String(r.ip) } else { Value::Null },
+                "ip": ip,
+                "geo": geo,
+                "public_ip": public_ip,
+                "public_source": public_source,
+                "public_geo": public_geo,
                 "connected_at": crate::util::db_to_iso_utc_z(&r.connected_at),
                 "disconnected_at": r.disconnected_at.as_deref().map(crate::util::db_to_iso_utc_z),
                 "seconds": start.map(|s| (end - s).max(0)),

@@ -31,6 +31,8 @@ const KEY_HOMES: Record<string, SiteTabId> = {
     lan_scan_enabled: "devices",
     device_ip_lookup_url: "devices",
     carrier_auto_update: "devices",
+    // GeoIP 與網卡廠商表的每月更新（面板在伺服器健康頁）。/ Monthly GeoIP and vendor data updates (the panel is on Server health).
+    datasets_auto_update: "devices",
     // 終端機錄影檔留幾天。/ How long terminal recordings are kept.
     recording_retention_days: "commands",
 };

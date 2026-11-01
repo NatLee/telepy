@@ -89,6 +89,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     audit_reseal: { key: "logs.event.audit_reseal", tone: "warning", category: "change" },
     carriers_updated: { key: "logs.event.carriers_updated", tone: "outline", category: "change" },
     carriers_update_failed: { key: "logs.event.carriers_update_failed", tone: "warning", category: "problem" },
+    datasets_updated: { key: "logs.event.datasets_updated", tone: "outline", category: "change" },
+    datasets_update_failed: { key: "logs.event.datasets_update_failed", tone: "warning", category: "problem" },
     api_token: { key: "logs.event.api_token", tone: "outline", category: "change" },
     user_key_import: { key: "logs.event.user_key_import", tone: "outline", category: "change" },
     token_call: { key: "logs.event.token_call", tone: "outline", category: "change" },

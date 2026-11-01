@@ -4,9 +4,16 @@
  */
 import { useEffect, useState } from "react";
 import { apiFetch, readJson } from "@/lib/api";
+import type { IpGeo } from "@/lib/geo";
 
 export interface ConnectionSession {
+    /** gateway 看到的來源。/ The source the gateway saw. */
     ip: string | null;
+    geo?: IpGeo | null;
+    /** gateway 看到內部位址時，裝置在這次連線回報的公網 IP。/ The device-reported public IP behind an internal peer. */
+    public_ip?: string | null;
+    public_source?: string | null;
+    public_geo?: IpGeo | null;
     connected_at: string;
     disconnected_at: string | null;
     seconds: number | null;
