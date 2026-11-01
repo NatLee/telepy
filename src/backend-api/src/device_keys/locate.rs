@@ -6,7 +6,8 @@
 //! 2. 證據：Telepy 剛用它的服務金鑰登入成功，所以**放著那把金鑰的檔案**就是伺服器在讀的。只有一個 = 就是它。
 //! 3. 好幾個都有（例如有人手動多放了一份，或舊版 Telepy 在 SFTP 模式把金鑰寫進伺服器不讀的 `~/.ssh`）：在每個候選檔
 //!    暫時放一把臨時金鑰、經隧道用它登入一次，能登入的就是伺服器讀的檔（臨時那行立刻拿掉）。這會短暫寫檔，所以只在
-//!    寫入路徑（呼叫者已拿著這台裝置的鎖）做；唯讀路徑先用第一個候選、不記住。
+//!    寫入路徑（呼叫者已拿著這台裝置的鎖）做；唯讀路徑先用第一個候選、不記住。先做對照組：金鑰還不在任何檔案時登入必須
+//!    失敗（否則登入分不出檔案，例如沒設密碼、什麼都放行的伺服器）。
 //! 4. 都沒有（Telepy 不是靠檔案裡的金鑰登入的，例如 AuthorizedKeysCommand）：伺服器說的第一個，否則 `~/.ssh/authorized_keys`。
 //!
 //! Which file holds this account's authorized keys — asked of the server, decided by evidence, tested by a login when
@@ -16,7 +17,8 @@
 //! 2. Evidence: Telepy just logged in with its service key, so the file holding that key is the one the server reads.
 //! 3. Several hold it: a throwaway key goes into each candidate in turn and logs in through the tunnel; the one that
 //!    works is the file the server reads (the line is removed at once). This writes briefly, so only on the write
-//!    path (the caller holds the device's lock); the read path takes the first holder and does not remember it.
+//!    path (the caller holds the device's lock); the read path takes the first holder and does not remember it. A
+//!    control comes first: with the key in no file the login must fail (else a login cannot tell the files apart).
 //! 4. None holds it: the server's first file, else `~/.ssh/authorized_keys`.
 
 use std::sync::Arc;
@@ -151,6 +153,12 @@ pub async fn probe(state: &AppState, reverse_port: i64, username: &str, holders:
     let mark = format!("{PROBE_MARK}{}", crate::util::random_alnum(10).to_ascii_lowercase());
     let public = key.public_key().to_openssh().context("encode the throwaway key")?;
     let line = format!("{} {mark}", public.split_whitespace().take(2).collect::<Vec<_>>().join(" "));
+    // 對照組：金鑰還不在任何檔案裡，登入必須失敗；成功了（不檢查金鑰的伺服器）就分不出是哪個檔。
+    // The control: with the key in no file yet the login must fail; if it works, a login cannot tell the files apart.
+    if crate::ssh::device::accepts_key(state, username, reverse_port, &key).await? {
+        tracing::warn!(reverse_port, account = username, "device keys: the device accepts a key that is in no file; cannot tell which authorized_keys it reads");
+        return Ok(None);
+    }
     for path in holders {
         // 先清掉以前沒清完的臨時行。/ Leftovers of an earlier, interrupted run first.
         let _ = run(state, reverse_port, username, &remove_command(path, PROBE_MARK)).await;
