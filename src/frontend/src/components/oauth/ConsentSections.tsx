@@ -120,7 +120,8 @@ export function ScopeChoices({
                                     checked ? "border-input bg-card" : "border-dashed border-border hover:bg-muted/40"
                                 )}
                             >
-                                <input type="checkbox" className="mt-2 accent-primary" checked={checked} onChange={() => onToggle(s.name)} />
+                                {/* data-tapi-scope：Tapi 版看到會改東西的權限被勾會提醒。/ The Tapi look warns when a scope that can change things is ticked. */}
+                                <input type="checkbox" className="mt-2 accent-primary" checked={checked} onChange={() => onToggle(s.name)} data-tapi-scope={meta?.changes ? "changes" : "read"} />
                                 {Icon && (
                                     <span className={cn("grid size-8 shrink-0 place-items-center rounded-md border border-border bg-card", checked ? "text-foreground" : "text-muted-foreground")}>
                                         <Icon size={16} aria-hidden />

@@ -9,7 +9,7 @@
  */
 import { cliHost } from "./cliClient.ts";
 
-/** 一般 / 低調 / Tapi 版（Tapi 版只給三個登入頁，授權頁沒有）。/ Standard / discreet / Tapi (the Tapi look is for the three sign-in pages, not the approval page). */
+/** 一般 / 低調 / Tapi 版（Tapi 版每一頁有自己的場景，lib/tapiStage `sceneFor`）。/ Standard / discreet / Tapi (each page has its own Tapi scene, lib/tapiStage `sceneFor`). */
 export type SignInStyle = "standard" | "discreet" | "tapi";
 /**
  * 哪一頁：一般登入頁 / 應用程式（MCP）的 OAuth 登入頁 / `telepy login` 打開的那一頁（同一個 /oauth/login，要求的 app 是 CLI）/
@@ -41,8 +41,6 @@ export interface SignInLook {
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet", "tapi"];
-/** 授權頁能選的樣子。/ The looks the approval page offers. */
-export const CONSENT_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
 export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null, webHost: null, sshHost: null, publicUrl: null };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
@@ -51,11 +49,6 @@ export const LINE_MAX = 80;
 export const MESSAGE_MAX = MESSAGE_LINES * (LINE_MAX + 1);
 
 const asStyle = (v: unknown): SignInStyle | null => (v === "standard" || v === "discreet" || v === "tapi" ? v : null);
-/** 授權頁沒有 Tapi 版：萬一收到就當一般。/ The approval page has no Tapi look: treat one as standard. */
-const asConsentStyle = (v: unknown): SignInStyle | null => {
-    const style = asStyle(v);
-    return style === "tapi" ? "standard" : style;
-};
 
 /**
  * 公開端點（`{style, oauth_style, cli_style, consent_style, message}`）或快取（同名的 camelCase）→ SignInLook；
@@ -70,7 +63,7 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
     const oauthStyle = asStyle(o.oauth_style ?? o.oauthStyle);
     if (!style || !oauthStyle) return null;
     const cliStyle = asStyle(o.cli_style ?? o.cliStyle) ?? oauthStyle;
-    const consentStyle = asConsentStyle(o.consent_style ?? o.consentStyle) ?? "standard";
+    const consentStyle = asStyle(o.consent_style ?? o.consentStyle) ?? "standard";
     const google = o.google_client_id !== undefined ? o.google_client_id : o.googleClientId;
     return {
         style,

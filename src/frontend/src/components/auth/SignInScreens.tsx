@@ -33,7 +33,7 @@ export function SignInScreen({ style, message, Form, pin }: { style: SignInStyle
     }
     if (style === "tapi") {
         return (
-            <TapiShell message={message} pin={pin}>
+            <TapiShell scene="tea" message={message} pin={pin}>
                 <Form title={t("login.title")} description={t("tapiLook.signInBody")} />
             </TapiShell>
         );
@@ -134,7 +134,7 @@ export function OAuthSignInScreen({
     // Tapi 版不是低調：卡片上照樣列出應用程式、回到哪裡與權限。/ The Tapi look isn't discreet: the card lists the app, its return host and scopes.
     if (style === "tapi") {
         return (
-            <TapiShell message={message} pin={pin}>
+            <TapiShell scene={cli ? "terminal" : "mail"} message={message} pin={pin}>
                 <Form
                     title={t(cli ? "oauth.cli.signInTitle" : "oauth.signInTitle")}
                     description={cli ? t("oauth.cli.signInSubtitle", { host: host || t("oauth.cli.thisComputer") }) : t("oauth.signInSubtitle", { app: app.name ?? t("oauth.theApp") })}

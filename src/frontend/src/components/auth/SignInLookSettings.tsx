@@ -28,7 +28,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ConsentInfo } from "@/hooks/useOAuthConsent";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { CONSENT_STYLES, DEFAULT_LOOK, SIGNIN_STYLES, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, previewHeight, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { DEFAULT_LOOK, SIGNIN_STYLES, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, previewHeight, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
 import { LOGIN_SCOPES } from "@/lib/cliGuide";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -73,12 +73,22 @@ const STYLE_META: Record<SignInStyle, { name: TranslationKey; hint: TranslationK
     tapi: { name: "signinLook.tapi", hint: "signinLook.tapiHint", icon: Ghost },
 };
 
-/** 這一頁能選的樣子：授權頁沒有 Tapi 版。/ The looks a page offers: the approval page has no Tapi look. */
+/** Tapi 版每一頁的場景說明。/ What the Tapi look's scene is on each page. */
+const TAPI_SCENE_HINT: Record<SignInPageKind, TranslationKey> = {
+    signin: "signinLook.tapiScene.signin",
+    oauth: "signinLook.tapiScene.oauth",
+    cli: "signinLook.tapiScene.cli",
+    consent: "signinLook.tapiScene.consent",
+};
+/** 某一頁、某個樣子的說明（Tapi 版照頁面講它的場景）。/ A look's hint on a page (the Tapi look names that page's scene). */
+const hintFor = (style: SignInStyle, page: SignInPageKind): TranslationKey => (style === "tapi" ? TAPI_SCENE_HINT[page] : STYLE_META[style].hint);
+
+/** 這一頁能選的樣子。/ The looks a page offers. */
 function useStyleOptions(page: SignInPageKind) {
     const { t } = useI18n();
-    return (page === "consent" ? CONSENT_STYLES : SIGNIN_STYLES).map((value) => {
-        const { name, hint, icon: Icon } = STYLE_META[value];
-        return { value, label: t(name), icon: <Icon size={14} />, title: t(hint) };
+    return SIGNIN_STYLES.map((value) => {
+        const { name, icon: Icon } = STYLE_META[value];
+        return { value, label: t(name), icon: <Icon size={14} />, title: t(hintFor(value, page)) };
     });
 }
 
@@ -154,7 +164,7 @@ function ConsentPreview({ look, pin }: { look: SignInLook; pin: number | null })
     };
     return (
         <ConsentFrame style={look.consentStyle} message={look.message} pin={pin} step={1} appName={info.client.client_name}>
-            <ConsentForm state={state} actions={PREVIEW_ACTIONS} surface={look.consentStyle === "discreet" ? "card" : "background"} />
+            <ConsentForm state={state} actions={PREVIEW_ACTIONS} surface={look.consentStyle === "standard" ? "background" : "card"} />
         </ConsentFrame>
     );
 }
@@ -231,13 +241,12 @@ function StyleRow({ page, value, onChange }: { page: SignInPageKind; value: Sign
                 <h4 className="text-[1rem] text-foreground">{t(`siteSettings.${key}.label` as TranslationKey)}</h4>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {t(`siteSettings.${key}.description` as TranslationKey)}
-                    {page === "consent" && ` ${t("signinLook.tapiNoConsent")}`}
                 </p>
                 <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80">{key}</p>
             </div>
             <div className="shrink-0 sm:pt-0.5 sm:text-right">
                 <Segmented kind="toggle" size="sm" options={options} value={value} onChange={onChange} aria-label={t(`siteSettings.${key}.label` as TranslationKey)} />
-                <p className="mt-1.5 text-xs text-muted-foreground">{t(STYLE_META[value].hint)}</p>
+                <p className="mt-1.5 max-w-xs text-xs text-muted-foreground sm:ml-auto">{t(hintFor(value, page))}</p>
             </div>
         </li>
     );
@@ -266,6 +275,8 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
     const look: SignInLook = { ...saved, message };
     const pin = lines.mode === "custom" ? pinnedLine(lines.rows, editing) : null;
     const unused = allStandard(saved);
+    // Tapi 版的頁面在「內建的句子」時說自己場景的台詞。/ Tapi pages say their scene's own lines while the built-in greetings are chosen.
+    const tapiOwnLines = lines.mode === "builtin" && (["signin", "oauth", "cli", "consent"] as const).some((p) => styleOf(saved, p) === "tapi");
 
     const setStyle = (p: SignInPageKind, v: SignInStyle) => {
         void onSave(STYLE_KEY[p], v);
@@ -305,6 +316,7 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
                     <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                         {t("siteSettings.signin_page_message.description")}
                         {unused && ` ${t("signinLook.linesUnused")}`}
+                        {tapiOwnLines && ` ${t("signinLook.tapiLinesNote")}`}
                     </p>
                     <div className="mt-3">
                         <SignInLinesEditor value={lines} onChange={setDraft} builtIn={BUILT_IN_LINES.map((k) => t(k))} onFocusRow={setEditing} />
@@ -353,15 +365,14 @@ const SIGN_IN_PAGES: readonly SignInPageKind[] = ["signin", "oauth", "cli"];
 const APP_PAGES: readonly SignInPageKind[] = ["oauth", "cli", "consent"];
 
 /** 每一列只出現在相關的頁面（授權頁是登入之後，所以沒有登入方式、權限一律列出）。/ Each row only on the pages it is about. */
-/** `tapi` 只在登入頁（授權頁沒有 Tapi 版）。/ `tapi` only on the sign-in pages (the approval page has no Tapi look). */
-const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; tapi?: Cell; pages: readonly SignInPageKind[] }[] = [
+const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; tapi: Cell; pages: readonly SignInPageKind[] }[] = [
     { label: "signinLook.cmp.name", standard: "shown", discreet: "shown", tapi: "shown", pages: PAGES },
     { label: "signinLook.cmp.product", standard: "shown", discreet: "hidden", tapi: "hidden", pages: PAGES },
     { label: "signinLook.cmp.methods", standard: "shown", discreet: "shown", tapi: "shown", pages: SIGN_IN_PAGES },
     { label: "signinLook.cmp.app", standard: "shown", discreet: "shown", tapi: "shown", pages: APP_PAGES },
     { label: "signinLook.cmp.scopes", standard: "shown", discreet: "afterSignIn", tapi: "shown", pages: ["oauth", "cli"] },
-    { label: "signinLook.cmp.choices", standard: "shown", discreet: "shown", pages: ["consent"] },
-    { label: "signinLook.cmp.cliDone", standard: "inFull", discreet: "brief", pages: ["consent"] },
+    { label: "signinLook.cmp.choices", standard: "shown", discreet: "shown", tapi: "shown", pages: ["consent"] },
+    { label: "signinLook.cmp.cliDone", standard: "inFull", discreet: "brief", tapi: "brief", pages: ["consent"] },
     { label: "signinLook.cmp.html", standard: "emptyFrame", discreet: "emptyFrame", tapi: "emptyFrame", pages: PAGES },
     { label: "signinLook.cmp.after", standard: "unchanged", discreet: "unchanged", tapi: "unchanged", pages: SIGN_IN_PAGES },
 ];
@@ -397,7 +408,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
     const style = styleOf(look, page);
     const styleName = t(STYLE_META[style].name);
     const rows = ROWS.filter((r) => r.pages.includes(page));
-    const columns = page === "consent" ? CONSENT_STYLES : SIGNIN_STYLES;
+    const columns = SIGNIN_STYLES;
     const LookIcon = STYLE_META[style].icon;
     const cli = page === "cli";
     const consent = page === "consent";
@@ -433,7 +444,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                         <FlowNode
                             icon={LookIcon}
                             title={t("signinLook.flow.look", { look: styleName })}
-                            sub={t(STYLE_META[style].hint)}
+                            sub={t(hintFor(style, page))}
                             state="ok"
                             stateText={t("signinLook.flow.now")}
                             className="border-primary/60"
@@ -463,7 +474,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                 <div>
                     <h4 className="mb-2 text-sm text-foreground">{t(consent ? "signinLook.cmp.titleConsent" : "signinLook.cmp.title")}</h4>
                     <div className="overflow-hidden rounded-lg border border-border">
-                        <div className={cn("grid text-sm", columns.length === 3 ? "grid-cols-[minmax(0,1fr)_auto_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto_auto]")}>
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] text-sm">
                             <div className="bg-surface px-3 py-2 text-xs text-muted-foreground">{t("signinLook.cmp.item")}</div>
                             {columns.map((s) => (
                                 <div key={s} className={cn("flex items-center gap-1.5 px-3 py-2 text-xs", s === style ? "bg-primary/10 text-foreground" : "bg-surface text-muted-foreground")}>
@@ -476,7 +487,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                                     <div className="border-t border-border px-3 py-2 leading-snug text-foreground">{t(r.label)}</div>
                                     {columns.map((s) => (
                                         <div key={s} className={cn("border-t border-border px-3 py-2", style === s && "bg-primary/5")}>
-                                            <CellText cell={r[s] ?? r.standard} />
+                                            <CellText cell={r[s]} />
                                         </div>
                                     ))}
                                 </React.Fragment>

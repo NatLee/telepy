@@ -322,3 +322,86 @@
     opacity: 1;
     animation: none;
 }
+
+/* ── 每一頁的場景 / A scene per page ──────────────────────────── */
+
+/* 應用程式連接：航空信的淡藍灰。/ App connection: an airmail blue-grey. */
+.tapi-shell[data-scene="mail"] {
+    --tapi-tea: #eaf0ef;
+    --tapi-tea-deep: #d6e0de;
+}
+.dark .tapi-shell[data-scene="mail"] {
+    --tapi-tea: #141a1b;
+    --tapi-tea-deep: #222b2c;
+}
+
+/* 授權：審核櫃台的格子紙（格線畫在 canvas 上）。/ Approval: the counter's grid paper (lines drawn on the canvas). */
+.tapi-shell[data-scene="desk"] {
+    --tapi-tea: #f6f1e5;
+    --tapi-tea-deep: #e7dcc5;
+}
+.dark .tapi-shell[data-scene="desk"] {
+    --tapi-tea: #1c1a15;
+    --tapi-tea-deep: #2c281f;
+}
+
+/* CLI：終端機永遠是暗的（淺色主題也一樣），卡片照主題。/ CLI: a terminal is always dark (light theme too); the card follows the theme. */
+.tapi-shell[data-scene="terminal"] {
+    --tapi-tea: #15110f;
+    --tapi-tea-deep: #2a221d;
+    --tapi-ink: #8de6cf;
+}
+.tapi-shell[data-scene="terminal"] .tapi-z {
+    color: #8de6cf;
+}
+
+/* 終端機的對話框 = 一行提示字元。/ The terminal's bubble is a prompt line. */
+.tapi-bubble--term {
+    --tapi-ink: #8de6cf;
+    background: #0d0a09;
+    color: #f2e6da;
+    font-family: var(--font-mono);
+    max-width: min(30rem, 100%);
+    text-align: left;
+}
+.dark .tapi-bubble--term {
+    --tapi-ink: #8de6cf;
+}
+.tapi-bubble--term::after {
+    display: none;
+}
+.tapi-prompt {
+    color: #8de6cf;
+    line-height: inherit;
+}
+.tapi-bubble--term .dsc-caret {
+    width: 0.55em;
+    margin-right: -0.55em;
+    border-radius: 0;
+    background: #f28a38;
+}
+
+/* 授權頁按允許：一個大印章重重蓋在 Tapi 右邊的紙上。/ Approval: a big stamp lands hard on the paper right of Tapi. */
+.tapi-stamp {
+    position: absolute;
+    right: -52%;
+    top: 30%;
+    width: 50%;
+    transform: rotate(-12deg);
+    animation: tapi-stamp 0.42s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+    pointer-events: none;
+}
+@keyframes tapi-stamp {
+    0% {
+        transform: rotate(-12deg) scale(2.2);
+        opacity: 0;
+    }
+    60% {
+        transform: rotate(-12deg) scale(0.92);
+        opacity: 1;
+    }
+    100% {
+        transform: rotate(-12deg) scale(1);
+        opacity: 1;
+    }
+}

@@ -1,24 +1,33 @@
 "use client";
 
 /**
- * Tapi 版登入頁的外框（網站設定 → 登入 → Tapi）：整頁是一杯奶茶，像素粉圓從底下慢慢浮上來（滑鼠靠近會被攪開，點背景會冒出
- * 一把），Tapi 在旁邊陪你登入，頭上的對話框輪流打出句子（管理員寫的或內建的），下面是像素字標。Tapi 跟著表單反應：
- * 打帳號時開心地盯著看（每打一個字跳一下）、輸入密碼時轉過身「我不看」、按了顯示密碼會嚇一跳、送出時想一下、
- * 失敗驚訝、成功開心跳；滑鼠停在身上會揮手、戳它會開心，太久沒人理會睡著。一般登入頁、OAuth / CLI 登入頁與設定頁的預覽共用。
- * 粉圓畫在一張 canvas（數學在 lib/tapiStage.ts）；Tapi 與字標是 SVG 像素圖；動作在 tapi.css。
- * The Tapi sign-in frame (Site settings → Sign-in → Tapi): the page is a cup of milk tea with pixel tapioca pearls
- * rising through it (a mouse stirs them aside, a click on the background releases a handful), Tapi keeps you company
- * with a speech bubble typing the lines (the admin's or the built-in ones), and a pixel wordmark sits below. Tapi
- * follows the form: happily watching while you type the username (a hop per character), turned around while you type
- * the password, startled when the password is shown, thinking while signing in, surprised on a failure and jumping on
- * success; it waves when the pointer rests on it, beams when poked and falls asleep when left alone. Shared by the
- * sign-in page, the OAuth / CLI sign-in page and the settings preview. The pearls are one canvas (maths in
- * lib/tapiStage.ts); Tapi and the wordmark are SVG pixel art; the moves live in tapi.css.
+ * Tapi 版的外框（網站設定 → 登入 → Tapi）。每一頁照它做的事換場景（lib/tapiStage `sceneFor`）：
+ * - 登入（tea）= 一杯奶茶，像素粉圓往上浮；
+ * - 應用程式連接（mail）= 紙飛機把應用程式的請求送進來，Tapi 拿著信；
+ * - CLI 登入與登入完成頁（terminal）= 終端機，字元往上飄，對話框是一行提示字元；
+ * - 授權（desk）= 格子紙上的審核櫃台，印章一個個蓋下來，Tapi 戴著墨鏡。
+ * 背景是一張 canvas（畫法在 tapiScenes.ts）：滑鼠靠近會把東西推開，點背景（或戳 Tapi）有小驚喜。Tapi 頭上的對話框輪流打出
+ * 句子（管理員寫的，沒寫就是這個場景自己的三句），下面是像素字標。Tapi 跟著頁面反應：登入表單（盯著帳號、打密碼時轉身、
+ * 顯示密碼嚇一跳、失敗驚訝、成功開心）；授權頁（勾到會改東西的權限時提醒、按允許就蓋章、按拒絕就揮手）；滑鼠停在身上揮手、
+ * 戳它會笑、太久沒人理會睡著。CLI 登入完成頁給固定的心情（`fixedMood`）。登入頁、OAuth / CLI 登入頁、授權頁、CLI 完成頁
+ * 與設定頁的預覽共用。
+ * The Tapi frame (Site settings → Sign-in → Tapi). Each page gets a scene matching what it does (lib/tapiStage
+ * `sceneFor`): sign-in (tea) = a cup of milk tea with pixel pearls rising; app connection (mail) = paper planes
+ * bringing the app's request, Tapi holding the letter; CLI sign-in and its done page (terminal) = a terminal with
+ * characters drifting up and a prompt line for a speech bubble; approval (desk) = a counter on grid paper where stamps
+ * land and Tapi wears sunglasses. The background is one canvas (painters in tapiScenes.ts): a mouse pushes things
+ * aside and a click on the background (or a poke) brings a small surprise. The bubble types the lines (the admin's,
+ * else the scene's own three) and a pixel wordmark sits below. Tapi reacts to the page: the sign-in form (watching the
+ * username, turned around for the password, startled when it is shown, surprised on a failure, happy on success) and
+ * the approval page (a warning when a scope that can change things is ticked, a stamp on approve, a wave on deny); it
+ * waves when the pointer rests on it, giggles when poked and falls asleep when left alone. The CLI done page passes a
+ * fixed mood (`fixedMood`). Shared by every sign-in page, the approval page, the CLI done page and the settings preview.
  */
 import "./discreet.css";
 import "./tapi.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthPrefs } from "@/components/auth/AuthShell";
+import { painterFor, type SceneEnv } from "@/components/auth/tapiScenes";
 import { useMeasuringPreview } from "@/components/ui/preview-frame";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useTapi } from "@/hooks/useTapi";
@@ -30,25 +39,22 @@ import { messageLines } from "@/lib/signinLook";
 import {
     FLASH_MS,
     MOOD_MOTION,
-    PEARL_LAYERS,
-    PEARL_PALETTE,
-    PEARL_SPRITE,
+    SCENE_LINES,
     SLEEP_AFTER_SECS,
+    STAMP_OK,
     WORD_PALETTE,
-    makePearls,
     moodFor,
     moodLine,
-    moodSprite,
-    pearlAt,
-    pearlCount,
     pixelWord,
+    sceneSprite,
     type TapiFlash,
     type TapiFocus,
     type TapiMood,
+    type TapiScene,
 } from "@/lib/tapiStage";
+import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 
-const LINES: TranslationKey[] = ["discreet.line1", "discreet.line2", "discreet.line3"];
 const MOOD_TEXT: Record<Exclude<TapiMood, "idle" | "sleepy">, TranslationKey> = {
     watching: "tapiLook.watching",
     shy: "tapiLook.shy",
@@ -59,89 +65,73 @@ const MOOD_TEXT: Record<Exclude<TapiMood, "idle" | "sleepy">, TranslationKey> = 
     mfa: "tapiLook.mfa",
     wave: "tapiLook.wave",
     poke: "tapiLook.poke",
+    careful: "tapiLook.careful",
+    stamp: "tapiLook.stamp",
+    bye: "tapiLook.bye",
+    done: "tapiLook.done",
+};
+/** 這個場景可能說的反應（對話框的大小照它們算）。/ The reactions a scene may say (the bubble is sized for them). */
+const SCENE_MOODS: Record<TapiScene, Exclude<TapiMood, "idle" | "sleepy">[]> = {
+    tea: ["watching", "shy", "peek", "thinking", "oops", "yay", "mfa", "wave", "poke"],
+    mail: ["watching", "shy", "peek", "thinking", "oops", "yay", "mfa", "wave", "poke"],
+    terminal: ["watching", "shy", "peek", "thinking", "oops", "yay", "mfa", "wave", "poke", "bye", "done"],
+    desk: ["careful", "stamp", "bye", "wave", "poke"],
 };
 const PLOP_EVENT = "tapi-plop";
 const WORD = pixelWord("Telepy");
 
 type CSSVars = React.CSSProperties & Record<`--${string}`, string | number>;
 
-/* ── 粉圓 / The pearls ───────────────────────────────────────── */
-
-/** 一顆粉圓先畫在小 canvas 上（每層、每個主題、每個解析度一張）。/ A pearl pre-drawn per layer, theme and resolution. */
-function pearlImage(doc: Document, unit: number, ratio: number, palette: Record<string, string>): HTMLCanvasElement {
-    const c = doc.createElement("canvas");
-    const px = Math.max(1, Math.round(unit * ratio));
-    c.width = c.height = px * 8;
-    const g = c.getContext("2d")!;
-    PEARL_SPRITE.forEach((row, y) =>
-        [...row].forEach((ch, x) => {
-            const fill = palette[ch];
-            if (!fill) return;
-            g.fillStyle = fill;
-            g.fillRect(x * px, y * px, px, px);
-        }),
-    );
-    return c;
-}
-
-interface Plop {
-    x: number;
-    y: number;
-    vx: number;
-    vy: number;
-    born: number;
-    layer: 1 | 2;
-}
+/* ── 背景 / The background ───────────────────────────────────── */
 
 /**
- * 背景的繪圖迴圈：一張 canvas 鋪滿整頁，每幀把粉圓畫在對齊像素的位置；看不到就停（捲走、分頁在背景），減少動態 = 畫一張靜止的。
- * 滑鼠（能 hover 的裝置）：附近的粉圓被推開；點背景：從那裡冒出一把往上浮的粉圓。
- * The background loop: one canvas over the page, pearls drawn on pixel-aligned spots every frame; it stops while out
- * of sight (scrolled away, hidden tab) and reduced motion draws a single still frame. A mouse (hover devices) pushes
- * nearby pearls aside; a click on the background releases a handful that float up from there.
+ * 背景的繪圖迴圈：一張 canvas 鋪滿整頁，交給這個場景的畫法（tapiScenes.ts）。看不到就停（捲走、分頁在背景），減少動態 =
+ * 畫一張靜止的（點出來的小驚喜動完為止）。滑鼠（能 hover 的裝置）推開附近的東西。
+ * The background loop: one canvas over the page, painted by the scene's painter (tapiScenes.ts). It stops while out of
+ * sight (scrolled away, hidden tab); reduced motion draws a still frame (plus a surprise until it settles). A mouse
+ * (hover devices) pushes nearby things aside.
  */
-function runTea(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean): () => void {
+function runScene(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean, scene: TapiScene): () => void {
     const doc = canvas.ownerDocument;
     const win = doc.defaultView;
     const ctx = canvas.getContext("2d");
     if (!win || !ctx) return () => {};
-
+    const painter = painterFor(scene);
     let width = 0;
     let height = 0;
-    let ratio = 1;
-    let pearls = makePearls(0);
-    let push = new Float32Array(0);
+    let ratio = 0;
     let dark = doc.documentElement.classList.contains("dark");
-    let images: HTMLCanvasElement[] = [];
     let pointer: { x: number; y: number } | null = null;
-    const plops: Plop[] = [];
     let visible = true;
     let frame = 0;
+    let frames = 0;
+    let busy = false;
+    // 畫法共用這一份（setup 時給參考，之後改欄位就好）。/ One shared env (painters keep the reference).
+    const env: SceneEnv = { doc, width: 0, height: 0, ratio: 1, dark, avoid: [] };
+    // 卡片、Tapi、對話框、頁首的位置（相對畫面）。/ Where the solid parts are, relative to the page.
+    const measure = () => {
+        const box = host.getBoundingClientRect();
+        env.avoid = [...host.querySelectorAll<HTMLElement>("[data-tapi-solid]")].map((el) => {
+            const r = el.getBoundingClientRect();
+            return { left: r.left - box.left, top: r.top - box.top, right: r.right - box.left, bottom: r.bottom - box.top };
+        });
+    };
     const start = win.performance.now();
     let last = start;
 
-    const paint = () => {
-        const palette = PEARL_PALETTE[dark ? "dark" : "light"];
-        images = PEARL_LAYERS.map((l) => pearlImage(doc, l.unit, ratio, palette));
-    };
     const resize = () => {
         const w = host.clientWidth;
         const h = host.clientHeight;
         const r = Math.min(2, Math.max(1, win.devicePixelRatio || 1));
-        if (w === width && h === height && r === ratio && images.length) return;
-        const recount = w !== width || h !== height;
+        if (w === width && h === height && r === ratio) return;
         width = w;
         height = h;
-        if (r !== ratio || !images.length) {
-            ratio = r;
-            paint();
-        }
-        canvas.width = Math.max(1, Math.round(w * ratio));
-        canvas.height = Math.max(1, Math.round(h * ratio));
-        if (recount) {
-            pearls = makePearls(pearlCount(w, h));
-            push = new Float32Array(pearls.length * 2);
-        }
+        ratio = r;
+        canvas.width = Math.max(1, Math.round(w * r));
+        canvas.height = Math.max(1, Math.round(h * r));
+        measure();
+        Object.assign(env, { width, height, ratio, dark });
+        painter.setup(env);
     };
 
     const draw = (now: number) => {
@@ -153,60 +143,16 @@ function runTea(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean):
         ctx.imageSmoothingEnabled = false;
         const box = host.getBoundingClientRect();
         const local = pointer ? { x: pointer.x - box.left, y: pointer.y - box.top } : null;
-        const ease = 1 - Math.exp(-dt / 0.25);
-        // 後面的先畫。/ Back layers first.
-        for (const layer of [0, 1, 2] as const) {
-            const l = PEARL_LAYERS[layer];
-            const img = images[layer];
-            ctx.globalAlpha = l.alpha;
-            pearls.forEach((p, i) => {
-                if (p.layer !== layer) return;
-                const at = pearlAt(p, t, width, height);
-                let gx = 0;
-                let gy = 0;
-                if (local) {
-                    const cx = at.x + at.size / 2 - local.x;
-                    const cy = at.y + at.size / 2 - local.y;
-                    const d = Math.hypot(cx, cy);
-                    const reach = 130;
-                    if (d < reach && d > 0.01) {
-                        const k = ((reach - d) / reach) * 46 * (0.5 + layer * 0.35);
-                        gx = (cx / d) * k;
-                        gy = (cy / d) * k;
-                    }
-                }
-                push[i * 2] += (gx - push[i * 2]) * ease;
-                push[i * 2 + 1] += (gy - push[i * 2 + 1]) * ease;
-                const x = Math.round((at.x + push[i * 2]) / l.unit) * l.unit;
-                const y = Math.round((at.y + push[i * 2 + 1]) / l.unit) * l.unit;
-                ctx.drawImage(img, Math.round(x * ratio), Math.round(y * ratio));
-            });
-        }
-        // 點出來的那把：往上浮、慢慢淡掉。/ The released handful: floating up and fading.
-        for (let i = plops.length - 1; i >= 0; i--) {
-            const p = plops[i];
-            const age = (now - p.born) / 1000;
-            if (age > 2.4) {
-                plops.splice(i, 1);
-                continue;
-            }
-            p.vy -= 60 * dt;
-            p.vx *= 1 - dt * 1.5;
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            const l = PEARL_LAYERS[p.layer];
-            ctx.globalAlpha = Math.max(0, Math.min(1, 1.4 - age / 1.7)) * l.alpha;
-            const x = Math.round(p.x / l.unit) * l.unit;
-            const y = Math.round(p.y / l.unit) * l.unit;
-            ctx.drawImage(images[p.layer], Math.round(x * ratio), Math.round(y * ratio));
-        }
+        // 版面會變（卡片長高、字型晚到）：每秒左右重量一次。/ The layout moves (a taller card, a late font): re-measure about once a second.
+        if (++frames % 60 === 1) measure();
+        busy = painter.draw(ctx, t, dt, local, now);
         ctx.globalAlpha = 1;
     };
 
     const loop = (now: number) => {
         frame = 0;
         draw(now);
-        if ((!reduced || plops.length) && visible) frame = win.requestAnimationFrame(loop);
+        if ((!reduced || busy) && visible) frame = win.requestAnimationFrame(loop);
     };
     const kick = () => {
         if (!frame) frame = win.requestAnimationFrame(loop);
@@ -231,12 +177,13 @@ function runTea(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean):
         }
     });
     io.observe(canvas);
-    // 換主題（含預覽框同步過去的 class）：重畫粉圓的顏色。/ Theme changes (preview frames too): repaint the pearls.
+    // 換主題（含預覽框同步過去的 class）：重畫顏色。/ Theme changes (preview frames too): repaint the colours.
     const mo = new win.MutationObserver(() => {
         const next = doc.documentElement.classList.contains("dark");
         if (next === dark) return;
         dark = next;
-        paint();
+        env.dark = dark;
+        painter.setup(env);
         kick();
     });
     mo.observe(doc.documentElement, { attributes: true, attributeFilter: ["class"] });
@@ -249,16 +196,9 @@ function runTea(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean):
         pointer = null;
     };
     const onPlop = (e: Event) => {
-        if (reduced) return;
         const { x, y } = (e as CustomEvent<{ x: number; y: number }>).detail;
         const box = host.getBoundingClientRect();
-        const now = win.performance.now();
-        for (let k = 0; k < 9; k++) {
-            const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
-            const speed = 90 + Math.random() * 120;
-            plops.push({ x: x - box.left - 16, y: y - box.top - 16, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, born: now, layer: Math.random() < 0.5 ? 1 : 2 });
-        }
-        if (plops.length > 60) plops.splice(0, plops.length - 60);
+        painter.plop(x - box.left, y - box.top, win.performance.now());
         kick();
     };
     if (hover) {
@@ -279,19 +219,19 @@ function runTea(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean):
     };
 }
 
-function Tea({ host }: { host: React.RefObject<HTMLDivElement | null> }) {
+function Backdrop({ host, scene }: { host: React.RefObject<HTMLDivElement | null>; scene: TapiScene }) {
     const canvas = useRef<HTMLCanvasElement>(null);
     const reduced = useReducedMotion();
     const measuring = useMeasuringPreview();
     useEffect(() => {
         if (!host.current || !canvas.current) return;
-        return runTea(canvas.current, host.current, reduced);
-    }, [host, reduced]);
+        return runScene(canvas.current, host.current, reduced, scene);
+    }, [host, reduced, scene]);
     if (measuring) return null;
     return <canvas ref={canvas} className="tapi-tea" aria-hidden />;
 }
 
-/** 從某個點冒出一把粉圓（Tea 在聽）。/ Release a handful of pearls from a point (Tea listens). */
+/** 從某個點送出小驚喜（背景在聽）。/ Sends a small surprise from a point (the background listens). */
 function plop(from: Element, x: number, y: number) {
     from.dispatchEvent(new CustomEvent(PLOP_EVENT, { bubbles: true, detail: { x, y } }));
 }
@@ -310,11 +250,13 @@ function focusOf(card: HTMLElement): { focus: TapiFocus; shown: boolean } {
 }
 
 /**
- * 跟著表單決定心情：焦點、密碼有沒有顯示、送出中、登入結果（lib/signInSignal）、滑鼠在不在 Tapi 身上、多久沒動。
- * Works out the mood from the form: focus, whether the password is shown, signing in, the result
- * (lib/signInSignal), the pointer on Tapi and how long nothing happened.
+ * 跟著頁面決定心情：焦點、密碼有沒有顯示、送出中、登入結果（lib/signInSignal）、授權頁的權限與決定（`data-tapi-scope` /
+ * `data-tapi-decision`）、滑鼠在不在 Tapi 身上、多久沒動。
+ * Works out the mood from the page: focus, whether the password is shown, signing in, the result (lib/signInSignal),
+ * the approval page's scopes and decision (`data-tapi-scope` / `data-tapi-decision`), the pointer on Tapi and how
+ * long nothing happened.
  */
-function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.RefObject<HTMLDivElement | null>) {
+function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.RefObject<HTMLDivElement | null>, fixedMood: TapiMood | null) {
     const [where, setWhere] = useState<{ focus: TapiFocus; shown: boolean }>({ focus: null, shown: false });
     const [submitting, setSubmitting] = useState(false);
     const [flash, setFlash] = useState<TapiFlash | null>(null);
@@ -355,6 +297,17 @@ function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.R
             touch();
             if ((e.target as HTMLElement | null)?.id === "login-username") setHops((n) => n + 1);
         };
+        // 授權頁：勾了會改東西的權限 = 提醒一下。/ Approval page: ticking a scope that can change things gets a warning.
+        const onChange = (e: Event) => {
+            const box = e.target as HTMLInputElement | null;
+            if (box?.dataset.tapiScope === "changes" && box.checked) react("careful");
+        };
+        const onClick = (e: Event) => {
+            later();
+            const decision = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-tapi-decision]")?.dataset.tapiDecision;
+            if (decision === "approve") react("stamp");
+            else if (decision === "deny") react("bye");
+        };
         const onSubmit = () => {
             touch();
             setSubmitting(true);
@@ -367,8 +320,9 @@ function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.R
         };
         el.addEventListener("focusin", later);
         el.addEventListener("focusout", later);
-        el.addEventListener("click", later);
+        el.addEventListener("click", onClick);
         el.addEventListener("input", onInput);
+        el.addEventListener("change", onChange);
         el.addEventListener("submit", onSubmit);
         host.addEventListener("pointermove", onMove);
         host.addEventListener("keydown", touch);
@@ -388,8 +342,9 @@ function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.R
         return () => {
             el.removeEventListener("focusin", later);
             el.removeEventListener("focusout", later);
-            el.removeEventListener("click", later);
+            el.removeEventListener("click", onClick);
             el.removeEventListener("input", onInput);
+            el.removeEventListener("change", onChange);
             el.removeEventListener("submit", onSubmit);
             host.removeEventListener("pointermove", onMove);
             host.removeEventListener("keydown", touch);
@@ -398,19 +353,19 @@ function useTapiMood(card: React.RefObject<HTMLDivElement | null>, root: React.R
         };
     }, [card, root, touch, react]);
 
-    const mood = moodFor({ focus: where.focus, passwordShown: where.shown, submitting, flash, hovering, idleSecs: asleep ? SLEEP_AFTER_SECS : 0 });
+    const mood = flash ?? fixedMood ?? moodFor({ focus: where.focus, passwordShown: where.shown, submitting, flash, hovering, idleSecs: asleep ? SLEEP_AFTER_SECS : 0 });
     return { mood, hops, setHovering, react, touch };
 }
 
 /* ── 畫面 / The pieces ───────────────────────────────────────── */
 
-/** Tapi 的像素圖（帳號的髮夾顏色、今天的節日；訪客 = 預設）。/ Tapi's pixel art (the account's clips and today's festival; visitors get the default). */
-function TapiSprite({ mood }: { mood: TapiMood }) {
+/** Tapi 的像素圖（場景的配件、帳號的髮夾顏色、今天的節日；訪客 = 預設）。/ Tapi with the scene's props, the account's clips and today's festival. */
+function TapiSprite({ mood, scene }: { mood: TapiMood; scene: TapiScene }) {
     const tapi = useTapi();
     const { runs, w, h } = useMemo(() => {
-        const dressed = dressTapi(moodSprite(mood), { clip: tapi.clip, festival: tapi.festival });
+        const dressed = dressTapi(sceneSprite(mood, scene), { clip: tapi.clip, festival: tapi.festival });
         return { runs: pixelRuns(dressed.sprite, dressed.palette), ...spriteSize(dressed.sprite) };
-    }, [mood, tapi.clip, tapi.festival]);
+    }, [mood, scene, tapi.clip, tapi.festival]);
     return (
         <svg viewBox={`0 0 ${w} ${h}`} shapeRendering="crispEdges" className="block w-full" style={{ aspectRatio: `${w} / ${h}` }} aria-hidden>
             {runs.map((r) => (
@@ -420,7 +375,21 @@ function TapiSprite({ mood }: { mood: TapiMood }) {
     );
 }
 
-function TapiActor({ mood, hops, onHover, onPoke }: { mood: TapiMood; hops: number; onHover: (on: boolean) => void; onPoke: (el: HTMLElement) => void }) {
+/** 授權頁按允許時蓋下去的大印章。/ The big stamp that lands when the approval page is approved. */
+function BigStamp() {
+    const runs = useMemo(() => pixelRuns(STAMP_OK, { B: "#e8433a" }), []);
+    return (
+        <span className="tapi-stamp" aria-hidden>
+            <svg viewBox={`0 0 ${STAMP_OK[0].length} ${STAMP_OK.length}`} shapeRendering="crispEdges" className="block w-full">
+                {runs.map((r) => (
+                    <rect key={`${r.x}-${r.y}`} x={r.x} y={r.y} width={r.w} height={1} fill={r.fill} />
+                ))}
+            </svg>
+        </span>
+    );
+}
+
+function TapiActor({ mood, scene, hops, onHover, onPoke }: { mood: TapiMood; scene: TapiScene; hops: number; onHover: (on: boolean) => void; onPoke: (el: HTMLElement) => void }) {
     const { t } = useI18n();
     return (
         <button
@@ -437,11 +406,12 @@ function TapiActor({ mood, hops, onHover, onPoke }: { mood: TapiMood; hops: numb
                 <span className="tapi-sway block">
                     {/* 打帳號時每個字跳一下。/ A hop per typed character. */}
                     <span key={mood === "watching" ? hops : -1} className={mood === "watching" && hops > 0 ? "tapi-hop block" : "block"}>
-                        <TapiSprite mood={mood} />
+                        <TapiSprite mood={mood} scene={scene} />
                     </span>
                 </span>
             </span>
             <span className="tapi-shadow" aria-hidden />
+            {mood === "stamp" && <BigStamp />}
             {mood === "sleepy" && (
                 <span className="tapi-z" aria-hidden>
                     <span>z</span>
@@ -454,24 +424,31 @@ function TapiActor({ mood, hops, onHover, onPoke }: { mood: TapiMood; hops: numb
 }
 
 /**
- * 對話框：平常輪流打出句子（管理員寫的，或內建的三句），有反應時換成那個心情的話。所有可能的句子都疊在同一格裡
- * （看不見），所以對話框大小固定，Tapi 不會被擠上擠下。
- * The speech bubble: the typed lines (the admin's or the three built-in ones), replaced by the mood's own line while
- * Tapi reacts. Every possible text sits invisibly in the same cell, so the bubble keeps one size and Tapi never shifts.
+ * 對話框：平常輪流打出句子（管理員寫的，或這個場景的三句），有反應時換成那個心情的話。所有可能的句子都疊在同一格裡
+ * （看不見），所以對話框大小固定，Tapi 不會被擠上擠下。終端機場景的對話框是一行提示字元。
+ * The speech bubble: the typed lines (the admin's, or the scene's three), replaced by the mood's own line while Tapi
+ * reacts. Every possible text sits invisibly in the same cell, so the bubble keeps one size and Tapi never shifts. In
+ * the terminal scene the bubble is a prompt line.
  */
-function Speech({ mood, message, pin }: { mood: TapiMood; message: string; pin: number | null }) {
+function Speech({ mood, scene, message, pin }: { mood: TapiMood; scene: TapiScene; message: string; pin: number | null }) {
     const { t } = useI18n();
     const reduced = useReducedMotion();
     const measuring = useMeasuringPreview();
     const own = messageLines(message);
-    const lines = own.length ? own : LINES.map((key) => t(key));
+    const lines = own.length ? own : SCENE_LINES[scene].map((key) => t(key as TranslationKey));
     const { text, caret } = useTypewriter(lines, pin !== null && pin < lines.length ? pin : null, !reduced && !measuring);
     const said = moodLine(mood);
-    const sizers = [...lines, ...Object.values(MOOD_TEXT).map((k) => t(k))];
+    const sizers = [...lines, ...SCENE_MOODS[scene].map((m) => t(MOOD_TEXT[m]))];
+    const term = scene === "terminal";
     return (
-        <div className="tapi-bubble text-base leading-relaxed sm:text-lg" data-tapi-solid>
+        <div className={cn("tapi-bubble leading-relaxed", term ? "tapi-bubble--term flex items-center gap-2 text-sm sm:text-base" : "text-base sm:text-lg")} data-tapi-solid>
+            {term && (
+                <span className="tapi-prompt shrink-0 self-start" aria-hidden>
+                    tapi@telepy:~$
+                </span>
+            )}
             <p className="sr-only">{lines.join(" ")}</p>
-            <p className="dsc-type text-center" aria-hidden>
+            <p className={cn("dsc-type min-w-0 flex-1", term ? "text-left" : "text-center")} aria-hidden>
                 {sizers.map((line, i) => (
                     <span key={i} className="dsc-type-sizer">
                         {line}
@@ -499,7 +476,7 @@ function Speech({ mood, message, pin }: { mood: TapiMood; message: string; pin: 
 /** 像素字標：每個字母各自一張，輪流輕輕跳；滑鼠指到的字母翹起來。/ The pixel wordmark: one image per letter, hopping in turn; a pointed-at letter tips up. */
 function Wordmark() {
     return (
-        <h1 className="tapi-word" aria-label="Telepy" style={{ "--tapi-gap": "0px" } as CSSVars}>
+        <h1 className="tapi-word" aria-label="Telepy" data-tapi-solid style={{ "--tapi-gap": "0px" } as CSSVars}>
             {WORD.glyphs.map((g, i) => {
                 const w = g.rows[0].length;
                 const h = g.rows.length;
@@ -518,18 +495,27 @@ function Wordmark() {
 }
 
 export function TapiShell({
+    scene,
     message,
     pin = null,
+    wide = false,
+    fixedMood = null,
     children,
 }: {
+    /** 這一頁的場景（lib/tapiStage `sceneFor`）。/ This page's scene (lib/tapiStage `sceneFor`). */
+    scene: TapiScene;
     message: string;
     /** 預覽正在看哪一句。/ The line the preview shows. */
     pin?: number | null;
+    /** 內容多的頁面（授權頁）用寬一點的卡片，Tapi 黏在上面。/ A wider card for content-heavy pages (approval); Tapi stays in view. */
+    wide?: boolean;
+    /** 固定的心情（CLI 登入完成頁）。/ A fixed mood (the CLI done page). */
+    fixedMood?: TapiMood | null;
     children: React.ReactNode;
 }) {
     const root = useRef<HTMLDivElement>(null);
     const card = useRef<HTMLDivElement>(null);
-    const { mood, hops, setHovering, react, touch } = useTapiMood(card, root);
+    const { mood, hops, setHovering, react, touch } = useTapiMood(card, root, fixedMood);
 
     const poke = (el: HTMLElement) => {
         touch();
@@ -537,7 +523,7 @@ export function TapiShell({
         const r = el.getBoundingClientRect();
         plop(el, r.left + r.width / 2, r.top + r.height * 0.35);
     };
-    // 點背景（不是卡片、Tapi、對話框、頁首）：冒出一把粉圓。/ A click on the background releases a handful of pearls.
+    // 點背景（不是卡片、Tapi、對話框、頁首）：小驚喜。/ A click on the background: a small surprise.
     const onBackground = (e: React.MouseEvent<HTMLDivElement>) => {
         if ((e.target as HTMLElement).closest("[data-tapi-solid], a, button, input, label")) return;
         plop(e.currentTarget, e.clientX, e.clientY);
@@ -547,26 +533,35 @@ export function TapiShell({
         <div
             ref={root}
             onClick={onBackground}
+            data-scene={scene}
             className="tapi-shell relative flex min-h-screen flex-col overflow-clip text-foreground"
-            style={{ "--tapi-size": "clamp(8.5rem, 19vw, 15rem)", "--tapi-unit": "clamp(0.13rem, 0.55vw, 0.21rem)" } as CSSVars}
+            style={{ "--tapi-size": wide ? "clamp(8rem, 15vw, 12.5rem)" : "clamp(8.5rem, 19vw, 15rem)", "--tapi-unit": "clamp(0.13rem, 0.55vw, 0.21rem)" } as CSSVars}
         >
-            <Tea host={root} />
+            <Backdrop host={root} scene={scene} />
             {/* 頁首在版面裡：表單再高也不會壓到語言 / 主題切換。/ In the flow, so a tall form never covers it. */}
             <header className="relative z-10 flex justify-end p-4 sm:p-6" data-tapi-solid>
                 <AuthPrefs />
             </header>
 
-            <div className="relative mx-auto grid w-full max-w-6xl flex-1 grid-cols-[minmax(0,1fr)] content-center items-center gap-8 px-4 pb-12 pt-2 sm:px-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-16 lg:px-12 lg:pb-14">
-                <section className="flex flex-col items-center gap-5 text-center lg:gap-6">
-                    <Speech mood={mood} message={message} pin={pin} />
-                    <TapiActor mood={mood} hops={hops} onHover={setHovering} onPoke={poke} />
+            <div
+                className={cn(
+                    "relative mx-auto grid w-full max-w-6xl flex-1 grid-cols-[minmax(0,1fr)] content-center items-center gap-8 px-4 pb-12 pt-2 sm:px-8 lg:gap-16 lg:px-12 lg:pb-14",
+                    wide ? "lg:grid-cols-[minmax(0,1fr)_32rem] lg:items-start" : "lg:grid-cols-[minmax(0,1fr)_24rem]",
+                )}
+            >
+                <section className={cn("flex flex-col items-center gap-5 text-center lg:gap-6", wide && "lg:sticky lg:top-8")}>
+                    <Speech mood={mood} scene={scene} message={message} pin={pin} />
+                    <TapiActor mood={mood} scene={scene} hops={hops} onHover={setHovering} onPoke={poke} />
                     <Wordmark />
                 </section>
 
                 <div
                     ref={card}
                     data-tapi-solid
-                    className="relative w-full max-w-sm justify-self-center animate-fade-in-up rounded-xl border border-border bg-card p-6 shadow-card sm:p-8 lg:justify-self-end"
+                    className={cn(
+                        "relative w-full justify-self-center animate-fade-in-up rounded-xl border border-border bg-card p-6 shadow-card sm:p-8 lg:justify-self-end",
+                        wide ? "max-w-lg" : "max-w-sm",
+                    )}
                 >
                     {children}
                 </div>

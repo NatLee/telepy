@@ -59,7 +59,7 @@ function ConsentInner() {
 
     return frame(
         <>
-            <ConsentForm state={{ ...state, info }} actions={actions} surface={style === "discreet" ? "card" : "background"} />
+            <ConsentForm state={{ ...state, info }} actions={actions} surface={style === "standard" ? "background" : "card"} />
             {reauthDialog}
         </>
     );

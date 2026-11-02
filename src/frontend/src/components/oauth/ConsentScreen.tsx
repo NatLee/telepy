@@ -2,10 +2,11 @@
 
 /**
  * 授權（同意）頁的畫面，依網站設定的樣子（網站設定 → 登入 → 授權頁）畫外框：一般 = 「連接一個 app」的流程面板 +
- * 步驟條；低調 = 只寫 Telepy 的低調外框，卡片寬一點。內容（誰在要求、導回哪裡、帳號、先前的連線、權限、隧道、
+ * 步驟條；低調 = 只寫 Telepy 的低調外框，卡片寬一點；Tapi = 審核櫃台（戴墨鏡的 Tapi 盯著權限、允許時蓋章）。內容（誰在要求、導回哪裡、帳號、先前的連線、權限、隧道、
  * 決定列）兩種樣子都一樣——同意要看清楚。真的頁面與網站設定的預覽共用這組元件（預覽給範例資料、不做事的動作）。
  * The approval (consent) page for each look (Site settings → Sign-in → approval page): standard = the
- * "connect an app" flow panel and step strip; discreet = the plain "Telepy" frame with a wider card. The content (who
+ * "connect an app" flow panel and step strip; discreet = the plain "Telepy" frame with a wider card; Tapi = the
+ * counter (Tapi in sunglasses watching the scopes, a stamp on approve). The content (who
  * is asking, where it returns, the account, earlier connections, scopes, tunnels, the decision bar) is the same in
  * both — consent must stay readable. The real page and the settings preview share these components (the preview
  * passes sample data and inert actions).
@@ -14,6 +15,7 @@ import React from "react";
 import { Check, ShieldCheck } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { DiscreetShell } from "@/components/auth/DiscreetShell";
+import { TapiShell } from "@/components/auth/TapiShell";
 import { AppTile, ConnectAppAside, ConnectProgress, ReturnsTo, type ConnectStep } from "@/components/oauth/ConnectFlow";
 import { AccountRow, ExistingConnection, ScopeChoices, TunnelChoice } from "@/components/oauth/ConsentSections";
 import { Button } from "@/components/ui/button";
@@ -45,6 +47,14 @@ export function ConsentFrame({
             <DiscreetShell message={message} pin={pin} wide>
                 {children}
             </DiscreetShell>
+        );
+    }
+    // Tapi 版：審核櫃台，戴墨鏡的 Tapi 盯著權限，按允許就蓋章。/ The Tapi look: the counter, Tapi in sunglasses, a stamp on approve.
+    if (style === "tapi") {
+        return (
+            <TapiShell scene="desk" message={message} pin={pin} wide>
+                {children}
+            </TapiShell>
         );
     }
     return (
@@ -167,10 +177,10 @@ export function ConsentForm({ state, actions, surface = "background" }: { state:
                 {stepUpError && <p className="mb-2 text-sm text-destructive">{stepUpError}</p>}
                 <p className="mb-2 text-xs text-muted-foreground">{t("oauth.summary", { scopes: selectedScopes.length, total: info.scopes.length, tunnels: tunnelSummary })}</p>
                 <div className="flex gap-3">
-                    <Button variant="outline" className="h-11 flex-1" disabled={submitting} onClick={actions.deny}>
+                    <Button variant="outline" className="h-11 flex-1" disabled={submitting} onClick={actions.deny} data-tapi-decision="deny">
                         {t("oauth.deny")}
                     </Button>
-                    <Button className="h-11 flex-[2] font-semibold" disabled={!canApprove} onClick={actions.approve}>
+                    <Button className="h-11 flex-[2] font-semibold" disabled={!canApprove} onClick={actions.approve} data-tapi-decision="approve">
                         {submitting ? (
                             <span className="size-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" aria-hidden />
                         ) : (

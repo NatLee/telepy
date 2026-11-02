@@ -242,11 +242,13 @@ Only the word "Telepy", a moving background and the lines you write, typed out o
 
 ### The Tapi sign-in page
 
-Find it: **Site settings → Sign-in → Sign-in page look → Tapi** (the sign-in, app connection and CLI pages; the approval page stays plain).
+Find it: **Site settings → Sign-in → Sign-in page look → Tapi**, for any of the four pages.
 
-The page becomes a cup of bubble tea with Tapi floating in it, saying your lines in a speech bubble. Tapi watches you type your username, turns around while you type the password, and is visibly startled if you show the password anyway. A wrong password gets a surprised look, a right one a little jump. Click the background and a handful of pearls floats up; poke Tapi and it giggles.
+Tapi keeps you company on every page, in a scene that fits the job. On the sign-in page it is a cup of bubble tea with pearls rising. On the app connection page, paper planes bring the app's request and Tapi holds the letter. The CLI pages are a terminal, prompt line included. The approval page is a counter on grid paper, where Tapi wears sunglasses and stamps your approval.
 
-![The Tapi sign-in page: Tapi turned around while the password is typed, pearls rising behind](images/en/tapi-signin.png)
+Tapi reacts as you go. It watches you type your username, turns around while you type the password, and is visibly startled if you show the password anyway. At the counter it warns you when you tick a permission that can change things on your devices. Approve and a big OK stamp lands; deny and it waves the app goodbye. Click the background for a small surprise; poke Tapi and it giggles.
+
+![The Tapi look on the four pages: bubble tea, paper planes, a terminal and the approval counter](images/en/tapi-pages.png)
 
 ## Running the server
 
