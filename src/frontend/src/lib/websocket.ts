@@ -121,6 +121,23 @@ function reconnectNotifications() {
 }
 
 /**
+ * 在 React 之外收通知（例如等一個被代理切斷的請求做完，見 `lib/longRequest.ts`）；回傳取消訂閱。
+ * 共用同一條通知 socket，頁面上沒有別人訂閱時也會連上。
+ * Receive notifications outside React (e.g. waiting for a request a proxy cut, see `lib/longRequest.ts`); returns the
+ * unsubscribe. Shares the one notification socket and connects it when nobody else on the page has.
+ */
+export function onNotification(handler: (msg: NotificationPayload) => void): () => void {
+    return notificationHub.subscribe({
+        onMessage: (raw) => {
+            const msg = (raw as { message?: NotificationPayload } | null)?.message;
+            if (msg?.action) handler(msg);
+        },
+        onStatus: () => {},
+        onPhase: () => {},
+    });
+}
+
+/**
  * 依 action 把通知分派給 handler。每則訊息都直接從 socket 交給 handler，不經過 React state：
  * 以前用一個 `lastMessage` state 轉手，兩則在同一次 render 前到達就只剩後一則（例如人數歸零的
  * UPDATE-TUNNEL-PRESENCE 被吃掉，列表一直顯示「使用中」）。

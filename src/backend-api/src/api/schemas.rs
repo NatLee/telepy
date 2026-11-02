@@ -3352,6 +3352,12 @@ pub struct TunnelDeleteGrant {
     pub can_revoke: bool,
 }
 
+/// `POST /api/reverse/server/{id}/delete/skip-device`：正在跑的刪除收到了。/ The running delete was told to skip the device.
+#[derive(ToSchema)]
+pub struct DeleteSkipDevice {
+    pub skipped: bool,
+}
+
 #[derive(ToSchema)]
 pub struct TunnelDeleteCheck {
     pub tunnel: TunnelDeleteTunnel,

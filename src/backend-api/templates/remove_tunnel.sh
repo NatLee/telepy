@@ -24,6 +24,36 @@ KEEP_ID=""
 KEY_ELSEWHERE=""
 
 out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
+# Nothing here reads input: a program that asks something (a prompt, `cat -`) gets end-of-file at once instead of
+# waiting until Telepy gives up on the whole script.
+exec </dev/null
+# Which part the script is looking at now: when the device takes too long, Telepy says where it stopped.
+step() { out step "$1" ""; }
+# Run a command for at most $1 seconds (macOS has no `timeout`): for programs that wait on something outside this
+# script — a container engine that is starting or asleep, sudo, crontab, a key file. The command keeps its output; a
+# watcher ends it when the time is up.
+lim() {
+    lim_s=$1
+    shift
+    "$@" </dev/null &
+    lim_p=$!
+    # The watcher ends quietly when told to (no "Terminated" notice, no sleep left behind).
+    (
+        sleep "$lim_s" &
+        lim_z=$!
+        trap 'kill "$lim_z" 2>/dev/null; exit 0' TERM
+        wait "$lim_z"
+        kill "$lim_p" 2>/dev/null
+        sleep 2
+        kill -9 "$lim_p" 2>/dev/null
+    ) </dev/null >/dev/null 2>&1 &
+    lim_w=$!
+    wait "$lim_p"
+    lim_rc=$?
+    kill "$lim_w" 2>/dev/null
+    wait "$lim_w" 2>/dev/null
+    return "$lim_rc"
+}
 # The forward as files write it (a unit, a plist line, a script): older scripts carry the number.
 PORT_RE="(^|[^0-9])$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
 # A -R forward in a process or crontab line (never a -L with the same number).
@@ -52,8 +82,8 @@ km_check() {
     exists "$1" || return 1
     if rd "$1.pub" | awk '{print $2}' | grep -qxF -- "$T_KEY"; then return 0; fi
     command -v ssh-keygen >/dev/null 2>&1 || return 1
-    ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY" && return 0
-    [ -n "$SUDO" ] && $SUDO ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
+    lim 10 ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY" && return 0
+    [ -n "$SUDO" ] && lim 10 $SUDO ssh-keygen -y -P '' -f "$1" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
 }
 # Answers are remembered per path (so sudo is asked once per key file, not once per line).
 KM_YES=" "
@@ -170,9 +200,10 @@ ME=$(id -un 2>/dev/null || echo "?")
 MY_UID=$(id -u 2>/dev/null || echo 1)
 SUDO=""
 ROOT=0
+step "sudo"
 if [ "$MY_UID" = 0 ]; then
     ROOT=1
-elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+elif command -v sudo >/dev/null 2>&1 && lim 10 sudo -n true >/dev/null 2>&1; then
     SUDO="sudo -n"
     ROOT=1
 fi
@@ -229,6 +260,7 @@ rmf() {
 }
 
 # --- systemd (system units: join as root, the autossh service script, units written by hand) ---------
+step "systemd units"
 if command -v systemctl >/dev/null 2>&1; then
     for f in /etc/systemd/system/*.service /lib/systemd/system/telepy*.service /usr/lib/systemd/system/telepy*.service; do
         has_port "$f" || continue
@@ -277,6 +309,7 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 # --- launchd (macOS: join as LaunchDaemon / LaunchAgent) ---------------------------------------------
+step "launchd jobs"
 if command -v launchctl >/dev/null 2>&1; then
     for f in /Library/LaunchDaemons/*.plist "$HOME"/Library/LaunchAgents/*.plist; do
         has_port "$f" || continue
@@ -307,6 +340,7 @@ fi
 
 # --- processes running this tunnel, and the scripts that started them ---------------------------------
 # (Background loops, ssh / autossh template scripts run by hand.)
+step "background loops"
 RUNNERS=""
 for r in "$HOME/.ssh/telepy-tunnel-$T_ID.sh" ${T_INSTALL:+"$HOME/.ssh/telepy-$T_INSTALL.sh"}; do
     if has_port "$r"; then
@@ -363,6 +397,7 @@ ppid_of() {
     if [ -r "/proc/$1/stat" ]; then sed 's/^.*) [A-Za-z] \([0-9]*\).*/\1/' "/proc/$1/stat" 2>/dev/null
     else ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; fi
 }
+step "running processes"
 if [ -r /proc/1/cmdline ]; then
     ALL=$(for d in /proc/[0-9]*; do printf '%s %s\n' "${d#/proc/}" "$(tr '\000' ' ' < "$d/cmdline" 2>/dev/null)"; done)
 else
@@ -409,7 +444,7 @@ EOF
 
 # Crontab lines pointing at the runners or carrying the forward.
 crontab_clean() {
-    CR=$($1 crontab -l 2>/dev/null) || return 0
+    CR=$(lim 10 $1 crontab -l 2>/dev/null) || return 0
     KEEP=$(printf '%s\n' "$CR" | while IFS= read -r l; do line_is_mine "$l" || printf '%s\n' "$l"; done)
     for r in $RUNNERS; do KEEP=$(printf '%s\n' "$KEEP" | grep -vF -- "$r"); done
     [ "$KEEP" = "$CR" ] && return 0
@@ -418,11 +453,13 @@ crontab_clean() {
     if [ -z "$KEEP" ]; then printf '' | $1 crontab - 2>/dev/null; else printf '%s\n' "$KEEP" | $1 crontab - 2>/dev/null; fi
     if [ "$?" = 0 ]; then out removed cron "crontab of $2"; else out failed cron "could not rewrite the crontab of $2"; fi
 }
+step "crontab"
 if command -v crontab >/dev/null 2>&1; then
     crontab_clean "" "$ME"
     [ -n "$SUDO" ] && crontab_clean "$SUDO" root
 fi
 # OpenWrt (procd) init scripts and /etc/rc.local: what a router's tunnel is usually started from.
+step "init.d scripts"
 if [ -f /etc/rc.common ]; then
     for f in /etc/init.d/*; do
         has_port "$f" || continue
@@ -441,6 +478,7 @@ if [ -f /etc/rc.common ]; then
         fi
     done
 fi
+step "/etc/rc.local"
 if [ -f /etc/rc.local ]; then
     RL=$(rd /etc/rc.local)
     RL_KEEP=$(printf '%s\n' "$RL" | while IFS= read -r l; do line_is_mine "$l" || printf '%s\n' "$l"; done)
@@ -471,6 +509,7 @@ for r in $RUNNERS; do
 done
 
 # Downloaded scripts of this tunnel that are not running (ssh / autossh / docker templates).
+step "downloaded scripts"
 for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME"/Downloads/*.yml "$HOME"/Desktop/*.sh; do
     has_port "$f" || continue
     out found script "$f"
@@ -478,23 +517,26 @@ for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME
 done
 
 # --- Docker (docker run / docker compose templates: jnovack/autossh with SSH_TUNNEL_PORT) -----------
+# A container engine that is stopped, starting or asleep (Docker Desktop, OrbStack, Colima) can keep `docker` waiting,
+# so every call has a time limit, and a slow engine is reported instead of stopping the whole script.
+step "Docker"
 DOCKER=""
 if command -v docker >/dev/null 2>&1; then
-    if docker ps -q >/dev/null 2>&1; then DOCKER="docker"
-    elif [ -n "$SUDO" ] && $SUDO docker ps -q >/dev/null 2>&1; then DOCKER="$SUDO docker"; fi
-    [ -z "$DOCKER" ] && out note docker "could not list containers as $ME (not in the docker group); a telepy-tunnel container, if any, is left running"
+    if lim 15 docker ps -q >/dev/null 2>&1; then DOCKER="docker"
+    elif [ -n "$SUDO" ] && lim 15 $SUDO docker ps -q >/dev/null 2>&1; then DOCKER="$SUDO docker"; fi
+    [ -z "$DOCKER" ] && out note docker "could not list containers as $ME (not in the docker group, or the container engine did not answer within 15 s); a telepy-tunnel container, if any, is left running"
 fi
 if [ -n "$DOCKER" ]; then
-    for c in $($DOCKER ps -aq 2>/dev/null); do
+    for c in $(lim 15 $DOCKER ps -aq 2>/dev/null); do
         # Old containers carry the number in the env; new ones mount the tunnel's key at /id_rsa.
-        if ! $DOCKER inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -Eq "^SSH_TUNNEL_PORT=$T_PORT$"; then
-            mounted=$($DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' "$c" 2>/dev/null)
+        if ! lim 10 $DOCKER inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -Eq "^SSH_TUNNEL_PORT=$T_PORT$"; then
+            mounted=$(lim 10 $DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' "$c" 2>/dev/null)
             [ -n "$mounted" ] && key_matches "$mounted" || continue
         fi
-        cname=$($DOCKER inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's:^/::')
+        cname=$(lim 10 $DOCKER inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's:^/::')
         out found docker "$cname"
         later "$DOCKER rm -f $c >/dev/null 2>&1" stop "docker $cname"
-        compose=$($DOCKER inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$c" 2>/dev/null)
+        compose=$(lim 10 $DOCKER inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$c" 2>/dev/null)
         for cf in $(printf '%s' "$compose" | tr ',' ' '); do
             if has_port "$cf"; then rmf "$cf" file; fi
         done
@@ -509,6 +551,7 @@ fi
 
 # --- files of the one-command install ------------------------------------------------------------------
 # A rename keeps the key: the new service logs in with it.
+step "the one-command install's files"
 SSH_DIR="$HOME/.ssh"
 if [ "$T_MODE" != relabel ]; then
     for k in "$SSH_DIR"/telepy_tunnel_*; do
@@ -572,6 +615,7 @@ if [ -n "$T_INSTALL" ] && [ -f "$REC" ]; then
 fi
 # known_hosts: the ones the removed parts used, plus (delete) the join's. Kept while anything else still uses one:
 # a unit, a plist, a loop, or this computer's own ssh config (a device is often someone's laptop too).
+step "known_hosts files"
 KHS="$OLD_KH"
 if [ "$T_MODE" = delete ]; then
     for k in "$SSH_DIR/telepy_known_hosts" ${T_INSTALL:+"$SSH_DIR/telepy-$T_INSTALL.known_hosts"}; do

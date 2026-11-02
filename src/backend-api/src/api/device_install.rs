@@ -46,8 +46,16 @@ async fn show(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id):
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/survey", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "Surveyed; the fresh view", body = super::schemas::DeviceInstall), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy", body = super::schemas::ErrorBody), (status = 502, description = "code = survey_failed", body = super::schemas::ErrorBody)))]
-async fn survey(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+async fn survey(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tunnel = load(&state, user.id, id).await?;
+    let st = state.clone();
+    // 腳本最多跑 90 s：在自己的 task 裡做完並記下，前面的代理先放棄也一樣（見 `super::detached`）。
+    // The script may take up to 90 s: finished and recorded in its own task even when a proxy gives up first.
+    super::detached::run(&state, user.id, &headers, "device_install.survey", Some(id), async move { survey_now(&st, tunnel).await }).await
+}
+
+async fn survey_now(state: &AppState, tunnel: db::tunnels::Tunnel) -> ApiResult<Json<Value>> {
+    let state = state.clone();
     if device_install::busy(&tunnel) {
         return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being renamed right now."));
     }
@@ -61,9 +69,15 @@ async fn survey(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/rename", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The rename ran (see ok / steps / code); the view after it", body = super::schemas::DeviceInstallRename), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
-async fn rename(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+async fn rename(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tunnel = load(&state, user.id, id).await?;
-    let report = match device_install::rename(&state, &tunnel, &user.username).await {
+    let st = state.clone();
+    super::detached::run(&state, user.id, &headers, "device_install.rename", Some(id), async move { rename_now(&st, tunnel, user.username).await }).await
+}
+
+async fn rename_now(state: &AppState, tunnel: db::tunnels::Tunnel, by: String) -> ApiResult<Json<Value>> {
+    let state = state.clone();
+    let report = match device_install::rename(&state, &tunnel, &by).await {
         Ok(r) => r,
         Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being renamed right now.")),
         Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
@@ -74,9 +88,15 @@ async fn rename(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/device-install/tidy", tag = "Device install", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The removal of the extra copies ran (see ok / steps / code); the view after it", body = super::schemas::DeviceInstallRename), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline | busy | no_accounts", body = super::schemas::ErrorBody)))]
-async fn tidy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+async fn tidy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let tunnel = load(&state, user.id, id).await?;
-    let report = match device_install::tidy(&state, &tunnel, &user.username).await {
+    let st = state.clone();
+    super::detached::run(&state, user.id, &headers, "device_install.tidy", Some(id), async move { tidy_now(&st, tunnel, user.username).await }).await
+}
+
+async fn tidy_now(state: &AppState, tunnel: db::tunnels::Tunnel, by: String) -> ApiResult<Json<Value>> {
+    let state = state.clone();
+    let report = match device_install::tidy(&state, &tunnel, &by).await {
         Ok(r) => r,
         Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being changed right now.")),
         Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),
@@ -99,7 +119,13 @@ async fn switch(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     };
     let base = crate::oauth::issuer(state.config.public_base().as_deref(), &headers);
     let sw = device_install::Switch { transport, ws_url: super::join::ws_url(&base), carrier_url: format!("{base}/api/join/carrier") };
-    let report = match device_install::switch_transport(&state, &tunnel, &user.username, sw).await {
+    let st = state.clone();
+    super::detached::run(&state, user.id, &headers, "device_install.switch", Some(id), async move { switch_now(&st, tunnel, user.username, sw).await }).await
+}
+
+async fn switch_now(state: &AppState, tunnel: db::tunnels::Tunnel, by: String, sw: device_install::Switch) -> ApiResult<Json<Value>> {
+    let state = state.clone();
+    let report = match device_install::switch_transport(&state, &tunnel, &by, sw).await {
         Ok(r) => r,
         Err(RenameError::Busy) => return Err(coded(StatusCode::CONFLICT, "busy", "The device's service is being changed right now.")),
         Err(RenameError::Offline) => return Err(coded(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name))),

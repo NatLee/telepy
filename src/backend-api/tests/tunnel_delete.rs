@@ -341,3 +341,103 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
     let leftovers: Vec<_> = std::fs::read_dir(home.join("tmp")).unwrap().flatten().map(|e| e.file_name()).collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+/// 等某一則通知（最多 `secs` 秒）。/ Wait for one notification (at most `secs` seconds).
+async fn wait_for(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, secs: u64, want: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let msg = tokio::time::timeout(left, rx.recv()).await.expect("the notification came in time").expect("hub open");
+        let v: Value = serde_json::from_str(&msg).unwrap();
+        if want(&v["message"]) {
+            return v["message"].clone();
+        }
+    }
+}
+
+/// 裝置上有個程式一直不回（容器引擎還在啟動之類），前面的代理又先放棄了請求：刪除照樣在伺服器上做完並通知；
+/// 再刪一次是 409；叫它「跳過裝置」後不再等裝置，Telepy 自己的部分做完。
+/// A program on the device never answers (a container engine still starting) and a proxy gave up on the request first:
+/// the delete still finishes on the server and says so; a second delete is a 409; "skip the device" ends the wait and
+/// Telepy's own part completes.
+#[tokio::test]
+async fn a_cut_delete_finishes_on_the_server_and_can_skip_a_stuck_device() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    // `docker` 在帳號 PATH 的最前面，而且永遠不回。/ A `docker` first in the account's PATH that never answers.
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    std::fs::write(home.join("bin/docker"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    std::fs::set_permissions(home.join("bin/docker"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    let id = dev.tunnel_id;
+
+    let mut rx = lab.app.state.hub.subscribe_user(alice.id);
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/reverse/server/keys/{id}?remove_device_keys=true&remove_service=true"))
+        .header("authorization", format!("Bearer {}", alice.token))
+        .header("x-telepy-request", "cut-1")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    // 兩秒後放棄這個請求（像代理回 504）：handler 的 future 被丟掉，工作不能跟著停。
+    // Give up on the request after two seconds (like a proxy's 504): the handler's future is dropped, the work must go on.
+    assert!(tokio::time::timeout(Duration::from_secs(2), lab.app.send(req)).await.is_err(), "the device step is still running");
+    wait_for(&mut rx, 10, |m| m["action"] == "TUNNEL-DELETE-PROGRESS" && m["step"] == "service" && m["state"] == "active").await;
+
+    let again = lab.app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await;
+    assert_eq!((again.status, again.json["code"].as_str()), (StatusCode::CONFLICT, Some("deleting")), "{}", again.text);
+    let rename = lab.app.post(&format!("/api/reverse/server/{id}/device-install/rename"), Some(&alice.token), json!({})).await;
+    assert_eq!(rename.status, StatusCode::CONFLICT, "no rename while it is being deleted: {}", rename.text);
+
+    let skipped_at = tokio::time::Instant::now();
+    let skip = lab.app.post(&format!("/api/reverse/server/{id}/delete/skip-device"), Some(&alice.token), json!({})).await;
+    assert_eq!(skip.status, StatusCode::OK, "{}", skip.text);
+    let done = wait_for(&mut rx, 30, |m| m["action"] == "REQUEST-FINISHED" && m["request"] == "cut-1").await;
+    assert!(skipped_at.elapsed() < Duration::from_secs(8), "skipping does not wait for the device: {:?}", skipped_at.elapsed());
+    assert_eq!((done["what"].as_str(), done["tunnel_id"].as_i64(), done["status"].as_i64()), (Some("tunnel.delete"), Some(id), Some(200)), "{done}");
+    let body = &done["body"];
+    assert_eq!(body["deleted"], true, "{body}");
+    let steps = ended(body);
+    assert_eq!(
+        steps,
+        pairs(&[("service", "skipped"), ("keys", "skipped"), ("stop", "skipped"), ("watch", "skipped"), ("telepy", "done"), ("disconnect", "done")]),
+        "{}",
+        body["steps"]
+    );
+    assert!(body["steps"].as_array().unwrap()[..4].iter().all(|s| s["reason"] == "forced"), "{}", body["steps"]);
+    assert!(db::tunnels::by_id(&lab.app.state.db, id).await.unwrap().is_none(), "Telepy's part ran: the tunnel is gone");
+    let late = lab.app.post(&format!("/api/reverse/server/{id}/delete/skip-device"), Some(&alice.token), json!({})).await;
+    assert_eq!(late.status, StatusCode::NOT_FOUND, "{}", late.text);
+}
+
+/// 盤點腳本卡在某一部分時，錯誤說出是哪一部分；裝置上一直不回的程式最多等它 15 秒，腳本照樣做完。
+/// A survey never hangs on one stuck program (each outside call has a time limit) and still finishes.
+#[tokio::test]
+async fn a_survey_finishes_although_a_program_on_the_device_never_answers() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    // 不回的 docker，加上一個會讀 stdin 讀到 EOF 為止的 crontab。/ A docker that never answers and a crontab reading stdin.
+    std::fs::write(home.join("bin/docker"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    std::fs::write(home.join("bin/crontab"), "#!/bin/sh\ncat\n").unwrap();
+    for f in ["docker", "crontab"] {
+        std::fs::set_permissions(home.join("bin").join(f), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    }
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
+    lab.username(&alice, &dev, "pi").await;
+    let started = tokio::time::Instant::now();
+    let r = lab.app.post(&format!("/api/reverse/server/{}/device-install/survey", dev.tunnel_id), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(started.elapsed() < Duration::from_secs(45), "{:?}", started.elapsed());
+    assert!(r.json["survey_error"].is_null(), "{}", r.json);
+    let row = db::device_install::get(&lab.app.state.db, dev.tunnel_id).await.unwrap().expect("recorded");
+    let survey = row.survey.unwrap_or_default();
+    assert!(survey.contains("did not answer within 15 s"), "the slow engine is reported: {survey}");
+}

@@ -474,6 +474,8 @@ pub struct CleanupOptions {
     pub device_keys: bool,
     /// 服務金鑰（移掉之後 Telepy 就登不進這些帳號了）。/ The service key (Telepy can no longer log in).
     pub service_key: bool,
+    /// false = 只清 Telepy 的紀錄、不連裝置（刪除時選了跳過裝置）。/ false = only Telepy's rows, the device is not touched.
+    pub device: bool,
 }
 
 /// 一個帳號的清理結果。/ Cleanup result of one account.
@@ -560,8 +562,8 @@ pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel, opts: CleanupOptio
             work.entry(a.clone()).or_default().insert(own.clone());
         }
     }
-    if !online || work.is_empty() {
-        let keys_left = if opts.device_keys && online { 0 } else { distinct(&mut installed.iter()) };
+    if !online || !opts.device || work.is_empty() {
+        let keys_left = if opts.device_keys && online && opts.device { 0 } else { distinct(&mut installed.iter()) };
         return Cleanup { online, accounts: Vec::new(), keys_left };
     }
     let mut service = shared_bares(&state.db).await.unwrap_or_default();

@@ -179,6 +179,7 @@ pub const ROUTES: &[RouteRule] = {
         rule("POST", "/api/reverse/server/keys", MANAGE, Unrestricted),
         rule("PATCH|PUT|DELETE", "/api/reverse/server/keys/{t}", MANAGE, Path),
         rule("GET", "/api/reverse/server/{t}/delete-check", MANAGE, Path),
+        rule("POST", "/api/reverse/server/{t}/delete/skip-device", MANAGE, Path),
         // 裝置上的服務：盤點、改名（刪隧道本來就能移除它，所以同一個 scope）。/ The device's service: survey, rename.
         rule("POST", "/api/reverse/server/{t}/device-install/survey|rename|tidy|switch", MANAGE, Path),
         rule("PUT", "/api/reverse/server/{t}/labels", MANAGE, Path),

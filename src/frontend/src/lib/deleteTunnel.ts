@@ -15,7 +15,8 @@ export type DeleteStepId = (typeof DELETE_STEPS)[number];
 
 /** `TUNNEL-DELETE-PROGRESS` / 回應的 `steps` 裡的一步。/ One step of the progress notification / the report's `steps`. */
 export interface DeleteStepEvent extends StepEvent<DeleteStepId> {
-    reason?: "off" | "offline" | "not_stopped" | "not_found" | "still_connected" | "came_back" | string;
+    /** `forced` = 刪除時選了「跳過裝置」。/ `forced` = "skip the device" was chosen during the delete. */
+    reason?: "off" | "offline" | "forced" | "not_stopped" | "not_found" | "still_connected" | "came_back" | string;
     found?: number;
     errors?: number;
     removed?: number;
@@ -65,8 +66,8 @@ export function stepLine(view: DeleteStepView, ctx: { keys: number; lanHosts: nu
     const e = view.event;
     const s = view.state;
     if (s === "skipped") {
-        const why = view.reason === "offline" ? "Offline" : view.reason === "not_stopped" ? "NotStopped" : "Off";
-        if (view.id === "keys") return { key: "deleteTunnel.line.keysOffline", vars: { count: e?.keys_left ?? ctx.keys } };
+        const why = view.reason === "offline" ? "Offline" : view.reason === "not_stopped" ? "NotStopped" : view.reason === "forced" ? "Forced" : "Off";
+        if (view.id === "keys") return { key: view.reason === "forced" ? "deleteTunnel.line.keysForced" : "deleteTunnel.line.keysOffline", vars: { count: e?.keys_left ?? ctx.keys } };
         return { key: `deleteTunnel.line.${view.id}${why}` as TranslationKey };
     }
     if (s === "waiting" || s === "active" || !e || (s === "failed" && e.state !== "failed")) {
@@ -103,6 +104,8 @@ export function stepLine(view: DeleteStepView, ctx: { keys: number; lanHosts: nu
 export function deleteVerdict(views: readonly DeleteStepView[]): { tone: "tip" | "warning" | "danger"; key: TranslationKey } {
     const worst = worstEnding(views);
     const by = (id: DeleteStepId) => views.find((v) => v.id === id);
+    // 跳過了裝置：Telepy 這邊刪乾淨了，裝置上的東西沒人看過。/ The device was skipped: nobody looked at what is left there.
+    if (views.some((v) => v.reason === "forced")) return { tone: "warning", key: "deleteTunnel.verdict.forced" };
     if (worst === "failed" || worst === "warn") {
         const watch = by("watch");
         if (watch?.state === "failed") return { tone: "danger", key: "deleteTunnel.verdict.cameBack" };
@@ -115,6 +118,11 @@ export function deleteVerdict(views: readonly DeleteStepView[]): { tone: "tip" |
 }
 
 /** 圖上的四樣東西。/ The diagram's four parts. */
+/** 正在等裝置的那步（可以叫它跳過裝置）。/ A device step is running now (the delete can be told to skip the device). */
+export function waitingOnDevice(views: readonly DeleteStepView[]): boolean {
+    return views.some((v) => v.state === "active" && (v.id === "service" || v.id === "keys" || v.id === "stop" || v.id === "watch"));
+}
+
 export interface DeleteFlowStates {
     /** 裝置上跑隧道的服務。/ The tunnel service on the device. */
     service: StepState;

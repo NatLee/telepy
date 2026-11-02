@@ -13,6 +13,7 @@ pub mod command_rules;
 pub mod config;
 pub mod datasets;
 pub mod db;
+pub mod delete_runs;
 pub mod desktop;
 pub mod device_facts;
 pub mod device_info;

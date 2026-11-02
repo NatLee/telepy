@@ -9,6 +9,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
+import { formatApiError } from "@/lib/formatApiError";
+import { LongRequestLost, longFetch } from "@/lib/longFetch";
 import { useI18n } from "@/lib/i18n";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
@@ -115,6 +117,11 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
     // 這次刪除收到的進度(收到的時間記在 `at`,倒數用)與開始的時間。/ Progress received for this delete, and when it started.
     const [events, setEvents] = useState<DeleteStepEvent[]>([]);
     const [startedAt, setStartedAt] = useState<number | null>(null);
+    // 前面的代理切斷了請求（狀態碼；0 = 連線斷掉）：伺服器照樣做完，這裡改等它的通知。
+    // A proxy in front cut the request (status; 0 = the connection dropped): the server still finishes, we wait for it.
+    const [cut, setCut] = useState<number | null>(null);
+    // 叫刪除不再等裝置了。/ The delete was told to stop waiting for the device.
+    const [skipping, setSkipping] = useState(false);
 
     useEffect(() => {
         if (!isOpen || tunnelId === null) return;
@@ -163,6 +170,8 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         setDeleting(true);
         setError(null);
         setEvents([]);
+        setCut(null);
+        setSkipping(false);
         setStartedAt(Date.now());
         // 裝置離線時金鑰動不了,不要送出做不到的選項。/ Offline: don't ask for what cannot be done.
         const qs = new URLSearchParams({
@@ -173,20 +182,32 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
             revoke_grant_ids: data.grants.filter((g) => choiceFor(g) === "revoke").map((g) => g.id).join(","),
         });
         try {
-            const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}?${qs.toString()}`, { method: "DELETE" });
-            const body = await readJson<DeleteReport>(res);
-            if (res.ok && body) {
-                setReport(body);
+            const r = await longFetch<DeleteReport>(`/api/reverse/server/keys/${tunnelId}?${qs.toString()}`, { method: "DELETE" }, { onCut: setCut });
+            if (r.ok && r.body) {
+                setReport(r.body);
                 onDeleted();
             } else {
-                setError(responseError(res, body, t("tunnels.deleteFailed")));
+                setError(formatApiError(r.body, "") || `${t("tunnels.deleteFailed")} (${r.status})`);
             }
         } catch (e) {
-            setError(e instanceof Error ? e.message : t("tunnels.deleteFailed"));
+            setError(e instanceof LongRequestLost ? t("api.cutNoResult") : e instanceof Error ? e.message : t("tunnels.deleteFailed"));
         } finally {
             setDeleting(false);
         }
     }, [tunnelId, data, options, choiceFor, onDeleted, t]);
+
+    /** 不再等裝置（強制刪除）：還沒做完的裝置步驟結束成「跳過」，Telepy 自己的部分照做。/ Stop waiting for the device. */
+    const skipDevice = useCallback(async () => {
+        if (tunnelId === null || !deleting || skipping) return;
+        setSkipping(true);
+        try {
+            const res = await apiFetch(`/api/reverse/server/${tunnelId}/delete/skip-device`, { method: "POST" });
+            // 409 = 刪除剛好做完了；其他的錯誤就讓使用者再按一次。/ 409 = it just finished; on other errors let them try again.
+            if (!res.ok && res.status !== 409) setSkipping(false);
+        } catch {
+            setSkipping(false);
+        }
+    }, [tunnelId, deleting, skipping]);
 
     const setOption = useCallback(<K extends keyof DeleteOptions>(key: K, value: DeleteOptions[K]) => setOptions((o) => ({ ...o, [key]: value })), []);
 
@@ -204,6 +225,9 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         submit,
         events,
         startedAt,
+        cut,
+        skipping,
+        skipDevice,
         /** 整件事在哪:沒開始 / 跑著 / 做完 / 請求失敗。/ Where the run is. */
         phase: (report ? "done" : deleting ? "running" : error && startedAt ? "failed" : "idle") as RunPhase,
     };

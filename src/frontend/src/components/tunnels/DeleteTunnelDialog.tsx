@@ -12,7 +12,7 @@
  * commands that need root are listed on their own.
  */
 import React from "react";
-import { Bot, Check, ChevronDown, CircleHelp, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleHelp, FastForward, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { activeNumber } from "@/lib/progressSteps";
 import type { SpotState } from "@/lib/flow";
 import type { StepState } from "@/lib/progressSteps";
-import { deleteSteps, deleteVerdict, flowStates, stepLine, type DeleteStepView } from "@/lib/deleteTunnel";
+import { deleteSteps, deleteVerdict, flowStates, stepLine, waitingOnDevice, type DeleteStepView } from "@/lib/deleteTunnel";
 import { useDeleteTunnel, type DeleteCheck, type DeleteCheckGrant, type DeleteOptions, type DeleteReport, type GrantChoice, type ServiceItem, type ServiceRemoval } from "@/hooks/useDeleteTunnel";
 import { DeleteImpactMap } from "./DeleteImpactMap";
 
@@ -72,6 +72,13 @@ export function DeleteTunnelDialog({ isOpen, tunnelId, name, onClose, onDeleted 
                                 <Elapsed since={d.startedAt} />
                             </span>
                         )}
+                        {running && (waitingOnDevice(views) || d.skipping) && (
+                            // 裝置卡住時不必等滿：Telepy 這邊照樣刪乾淨。/ No need to wait out a stuck device: Telepy's part still runs.
+                            <Button type="button" variant="outline" onClick={d.skipDevice} disabled={d.skipping} title={t("deleteTunnel.skipDeviceHint")}>
+                                {d.skipping ? <Loader2 className="animate-spin" /> : <FastForward />}
+                                {d.skipping ? t("deleteTunnel.skippingDevice") : t("deleteTunnel.skipDevice")}
+                            </Button>
+                        )}
                         <Button type="button" variant="outline" onClick={onClose} disabled={running}>
                             {t("common.cancel")}
                         </Button>
@@ -93,6 +100,11 @@ export function DeleteTunnelDialog({ isOpen, tunnelId, name, onClose, onDeleted 
                 )
             ) : (
                 <div className="min-h-40" aria-hidden />
+            )}
+            {running && d.cut !== null && (
+                <Callout tone="info" className="mt-4" title={t("deleteTunnel.cutTitle")}>
+                    {d.cut > 0 ? t("deleteTunnel.cutBody", { status: d.cut }) : t("deleteTunnel.cutBodyDropped")}
+                </Callout>
             )}
             {!report && d.error && <Callout tone="danger" className="mt-4">{d.error}</Callout>}
         </Modal>
