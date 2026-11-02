@@ -23,6 +23,13 @@ base64 = "0.22"
 # 本機時區的時間（`api activity`）。/ Local times for `api activity`.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
+# Tab 補完：shell 每按一次 Tab 就問 telepy（`TELEPY_COMPLETE=<shell> telepy -- …`），所以隧道名稱、帳號、標籤也補得出來。
+# Tab completion: the shell asks telepy on every Tab (`TELEPY_COMPLETE=<shell> telepy -- …`), so tunnel names, accounts and labels complete too.
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
+# 顏色：樣式（clap 的說明也用它）與「這個終端機能不能上色」（`TERM`、`NO_COLOR`、`CLICOLOR`、Windows 主控台的 ANSI 模式）。
+# Colour: styles (clap's help uses them too) and whether this terminal can show colour (`TERM`, `NO_COLOR`, `CLICOLOR`, the Windows console's ANSI mode).
+anstyle = "1"
+anstyle-query = "1"
 # `telepy update`：發行檔是 .tar.gz（macOS / Linux）或 .zip（Windows）；兩種都在每個平台上編，解壓縮才測得到。
 # `telepy update`: release archives are .tar.gz (macOS / Linux) or .zip (Windows); both are built everywhere so both get tested.
 flate2 = "1"

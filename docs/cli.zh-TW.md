@@ -106,6 +106,39 @@ telepy update --to v2.9.0    # 指定某個發行版（也能用來退回舊版�
 
 `telepy doctor` 會顯示版本，以及有沒有新版（只是警告，不算失敗）。自己建置的 telepy 不會主動檢查。
 
+### Tab 補完
+
+`telepy completions` 會告訴你該在 shell 的設定檔加哪一行。以 zsh 為例：
+
+```sh
+eval "$(telepy completions zsh)"     # 加在 ~/.zshrc
+```
+
+| Shell | 設定檔 | 要加的那一行 |
+| --- | --- | --- |
+| bash | `~/.bashrc`（macOS：`~/.bash_profile`） | `eval "$(telepy completions bash)"` |
+| zsh | `~/.zshrc` | `eval "$(telepy completions zsh)"` |
+| fish | `~/.config/fish/config.fish` | `telepy completions fish \| source` |
+| PowerShell | `$PROFILE` | `telepy completions powershell \| Out-String \| Invoke-Expression` |
+| elvish | `~/.config/elvish/rc.elv` | `eval (telepy completions elvish \| slurp)` |
+
+除了指令和選項，Tab 也補得出你的通道名稱、帳號（打 `box@` 再按 Tab）、`--label`、`--group`、`telepy run` 的工具箱片段，以及 `cp` / `scp` 裝置那一邊（`box:`）。每按一次 Tab 都會問 telepy，它從設定目錄裡的小快取回答，最多每 30 秒向伺服器更新一次，而且最多只等兩秒。伺服器連不上時只會慢那一下，之後照樣用快取裡的名字。登出時快取會一起刪掉。Tab 補得出名字，但到底想重開哪一台，還是得你自己決定。
+
+舊的 shell：bash 那一行在 macOS 內建的 bash 3.2 也能用（那裡的 `source <(…)` 什麼都不做，所以用 `eval`）。如果 `~/.zshrc` 沒有載入 zsh 的補完系統，zsh 那一行會幫你載入。純 `sh`、`dash` 和 BusyBox 的 `ash`（OpenWrt）沒有可程式化的補完，所以沒什麼可加的，Tab 照舊只補檔名。PowerShell 要 5.0 以上。
+
+### 顏色
+
+在終端機裡，telepy 會替幾樣東西上色：`ls` 和 `status` 的通道狀態（上線是綠色、降級是黃色、離線是淡色）、`doctor` 的 ✓ / ✗ / !、`exec` 同時跑好幾台時每台的前綴和結束碼、`api activity` 的 HTTP 狀態碼，還有 `--help`。只用 16 個基本色加上粗體和淡色，所以會跟著你終端機自己的配色走，老終端機也看得懂。裝置自己印出來的東西（`exec` 的輸出）原樣轉過去，不會被動到。
+
+以下情況不上色：
+
+- 輸出導到管線或檔案（`telepy ls | grep …` 拿到的是純文字）；
+- 設了 `NO_COLOR`，或 `CLICOLOR=0`；
+- `TERM` 是 `dumb`，或根本沒設（cron、某些服務）；
+- Windows 主控台開不了 ANSI 模式（Windows 10 以前）：這時印的是純文字，不會是一堆控制碼。
+
+`--color always`（或 `CLICOLOR_FORCE=1`）連管線也上色，例如搭配 `less -R`；`--color never` 只關掉這一次。指令上的選項優先於環境變數。
+
 ## 登入
 
 ```sh
@@ -306,7 +339,7 @@ telepy browse close "$ID"
 
 ## 指令速查
 
-每個指令也都接受 `--server <url>` 和 `--token tpt_…`（或 `TELEPY_URL`、`TELEPY_TOKEN`），用來指定這一次要用哪台伺服器、哪個憑證。
+每個指令也都接受 `--server <url>` 和 `--token tpt_…`（或 `TELEPY_URL`、`TELEPY_TOKEN`），用來指定這一次要用哪台伺服器、哪個憑證；顏色則用 `--color auto|always|never` 選。
 
 <details>
 <summary>所有指令、用途與需要的 scope</summary>
@@ -341,6 +374,7 @@ telepy browse close "$ID"
 | `telepy api activity` | 你的 token 與 CLI 登入發出的呼叫（見[呼叫紀錄](#呼叫紀錄)） | — |
 | `telepy doctor` | 檢查伺服器、登入、scope、到期日、本機的 ssh 工具與版本 | — |
 | `telepy update` | 更新 telepy；`--check`、`--to <version>` | — |
+| `telepy completions [shell]` | 印出 bash、zsh、fish、powershell 或 elvish 的 Tab 補完腳本；不給 shell 就告訴你該加哪一行、加在哪 | — |
 
 </details>
 
@@ -487,7 +521,9 @@ telepy api activity --all --user bob       # 管理員：所有人的，或某�
 | `TELEPY_RELEASES_URL` | 發行版頁面的鏡像，給更新檢查與 `telepy update` 用 |
 | `TELEPY_RELEASE_KEYS` | 改信任這些發行公鑰，取代內建的（給重新簽名的鏡像用） |
 | `TELEPY_NO_MASCOT=1` | `login` 與 `doctor` 旁邊不顯示 Tapi |
-| `NO_COLOR` | Tapi 不上色 |
+| `NO_COLOR` | 不上色，Tapi 也是（`--color` 優先） |
+| `CLICOLOR=0` | 一樣不上色 |
+| `CLICOLOR_FORCE=1` | 導到管線或檔案也上色，同 `--color always` |
 | `CI` | 有設定時不檢查新版 |
 | `TELEPY_VERSION` | 建置時用：要標進執行檔的版本 |
 

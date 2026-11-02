@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { firstOpenStep } from "./stepTabs.ts";
 import {
     CLI_COMMANDS,
+    COMPLETION_SETUP,
+    defaultShell,
     CLI_TOPICS,
     archesFor,
     archiveName,
@@ -171,6 +173,18 @@ test("every command the page lists is a real subcommand", () => {
     // 隱藏的指令不列。/ Hidden commands are not listed.
     const hidden = [...block.matchAll(/#\[command\(hide = true\)\]\s*\n\s*([A-Z][a-z]+)/g)].map((m) => m[1].toLowerCase());
     assert.deepEqual(listed.sort(), variants.filter((v) => !hidden.includes(v)).sort());
+});
+
+test("the Tab completion setup is what the CLI prints", () => {
+    const rs = readFileSync(new URL("../../../cli/src/complete.rs", import.meta.url), "utf8");
+    const block = rs.slice(rs.indexOf("pub const SETUP"), rs.indexOf("];", rs.indexOf("pub const SETUP")));
+    const rows = [...block.matchAll(/Setup \{ shell: "([^"]+)", file: "([^"]+)", line: (?:r#"(.*?)"#|"(.*?)") \}/g)].map((m) => ({ shell: m[1], file: m[2], line: m[3] ?? m[4] }));
+    assert.deepEqual(rows, COMPLETION_SETUP.map((s) => ({ ...s })));
+    const lib = readFileSync(new URL("../../../cli/src/lib.rs", import.meta.url), "utf8");
+    assert.match(lib, /value_parser = \["bash", "zsh", "fish", "powershell", "elvish"\]/, "the same shells");
+    assert.equal(defaultShell("macos"), "zsh");
+    assert.equal(defaultShell("linux"), "bash");
+    assert.equal(defaultShell("windows"), "powershell");
 });
 
 test("getting-started steps", () => {

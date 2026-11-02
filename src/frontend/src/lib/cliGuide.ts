@@ -312,6 +312,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "api tokens | activity [--follow]", key: "api", needs: [] },
     { usage: "doctor", key: "doctor", needs: [] },
     { usage: "update [--check] [--to <version>]", key: "update", needs: [] },
+    { usage: "completions [bash|zsh|fish|powershell|elvish]", key: "completions", needs: [] },
 ];
 
 /**
@@ -354,7 +355,39 @@ export const CLI_ENV: readonly CliEnvVar[] = [
     { name: "TELEPY_NO_UPDATE_CHECK", key: "noUpdateCheck" },
     { name: "TELEPY_RELEASES_URL", key: "releasesUrl" },
     { name: "NO_COLOR", key: "noColor" },
+    { name: "CLICOLOR_FORCE", key: "clicolorForce" },
 ];
+
+// ---------------------------------------------------------------- Tab completion
+
+export type CompletionShell = "bash" | "zsh" | "fish" | "powershell" | "elvish";
+
+export interface CompletionSetup {
+    shell: CompletionShell;
+    /** 設定檔（照 CLI 印的原樣）。/ The startup file, as the CLI prints it. */
+    file: string;
+    /** 要加進去的那一行。/ The line to add. */
+    line: string;
+}
+
+/**
+ * `telepy completions` 印的設定：跟 `src/cli/src/complete.rs` 的 `SETUP` 一字不差（測試比對）。
+ * bash 用 `eval "$(…)"` 而不是 `source <(…)`：macOS 內建的 bash 3.2 讀不到後者。
+ * What `telepy completions` prints, identical to `SETUP` in `src/cli/src/complete.rs` (the test compares them).
+ * bash gets `eval "$(…)"` rather than `source <(…)`, which macOS's bash 3.2 silently ignores.
+ */
+export const COMPLETION_SETUP: readonly CompletionSetup[] = [
+    { shell: "bash", file: "~/.bashrc (macOS: ~/.bash_profile)", line: 'eval "$(telepy completions bash)"' },
+    { shell: "zsh", file: "~/.zshrc", line: 'eval "$(telepy completions zsh)"' },
+    { shell: "fish", file: "~/.config/fish/config.fish", line: "telepy completions fish | source" },
+    { shell: "powershell", file: "$PROFILE", line: "telepy completions powershell | Out-String | Invoke-Expression" },
+    { shell: "elvish", file: "~/.config/elvish/rc.elv", line: "eval (telepy completions elvish | slurp)" },
+];
+
+/** 每個系統預設的 shell：macOS = zsh（10.15 起）、Linux = bash、Windows = PowerShell。/ Each system's default shell. */
+export function defaultShell(os: CliOs): CompletionShell {
+    return os === "macos" ? "zsh" : os === "windows" ? "powershell" : "bash";
+}
 
 // ---------------------------------------------------------------- the getting-started steps
 

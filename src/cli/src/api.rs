@@ -100,6 +100,11 @@ impl Api {
         format!("{}{path}", self.server)
     }
 
+    /// 用的是 `telepy login` 存的登入（不是 `--token` / `TELEPY_TOKEN`）。/ Using the sign-in `telepy login` stored (not `--token` / `TELEPY_TOKEN`).
+    pub fn is_stored(&self) -> bool {
+        self.persist
+    }
+
     pub fn is_token(&self) -> bool {
         matches!(*self.auth.lock().unwrap(), Auth::Token(_))
     }
@@ -154,6 +159,20 @@ impl Api {
 
     pub fn get(&self, path: &str) -> Result<Value> {
         self.json(Method::GET, path, None)
+    }
+
+    /// 給 Tab 補完的快速 GET：有時限、不重試，也從不換 OAuth token（補完的程序隨時會被 shell 丟掉，
+    /// 換到一半的 refresh token 會讓登入失效）。token 該換了就直接失敗，交給下一個一般指令去換。
+    /// A quick GET for Tab completion: time-limited, no retry, and never renews an OAuth token (the shell may drop the
+    /// process at any moment, and a refresh cut short would lose the rotated token). A token due for renewal fails here;
+    /// the next ordinary command renews it.
+    pub fn get_quick(&self, path: &str, timeout: Duration) -> Result<Value> {
+        let bearer = match &*self.auth.lock().unwrap() {
+            Auth::Token(t) => t.clone(),
+            Auth::Oauth { secret, .. } if secret.expires_at.is_some_and(|e| e - 60 <= now()) => bail!("the sign-in needs renewing"),
+            Auth::Oauth { secret, .. } => secret.access.clone(),
+        };
+        read(self.http.get(self.url(path)).bearer_auth(bearer).timeout(timeout).send()?)
     }
 }
 

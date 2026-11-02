@@ -106,6 +106,39 @@ Release builds also look for a newer release on their own:
 
 `telepy doctor` shows the version and whether a newer one is out (a warning, never a failure). A telepy you built yourself never checks on its own.
 
+### Tab completion
+
+`telepy completions` tells you which line to add to your shell's startup file. For zsh:
+
+```sh
+eval "$(telepy completions zsh)"     # in ~/.zshrc
+```
+
+| Shell | File | Line |
+| --- | --- | --- |
+| bash | `~/.bashrc` (macOS: `~/.bash_profile`) | `eval "$(telepy completions bash)"` |
+| zsh | `~/.zshrc` | `eval "$(telepy completions zsh)"` |
+| fish | `~/.config/fish/config.fish` | `telepy completions fish \| source` |
+| PowerShell | `$PROFILE` | `telepy completions powershell \| Out-String \| Invoke-Expression` |
+| elvish | `~/.config/elvish/rc.elv` | `eval (telepy completions elvish \| slurp)` |
+
+Besides commands and flags, Tab completes your tunnel names, accounts (`box@` then Tab), `--label`, `--group`, toolbox snippets for `telepy run`, and the device side of `cp` / `scp` (`box:`). Each Tab asks telepy, which answers from a small cache in the config directory and refreshes it from the server at most every 30 seconds, waiting two seconds at most. An unreachable server costs one slow Tab; after that the cached names keep coming. Signing out deletes the cache. Tab completes names; which device you meant to reboot is still up to you.
+
+Old shells: the bash line works in the bash 3.2 that macOS ships (`source <(…)` silently does nothing there, hence `eval`). If your `~/.zshrc` never loads zsh's completion system, the zsh line loads it. Plain `sh`, `dash` and BusyBox `ash` (OpenWrt) have no programmable completion, so there is nothing to add; Tab completes file names there as before. PowerShell needs 5.0 or later.
+
+### Colours
+
+In a terminal telepy colours a few things: tunnel health in `ls` and `status` (online green, degraded yellow, offline dimmed), the ✓ / ✗ / ! of `doctor`, each device's prefix and exit code when `exec` runs on several, HTTP status codes in `api activity`, and `--help`. It sticks to the 16 basic colours plus bold and dim, so it follows your terminal's own palette and old terminals understand it. What the device prints (the output of `exec`) is passed through untouched.
+
+No colour when:
+
+- the output goes to a pipe or a file (`telepy ls | grep …` gets plain text);
+- `NO_COLOR` is set, or `CLICOLOR=0`;
+- `TERM` is `dumb`, or not set at all (cron, some services);
+- a Windows console can't switch to ANSI mode (before Windows 10): you get plain text instead of escape codes.
+
+`--color always` (or `CLICOLOR_FORCE=1`) colours a pipe too, say for `less -R`, and `--color never` turns colour off for one run. The flag wins over the environment.
+
 ## Sign in
 
 ```sh
@@ -306,7 +339,7 @@ telepy browse close "$ID"
 
 ## Command reference
 
-Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL` and `TELEPY_TOKEN`) to choose the server and the credential for that run.
+Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL` and `TELEPY_TOKEN`) to choose the server and the credential for that run, and `--color auto|always|never`.
 
 <details>
 <summary>Every command, what it does and the scope it needs</summary>
@@ -341,6 +374,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy api activity` | Calls made with your tokens and CLI sign-ins (see [The call log](#the-call-log)) | — |
 | `telepy doctor` | Check the server, the sign-in, scopes, expiry, the local ssh tools and the version | — |
 | `telepy update` | Update telepy; `--check`, `--to <version>` | — |
+| `telepy completions [shell]` | Print the Tab completion script for bash, zsh, fish, powershell or elvish; without a shell, which line to add where | — |
 
 </details>
 
@@ -487,7 +521,9 @@ telepy api activity --all --user bob       # admins: everyone's, or one person's
 | `TELEPY_RELEASES_URL` | A mirror of the releases page, for the update check and `telepy update` |
 | `TELEPY_RELEASE_KEYS` | Release public keys to trust instead of the built-in ones (for a re-signing mirror) |
 | `TELEPY_NO_MASCOT=1` | No Tapi next to `login` and `doctor` |
-| `NO_COLOR` | Tapi without colour |
+| `NO_COLOR` | No colour, Tapi included (`--color` wins over it) |
+| `CLICOLOR=0` | No colour either |
+| `CLICOLOR_FORCE=1` | Colour even into a pipe or a file, like `--color always` |
 | `CI` | When set, no update check |
 | `TELEPY_VERSION` | At build time: the version to stamp into the binary |
 

@@ -1,5 +1,11 @@
 //! 純文字表格（`telepy ls` / `sessions` / `recordings ls`）：欄寬照內容（以字元寬算，CJK 兩格），最後一欄不補空白。
+//! 上色時欄寬照樣用原字算，顏色碼只包在字外面，所以有沒有顏色欄位都對得齊。
 //! Plain-text tables: column widths follow the content (CJK counts as two cells); the last column is not padded.
+//! With colour the widths still come from the plain text and the codes only wrap it, so columns line up either way.
+
+use anstyle::Style;
+
+use crate::color;
 
 /// 一個字元在終端機佔幾格（夠用的近似：東亞寬字元 = 2）。/ Terminal cells of one char (East Asian wide = 2).
 fn cell_width(c: char) -> usize {
@@ -25,6 +31,11 @@ pub fn width(s: &str) -> usize {
 }
 
 pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
+    render_styled(headers, rows, false, |_, _| color::PLAIN)
+}
+
+/// 同 [`render`]，`color` 為真時標題粗體、每格照 `style(欄, 字)` 上色。/ Like [`render`]; with `color`, bold headers and each cell styled by `style(column, text)`.
+pub fn render_styled(headers: &[&str], rows: &[Vec<String>], color: bool, style: impl Fn(usize, &str) -> Style) -> String {
     let cols = headers.len();
     let mut w: Vec<usize> = headers.iter().map(|h| width(h)).collect();
     for r in rows {
@@ -32,23 +43,21 @@ pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
             w[i] = w[i].max(width(c));
         }
     }
-    let line = |cells: Vec<&str>| {
+    let line = |cells: Vec<&str>, pick: &dyn Fn(usize, &str) -> Style| {
         let mut out = String::new();
         for (i, c) in cells.iter().enumerate() {
-            if i + 1 == cells.len() {
-                out.push_str(c);
-            } else {
-                out.push_str(c);
+            out.push_str(&color::paint(color, pick(i, c), c));
+            if i + 1 < cells.len() {
                 out.push_str(&" ".repeat(w[i] - width(c) + 2));
             }
         }
         out.trim_end().to_string()
     };
-    let mut out = line(headers.to_vec());
+    let mut out = line(headers.to_vec(), &|_, _| color::BOLD);
     out.push('\n');
     for r in rows {
         let cells: Vec<&str> = (0..cols).map(|i| r.get(i).map(String::as_str).unwrap_or("")).collect();
-        out.push_str(&line(cells));
+        out.push_str(&line(cells, &style));
         out.push('\n');
     }
     out
@@ -117,6 +126,18 @@ mod tests {
         assert_eq!(lines[0], "NAME    HEALTH   LABELS");
         assert_eq!(lines[1], "box     online   env=prod");
         assert_eq!(lines[2], "樹莓派  offline", "trailing blanks trimmed; CJK is two cells wide");
+    }
+
+    #[test]
+    fn colour_wraps_the_cells_and_keeps_the_columns() {
+        let rows = [vec!["box".to_string(), "online".to_string(), "".to_string()], vec!["樹莓派".to_string(), "offline".to_string(), "x".to_string()]];
+        let style = |col: usize, text: &str| if col == 1 { color::health(text) } else { color::PLAIN };
+        assert_eq!(render_styled(&["NAME", "HEALTH", "L"], &rows, false, style), render(&["NAME", "HEALTH", "L"], &rows), "no colour = the plain table");
+        let out = render_styled(&["NAME", "HEALTH", "L"], &rows, true, style);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "\x1b[1mNAME\x1b[0m    \x1b[1mHEALTH\x1b[0m   \x1b[1mL\x1b[0m");
+        assert_eq!(lines[1], "box     \x1b[32monline\x1b[0m", "an empty last cell is still trimmed");
+        assert_eq!(lines[2], "樹莓派  \x1b[2moffline\x1b[0m  x");
     }
 
     #[test]
