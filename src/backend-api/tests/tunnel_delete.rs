@@ -414,8 +414,8 @@ async fn a_cut_delete_finishes_on_the_server_and_can_skip_a_stuck_device() {
     assert_eq!(late.status, StatusCode::NOT_FOUND, "{}", late.text);
 }
 
-/// 盤點腳本卡在某一部分時，錯誤說出是哪一部分；裝置上一直不回的程式最多等它 15 秒，腳本照樣做完。
-/// A survey never hangs on one stuck program (each outside call has a time limit) and still finishes.
+/// 裝置上一直不回的程式最多等它 15 秒、讀不動的資料夾最多 20 秒，盤點照樣做完並說出卡在哪。
+/// A survey never hangs on one stuck program or folder (each has a time limit) and still finishes, saying what was slow.
 #[tokio::test]
 async fn a_survey_finishes_although_a_program_on_the_device_never_answers() {
     let Some(lab) = Lab::start().await else { return };
@@ -424,10 +424,16 @@ async fn a_survey_finishes_although_a_program_on_the_device_never_answers() {
     let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
     let home = boxm.account_home("pi");
     std::fs::create_dir_all(home.join("bin")).unwrap();
-    // 不回的 docker，加上一個會讀 stdin 讀到 EOF 為止的 crontab。/ A docker that never answers and a crontab reading stdin.
+    // 不回的 docker、會讀 stdin 讀到 EOF 為止的 crontab，再加上一讀 Downloads 就卡住的 grep（像 macOS 等人按「允許」）。
+    // A docker that never answers, a crontab reading stdin, and a grep that blocks on Downloads (like macOS waiting
+    // for someone to click Allow).
     std::fs::write(home.join("bin/docker"), "#!/bin/sh\nexec sleep 300\n").unwrap();
     std::fs::write(home.join("bin/crontab"), "#!/bin/sh\ncat\n").unwrap();
-    for f in ["docker", "crontab"] {
+    let real_grep = ["/usr/bin/grep", "/bin/grep"].into_iter().find(|p| std::path::Path::new(p).exists()).expect("a grep");
+    std::fs::write(home.join("bin/grep"), format!("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in */Downloads/*) exec sleep 300 ;; esac; done\nexec {real_grep} \"$@\"\n")).unwrap();
+    std::fs::create_dir_all(home.join("Downloads")).unwrap();
+    std::fs::write(home.join("Downloads/telepy-ssh.sh"), "ssh -NR '*:0:localhost:22' telepy@gw\n").unwrap();
+    for f in ["docker", "crontab", "grep"] {
         std::fs::set_permissions(home.join("bin").join(f), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     }
     let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
@@ -435,9 +441,10 @@ async fn a_survey_finishes_although_a_program_on_the_device_never_answers() {
     let started = tokio::time::Instant::now();
     let r = lab.app.post(&format!("/api/reverse/server/{}/device-install/survey", dev.tunnel_id), Some(&alice.token), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert!(started.elapsed() < Duration::from_secs(45), "{:?}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_secs(70), "well inside the script's 90 s: {:?}", started.elapsed());
     assert!(r.json["survey_error"].is_null(), "{}", r.json);
     let row = db::device_install::get(&lab.app.state.db, dev.tunnel_id).await.unwrap().expect("recorded");
     let survey = row.survey.unwrap_or_default();
     assert!(survey.contains("did not answer within 15 s"), "the slow engine is reported: {survey}");
+    assert!(survey.contains("stopped looking for downloaded tunnel scripts"), "the stuck folder is reported: {survey}");
 }

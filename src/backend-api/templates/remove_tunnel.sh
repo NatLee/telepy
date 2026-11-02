@@ -31,7 +31,7 @@ exec </dev/null
 step() { out step "$1" ""; }
 # Run a command for at most $1 seconds (macOS has no `timeout`): for programs that wait on something outside this
 # script — a container engine that is starting or asleep, sudo, crontab, a key file. The command keeps its output; a
-# watcher ends it when the time is up.
+# watcher ends it when the time is up (then the status is 143, or 137 when it had to be killed).
 lim() {
     lim_s=$1
     shift
@@ -510,11 +510,24 @@ done
 
 # Downloaded scripts of this tunnel that are not running (ssh / autossh / docker templates).
 step "downloaded scripts"
-for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME"/Downloads/*.yml "$HOME"/Desktop/*.sh; do
+# These folders can be large, synced to iCloud (files not on the disk yet) or, on macOS, behind a privacy prompt that keeps
+# a read over SSH waiting until someone clicks Allow on the Mac's screen. So one time-limited pass lists them and keeps
+# the files that mention ssh / the Docker port variable (grep's output goes nowhere, so a grep left waiting cannot hold
+# this list open); only those are read again.
+DL=$(lim 20 sh -c 'for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME"/Downloads/*.yml "$HOME"/Desktop/*.sh; do
+    [ -f "$f" ] && grep -qE "ssh|SSH_TUNNEL_PORT" "$f" </dev/null >/dev/null 2>&1 && printf "%s\n" "$f"
+done; exit 0')
+case "$?" in
+    137|143) out note scripts "stopped looking for downloaded tunnel scripts in the home folder, Downloads and Desktop after 20 s (macOS asks before an SSH login reads Desktop / Downloads, or the files are in iCloud and not on the disk, or the folder is very large); a tunnel script there, if any, is left alone" ;;
+esac
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
     has_port "$f" || continue
     out found script "$f"
     [ "$SURVEY" = 1 ] || rmf "$f" file
-done
+done <<EOF
+$DL
+EOF
 
 # --- Docker (docker run / docker compose templates: jnovack/autossh with SSH_TUNNEL_PORT) -----------
 # A container engine that is stopped, starting or asleep (Docker Desktop, OrbStack, Colima) can keep `docker` waiting,
