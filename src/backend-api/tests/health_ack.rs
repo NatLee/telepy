@@ -105,7 +105,7 @@ async fn a_known_warning_can_be_acknowledged_until_it_changes() {
     assert_eq!(msgs[0].0, "admin acknowledged \"SECRET_KEY\" (warn): local dev box");
     assert_eq!(msgs[1].0, "admin removed the acknowledgement of \"SECRET_KEY\"");
     assert!(msgs.iter().all(|m| m.1.is_none()));
-    // 審計鏈照樣完好。/ The audit chain still verifies.
-    let r = app.get("/api/site/health", Some(&admin)).await;
+    // 審計鏈照樣完好（現在驗，不用背景那次）。/ The audit chain still verifies (now, not the background run).
+    let r = app.get("/api/site/health?fresh=1", Some(&admin)).await;
     assert_eq!(find(&r.json, "audit_log")["status"], "ok", "{}", r.text);
 }

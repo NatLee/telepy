@@ -48,8 +48,16 @@ async fn a_failing_audit_log_can_be_resealed_and_later_edits_still_show() {
     std::fs::write(&file, &anchors).unwrap();
     sqlx::query("UPDATE telepy_gateway_event SET message = 'edited' WHERE id = 3").execute(&app.state.db.write).await.unwrap();
 
-    let health = app.get("/api/site/health", Some(&admin)).await;
+    // 打開頁面：沿用剛才的驗證（背景每 10 分鐘一次），`checked_at` 說是哪一次；重新整理（`fresh=1`）才現在驗。
+    // Opening the page reuses the verification from a moment ago (the background runs every 10 minutes) and
+    // `checked_at` says which one; Refresh (`fresh=1`) verifies now.
+    let reused = app.get("/api/site/health", Some(&admin)).await;
+    let audit = find(&reused.json, "audit_log");
+    assert_eq!(audit["status"], "ok", "{audit}");
+    let reused_at = audit["checked_at"].as_str().unwrap_or_else(|| panic!("no checked_at: {audit}")).to_string();
+    let health = app.get("/api/site/health?fresh=1", Some(&admin)).await;
     let audit = find(&health.json, "audit_log");
+    assert!(audit["checked_at"].as_str().unwrap() >= reused_at.as_str(), "{audit}");
     assert_eq!(audit["status"], "fail", "{audit}");
     assert!(audit["detail"].as_str().unwrap().contains("re-seal"), "{audit}");
     let fp = audit["fingerprint"].as_str().unwrap().to_string();
@@ -122,7 +130,7 @@ async fn a_failing_audit_log_can_be_resealed_and_later_edits_still_show() {
 
     // 之後再改一列（封存前的也算）：又變 ✗。/ A later edit — a row from before the re-seal included — fails it again.
     sqlx::query("UPDATE telepy_gateway_event SET message = 'edited again' WHERE id = 2").execute(&app.state.db.write).await.unwrap();
-    let health = app.get("/api/site/health", Some(&admin)).await;
+    let health = app.get("/api/site/health?fresh=1", Some(&admin)).await;
     assert_eq!(find(&health.json, "audit_log")["status"], "fail", "{}", health.text);
     let v = app.get("/api/log/audit/verify", Some(&admin)).await;
     assert_eq!((v.json["tables"][0]["chain_broken_at"].as_i64(), v.json["tables"][1]["ok"].as_bool()), (Some(2), Some(true)), "{}", v.text);

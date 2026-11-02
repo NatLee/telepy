@@ -623,6 +623,9 @@ pub struct HealthCheck {
     pub ack: Option<HealthAck>,
     /// 之前的確認，但結果已經變了。/ An earlier acknowledgement of a result that has changed since.
     pub stale_ack: Option<HealthAck>,
+    /// When the result was obtained, only on checks that may reuse an earlier one (audit_log: the background verification); absent = run just now
+    #[schema(example = "2026-10-30T01:00:03Z")]
+    pub checked_at: Option<String>,
 }
 
 /// 管理員對一項檢查的確認。/ An admin's acknowledgement of a check.
@@ -4997,6 +5000,15 @@ pub struct ServerStatsStorage {
     /// Sum of `LOG_ROOT`; null when unreadable
     pub logs_bytes: Option<i64>,
     pub logs_truncated: bool,
+    /// Sum of `CARRIER_DIR` (the cached device carriers, every platform); null when unreadable
+    pub carriers_bytes: Option<i64>,
+    pub carriers_truncated: bool,
+    /// Sum of `GEOIP_DIR` (the IP location / network databases); null when unreadable
+    pub geoip_bytes: Option<i64>,
+    pub geoip_truncated: bool,
+    /// Sum of `OUI_DIR` (the NIC vendor list); null when unreadable
+    pub oui_bytes: Option<i64>,
+    pub oui_truncated: bool,
 }
 
 #[derive(ToSchema)]

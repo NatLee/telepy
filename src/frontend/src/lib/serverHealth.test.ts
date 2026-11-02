@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CHECK_IDS, GROUP_OF, checksIn, countStatuses, groupCounts, groupStatuses, initialHealthTab, parseHealthTab, parseServerHealth, problems, sortChecks, worstStatus } from "./serverHealth.ts";
+import { CHECK_IDS, GROUP_OF, auditReusedAt, checksIn, countStatuses, groupCounts, groupStatuses, initialHealthTab, parseHealthTab, parseServerHealth, problems, sortChecks, worstStatus } from "./serverHealth.ts";
 
 const answer = {
     checks: [
@@ -25,7 +25,7 @@ test("the backend answer is read safely", () => {
     assert.equal(parseServerHealth(null), null);
     assert.equal(parseServerHealth({ ok: 3 }), null, "no checks = not this endpoint");
     const odd = parseServerHealth({ checks: [{ name: "" }, { name: "x", status: "great" }, { status: "ok" }], ok: -1 })!;
-    assert.deepEqual(odd.checks, [{ id: null, name: "x", status: "info", detail: "", fingerprint: "", ack: null, staleAck: null }]);
+    assert.deepEqual(odd.checks, [{ id: null, name: "x", status: "info", detail: "", fingerprint: "", ack: null, staleAck: null, checkedAt: null }]);
     assert.equal(odd.ok, 0);
     assert.equal(odd.ranAt, null);
 });
@@ -98,4 +98,16 @@ test("an acknowledged problem is no longer an alert; a stale one still is", () =
     assert.deepEqual(problems(h.checks).map((c) => c.id), ["guacd"]);
     assert.deepEqual(countStatuses(h.checks), { ok: 1, info: 0, warn: 1, fail: 0, acked: 1 });
     assert.equal(groupStatuses(h.checks).storage, "ok");
+});
+
+test("the audit chain's earlier verification is shown only when it was reused", () => {
+    const at = (checked: unknown) => parseServerHealth({ checks: [{ id: "audit_log", name: "audit log", status: "ok", detail: "intact", checked_at: checked }], ran_at: "2026-11-02T10:00:00Z" })!;
+    assert.equal(at("2026-11-02T09:55:00Z").checks[0].checkedAt, "2026-11-02T09:55:00Z");
+    assert.equal(auditReusedAt(at("2026-11-02T09:55:00Z")), "2026-11-02T09:55:00Z");
+    // 這次才驗的（差不到 30 秒）= 不另外說。/ Verified in this run (under 30 s apart) = nothing to say.
+    assert.equal(auditReusedAt(at("2026-11-02T09:59:45Z")), null);
+    // 沒有 / 壞掉的時間、舊的後端 = 沒有。/ Missing or broken times, older backends = none.
+    assert.equal(at("not a time").checks[0].checkedAt, null);
+    assert.equal(auditReusedAt(at(undefined)), null);
+    assert.equal(auditReusedAt(parseServerHealth(answer)!), null);
 });

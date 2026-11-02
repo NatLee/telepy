@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { CHECK_IDS, type HealthCheck, type HealthCheckId, type HealthStatus, type ServerHealth } from "./serverHealth.ts";
 import { HEALTH_SPOTS, SPOT_CHECKS, effectiveStatus, healthNow, healthSpots, spotOf, stateOf } from "./serverHealthFlow.ts";
 
-const c = (id: HealthCheckId | null, status: HealthStatus, name = id ?? "new check"): HealthCheck => ({ id, name, status, detail: `${name} detail`, fingerprint: `${name}-fp`, ack: null, staleAck: null });
+const c = (id: HealthCheckId | null, status: HealthStatus, name = id ?? "new check"): HealthCheck => ({ id, name, status, detail: `${name} detail`, fingerprint: `${name}-fp`, ack: null, staleAck: null, checkedAt: null });
 const ack = { by: "admin", at: "2026-10-30T02:00:00Z", note: "restored from a backup" };
 const health = (checks: HealthCheck[]): ServerHealth => ({ checks, ok: 0, info: 0, warnings: 0, failures: 0, ranAt: null });
 const allOk = () => CHECK_IDS.map((id) => c(id, "ok"));

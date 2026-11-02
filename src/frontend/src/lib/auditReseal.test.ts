@@ -9,6 +9,7 @@ const c = (id: HealthCheckId | null, status: HealthStatus, extra: Partial<Health
     status,
     detail: "",
     fingerprint: "fp",
+    checkedAt: null,
     ack: null,
     staleAck: null,
     ...extra,

@@ -2,22 +2,27 @@
 
 /**
  * 管理區「伺服器狀態」頁：`telepy-server doctor` 的檢查分成左側分頁（總覽 + 設定 / 資料與審計 / 金鑰與閘道 / 相依服務 /
- * 訪客位址），分頁記在 `?tab=`。總覽 = 總結、要處理的項目、每組一格；每組 = 每項檢查一張卡（翻譯過的名稱、在檢查什麼、
- * 怎麼修，加上後端原文）。「訪客位址」分頁最後接「Telepy 怎麼看你的位址」。每次重新整理都重跑（含審計鏈驗證），不輪詢。
+ * 訪客位址），分頁記在 `?tab=`。總覽 = 狀態卡（結論、每組一格、版本與運作時間）、要處理的項目，再來是即時數字、
+ * 儲存空間、最近 24 小時；每組 = 每項檢查一張卡（翻譯過的名稱、在檢查什麼、怎麼修，加上後端原文）。「訪客位址」分頁
+ * 最後接「Telepy 怎麼看你的位址」。檢查與即時數字同時抓、各自先到先畫，總覽不必等最慢的那一項；進頁面時審計鏈沿用
+ * 後端背景（每 10 分鐘）驗好的結果，按重新整理才全部重跑（含審計鏈）。不輪詢。
  * The admin "Server health" page: the `telepy-server doctor` checks in left side tabs (an overview + configuration /
  * data & audit / keys & gateway / companion services / visitor addresses), the tab kept in `?tab=`. The overview =
- * the summary, what needs action and one tile per group; each group = one card per check (translated title, what it
- * checks, how to fix it, plus the backend's own text). The addresses tab ends with "How Telepy sees your address".
- * Every refresh reruns the checks (the audit chain included), so the page never polls.
+ * a status card (the verdict, one cell per group, version / uptime), what needs action, then the live numbers,
+ * storage and the last 24 hours; each group = one card per check (translated title, what it checks, how to fix it,
+ * plus the backend's own text). The addresses tab ends with "How Telepy sees your address".
+ * The checks and the live numbers are fetched at the same time and each part draws as soon as its data is in, so the
+ * overview never waits for the slowest check. On open the audit chain reuses the backend's background verification
+ * (every 10 minutes); Refresh reruns everything, the audit chain included. The page never polls.
  * 已確認：⚠ / ✗ 卡可以「確認…」（附備註，結果一樣就不再算警報，一變又亮起），確認過的卡變中性、細節收起來；
  * 之前確認過但結果變了的卡，最上面說明一次。純邏輯在 lib/healthAck。
  * Acknowledgements: a warning / failure card can be acknowledged with a note (no longer an alert while the result
  * stays the same, red again once it changes); an acknowledged card turns neutral with its details folded away; a
  * card whose earlier acknowledgement no longer matches says so on top. Pure logic in lib/healthAck.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, Puzzle, SlidersHorizontal, Stamp } from "lucide-react";
+import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, LoaderCircle, Puzzle, SlidersHorizontal, Stamp } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
@@ -26,22 +31,24 @@ import { CarriersPanel } from "@/components/health/CarriersPanel";
 import { DatasetsPanel } from "@/components/health/DatasetsPanel";
 import { HealthAckDialog } from "@/components/health/HealthAckDialog";
 import { ServerHealthInfoDialog } from "@/components/health/ServerHealthInfoDialog";
-import { ServerStats } from "@/components/health/ServerStats";
+import { ActivityPanel, LiveNumbers, StoragePanel, type StorageTarget } from "@/components/health/ServerStats";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { NavTabs, type NavTab } from "@/components/ui/nav-tabs";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { useToast } from "@/components/ui/Toast";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useReauth } from "@/hooks/useReauth";
 import { useServerHealth, type AckOutcome } from "@/hooks/useServerHealth";
+import { useServerStats, type ServerStatsState } from "@/hooks/useServerStats";
 import { canReseal } from "@/lib/auditReseal";
 import { ackedSummary, canAcknowledge, cardLook, tileTone } from "@/lib/healthAck";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { formatUptime } from "@/lib/serverStats";
 import {
     HEALTH_GROUPS,
+    auditReusedAt,
     checksIn,
     countStatuses,
     groupCounts,
@@ -97,6 +104,27 @@ const GROUP_ICON: Record<HealthGroup, React.ComponentType<{ size?: number; class
 
 const tKey = (id: HealthCheckId, part: "title" | "what" | "fix") => `health.check.${id}.${part}` as TranslationKey;
 
+/** 頁面至少這麼寬（rem）才把分頁放在左邊：15rem 的分頁欄 + 約 40rem 的內容。/ Page width (rem) for the left rail: 15rem of tabs + ~40rem of content. */
+const RAIL_MIN_REM = 56;
+
+/** 元素寬度 ≥ `rem` 個根字級（跟著顯示大小）；畫面出現前就量好，不會先閃一下。/ Element width ≥ `rem` root font sizes; measured before paint. */
+function useWiderThan(ref: React.RefObject<HTMLElement | null>, rem: number): boolean {
+    const [wider, setWider] = useState(false);
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const measure = () => {
+            const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+            setWider(el.clientWidth >= rem * root);
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ref, rem]);
+    return wider;
+}
+
 function StatusChip({ status }: { status: HealthStatus }) {
     const { t } = useI18n();
     const Icon = STATUS_ICON[status];
@@ -107,15 +135,19 @@ function StatusChip({ status }: { status: HealthStatus }) {
     );
 }
 
-/** 「2 項失敗 · 1 項警告」；全部通過 = 「全部正常」。/ "2 failures · 1 warning"; all passing = "All OK". */
+/**
+ * 「2 項失敗 · 1 項警告」；全部通過 = 「全部正常」。`withOk` = 最後也列通過的（狀態卡的總數）。
+ * "2 failures · 1 warning"; all passing = "All OK". `withOk` = the passing ones last too (the status card's totals).
+ */
 function useCountsLine() {
     const { t } = useI18n();
-    return (c: StatusCounts): string => {
+    return (c: StatusCounts, withOk = false): string => {
         const parts: string[] = [];
         if (c.fail) parts.push(t(c.fail === 1 ? "health.n.failOne" : "health.n.fail", { n: String(c.fail) }));
         if (c.warn) parts.push(t(c.warn === 1 ? "health.n.warnOne" : "health.n.warn", { n: String(c.warn) }));
         if (c.info) parts.push(t(c.info === 1 ? "health.n.infoOne" : "health.n.info", { n: String(c.info) }));
         if (c.acked) parts.push(t(c.acked === 1 ? "health.n.ackedOne" : "health.n.acked", { n: String(c.acked) }));
+        if (withOk && c.ok) parts.push(t(c.ok === 1 ? "health.n.okOne" : "health.n.ok", { n: String(c.ok) }));
         if (parts.length === 0) return c.ok ? t("health.n.allOk") : t("health.n.none");
         return parts.join(" · ");
     };
@@ -165,13 +197,22 @@ export function ServerHealthView() {
     const cardActions: CardActions = { onAck: setAcking, onUndo: (c) => void undo(c), onReseal: () => setResealing(true) };
     const bodyRef = useRef<HTMLDivElement>(null);
     const [info, setInfo] = useState(false);
-    // 每按一次重新整理就加一，讓即時數據也重抓。/ Bumped on every Refresh so the live stats reload too.
+    // 每按一次重新整理就加一，讓即時數據也重抓；檢查連審計鏈都現在驗。即時數字跟檢查同時抓（頁面層級），總覽不用等檢查。
+    // Bumped on every Refresh so the live stats reload too; the checks verify the audit chain now. The live numbers are
+    // fetched at page level alongside the checks, so the overview never waits for them.
     const [reloadKey, setReloadKey] = useState(0);
+    const stats = useServerStats(reloadKey);
     const refresh = () => {
         setReloadKey((n) => n + 1);
-        return reload();
+        return reload(true);
     };
-    const wide = useMediaQuery("(min-width: 1024px)") === true;
+    // 分頁欄在左邊只在頁面本身夠寬時（看頁面寬度、以 rem 算，跟著顯示大小走）：側欄展開、字放大時，視窗 1024px
+    // 還不夠放分頁欄加內容，內容會被擠到兩百多 px。不夠寬就是上面一排。
+    // The tab rail sits on the left only when the page itself is wide enough (its own width, in rem, so it follows the
+    // display size): with the sidebar open and larger text a 1024px window left the content a couple of hundred px.
+    // Otherwise the tabs are a row on top.
+    const gridRef = useRef<HTMLDivElement>(null);
+    const wide = useWiderThan(gridRef, RAIL_MIN_REM);
 
     const rawTab = searchParams.get("tab");
     const tab = parseHealthTab(rawTab);
@@ -212,6 +253,21 @@ export function ServerHealthView() {
         setInfo(false);
     };
 
+    // 儲存空間的一列 → 那個分頁上的面板（換頁後捲過去）。/ A storage row → its panel on that tab (scrolled to after the switch).
+    const [anchor, setAnchor] = useState<string | null>(null);
+    const openPanel = (target: Extract<StorageTarget, { tab: string }>) => {
+        setTab(target.tab);
+        setAnchor(target.anchor);
+    };
+    useEffect(() => {
+        if (!anchor || tab === "overview") return;
+        const id = requestAnimationFrame(() => {
+            document.getElementById(anchor)?.scrollIntoView({ block: "start" });
+            setAnchor(null);
+        });
+        return () => cancelAnimationFrame(id);
+    }, [anchor, tab]);
+
     return (
         <div className="flex flex-col animate-fade-in-up">
             <PageHeader
@@ -230,21 +286,23 @@ export function ServerHealthView() {
                 }
             />
 
-            <div className="grid gap-4 lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-6">
-                {/* 手機到平板是一列可橫捲的分頁，從 lg 起是黏在左側的一欄。/ A scrolling row below lg, a sticky left rail from lg. */}
-                <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-0.5 lg:sticky lg:top-20 lg:m-0 lg:overflow-visible lg:p-0">
-                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("health.title")} className="sm:flex-row lg:flex-col" />
+            <div ref={gridRef} className={cn("grid", wide ? "grid-cols-[15rem_minmax(0,1fr)] items-start gap-6" : "gap-4")}>
+                {/* 不夠寬是一列可橫捲的分頁，夠寬是黏在左側的一欄。/ A scrolling row when narrow, a sticky left rail when wide. */}
+                <div className={cn("min-w-0", wide ? "sticky top-20" : "-mx-1 overflow-x-auto px-1 pb-0.5")}>
+                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("health.title")} className={wide ? "sm:flex-col" : "sm:min-w-max sm:flex-row [&_span]:whitespace-nowrap"} />
                 </div>
 
-                <div ref={bodyRef} className="min-w-0 space-y-4">
-                    {failed && !health ? (
+                <div ref={bodyRef} className="min-w-0 space-y-6">
+                    {tab === "overview" ? (
+                        <Overview health={health} failed={failed} stats={stats} onPick={setTab} onOpen={openPanel} />
+                    ) : failed && !health ? (
                         <Callout tone="danger">{t("health.failed")}</Callout>
                     ) : !health ? (
-                        <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
-                    ) : tab === "overview" ? (
-                        <Overview health={health} onPick={setTab} reloadKey={reloadKey} />
+                        <p className="text-sm text-muted-foreground">{t("health.checking")}</p>
                     ) : (
-                        <GroupPanel health={health} group={tab} actions={cardActions} />
+                        <div className="space-y-4">
+                            <GroupPanel health={health} group={tab} actions={cardActions} />
+                        </div>
                     )}
                     {tab === "addresses" && <ClientIpCheckPanel />}
                     {tab === "services" && <CarriersPanel />}
@@ -266,41 +324,133 @@ export function ServerHealthView() {
     );
 }
 
-/** 總結一行：最嚴重的一級、各級數量、什麼時候跑的。/ The summary: worst level, counts, when it ran. */
-function Summary({ health, onPick }: { health: ServerHealth; onPick: (tab: HealthTab) => void }) {
+/**
+ * 總覽最上面的狀態卡：結論（最嚴重的一級）、各級數量、版本與運作時間，下面一排每組一格（點了到那個分頁），最下面一行
+ * 是什麼時候檢查的（審計鏈沿用背景的驗證時另外說）。檢查還沒回來時是「正在檢查」與灰色格子，即時數字照樣先畫。
+ * The status card on top of the overview: the verdict (worst level), counts, version and uptime, one cell per group
+ * below (a click opens that tab) and when the checks ran (plus the audit chain's own time when the background
+ * verification was reused). While the checks are still running it says so with grey cells; the live numbers draw
+ * regardless.
+ */
+function StatusCard({ health, failed, server, onPick }: { health: ServerHealth | null; failed: boolean; server: NonNullable<ServerStatsState["stats"]>["server"] | null; onPick: (tab: HealthTab) => void }) {
     const { t, locale } = useI18n();
-    const worst = worstStatus(health.checks);
-    const Icon = STATUS_ICON[worst];
-    // 數字由頁面自己算，確認過的另外算（後端的數字不分）。/ Counted here so acknowledged ones are separate.
-    const counts = countStatuses(health.checks);
-    const acked = ackedSummary(health.checks);
-    return (
-        <section
-            className={cn(
-                "flex items-start gap-3 rounded-xl px-4 py-3.5 ring-1 ring-inset sm:px-5",
-                worst === "fail" ? "bg-destructive/8 ring-destructive/20" : worst === "warn" ? "bg-warning/10 ring-warning/30" : "bg-success/8 ring-success/25",
-            )}
-        >
-            <Icon size={20} className={cn("mt-0.5 shrink-0", STATUS_TEXT[worst])} aria-hidden />
-            <div className="min-w-0 flex-1">
-                <p className="text-base text-foreground">
-                    {t(worst === "fail" ? "health.summary.fail" : worst === "warn" ? "health.summary.warn" : acked ? "health.summary.okAcked" : "health.summary.ok")}
-                </p>
-                <p className="mt-0.5 text-sm text-foreground/85">
-                    {t("health.counts", { ok: String(counts.ok), info: String(counts.info), warnings: String(counts.warn), failures: String(counts.fail) })}
-                    {counts.acked > 0 && <> · {t(counts.acked === 1 ? "health.n.ackedOne" : "health.n.acked", { n: String(counts.acked) })}</>}
-                </p>
-                {acked && (
-                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
-                        <CheckCheck size={14} className="shrink-0" aria-hidden />
-                        {t(acked.count === 1 ? "health.ack.overviewOne" : "health.ack.overview", { n: String(acked.count) })}
-                        <button type="button" onClick={() => onPick(acked.group)} className="inline-flex items-center gap-1 rounded-sm text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            {t("health.todo.open", { group: t(GROUP_LABEL[acked.group]) })} <ArrowRight size={13} aria-hidden />
-                        </button>
-                    </p>
-                )}
-                {health.ranAt && <p className="mt-1 text-xs text-muted-foreground">{t("health.ranAt", { time: new Date(health.ranAt).toLocaleString(locale) })}</p>}
+    const countsLine = useCountsLine();
+    const time = (iso: string) => new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+    const uptime = server?.uptime_secs ?? null;
+
+    let head: React.ReactNode;
+    if (!health) {
+        head = failed ? (
+            <Callout tone="danger">{t("health.failed")}</Callout>
+        ) : (
+            <div className="flex items-start gap-3" aria-live="polite">
+                <LoaderCircle size={20} className="mt-0.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden />
+                <div className="min-w-0">
+                    <p className="text-base text-foreground">{t("health.checking")}</p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">{t("health.checkingHint")}</p>
+                </div>
             </div>
+        );
+    } else {
+        const worst = worstStatus(health.checks);
+        const Icon = STATUS_ICON[worst];
+        // 數字由頁面自己算，確認過的另外算（後端的數字不分）。/ Counted here so acknowledged ones are separate.
+        const counts = countStatuses(health.checks);
+        const acked = ackedSummary(health.checks);
+        head = (
+            <div className="flex items-start gap-3">
+                <Icon size={20} className={cn("mt-0.5 shrink-0", STATUS_TEXT[worst])} aria-hidden />
+                <div className="min-w-0 flex-1">
+                    <p className="text-base text-foreground">
+                        {t(worst === "fail" ? "health.summary.fail" : worst === "warn" ? "health.summary.warn" : acked ? "health.summary.okAcked" : "health.summary.ok")}
+                    </p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">{countsLine(counts, true)}</p>
+                    {acked && (
+                        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
+                            <CheckCheck size={14} className="shrink-0" aria-hidden />
+                            {t(acked.count === 1 ? "health.ack.overviewOne" : "health.ack.overview", { n: String(acked.count) })}
+                            <button type="button" onClick={() => onPick(acked.group)} className="inline-flex items-center gap-1 rounded-sm text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                {t("health.todo.open", { group: t(GROUP_LABEL[acked.group]) })} <ArrowRight size={13} aria-hidden />
+                            </button>
+                        </p>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    const statuses = health ? groupStatuses(health.checks) : null;
+    const counts = health ? groupCounts(health.checks) : null;
+    const reused = health ? auditReusedAt(health) : null;
+
+    return (
+        <section className="@container overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
+            <div className="flex flex-col gap-3 px-4 py-4 sm:px-5 @2xl:flex-row @2xl:items-start @2xl:justify-between">
+                <div className="min-w-0 flex-1">{head}</div>
+                {/* 這台伺服器：版本（發行版才有）與運作時間，來自即時數字。/ This server: version (release builds only) and uptime, from the live numbers. */}
+                {server && (server.version || uptime !== null) && (
+                    <dl className="flex shrink-0 flex-wrap gap-x-5 gap-y-1 text-sm @2xl:justify-end @2xl:text-right">
+                        {server.version && (
+                            <div>
+                                <dt className="text-xs text-muted-foreground">{t("health.stats.version")}</dt>
+                                <dd className="font-mono text-foreground">{server.version}</dd>
+                            </div>
+                        )}
+                        {uptime !== null && (
+                            <div>
+                                <dt className="text-xs text-muted-foreground">{t("health.uptime")}</dt>
+                                <dd className="text-foreground" title={server.started_at ? t("health.stats.since", { date: new Date(server.started_at).toLocaleString(locale) }) : undefined}>
+                                    {formatUptime(uptime, locale)}
+                                </dd>
+                            </div>
+                        )}
+                    </dl>
+                )}
+            </div>
+
+            {/* 每組一格：窄的時候一列一組，寬的時候五格一排；中間用細線分開。/ One cell per group: rows when narrow, five across when wide; hairlines between. */}
+            <ul className="grid grid-cols-1 gap-px border-t border-border bg-border @3xl:grid-cols-5" data-refresh-list>
+                {HEALTH_GROUPS.map((g) => {
+                    const Icon = GROUP_ICON[g];
+                    const c = counts?.[g];
+                    // 全是備註、只剩確認過的（或沒有檢查）= 灰點，不算「正常」。/ Only notes, acknowledged ones or nothing = a grey dot.
+                    const tone: HealthStatus | null = statuses && c ? tileTone(statuses[g], c) : null;
+                    return (
+                        <li key={g} className="min-w-0 bg-card">
+                            <button
+                                type="button"
+                                onClick={() => onPick(g)}
+                                title={t(GROUP_HINT[g])}
+                                className="flex h-full w-full min-w-0 items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 sm:px-5 @3xl:flex-col @3xl:items-start @3xl:gap-1 @3xl:px-4"
+                            >
+                                <span className="flex min-w-0 flex-1 items-center gap-2 @3xl:w-full @3xl:flex-none">
+                                    <Icon size={15} className="shrink-0 text-muted-foreground" aria-hidden />
+                                    <span className="min-w-0 flex-1 text-sm text-foreground">{t(GROUP_LABEL[g])}</span>
+                                </span>
+                                {/* 狀態點跟著數量那一行，名稱才有整格的寬度。/ The dot sits with the counts so the name gets the whole width. */}
+                                <span className="flex shrink-0 items-center gap-1.5 text-xs @3xl:min-w-0 @3xl:shrink">
+                                    {c && tone ? (
+                                        <>
+                                            <span className={cn("size-2 shrink-0 rounded-full", tone === "info" ? "bg-muted-foreground/50" : STATUS_DOT[tone === "ok" ? "ok" : tone])} aria-hidden />
+                                            <span className={STATUS_TEXT[tone]}>{countsLine(c)}</span>
+                                        </>
+                                    ) : (
+                                        <span className="h-3 w-16 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" aria-hidden />
+                                    )}
+                                </span>
+                            </button>
+                        </li>
+                    );
+                })}
+            </ul>
+
+            {health?.ranAt && (
+                <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground sm:px-5">
+                    {reused
+                        ? t("health.ranAtReused", { time: new Date(health.ranAt).toLocaleString(locale), audit: time(reused) })
+                        : t("health.ranAt", { time: new Date(health.ranAt).toLocaleString(locale) })}
+                </p>
+            )}
         </section>
     );
 }
@@ -309,34 +459,43 @@ function checkTitle(t: ReturnType<typeof useI18n>["t"], c: HealthCheck) {
     return c.id ? t(tKey(c.id, "title")) : c.name;
 }
 
-function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick: (tab: HealthTab) => void; reloadKey: number }) {
+function Overview({
+    health,
+    failed,
+    stats,
+    onPick,
+    onOpen,
+}: {
+    health: ServerHealth | null;
+    failed: boolean;
+    stats: ServerStatsState;
+    onPick: (tab: HealthTab) => void;
+    onOpen: (target: Extract<StorageTarget, { tab: string }>) => void;
+}) {
     const { t } = useI18n();
-    const countsLine = useCountsLine();
-    const todo = problems(health.checks);
-    const statuses = groupStatuses(health.checks);
-    const counts = groupCounts(health.checks);
+    const todo = health ? problems(health.checks) : [];
 
     return (
         <>
-            <Summary health={health} onPick={onPick} />
-
-            <ServerStats reloadKey={reloadKey} />
+            <StatusCard health={health} failed={failed} server={stats.stats?.server ?? null} onPick={onPick} />
 
             {todo.length > 0 && (
-                <section className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
-                    <div className="px-4 pt-4 sm:px-6">
+                // 一列怎麼排看卡片自己的寬度（側欄 + 分頁欄在窄螢幕、大字時會把它擠得很窄）。
+                // Rows lay out by the card's own width (the sidebar and tab rail squeeze it on narrow screens at large text sizes).
+                <section className="@container overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
+                    <div className="px-4 pt-4 sm:px-5">
                         <SectionHeading title={t("health.todo.title")} description={t("health.todo.description")} />
                     </div>
                     <ol className="mt-3 divide-y divide-border border-t border-border" data-refresh-list>
                         {todo.map((c, i) => {
                             const g = groupOf(c);
                             return (
-                                <li key={`${c.name}-${i}`} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
-                                    <div className="flex min-w-0 flex-1 items-start gap-2">
+                                <li key={`${c.name}-${i}`} className="flex flex-col gap-2 px-4 py-3 sm:px-5 @lg:flex-row @lg:items-center @lg:gap-4">
+                                    <div className="flex min-w-0 flex-1 flex-wrap items-start gap-2">
                                         <StatusChip status={c.status} />
-                                        <span className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{checkTitle(t, c)}</span>
+                                        <span className="min-w-0 flex-1 basis-40 text-sm text-foreground [overflow-wrap:anywhere]">{checkTitle(t, c)}</span>
                                     </div>
-                                    <Button type="button" variant="ghost" size="sm" className="self-start sm:self-auto" onClick={() => onPick(g)}>
+                                    <Button type="button" variant="ghost" size="sm" className="h-auto min-h-8 self-start whitespace-normal text-left @lg:self-auto" onClick={() => onPick(g)}>
                                         {t("health.todo.open", { group: t(GROUP_LABEL[g]) })} <ArrowRight size={14} aria-hidden />
                                     </Button>
                                 </li>
@@ -346,31 +505,9 @@ function Overview({ health, onPick, reloadKey }: { health: ServerHealth; onPick:
                 </section>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-refresh-list>
-                {HEALTH_GROUPS.map((g) => {
-                    const Icon = GROUP_ICON[g];
-                    const s = statuses[g];
-                    const c = counts[g];
-                    // 全是備註、只剩確認過的（或沒有檢查）= 灰點，不算「正常」。/ Only notes, acknowledged ones or nothing = a grey dot.
-                    const tone: HealthStatus = tileTone(s, c);
-                    return (
-                        <button
-                            key={g}
-                            type="button"
-                            onClick={() => onPick(g)}
-                            className="flex min-w-0 flex-col gap-2 rounded-xl border border-border/80 bg-card p-4 text-left text-card-foreground shadow-card transition-colors hover:border-border hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        >
-                            <span className="flex items-center gap-2">
-                                <Icon size={16} className="shrink-0 text-muted-foreground" aria-hidden />
-                                <span className="min-w-0 flex-1 text-sm text-foreground">{t(GROUP_LABEL[g])}</span>
-                                <span className={cn("size-2 shrink-0 rounded-full", tone === "info" ? "bg-muted-foreground/50" : STATUS_DOT[tone === "ok" ? "ok" : tone])} aria-hidden />
-                            </span>
-                            <span className="text-xs leading-snug text-muted-foreground">{t(GROUP_HINT[g])}</span>
-                            <span className={cn("text-sm", STATUS_TEXT[tone])}>{countsLine(c)}</span>
-                        </button>
-                    );
-                })}
-            </div>
+            <LiveNumbers state={stats} />
+            <StoragePanel state={stats} onOpen={onOpen} />
+            <ActivityPanel state={stats} />
         </>
     );
 }
@@ -451,6 +588,8 @@ function CheckCard({ check, actions }: { check: HealthCheck; actions: CardAction
                 <div className="min-w-0 flex-1 basis-60">
                     <p className={cn("text-base [overflow-wrap:anywhere]", look === "acked" ? "text-foreground/80" : "text-foreground")}>{checkTitle(t, check)}</p>
                     {check.id && <p className="mt-0.5 text-sm text-muted-foreground">{t(tKey(check.id, "what"))}</p>}
+                    {/* 沿用背景驗證的結果時說是什麼時候驗的。/ When the background verification was reused, say when it ran. */}
+                    {check.checkedAt && <p className="mt-0.5 text-xs text-muted-foreground">{t("health.verifiedAt", { time: when(check.checkedAt) })}</p>}
                 </div>
                 {(canReseal(check) || canAcknowledge(check)) && (
                     <div className="flex shrink-0 flex-wrap gap-2">

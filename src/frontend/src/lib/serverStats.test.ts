@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { barsSummary, diskFree, formatBytes, formatUptime, hourBars, isQuiet, niceMax, parseServerStats, sessionKinds, tunnelSegments, uptimeParts } from "./serverStats.ts";
+import { barsSummary, diskFree, formatBytes, formatUptime, hourBars, isQuiet, niceMax, parseServerStats, sessionKinds, storageParts, tunnelSegments, uptimeParts } from "./serverStats.ts";
 
 const zeros = () => Array(24).fill(0);
 const hours = Array.from({ length: 24 }, (_, i) => new Date(Date.UTC(2026, 9, 30, i)).toISOString());
@@ -119,4 +119,57 @@ test("session kinds: known order, unknown after, zeros dropped", () => {
 test("sizes under 1 KB read as B in every language", () => {
     assert.equal(formatBytes(0, "zh-TW"), "0 B");
     assert.equal(formatBytes(512, "ja"), "512 B");
+});
+
+test("storage: carriers and IP / vendor data are parsed, truncated walks flagged", () => {
+    const s = parseServerStats({
+        storage: {
+            db_bytes: 4000,
+            wal_bytes: 100,
+            data_dir: null,
+            recordings_bytes: 9000,
+            recordings_truncated: true,
+            logs_bytes: 500,
+            logs_truncated: false,
+            carriers_bytes: 2000,
+            geoip_bytes: 700,
+            oui_bytes: 300,
+            oui_truncated: "yes",
+        },
+    })!;
+    assert.equal(s.storage?.carriers_bytes, 2000);
+    assert.equal(s.storage?.geoip_bytes, 700);
+    assert.equal(s.storage?.oui_bytes, 300);
+    assert.deepEqual(s.storage?.truncated, ["recordings"], "only a real true counts");
+});
+
+test("storage parts: largest first, datasets = GeoIP + OUI, shares sum to 1", () => {
+    const s = parseServerStats({
+        storage: { db_bytes: 4000, wal_bytes: 0, recordings_bytes: 9000, recordings_truncated: true, logs_bytes: 500, carriers_bytes: 2000, geoip_bytes: 700, oui_bytes: 300 },
+    })!;
+    const { parts, total, atLeast } = storageParts(s.storage);
+    assert.deepEqual(parts.map((p) => p.id), ["recordings", "database", "carriers", "datasets", "logs", "wal"]);
+    assert.equal(total, 16500);
+    assert.equal(atLeast, true);
+    assert.equal(parts[0].atLeast, true);
+    const ds = parts.find((p) => p.id === "datasets")!;
+    assert.equal(ds.bytes, 1000);
+    assert.deepEqual(ds.split, { geoip: 700, oui: 300 });
+    assert.ok(Math.abs(parts.reduce((a, p) => a + p.share, 0) - 1) < 1e-9);
+    assert.equal(parts.find((p) => p.id === "wal")!.share, 0);
+});
+
+test("storage parts: an older backend without the new fields lists what it has", () => {
+    const s = parseServerStats({ storage: { db_bytes: 10, wal_bytes: 10, recordings_bytes: null, logs_bytes: 5 } })!;
+    const { parts, total } = storageParts(s.storage);
+    // 一樣大照固定順序：資料庫在 WAL 前。/ Ties keep the fixed order: database before WAL.
+    assert.deepEqual(parts.map((p) => p.id), ["database", "wal", "logs"]);
+    assert.equal(total, 25);
+    assert.deepEqual(storageParts(null), { parts: [], total: 0, atLeast: false });
+    // 只有 OUI 也算 IP 與廠商資料。/ OUI alone still counts as the IP and vendor data.
+    const only = parseServerStats({ storage: { db_bytes: 0, oui_bytes: 42 } })!;
+    assert.deepEqual(storageParts(only.storage).parts.find((p) => p.id === "datasets")?.split, { geoip: null, oui: 42 });
+    // 全部是 0：比例都是 0，不是 NaN。/ All zero: shares are 0, not NaN.
+    const zero = parseServerStats({ storage: { db_bytes: 0, wal_bytes: 0 } })!;
+    assert.deepEqual(storageParts(zero.storage).parts.map((p) => p.share), [0, 0]);
 });
