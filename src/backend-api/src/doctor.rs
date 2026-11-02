@@ -74,12 +74,17 @@ pub struct Check {
     pub ack: Option<Ack>,
     /// 之前的確認，但結果已經變了。/ An earlier acknowledgement of a result that has changed since.
     pub stale_ack: Option<Ack>,
+    /// 結果是什麼時候得到的（RFC 3339 `…Z`），只有沿用之前結果的檢查有（審計鏈）；其他都是這次跑的。
+    /// When the result was obtained (RFC 3339 `…Z`), only on checks that may reuse an earlier result (the audit
+    /// chain); every other check ran just now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<String>,
 }
 
 fn check(id: &'static str, name: &'static str, status: Status, detail: impl Into<String>) -> Check {
     let detail = detail.into();
     let fingerprint = fingerprint(&[id, status.as_str(), &detail]);
-    Check { id, name, status, detail, fingerprint, ack: None, stale_ack: None }
+    Check { id, name, status, detail, fingerprint, ack: None, stale_ack: None, checked_at: None }
 }
 
 impl Check {
@@ -162,19 +167,57 @@ pub async fn run(config: &Config) -> Vec<Check> {
     if let Ok(db) = &db {
         db.audit.set_anchors_file(config.log_root.join(db::audit_chain::ANCHORS_FILE));
     }
-    run_with(config, db).await
+    run_with(config, db, None).await
 }
 
 /// 跑全部檢查，資料庫由呼叫端給（管理區的「伺服器狀態」頁用後端自己開著的那個）；`Err` = 開不了的原因。
+/// 彼此無關的檢查同時跑（審計鏈、DNS、guacd / kasm、GeoIP / OUI 讀檔），總時間 ≈ 最慢的那一項，結果照固定順序排。
+/// `audit_max_age`：審計鏈在這麼久之內驗過就用那份（伺服器狀態頁打開時；背景每 10 分鐘驗一次）；`None` = 現在驗
+/// （CLI、按重新整理）。
 /// Run every check on a database the caller opened (the admin "Server health" page passes the backend's own);
-/// `Err` = why it could not be opened.
-pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
-    let mut out = Vec::new();
+/// `Err` = why it could not be opened. Independent checks run at the same time (the audit chain, DNS, guacd /
+/// kasm, reading GeoIP / OUI), so the whole run takes about as long as the slowest one; the order stays fixed.
+/// `audit_max_age`: reuse an audit-chain verification at most this old (the Server health page on open; the
+/// background verifies every 10 minutes); `None` = verify now (the CLI, Refresh).
+pub async fn run_with(config: &Config, db: Result<Db, String>, audit_max_age: Option<Duration>) -> Vec<Check> {
     // 網站設定裡的伺服器設定（環境變數有設的照樣優先），報告的是生效的值。/ Report the values in effect.
     if let Ok(db) = &db {
         let _ = config.live.load(db).await;
     }
+    let mut out = setting_checks(config);
+    let opened = db.as_ref().ok();
+    let (database, keys, ssh_host, services, data, addresses, audit) = tokio::join!(
+        database_checks(config, db.as_ref()),
+        key_checks(config, opened),
+        ssh_host_now(config),
+        service_checks(config),
+        dataset_checks(config),
+        client_address_check(config, opened),
+        async {
+            match opened {
+                Some(db) => Some(audit_log_check_within(db, audit_max_age).await.0),
+                None => None,
+            }
+        },
+    );
+    out.extend(database);
+    out.extend(keys);
+    out.push(ssh_host);
+    out.extend(services);
+    out.extend(data);
+    out.extend(addresses);
+    out.extend(audit);
+    // 確認（只讀；表不在的舊資料庫 = 沒有）。/ Acknowledgements (read only; an older database without the table = none).
+    if let Some(db) = opened {
+        let stored = db::health_acks::list(db).await.unwrap_or_default();
+        apply_acks(&mut out, &stored);
+    }
+    out
+}
 
+/// 設定與目錄（不用等任何東西）。/ Settings and directories (nothing to wait for).
+fn setting_checks(config: &Config) -> Vec<Check> {
+    let mut out = Vec::new();
     out.push(if config.secret_key_is_default {
         check("secret_key", "SECRET_KEY", Status::Warn, "not set: the legacy default signs every login token. Set a long random SECRET_KEY in .env (existing sessions and TOTP secrets will need to be renewed).")
     } else {
@@ -196,41 +239,43 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
             Err(e) => check(id, name, Status::Fail, format!("{} is not writable: {e}", dir.display())),
         });
     }
+    out
+}
 
-    // 資料庫：核心表都在才算好。/ Database: every key table must exist.
-    let db = {
-        match db {
-            Ok(db) => {
-                let mut missing = Vec::new();
-                for t in KEY_TABLES {
-                    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?").bind(t).fetch_one(&db.read).await.unwrap_or(0);
-                    if n == 0 {
-                        missing.push(*t);
-                    }
-                }
-                if missing.is_empty() {
-                    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_user").fetch_one(&db.read).await.unwrap_or(0);
-                    let tunnels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authorized_keys_reverseserverauthorizedkeys").fetch_one(&db.read).await.unwrap_or(0);
-                    out.push(check("database", "database", Status::Ok, format!("{} ({users} users, {tunnels} tunnels)", config.db_path.display())).fp(&[]));
-                    if users == 0 {
-                        out.push(check("accounts", "accounts", Status::Info, "no account yet: the first sign-up becomes the administrator (or run telepy-server create-superuser in the backend container)"));
-                    }
-                } else {
-                    let list = missing.join(", ");
-                    out.push(check("database", "database", Status::Warn, format!("tables missing: {list}. Restart the backend or run telepy-server migrate")).fp(&[&list]));
-                }
-                Some(db)
-            }
-            Err(why) => {
-                out.push(check("database", "database", Status::Fail, why));
-                None
-            }
-        }
+/// 資料庫：核心表都在才算好。/ Database: every key table must exist.
+async fn database_checks(config: &Config, db: Result<&Db, &String>) -> Vec<Check> {
+    let db = match db {
+        Ok(db) => db,
+        Err(why) => return vec![check("database", "database", Status::Fail, why.clone())],
     };
+    let mut out = Vec::new();
+    let mut missing = Vec::new();
+    for t in KEY_TABLES {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?").bind(t).fetch_one(&db.read).await.unwrap_or(0);
+        if n == 0 {
+            missing.push(*t);
+        }
+    }
+    if missing.is_empty() {
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_user").fetch_one(&db.read).await.unwrap_or(0);
+        let tunnels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authorized_keys_reverseserverauthorizedkeys").fetch_one(&db.read).await.unwrap_or(0);
+        out.push(check("database", "database", Status::Ok, format!("{} ({users} users, {tunnels} tunnels)", config.db_path.display())).fp(&[]));
+        if users == 0 {
+            out.push(check("accounts", "accounts", Status::Info, "no account yet: the first sign-up becomes the administrator (or run telepy-server create-superuser in the backend container)"));
+        }
+    } else {
+        let list = missing.join(", ");
+        out.push(check("database", "database", Status::Warn, format!("tables missing: {list}. Restart the backend or run telepy-server migrate")).fp(&[&list]));
+    }
+    out
+}
 
+/// 每條隧道的服務金鑰、共用的服務金鑰、gateway 主機金鑰。/ Per-tunnel service keys, the shared service key, gateway host keys.
+async fn key_checks(config: &Config, db: Option<&Db>) -> Vec<Check> {
+    let mut out = Vec::new();
     // 每條隧道自己的服務金鑰：都解得開才對（SECRET_KEY 換過會解不開，後端退回共用金鑰）。
     // Per-tunnel service keys must all decrypt (a changed SECRET_KEY breaks them; the backend falls back to the shared key).
-    if let Some(db) = &db {
+    if let Some(db) = db {
         let vault = crate::vault::Vault::new(&config.secret_key);
         match db::tunnel_keys::all_public_keys(db).await {
             Ok(keys) if keys.is_empty() => out.push(check("tunnel_keys", "tunnel keys", Status::Ok, "no tunnel has its own service key yet (created on first use)")),
@@ -257,7 +302,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
         Err(e) => check("service_key", "service key", Status::Fail, format!("{}: {e:#}. Restart the backend (a missing key is created at start) or run telepy-server keygen", config.ssh_identity.display())),
         Ok(_) => {
             let file = std::fs::read_to_string(&config.web_service_pubkey_path).map(|s| s.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-            let seeded = match &db {
+            let seeded = match db {
                 Some(db) => db::keys::first_service_key(db).await.ok().flatten().map(|k| k.split_whitespace().take(2).collect::<Vec<_>>().join(" ")),
                 None => None,
             };
@@ -287,111 +332,152 @@ pub async fn run_with(config: &Config, db: Result<Db, String>) -> Vec<Check> {
             }
         }
     });
+    out
+}
 
-    // 裝置與筆電的 SSH 連哪個名稱：落在 Cloudflare 的代理上就連不到 gateway 的 port。
-    // The name devices' and laptops' SSH dial: on Cloudflare's proxy it never reaches the gateway port.
+/// 裝置與筆電的 SSH 連哪個名稱：落在 Cloudflare 的代理上就連不到 gateway 的 port。
+/// The name devices' and laptops' SSH dial: on Cloudflare's proxy it never reaches the gateway port.
+async fn ssh_host_now(config: &Config) -> Check {
     let (ssh, ssh_source) = match config.ssh_host() {
         Some(h) => (Some(h), source_label(config, "server_ssh_host")),
         None => (config.server_host().filter(|h| !h.is_empty()), "SERVER_DOMAIN".to_string()),
     };
     let port = config.reverse_server_ssh_port.clone();
-    out.push(match ssh {
+    match ssh {
         None => check("ssh_host", "SSH host", Status::Info, "not set: scripts and SSH configs use the name the browser opened Telepy at. Set SERVER_DOMAIN (and SSH_SERVER_DOMAIN when the web name goes through a proxy)"),
         Some(host) => ssh_host_check(&crate::ssh_host::lookup(&host).await, &port, &ssh_source),
-    });
-
-    // 相依服務。/ Companion services.
-    out.push(match tcp_reachable(&config.guacd_addr, Duration::from_secs(3)).await {
-        Ok(()) => check("guacd", "guacd (remote desktop)", Status::Ok, config.guacd_addr.clone()),
-        // 指紋不含系統錯誤字（逾時 / 拒絕連線會來回變），連不到同一個位址就是同一個問題。
-        // The OS error text (timed out / refused flips back and forth) stays out of the fingerprint: same address, same problem.
-        Err(e) => check("guacd", "guacd (remote desktop)", Status::Warn, format!("cannot reach {}: {e}. Remote desktop will not work; start the guacd service", config.guacd_addr)).fp(&["unreachable", &config.guacd_addr]),
-    });
-    let health = format!("{}/healthz", config.kasm_api.trim_end_matches('/'));
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(4)).build().expect("reqwest client");
-    out.push(match http.get(&health).send().await {
-        Ok(r) if r.status().is_success() => check("kasm", "kasm-browser (remote browser)", Status::Ok, config.kasm_api.clone()),
-        Ok(r) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("{health} answered {}", r.status())),
-        Err(e) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("cannot reach {health}: {e}. The remote browser will not work")).fp(&["unreachable", &health]),
-    });
-    // GeoIP：裝了沒、多舊（用中的檔的建置時間；DB-IP 看 `.release` 是哪個月）。/ GeoIP: installed, and how old.
-    {
-        let now = chrono::Utc::now();
-        let geo = crate::geoip::GeoIp::load(&config.geoip_dir);
-        let oui = crate::oui::Oui::default();
-        let items = crate::datasets::inspect(&config.geoip_dir, &config.oui_dir, &geo, &oui, now);
-        let release = |id: &str| items.iter().find(|i| i.id == id).and_then(|i| i.release.clone());
-        let (country, asn) = geo.in_use();
-        // DB-IP 的月份只說 Telepy 自己的檔；用中的是 MaxMind 的就看建置日期。/ The month only describes Telepy's own DB-IP file.
-        let own = |u: &Option<crate::geoip::InUse>, id: &str| u.as_ref().filter(|u| u.file == crate::datasets::geoip_file(id)).and_then(|_| release(id));
-        let (rc, ra) = (own(&country, "country"), own(&asn, "asn"));
-        out.push(match crate::datasets::geoip_freshness(country.as_ref(), asn.as_ref(), (rc.as_deref(), ra.as_deref()), &config.geoip_dir, now) {
-            crate::datasets::Freshness::Missing => check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Download it on Server health → Companion services (IP and vendor data), or run telepy-server geoip in the backend container"),
-            crate::datasets::Freshness::Fresh(d) => check("geoip", "GeoIP", Status::Ok, d),
-            crate::datasets::Freshness::Stale(d, built) => check("geoip", "GeoIP", Status::Warn, d).fp(&["stale", &built]),
-        });
     }
+}
 
-    // 裝置載體：快取了哪些平台的；沒有的第一次有裝置要時從 release 頁抓。/ Device carriers: which platforms are cached.
-    {
-        let carriers = crate::carriers::Carriers::new(config, reqwest::Client::new());
-        let have = carriers.cached_targets();
-        let total = crate::carriers::TARGETS.len();
-        out.push(if have.is_empty() {
-            check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only); releases must be signed with: {}", carriers.dir().display(), carriers.releases(), carriers.keys_description()))
-        } else {
-            let list = carriers.cached_versions().into_iter().map(|(t, v)| format!("{t} ({})", v.as_deref().unwrap_or("hand-placed"))).collect::<Vec<_>>().join(", ");
-            check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {list}", have.len(), carriers.dir().display())).fp(&[&have.len().to_string()])
-        });
+/// 相依服務（guacd 與 kasm 同時問）。/ Companion services (guacd and kasm asked at the same time).
+async fn service_checks(config: &Config) -> Vec<Check> {
+    let guacd = async {
+        match tcp_reachable(&config.guacd_addr, Duration::from_secs(3)).await {
+            Ok(()) => check("guacd", "guacd (remote desktop)", Status::Ok, config.guacd_addr.clone()),
+            // 指紋不含系統錯誤字（逾時 / 拒絕連線會來回變），連不到同一個位址就是同一個問題。
+            // The OS error text (timed out / refused flips back and forth) stays out of the fingerprint: same address, same problem.
+            Err(e) => check("guacd", "guacd (remote desktop)", Status::Warn, format!("cannot reach {}: {e}. Remote desktop will not work; start the guacd service", config.guacd_addr)).fp(&["unreachable", &config.guacd_addr]),
+        }
+    };
+    let kasm = async {
+        let health = format!("{}/healthz", config.kasm_api.trim_end_matches('/'));
+        let http = reqwest::Client::builder().timeout(Duration::from_secs(4)).build().expect("reqwest client");
+        match http.get(&health).send().await {
+            Ok(r) if r.status().is_success() => check("kasm", "kasm-browser (remote browser)", Status::Ok, config.kasm_api.clone()),
+            Ok(r) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("{health} answered {}", r.status())),
+            Err(e) => check("kasm", "kasm-browser (remote browser)", Status::Warn, format!("cannot reach {health}: {e}. The remote browser will not work")).fp(&["unreachable", &health]),
+        }
+    };
+    let (guacd, kasm) = tokio::join!(guacd, kasm);
+    vec![guacd, kasm]
+}
+
+/// GeoIP、裝置載體、OUI（兩份資料的讀檔在 blocking 執行緒上同時跑）。
+/// GeoIP, device carriers, OUI (both data files are read on blocking threads at the same time).
+async fn dataset_checks(config: &Config) -> Vec<Check> {
+    let (geo_dir, oui_dir) = (config.geoip_dir.clone(), config.oui_dir.clone());
+    let geo = tokio::task::spawn_blocking(move || geoip_check(&geo_dir, &oui_dir));
+    let oui_dir = config.oui_dir.clone();
+    let oui = tokio::task::spawn_blocking(move || oui_check(&oui_dir));
+    let carriers = carriers_check(config);
+    let (geo, oui) = tokio::join!(geo, oui);
+    vec![
+        geo.unwrap_or_else(|e| check("geoip", "GeoIP", Status::Warn, format!("the check itself failed: {e}"))),
+        carriers,
+        oui.unwrap_or_else(|e| check("oui", "OUI vendors", Status::Warn, format!("the check itself failed: {e}"))),
+    ]
+}
+
+/// GeoIP：裝了沒、多舊（用中的檔的建置時間；DB-IP 看 `.release` 是哪個月）。/ GeoIP: installed, and how old.
+fn geoip_check(geoip_dir: &Path, oui_dir: &Path) -> Check {
+    let now = chrono::Utc::now();
+    let geo = crate::geoip::GeoIp::load(geoip_dir);
+    let oui = crate::oui::Oui::default();
+    let items = crate::datasets::inspect(geoip_dir, oui_dir, &geo, &oui, now);
+    let release = |id: &str| items.iter().find(|i| i.id == id).and_then(|i| i.release.clone());
+    let (country, asn) = geo.in_use();
+    // DB-IP 的月份只說 Telepy 自己的檔；用中的是 MaxMind 的就看建置日期。/ The month only describes Telepy's own DB-IP file.
+    let own = |u: &Option<crate::geoip::InUse>, id: &str| u.as_ref().filter(|u| u.file == crate::datasets::geoip_file(id)).and_then(|_| release(id));
+    let (rc, ra) = (own(&country, "country"), own(&asn, "asn"));
+    match crate::datasets::geoip_freshness(country.as_ref(), asn.as_ref(), (rc.as_deref(), ra.as_deref()), geoip_dir, now) {
+        crate::datasets::Freshness::Missing => check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Download it on Server health → Companion services (IP and vendor data), or run telepy-server geoip in the backend container"),
+        crate::datasets::Freshness::Fresh(d) => check("geoip", "GeoIP", Status::Ok, d),
+        crate::datasets::Freshness::Stale(d, built) => check("geoip", "GeoIP", Status::Warn, d).fp(&["stale", &built]),
     }
+}
 
-    let oui = crate::oui::Oui::load(&config.oui_dir);
-    let oui_modified = std::fs::metadata(config.oui_dir.join(crate::oui::FILE)).ok().and_then(|m| m.modified().ok()).map(chrono::DateTime::<chrono::Utc>::from);
-    out.push(match crate::datasets::oui_freshness(oui.len(), oui_modified, &config.oui_dir, chrono::Utc::now()) {
+/// 裝置載體：快取了哪些平台的；沒有的第一次有裝置要時從 release 頁抓。/ Device carriers: which platforms are cached.
+fn carriers_check(config: &Config) -> Check {
+    let carriers = crate::carriers::Carriers::new(config, reqwest::Client::new());
+    let have = carriers.cached_targets();
+    let total = crate::carriers::TARGETS.len();
+    if have.is_empty() {
+        check("carriers", "device carriers", Status::Info, format!("none cached in {} yet: a device's first web-port install fetches its platform's telepy-carrier from {} (prefetch with telepy-server fetch-carriers; devices without one use python3 or the SSH port only); releases must be signed with: {}", carriers.dir().display(), carriers.releases(), carriers.keys_description()))
+    } else {
+        let list = carriers.cached_versions().into_iter().map(|(t, v)| format!("{t} ({})", v.as_deref().unwrap_or("hand-placed"))).collect::<Vec<_>>().join(", ");
+        check("carriers", "device carriers", Status::Ok, format!("{} of {total} platforms cached in {}: {list}", have.len(), carriers.dir().display())).fp(&[&have.len().to_string()])
+    }
+}
+
+/// OUI 廠商表：裝了沒、多舊。/ The OUI vendor list: installed, and how old.
+fn oui_check(oui_dir: &Path) -> Check {
+    let oui = crate::oui::Oui::load(oui_dir);
+    let oui_modified = std::fs::metadata(oui_dir.join(crate::oui::FILE)).ok().and_then(|m| m.modified().ok()).map(chrono::DateTime::<chrono::Utc>::from);
+    match crate::datasets::oui_freshness(oui.len(), oui_modified, oui_dir, chrono::Utc::now()) {
         crate::datasets::Freshness::Missing => check("oui", "OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Download it on Server health → Companion services (IP and vendor data), or run telepy-server oui in the backend container"),
         crate::datasets::Freshness::Fresh(d) => check("oui", "OUI vendors", Status::Ok, d),
         crate::datasets::Freshness::Stale(d, date) => check("oui", "OUI vendors", Status::Warn, d).fp(&["stale", &date]),
-    });
+    }
+}
 
-    // 最近登入記到的來源 IP：全是內部位址 = 前面的代理把真實位址弄丟了（或層數設錯）。
-    // Recent sign-in addresses: all internal = a proxy in front loses the real address (or the hop count is off).
-    if let Some(db) = &db {
-        let since = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(30));
-        let ips: Vec<String> = sqlx::query_scalar("SELECT ip FROM telepy_sign_in_event WHERE ip IS NOT NULL AND at >= ? ORDER BY id DESC LIMIT 50")
-            .bind(since)
-            .fetch_all(&db.read)
-            .await
-            .unwrap_or_default();
-        let header = config.client_ip_header_name();
-        let mut setting = format!("client_ip_hops={} ({})", config.client_ip_hops().setting(), source_label(config, "client_ip_hops"));
-        if let Some(h) = &header {
-            setting = format!("client_ip_header={h} ({}), {setting}", source_label(config, "client_ip_header"));
-        }
-        let cf = config.client_ip_cloudflare();
-        if cf != crate::server_settings::Cloudflare::Auto {
-            setting.push_str(&format!(", client_ip_cloudflare={}", cf.as_str()));
-        }
-        let (status, detail, key) = client_addresses(&ips, config.client_ip_hops(), header.as_deref(), &setting);
-        out.push(check("client_addresses", "client addresses", status, detail).fp(&[&key]));
+/// 最近登入記到的來源 IP：全是內部位址 = 前面的代理把真實位址弄丟了（或層數設錯）。
+/// Recent sign-in addresses: all internal = a proxy in front loses the real address (or the hop count is off).
+async fn client_address_check(config: &Config, db: Option<&Db>) -> Option<Check> {
+    let db = db?;
+    let since = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(30));
+    let ips: Vec<String> = sqlx::query_scalar("SELECT ip FROM telepy_sign_in_event WHERE ip IS NOT NULL AND at >= ? ORDER BY id DESC LIMIT 50")
+        .bind(since)
+        .fetch_all(&db.read)
+        .await
+        .unwrap_or_default();
+    let header = config.client_ip_header_name();
+    let mut setting = format!("client_ip_hops={} ({})", config.client_ip_hops().setting(), source_label(config, "client_ip_hops"));
+    if let Some(h) = &header {
+        setting = format!("client_ip_header={h} ({}), {setting}", source_label(config, "client_ip_header"));
     }
-
-    // 審計鏈。/ Audit chain.
-    if let Some(db) = &db {
-        out.push(audit_log_check(db).await.0);
+    let cf = config.client_ip_cloudflare();
+    if cf != crate::server_settings::Cloudflare::Auto {
+        setting.push_str(&format!(", client_ip_cloudflare={}", cf.as_str()));
     }
-    // 確認（只讀；表不在的舊資料庫 = 沒有）。/ Acknowledgements (read only; an older database without the table = none).
-    if let Some(db) = &db {
-        let stored = db::health_acks::list(db).await.unwrap_or_default();
-        apply_acks(&mut out, &stored);
-    }
-    out
+    let (status, detail, key) = client_addresses(&ips, config.client_ip_hops(), header.as_deref(), &setting);
+    Some(check("client_addresses", "client addresses", status, detail).fp(&[&key]))
 }
 
 /// 審計鏈這一項（伺服器狀態頁的重新封存也用它拿指紋與驗證結果；驗證失敗 = 沒有結果）。
 /// The audit-log check, also used by the Server health page's re-seal for the fingerprint and the report (None
 /// when verification itself failed).
 pub async fn audit_log_check(db: &Db) -> (Check, Option<db::audit_chain::Report>) {
-    match db::audit_chain::verify(db).await {
+    audit_log_check_within(db, None).await
+}
+
+/// 同上，但 `max_age` 之內驗過的結果直接用（`None` = 現在驗）；`checked_at` = 那次驗證的時間。
+/// The same, reusing a verification at most `max_age` old (`None` = verify now); `checked_at` = when it ran.
+pub async fn audit_log_check_within(db: &Db, max_age: Option<Duration>) -> (Check, Option<db::audit_chain::Report>) {
+    let verified = match max_age {
+        Some(age) => db::audit_chain::verify_recent(db, age).await,
+        None => {
+            let at = chrono::Utc::now();
+            db::audit_chain::verify(db).await.map(|report| db::audit_chain::Verified { report, at })
+        }
+    };
+    let at = verified.as_ref().ok().map(|v| v.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let (mut c, report) = audit_log_result(verified.map(|v| v.report));
+    c.checked_at = at;
+    (c, report)
+}
+
+fn audit_log_result(verified: anyhow::Result<db::audit_chain::Report>) -> (Check, Option<db::audit_chain::Report>) {
+    match verified {
         Ok(r) if r.ok => {
             let rows: u64 = r.tables.iter().map(|t| t.checked).sum();
             let foreign: u64 = r.tables.iter().map(|t| t.checkpoints_foreign).sum();

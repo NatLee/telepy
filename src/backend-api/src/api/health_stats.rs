@@ -176,23 +176,39 @@ fn fs_space(path: &Path) -> Option<(u64, u64)> {
     Some((s.blocks_available() as u64 * frag, s.blocks() as u64 * frag))
 }
 
-/// 儲存空間：資料庫檔與 WAL、資料目錄的檔案系統、錄影與日誌目錄（在 blocking 執行緒上跑）。
-/// Storage: the database file and its WAL, the data directory's filesystem, recordings and logs (blocking thread).
-fn storage(db_path: PathBuf, data_dir: PathBuf, log_root: PathBuf) -> Value {
-    let mut wal = db_path.clone().into_os_string();
+/// 儲存空間要看的路徑。/ The paths the storage block looks at.
+pub struct StoragePaths {
+    pub db: PathBuf,
+    pub data_dir: PathBuf,
+    pub log_root: PathBuf,
+    pub carrier_dir: PathBuf,
+    pub geoip_dir: PathBuf,
+    pub oui_dir: PathBuf,
+}
+
+/// 儲存空間：資料庫檔與 WAL、資料目錄的檔案系統、錄影、日誌、裝置載體、IP 與廠商資料（GeoIP、OUI）
+/// （在 blocking 執行緒上跑）。每個目錄各自一份大小與「走到上限」旗標。
+/// Storage: the database file and its WAL, the data directory's filesystem, recordings, logs, device carriers and
+/// the IP and vendor data (GeoIP, OUI), on a blocking thread. Each directory gets its size and a "stopped at the
+/// cap" flag.
+pub fn storage(p: &StoragePaths) -> Value {
+    let mut wal = p.db.clone().into_os_string();
     wal.push("-wal");
-    let data = fs_space(&data_dir).map(|(free, total)| json!({ "path": data_dir.display().to_string(), "free_bytes": free, "total_bytes": total }));
-    let recordings = dir_size(&data_dir.join("recordings"), WALK_CAP);
-    let logs = dir_size(&log_root, WALK_CAP);
-    json!({
-        "db_bytes": file_len(&db_path),
+    let data = fs_space(&p.data_dir).map(|(free, total)| json!({ "path": p.data_dir.display().to_string(), "free_bytes": free, "total_bytes": total }));
+    let mut out = json!({
+        "db_bytes": file_len(&p.db),
         "wal_bytes": file_len(Path::new(&wal)),
         "data_dir": data,
-        "recordings_bytes": recordings.map(|d| d.bytes),
-        "recordings_truncated": recordings.is_some_and(|d| d.truncated),
-        "logs_bytes": logs.map(|d| d.bytes),
-        "logs_truncated": logs.is_some_and(|d| d.truncated),
-    })
+    });
+    let dirs = [("recordings", p.data_dir.join("recordings")), ("logs", p.log_root.clone()), ("carriers", p.carrier_dir.clone()), ("geoip", p.geoip_dir.clone()), ("oui", p.oui_dir.clone())];
+    if let Value::Object(m) = &mut out {
+        for (key, dir) in dirs {
+            let size = dir_size(&dir, WALK_CAP);
+            m.insert(format!("{key}_bytes"), json!(size.map(|d| d.bytes)));
+            m.insert(format!("{key}_truncated"), json!(size.is_some_and(|d| d.truncated)));
+        }
+    }
+    out
 }
 
 #[utoipa::path(get, path = "/api/site/health/stats", tag = "Site Settings", security(("bearer" = [])), responses(
@@ -233,8 +249,15 @@ async fn server_stats(State(state): State<AppState>, AuthUser(me): AuthUser) -> 
     let (w_total, w_enabled, w_paused, w_failing) = db::server_stats::webhooks(&state.db, &since_db).await?;
 
     let c = &state.config;
-    let (db_path, data_dir, log_root) = (c.db_path.clone(), c.data_dir.clone(), c.log_root.clone());
-    let storage = tokio::task::spawn_blocking(move || storage(db_path, data_dir, log_root)).await.unwrap_or(Value::Null);
+    let paths = StoragePaths {
+        db: c.db_path.clone(),
+        data_dir: c.data_dir.clone(),
+        log_root: c.log_root.clone(),
+        carrier_dir: c.carrier_dir.clone(),
+        geoip_dir: c.geoip_dir.clone(),
+        oui_dir: c.oui_dir.clone(),
+    };
+    let storage = tokio::task::spawn_blocking(move || storage(&paths)).await.unwrap_or(Value::Null);
 
     let body = json!({
         "server": {

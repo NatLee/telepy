@@ -1,10 +1,11 @@
 /**
- * 管理區「伺服器狀態」的資料：`GET /api/site/health`（每次都重跑 doctor 的檢查，含審計鏈驗證，所以只在進頁面和
- * 按重新整理時抓，不輪詢），以及「已確認」：`POST /api/site/health/ack`（要再驗證時呼叫 `requestReauth` 後重送一次）、
+ * 管理區「伺服器狀態」的資料：`GET /api/site/health`（每次都重跑 doctor 的檢查，所以只在進頁面和按重新整理時抓，
+ * 不輪詢；進頁面時審計鏈沿用後端背景最近一次的驗證，重新整理才帶 `?fresh=1` 現在驗），以及「已確認」：`POST /api/site/health/ack`（要再驗證時呼叫 `requestReauth` 後重送一次）、
  * `DELETE /api/site/health/ack/{id}`。兩者都回整份結果，直接換上。重新封存審計鏈：`GET /api/site/health/audit`（試算）與
  * `POST /api/site/health/audit/reseal`（一樣要再驗證、回整份結果加上 `resealed`）。
- * Data for the admin "Server health" page: `GET /api/site/health` (every call reruns the doctor checks, audit chain
- * included, so it loads on open and on Refresh only — no polling), plus acknowledgements: `POST
+ * Data for the admin "Server health" page: `GET /api/site/health` (every call reruns the doctor checks, so it loads
+ * on open and on Refresh only — no polling; on open the audit chain reuses the backend's background verification,
+ * Refresh asks for a fresh one with `?fresh=1`), plus acknowledgements: `POST
  * /api/site/health/ack` (retried once with a proof from `requestReauth` when asked) and `DELETE
  * /api/site/health/ack/{id}`. Both answer the whole result, which replaces the current one. Re-sealing the audit
  * chain: `GET /api/site/health/audit` (the dry run) and `POST /api/site/health/audit/reseal` (re-authentication
@@ -48,11 +49,11 @@ export function useServerHealth() {
     const [failed, setFailed] = useState(false);
     const [busy, setBusy] = useState(false);
 
-    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
-    const reload = useCallback(async (): Promise<boolean> => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。`fresh` = 審計鏈現在驗。/ Answers whether it arrived (the Refresh button's check); `fresh` = verify the audit chain now.
+    const reload = useCallback(async (fresh = false): Promise<boolean> => {
         setBusy(true);
         try {
-            const res = await apiFetch("/api/site/health");
+            const res = await apiFetch(fresh ? "/api/site/health?fresh=1" : "/api/site/health");
             const parsed = res.ok ? parseServerHealth(await readJson<unknown>(res)) : null;
             setHealth(parsed);
             setFailed(!parsed);

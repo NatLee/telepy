@@ -143,9 +143,35 @@ pub struct AuditChains {
     anchors_file: RwLock<Option<PathBuf>>,
     /// 這個資料庫的鏈 id（第一次用時讀或建）。/ This database's chain id, read or created on first use.
     chain_id: RwLock<Option<String>>,
+    /// 最近一次完整驗證的結果與時間（背景每次 checkpoint 後驗一次；伺服器狀態頁拿它，不必每次走完整條鏈）。
+    /// The latest full verification and when it ran (the background loop verifies after every checkpoint; the
+    /// Server health page reuses it instead of walking every chain on each visit).
+    verified: RwLock<Option<Verified>>,
+}
+
+/// 一次完整驗證的結果。/ One full verification's result.
+#[derive(Debug, Clone)]
+pub struct Verified {
+    pub report: Report,
+    pub at: chrono::DateTime<chrono::Utc>,
 }
 
 impl AuditChains {
+    /// 最近一次完整驗證（沒有 = 這個程序還沒驗過）。/ The latest full verification, if this process ran one.
+    pub fn last_verified(&self) -> Option<Verified> {
+        self.verified.read().ok().and_then(|g| g.clone())
+    }
+    fn remember_verified(&self, v: Verified) {
+        if let Ok(mut g) = self.verified.write() {
+            *g = Some(v);
+        }
+    }
+    /// 丟掉記著的結果（重新封存改了鏈之後；下一次一定重驗）。/ Drop the remembered result (after a re-seal changed the chains).
+    pub fn forget_verified(&self) {
+        if let Ok(mut g) = self.verified.write() {
+            *g = None;
+        }
+    }
     pub fn set_anchors_file(&self, path: PathBuf) {
         if let Ok(mut g) = self.anchors_file.write() {
             *g = Some(path);
@@ -346,12 +372,35 @@ pub async fn checkpoint_all(db: &Db) {
     }
 }
 
-/// 背景：開機時與之後每 [`CHECKPOINT_INTERVAL`] 寫一次 checkpoint。/ Checkpoint at start and every interval.
+/// 背景：開機時與之後每 [`CHECKPOINT_INTERVAL`] 寫一次 checkpoint，接著完整驗證一次並記住結果
+/// （伺服器狀態頁打開時就用這份，[`verify_recent`]）。
+/// Checkpoint at start and every interval, then verify everything once and remember the result (what the Server
+/// health page shows on open, see [`verify_recent`]).
 pub async fn run(db: Db) {
     loop {
         checkpoint_all(&db).await;
+        if let Err(e) = verify(&db).await {
+            tracing::warn!(error = %e, "audit chain: background verification failed");
+        }
         tokio::time::sleep(CHECKPOINT_INTERVAL).await;
     }
+}
+
+/// 背景驗證的結果在這麼久之內都算新（多一分鐘給背景那一輪自己要花的時間）。
+/// How long the background verification counts as current (one extra minute for the round itself).
+pub const VERIFIED_FRESH: Duration = Duration::from_secs(CHECKPOINT_INTERVAL.as_secs() + 60);
+
+/// 最近 `max_age` 內驗過就用那份，否則現在驗一次。/ The latest verification when younger than `max_age`, else verify now.
+pub async fn verify_recent(db: &Db, max_age: Duration) -> anyhow::Result<Verified> {
+    if let Some(v) = db.audit.last_verified() {
+        let age = chrono::Utc::now().signed_duration_since(v.at);
+        if age >= chrono::Duration::zero() && age.to_std().is_ok_and(|a| a <= max_age) {
+            return Ok(v);
+        }
+    }
+    let at = chrono::Utc::now();
+    let report = verify(db).await?;
+    Ok(Verified { report, at })
 }
 
 /// 讀外部錨點檔（不存在 = 沒有 checkpoint；壞掉的行略過）。/ Read the anchors file; missing = none.
@@ -435,22 +484,40 @@ pub struct Report {
 }
 
 /// 驗證三張表（外部錨點檔讀自 `db.audit`）。/ Verify all three tables against the chain and the anchors file.
+/// 三張表同時走：各自一個 task（雜湊與解碼才真的分到不同執行緒）、各用 read pool 的一條連線；
+/// 結果記在 `db.audit`（[`AuditChains::last_verified`]）。
+/// The three tables are walked at the same time, each in its own task (so hashing and decoding really run on
+/// different threads) with its own read-pool connection; the result is remembered in `db.audit`
+/// ([`AuditChains::last_verified`]).
 pub async fn verify(db: &Db) -> anyhow::Result<Report> {
+    let started = chrono::Utc::now();
     let lines = read_checkpoints(db).await?;
     let ours = chain_id(db).await?;
     // 表不在（還沒升級的舊資料庫，doctor 直接開的）= 沒有重新封存過。/ No table yet (an older database) = never re-sealed.
     let reseals = list_reseals(db).await.unwrap_or_default();
-    let mut tables = Vec::new();
-    for t in TABLES {
+    let walks = TABLES.map(|t| {
         let (cps, foreign) = lines_of(&lines, t, ours.as_deref());
         let (retired, active) = split_retired(&cps, &confirmed(&reseals, t));
-        let mut r = verify_table(db, t, active).await?;
-        r.checkpoints_foreign = foreign;
-        r.checkpoints_retired = retired;
-        r.last_reseal = reseals.iter().rev().find(|x| x.table == t.name()).cloned();
-        tables.push(r);
+        let active: Vec<CheckpointLine> = active.iter().map(|l| (*l).clone()).collect();
+        let last_reseal = reseals.iter().rev().find(|x| x.table == t.name()).cloned();
+        let db = db.clone();
+        tokio::spawn(async move {
+            let refs: Vec<&CheckpointLine> = active.iter().collect();
+            let mut r = verify_table(&db, t, &refs).await?;
+            r.checkpoints_foreign = foreign;
+            r.checkpoints_retired = retired;
+            r.last_reseal = last_reseal;
+            Ok::<_, sqlx::Error>(r)
+        })
+    });
+    let mut tables = Vec::with_capacity(TABLES.len());
+    for walk in futures::future::join_all(walks).await {
+        tables.push(walk.map_err(|e| anyhow::anyhow!("audit chain verification task: {e}"))??);
     }
-    Ok(Report { ok: tables.iter().all(|t| t.ok), tables })
+    let report = Report { ok: tables.iter().all(|t| t.ok), tables };
+    // 時間記開始的時候：之後寫的列不在這份結果裡。/ Stamped with the start: rows written later are not in it.
+    db.audit.remember_verified(Verified { report: report.clone(), at: started });
+    Ok(report)
 }
 
 /// 一張表在錨點檔裡屬於這個資料庫的行（檔案順序；沒有 `db` 的舊行算），以及別的資料庫寫的行數。
@@ -618,6 +685,8 @@ pub struct ResealBy<'a> {
 /// leaves the table untouched, and a line left by a failed commit is unknown to the database, so it does not count.
 /// It changes the baseline, not the evidence: edited rows do not come back.
 pub async fn reseal(db: &Db, targets: &[(Table, String)], by: &ResealBy<'_>) -> anyhow::Result<Vec<ResealRecord>> {
+    // 鏈要變了：記著的驗證結果作廢。/ The chains are about to change: the remembered verification no longer holds.
+    db.audit.forget_verified();
     // 鏈 id、錨點檔、舊紀錄先讀（寫入池只有一條連線）。/ Chain id, file and records first (the write pool has one connection).
     let chain = ensure_chain_id(db).await?;
     let lines = read_checkpoints(db).await?;

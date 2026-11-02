@@ -19,7 +19,7 @@
 //! `GET /api/site/health/audit` is the dry run (each table's problem, rows to re-hash, lines to set aside, earlier
 //! re-seals).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -102,17 +102,34 @@ async fn health_body(state: &AppState, mut checks: Vec<Check>) -> ApiResult<Valu
     Ok(body)
 }
 
-async fn run(state: &AppState) -> Vec<Check> {
-    doctor::run_with(&state.config, Ok(state.db.clone())).await
+/// 跑檢查。審計鏈：`fresh` = 現在驗；否則用背景最近一次的驗證（每 10 分鐘一次），太舊才現在驗。
+/// Run the checks. The audit chain: `fresh` = verify now; otherwise the background's latest verification (every 10
+/// minutes), verified now only when that is too old.
+async fn run_checks(state: &AppState, fresh: bool) -> Vec<Check> {
+    let audit_max_age = (!fresh).then_some(db::audit_chain::VERIFIED_FRESH);
+    doctor::run_with(&state.config, Ok(state.db.clone()), audit_max_age).await
 }
 
-#[utoipa::path(get, path = "/api/site/health", tag = "Site Settings", security(("bearer" = [])), responses(
-    (status = 200, description = "The `telepy-server doctor` checks run now (superusers): configuration, database, service and host keys, companion services, GeoIP, recent client addresses, audit chain; each with its fingerprint and acknowledgement", body = super::schemas::ServerHealth),
+/// 確認 / 取消時重跑：審計鏈用頁面看到的那份（指紋才對得上）。/ Reruns for acknowledgements use the audit result the page showed.
+async fn run(state: &AppState) -> Vec<Check> {
+    run_checks(state, false).await
+}
+
+#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HealthQuery {
+    /// `1` / `true`: verify the audit chain now instead of reusing the background verification (at most 11 minutes old)
+    pub fresh: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/site/health", tag = "Site Settings", security(("bearer" = [])), params(HealthQuery), responses(
+    (status = 200, description = "The `telepy-server doctor` checks run now (superusers): configuration, database, service and host keys, companion services, GeoIP, recent client addresses, audit chain; each with its fingerprint and acknowledgement. Independent checks run at the same time. The audit chain reuses the background verification (every 10 minutes; `checked_at` says when) unless `fresh=1`", body = super::schemas::ServerHealth),
     (status = 403, body = super::schemas::ErrorBody)
 ))]
-async fn server_health(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<impl IntoResponse> {
+async fn server_health(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Query<HealthQuery>) -> ApiResult<impl IntoResponse> {
     admin_only(&me)?;
-    let checks = run(&state).await;
+    let fresh = matches!(q.fresh.as_deref().map(str::trim), Some("1" | "true" | "yes"));
+    let checks = run_checks(&state, fresh).await;
     respond(&state, checks).await
 }
 
@@ -239,7 +256,7 @@ async fn audit_reseal(State(state): State<AppState>, AuthUser(me): AuthUser, hea
     let parts: Vec<String> = done.iter().map(reseal_summary).collect();
     let msg = format!("{} re-sealed the audit log: {}. Note: {note}", me.username, parts.join("; "));
     state.gateway.event("audit_reseal", None, None, None, msg).await;
-    let checks = run(&state).await;
+    let checks = run_checks(&state, true).await;
     let mut out = health_body(&state, checks).await?;
     if let Value::Object(m) = &mut out {
         m.insert("resealed".into(), serde_json::to_value(&done).map_err(|e| ApiError::internal(e.to_string()))?);

@@ -78,6 +78,24 @@ async fn server_stats_for_admins_only() {
     assert!(s["wal_bytes"].as_u64().is_some(), "{}", r.text);
     assert!(s["data_dir"]["total_bytes"].as_u64().unwrap() >= s["data_dir"]["free_bytes"].as_u64().unwrap(), "{}", r.text);
     assert_eq!(s["recordings_bytes"], 0, "{}", r.text);
+    // 裝置載體與 IP / 廠商資料：沒有就是 0，放了檔案就算進去。/ Device carriers and IP / vendor data: 0 when empty, counted once present.
+    for key in ["carriers_bytes", "geoip_bytes", "oui_bytes"] {
+        assert_eq!(s[key], 0, "{key}: {}", r.text);
+    }
+    let config = &app.state.config;
+    std::fs::create_dir_all(config.carrier_dir.join("x86_64-unknown-linux-musl")).unwrap();
+    std::fs::write(config.carrier_dir.join("x86_64-unknown-linux-musl/telepy-carrier"), vec![0u8; 1500]).unwrap();
+    std::fs::create_dir_all(&config.geoip_dir).unwrap();
+    std::fs::write(config.geoip_dir.join("dbip-country-lite.mmdb"), vec![0u8; 700]).unwrap();
+    std::fs::write(config.geoip_dir.join("dbip-asn-lite.mmdb"), vec![0u8; 300]).unwrap();
+    std::fs::create_dir_all(&config.oui_dir).unwrap();
+    std::fs::write(config.oui_dir.join("oui.csv"), vec![b'x'; 42]).unwrap();
+    let r = app.get("/api/site/health/stats", Some(&admin)).await;
+    let s = &r.json["storage"];
+    assert_eq!((s["carriers_bytes"].as_u64(), s["geoip_bytes"].as_u64(), s["oui_bytes"].as_u64()), (Some(1500), Some(1000), Some(42)), "{}", r.text);
+    for key in ["carriers_truncated", "geoip_truncated", "oui_truncated"] {
+        assert_eq!(s[key], false, "{key}: {}", r.text);
+    }
     assert_eq!(s["recordings_truncated"], false);
     // 閘道事件寫了 ssh-gateway.log 到 LOG_ROOT。/ The gateway events appended to LOG_ROOT's ssh-gateway.log.
     assert!(s["logs_bytes"].as_u64().is_some(), "{}", r.text);

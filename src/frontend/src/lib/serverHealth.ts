@@ -104,6 +104,12 @@ export interface HealthCheck {
     ack: HealthAck | null;
     /** 之前確認過、但結果已經變了（又變紅）。/ Acknowledged earlier, but the result has changed since (red again). */
     staleAck: HealthAck | null;
+    /**
+     * 結果是什麼時候得到的；只有會沿用之前結果的檢查有（審計鏈：背景每 10 分鐘驗一次），其他 = 這次跑的。
+     * When the result was obtained; only on checks that may reuse an earlier one (the audit chain, verified in the
+     * background every 10 minutes); null = run just now.
+     */
+    checkedAt: string | null;
 }
 
 export interface ServerHealth {
@@ -145,7 +151,8 @@ export function parseServerHealth(raw: unknown): ServerHealth | null {
         if (typeof o.name !== "string" || !o.name) return [];
         const status: HealthStatus = STATUSES.includes(o.status as HealthStatus) ? (o.status as HealthStatus) : "info";
         const id = CHECK_IDS.includes(o.id as HealthCheckId) ? (o.id as HealthCheckId) : (ID_BY_NAME[o.name] ?? null);
-        return [{ id, name: o.name, status, detail: typeof o.detail === "string" ? o.detail : "", fingerprint: typeof o.fingerprint === "string" ? o.fingerprint : "", ack: parseAck(o.ack), staleAck: parseAck(o.stale_ack) }];
+        const checkedAt = typeof o.checked_at === "string" && !Number.isNaN(Date.parse(o.checked_at)) ? o.checked_at : null;
+        return [{ id, name: o.name, status, detail: typeof o.detail === "string" ? o.detail : "", fingerprint: typeof o.fingerprint === "string" ? o.fingerprint : "", ack: parseAck(o.ack), staleAck: parseAck(o.stale_ack), checkedAt }];
     });
     return {
         checks,
@@ -233,4 +240,17 @@ export function problems(checks: HealthCheck[]): HealthCheck[] {
 export function initialHealthTab(rawTab: string | null | undefined, hash: string | null | undefined): HealthTab {
     if (!rawTab && hash === "#client-ip") return "addresses";
     return parseHealthTab(rawTab);
+}
+
+/**
+ * 審計鏈是沿用之前的驗證時，那次驗證的時間（比這次檢查早不到 30 秒 = 就是剛剛驗的，回 null）。
+ * When the audit chain reused an earlier verification, that verification's time (less than 30 s before this run =
+ * verified just now, null).
+ */
+export function auditReusedAt(health: ServerHealth): string | null {
+    const at = health.checks.find((c) => c.id === "audit_log")?.checkedAt;
+    if (!at) return null;
+    const ran = health.ranAt ? Date.parse(health.ranAt) : NaN;
+    if (!Number.isNaN(ran) && ran - Date.parse(at) < 30_000) return null;
+    return at;
 }

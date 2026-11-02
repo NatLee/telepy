@@ -26,6 +26,14 @@ export interface ServerStats {
         data_dir: { path: string | null; free_bytes: number | null; total_bytes: number | null } | null;
         recordings_bytes: number | null;
         logs_bytes: number | null;
+        /** 裝置載體（`CARRIER_DIR`，每個平台的 telepy-carrier）。/ The cached device carriers (`CARRIER_DIR`). */
+        carriers_bytes: number | null;
+        /** IP 位置 / 網路資料庫（`GEOIP_DIR`）。/ The IP location / network databases (`GEOIP_DIR`). */
+        geoip_bytes: number | null;
+        /** 網卡廠商表（`OUI_DIR`）。/ The NIC vendor list (`OUI_DIR`). */
+        oui_bytes: number | null;
+        /** 哪些目錄走到上限停了（大小只是下限）。/ Directories whose walk stopped at the cap (the size is a lower bound). */
+        truncated: StorageDir[];
     } | null;
     activity: {
         hours: string[] | null;
@@ -38,6 +46,10 @@ export interface ServerStats {
     } | null;
     webhooks: { total: number | null; enabled: number | null; paused: number | null; failing_recent: number | null } | null;
 }
+
+/** 後端會走訪的目錄。/ The directories the backend walks. */
+export type StorageDir = "recordings" | "logs" | "carriers" | "geoip" | "oui";
+const STORAGE_DIRS: StorageDir[] = ["recordings", "logs", "carriers", "geoip", "oui"];
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : null);
@@ -94,6 +106,10 @@ export function parseServerStats(raw: unknown): ServerStats | null {
                 data_dir: dd ? some({ path: str(dd.path), free_bytes: num(dd.free_bytes), total_bytes: num(dd.total_bytes) }) : null,
                 recordings_bytes: num(st.recordings_bytes),
                 logs_bytes: num(st.logs_bytes),
+                carriers_bytes: num(st.carriers_bytes),
+                geoip_bytes: num(st.geoip_bytes),
+                oui_bytes: num(st.oui_bytes),
+                truncated: [],
             })
             : null,
         activity: a
@@ -109,7 +125,55 @@ export function parseServerStats(raw: unknown): ServerStats | null {
             : null,
         webhooks: w ? some({ total: num(w.total), enabled: num(w.enabled), paused: num(w.paused), failing_recent: num(w.failing_recent) }) : null,
     };
+    // 旗標不算「有內容」，所以整塊判斷完才補上。/ Flags don't count as content, so they are added after the block check.
+    if (out.storage && st) out.storage.truncated = STORAGE_DIRS.filter((d) => st[`${d}_truncated`] === true);
     return Object.values(out).some((v) => v !== null) ? out : null;
+}
+
+/** 儲存空間清單的一列：Telepy 自己放在磁碟上的一類東西。/ One row of the storage list: one kind of thing Telepy keeps on disk. */
+export type StoragePartId = "database" | "wal" | "recordings" | "logs" | "carriers" | "datasets";
+export const STORAGE_PARTS: StoragePartId[] = ["database", "wal", "recordings", "logs", "carriers", "datasets"];
+
+export interface StoragePart {
+    id: StoragePartId;
+    bytes: number;
+    /** 佔 Telepy 全部的比例（0–1；全部是 0 時是 0）。/ Share of everything Telepy keeps (0–1; 0 when it all is). */
+    share: number;
+    /** 走訪到上限停了：至少這麼多。/ The walk stopped at the cap: at least this much. */
+    atLeast: boolean;
+    /** IP 與廠商資料拆成兩份（只有 `datasets` 有）。/ The IP and vendor data split in two (only on `datasets`). */
+    split?: { geoip: number | null; oui: number | null };
+}
+
+/**
+ * Telepy 放在磁碟上的東西，大的在前（一樣大照固定順序）；後端沒給的不列，IP 與廠商資料 = GeoIP + OUI。
+ * What Telepy keeps on disk, largest first (ties in a fixed order); parts the backend didn't send are left out,
+ * and the IP and vendor data = GeoIP + OUI.
+ */
+export function storageParts(st: ServerStats["storage"]): { parts: StoragePart[]; total: number; atLeast: boolean } {
+    if (!st) return { parts: [], total: 0, atLeast: false };
+    const cut = (d: StorageDir) => st.truncated.includes(d);
+    const datasets = st.geoip_bytes === null && st.oui_bytes === null ? null : (st.geoip_bytes ?? 0) + (st.oui_bytes ?? 0);
+    const raw: [StoragePartId, number | null, boolean][] = [
+        ["database", st.db_bytes, false],
+        ["wal", st.wal_bytes, false],
+        ["recordings", st.recordings_bytes, cut("recordings")],
+        ["logs", st.logs_bytes, cut("logs")],
+        ["carriers", st.carriers_bytes, cut("carriers")],
+        ["datasets", datasets, cut("geoip") || cut("oui")],
+    ];
+    const known = raw.filter((r): r is [StoragePartId, number, boolean] => r[1] !== null);
+    const total = known.reduce((a, [, b]) => a + b, 0);
+    const parts = known
+        .map(([id, bytes, atLeast]) => ({
+            id,
+            bytes,
+            share: total > 0 ? bytes / total : 0,
+            atLeast,
+            ...(id === "datasets" ? { split: { geoip: st.geoip_bytes, oui: st.oui_bytes } } : {}),
+        }))
+        .sort((a, b) => b.bytes - a.bytes || STORAGE_PARTS.indexOf(a.id) - STORAGE_PARTS.indexOf(b.id));
+    return { parts, total, atLeast: parts.some((p) => p.atLeast) };
 }
 
 const BYTE_UNITS = ["byte", "kilobyte", "megabyte", "gigabyte", "terabyte", "petabyte"] as const;
