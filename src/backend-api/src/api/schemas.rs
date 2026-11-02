@@ -117,7 +117,7 @@ pub struct SignInPage {
     /// The page `telepy login` (the CLI's browser sign-in) shows a signed-out browser: standard | discreet | tapi
     #[schema(example = "discreet")]
     pub cli_style: String,
-    /// The approval (consent) page `/oauth/authorize`, and the page `telepy login` shows once signed in: standard | discreet
+    /// The approval (consent) page `/oauth/authorize`, and the page `telepy login` shows once signed in: standard | discreet | tapi
     #[schema(example = "standard")]
     pub consent_style: String,
     /// The discreet page's lines, one per line, typed in turn; blank = the built-in ones

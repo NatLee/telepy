@@ -12,9 +12,13 @@ import { MASCOT_POSES, mirrored, type MascotPose } from "./mascot.ts";
 
 /* ── 心情 / Mood ─────────────────────────────────────────────── */
 
-export type TapiMood = "idle" | "watching" | "shy" | "peek" | "thinking" | "oops" | "yay" | "mfa" | "wave" | "poke" | "sleepy";
-/** 一下子就過去的反應（幾秒後回到跟著表單的心情）。/ Short reactions that pass after a few seconds. */
-export type TapiFlash = "oops" | "yay" | "poke";
+export type TapiMood = "idle" | "watching" | "shy" | "peek" | "thinking" | "oops" | "yay" | "mfa" | "wave" | "poke" | "sleepy" | "careful" | "stamp" | "bye" | "done";
+/**
+ * 一下子就過去的反應（幾秒後回到跟著表單的心情）。授權頁另有三個：勾了會改東西的權限（careful）、按允許（stamp）、按拒絕（bye）。
+ * Short reactions that pass after a few seconds. The approval page adds three: a scope that can change things ticked
+ * (careful), approve (stamp) and deny (bye).
+ */
+export type TapiFlash = "oops" | "yay" | "poke" | "careful" | "stamp" | "bye";
 /** 焦點在哪：帳號、密碼（含旁邊的顯示按鈕）、兩步驟的驗證碼、其他。/ Where focus is: username, password (and its toggle), the code, other. */
 export type TapiFocus = "username" | "password" | "code" | "other" | null;
 
@@ -33,7 +37,7 @@ export interface StageInput {
 /** 這麼久沒人理就睡著。/ Falls asleep after this long without anyone around. */
 export const SLEEP_AFTER_SECS = 40;
 /** 反應持續多久（毫秒）。/ How long each reaction lasts (ms). */
-export const FLASH_MS: Record<TapiFlash, number> = { oops: 2600, yay: 2400, poke: 1500 };
+export const FLASH_MS: Record<TapiFlash, number> = { oops: 2600, yay: 2400, poke: 1500, careful: 3400, stamp: 4000, bye: 3000 };
 
 /**
  * 心情的優先順序：剛發生的反應 > 送出中 > 密碼（轉身 / 嚇一跳）> 驗證碼 > 帳號 > 滑鼠在身上 > 睡著 > 平常。
@@ -63,6 +67,10 @@ export const MOOD_POSE: Record<TapiMood, MascotPose | "back"> = {
     wave: "wave",
     poke: "happy",
     sleepy: "idle",
+    careful: "surprised",
+    stamp: "happy",
+    bye: "wave",
+    done: "happy",
 };
 
 /** 每種心情的動作（tapi.css 的 class）。/ Each mood's motion (classes in tapi.css). */
@@ -73,6 +81,10 @@ export const MOOD_MOTION: Record<TapiMood, "bob" | "still" | "shake" | "jump" | 
     peek: "shake",
     thinking: "quick",
     oops: "shake",
+    careful: "shake",
+    stamp: "jump",
+    bye: "wiggle",
+    done: "bob",
     yay: "jump",
     mfa: "bob",
     wave: "wiggle",
@@ -254,4 +266,161 @@ export function pearlAt(p: Pearl, t: number, width: number, height: number): { x
     const x = p.x * Math.max(0, width - size) + Math.sin((t / l.period) * Math.PI * 2 + p.phase) * l.sway;
     const snap = (v: number) => Math.round(v / l.unit) * l.unit || 0;
     return { x: snap(x), y: snap(y), size };
+}
+
+/* ── 每一頁的場景 / A scene per page ─────────────────────────── */
+
+/**
+ * Tapi 版每一頁照它做的事換一個場景：登入 = 一杯珍奶；應用程式連接 = 紙飛機把應用程式的請求送來，Tapi 拿著信；
+ * CLI 登入（與登入完成頁）= 終端機；授權 = 審核櫃台，Tapi 戴著墨鏡蓋章。
+ * Each Tapi page gets a scene that matches what it does: sign-in = a cup of bubble tea; app connection = paper planes
+ * bringing the app's request, Tapi holding the letter; CLI sign-in (and its done page) = a terminal; approval = a
+ * counter where Tapi, in sunglasses, does the stamping.
+ */
+export type TapiScene = "tea" | "mail" | "terminal" | "desk";
+export const TAPI_SCENES: readonly TapiScene[] = ["tea", "mail", "terminal", "desk"];
+
+export function sceneFor(page: "signin" | "oauth" | "cli" | "consent"): TapiScene {
+    return page === "oauth" ? "mail" : page === "cli" ? "terminal" : page === "consent" ? "desk" : "tea";
+}
+
+/** 把一小張圖疊到 Tapi 上（`.` = 透明）。/ Lays a small grid over Tapi (`.` = see-through). */
+export function overlay(sprite: readonly string[], pattern: readonly string[], x0: number, y0: number): string[] {
+    const rows = sprite.map((r) => [...r]);
+    pattern.forEach((row, j) => [...row].forEach((c, i) => c !== "." && rows[y0 + j]?.[x0 + i] !== undefined && (rows[y0 + j][x0 + i] = c)));
+    return rows.map((r) => r.join(""));
+}
+
+// 墨鏡：上緣一條橫桿、鏡片塗黑（K）、每片左上一點反光（Q）；14 格寬、放在第 6 欄，正好以臉的中線（第 12.5 欄，
+// 兩隻眼睛的正中間）對稱，蓋住第 9–12 列的眼睛，嘴巴留在下面照樣表情。信封：W 紙、G 陰影。（K / Q / W / G 在 mascot.ts 的節日色票裡。）
+// Sunglasses: a bar across the top, blacked-out lenses (K) with a glint at each lens's top left (Q); 14 wide at column
+// 6, so they sit on the face's centre line (column 12.5, right between the eyes), cover the eyes on rows 9–12 and leave
+// the mouth below to show the mood. The envelope: W paper, G shade. (K / Q / W / G are in mascot.ts's festive palette.)
+export const SUNGLASSES = ["DDDDDDDDDDDDDD", "DQKKKD..DQKKKD", "DKKKKD..DKKKKD", ".DKKD....DKKD."];
+export const SUNGLASSES_AT = { x: 6, y: 9 } as const;
+const ENVELOPE = ["DDDDDDDD", "DWDWWDWD", "DWWDDWWD", "DWWWWWWD", "DDDDDDDD"];
+
+/**
+ * 某個場景、某個心情的 Tapi：授權頁戴墨鏡、應用程式連接頁拿著信；轉過身時什麼都不加。
+ * Tapi for a scene and mood: sunglasses at the approval page, a letter at the app connection page; nothing extra when
+ * turned around.
+ */
+export function sceneSprite(mood: TapiMood, scene: TapiScene): string[] {
+    const pose = MOOD_POSE[mood];
+    const base = moodSprite(mood);
+    if (pose === "back") return [...base];
+    if (scene === "desk") return overlay(base, SUNGLASSES, SUNGLASSES_AT.x, SUNGLASSES_AT.y);
+    if (scene === "mail") return overlay(base, ENVELOPE, 17, 13);
+    return [...base];
+}
+
+/** 每個場景自己的三句內建台詞（管理員沒寫句子時）。/ Each scene's three built-in lines (when the admin wrote none). */
+export const SCENE_LINES: Record<TapiScene, readonly [string, string, string]> = {
+    tea: ["tapiLook.tea.line1", "tapiLook.tea.line2", "tapiLook.tea.line3"],
+    mail: ["tapiLook.mail.line1", "tapiLook.mail.line2", "tapiLook.mail.line3"],
+    terminal: ["tapiLook.terminal.line1", "tapiLook.terminal.line2", "tapiLook.terminal.line3"],
+    desk: ["tapiLook.desk.line1", "tapiLook.desk.line2", "tapiLook.desk.line3"],
+};
+
+/* ── 紙飛機（應用程式連接頁）/ Paper planes (app connection) ─── */
+
+/** 12 × 9 的紙飛機，往右飛。/ A 12 × 9 paper plane flying right. */
+export const PLANE_SPRITE = ["DD..........", "DWDD........", ".DWWDDD.....", ".DWWWWWDDD..", "..DWWWWWWWDD", ".DGGGGDDDD..", ".DGGDD......", "DGD.........", "DD.........."];
+export const PLANE_PALETTE: Record<"light" | "dark", Record<string, string>> = {
+    light: { D: "#4a2026", W: "#fffaf0", G: "#d8cfc1" },
+    dark: { D: "#120c0d", W: "#f6efe3", G: "#bfb3a2" },
+};
+/** 三層：後面小、慢、淡。/ Three depths: back = small, slow, faint. */
+export const PLANE_LAYERS = [
+    { unit: 2, speed: 34, alpha: 0.35, dip: 10, period: 9 },
+    { unit: 3, speed: 52, alpha: 0.6, dip: 16, period: 7 },
+    { unit: 4, speed: 76, alpha: 0.95, dip: 22, period: 6 },
+] as const;
+
+export interface Flyer {
+    /** 高度（0–1）。/ Height, 0–1. */
+    y: number;
+    /** 一開始飛到哪（0–1），大家不會同時出發。/ Where along the way it starts, 0–1. */
+    x0: number;
+    layer: 0 | 1 | 2;
+    phase: number;
+}
+
+/** 畫面多大放幾架：每 9 萬平方 px 一架，5–14 架。/ How many planes: one per 90,000 px², 5–14. */
+export function planeCount(width: number, height: number): number {
+    return Math.min(14, Math.max(5, Math.round((Math.max(0, width) * Math.max(0, height)) / 90_000)));
+}
+
+export function makePlanes(count: number, seed = 11): Flyer[] {
+    const rand = seeded(seed);
+    return Array.from({ length: Math.max(0, Math.floor(count)) }, (_, i) => {
+        const r = (i * 0.6180339887) % 1;
+        const layer: 0 | 1 | 2 = r < 0.45 ? 0 : r < 0.8 ? 1 : 2;
+        return { y: 0.08 + rand() * 0.84, x0: rand(), layer, phase: rand() * Math.PI * 2 };
+    });
+}
+
+/**
+ * 一架紙飛機在 `t` 秒時的位置（左上角，px）：從左往右飛，飛出右邊再從左邊進來，上下輕輕起伏；`trail` = 後面虛線的點。
+ * Where a plane is at `t` seconds (top-left, px): left to right, back in from the left after leaving, gently dipping;
+ * `trail` = the dots of the dashed line behind it.
+ */
+export function planeAt(p: Flyer, t: number, width: number, height: number): { x: number; y: number; size: number; unit: number; trail: { x: number; y: number }[] } {
+    const l = PLANE_LAYERS[p.layer];
+    const size = 12 * l.unit;
+    const travel = width + size * 2 + 160;
+    const along = (p.x0 * travel + Math.max(0, t) * l.speed) % travel;
+    const x = along - size - 160;
+    const yAt = (xx: number) => p.y * Math.max(0, height - size) + Math.sin(((xx / Math.max(1, width)) * 2 + t / l.period) * Math.PI + p.phase) * l.dip;
+    const snap = (v: number) => Math.round(v / l.unit) * l.unit || 0;
+    const trail = [1, 2, 3, 4, 5].map((k) => {
+        const tx = x - k * 6 * l.unit;
+        return { x: snap(tx), y: snap(yAt(tx) + size * 0.55) };
+    });
+    return { x: snap(x), y: snap(yAt(x)), size, unit: l.unit, trail };
+}
+
+/* ── 終端機的字（CLI 頁）/ Terminal glyphs (CLI pages) ─────────── */
+
+/** 往上飄的字（像資料穿過通道）。/ The characters drifting up (data through the tunnel). */
+export const GLYPHS = "$>_~/{}[]|01-R:".split("");
+
+/** 第 `i` 個字在 `t` 秒時是哪一個：每幾秒換一次。/ Which character particle `i` shows at `t`: it changes every few seconds. */
+export function glyphAt(i: number, t: number, seed = 5): string {
+    const step = Math.floor(Math.max(0, t) / (2.5 + (i % 5) * 0.7));
+    const rand = seeded(seed + i * 7919 + step * 104729);
+    return GLYPHS[Math.floor(rand() * GLYPHS.length)];
+}
+
+/* ── 印章（授權頁）/ Stamps (approval page) ──────────────────── */
+
+/** 16 × 9 的圓形「OK」印章（O 與 K 各 4 × 5、中間空兩格）與 9 × 7 的勾勾。/ A 16 × 9 round "OK" stamp (O and K 4 × 5 each, two apart) and a 9 × 7 check mark. */
+export const STAMP_OK = ["...BBBBBBBBBB...", "..BB........BB..", ".B..BB...B..B.B.", ".B.B..B..B.B..B.", "B..B..B..BB....B", ".B.B..B..B.B..B.", ".B..BB...B..B.B.", "..BB........BB..", "...BBBBBBBBBB..."];
+export const STAMP_CHECK = [".......BB", "......BB.", ".....BB..", "BB..BB...", ".BBBB....", "..BB.....", "........."];
+
+/** 同時最多幾個印子、一輪多久（秒）。/ How many marks at once and how long one round lasts (s). */
+export const STAMP_SLOTS = 6;
+export const STAMP_ROUND = 7;
+
+/**
+ * 第 `slot` 格在 `t` 秒時的印子：每輪在不固定的位置「蓋」下去（先大一點、很快縮回），停一下再淡掉；輪與輪之間錯開。
+ * 沒有印子時回 null。`kind` = OK 印章或勾勾。
+ * The mark in slot `slot` at `t` seconds: each round it is "stamped" somewhere new (a little large, quickly settling),
+ * stays, then fades; slots are staggered. null between marks. `kind` = the OK stamp or a check mark.
+ */
+export function stampAt(slot: number, t: number, seed = 3): { x: number; y: number; kind: "ok" | "check"; alpha: number; scale: number; tilt: number } | null {
+    const local = Math.max(0, t) + (slot * STAMP_ROUND) / STAMP_SLOTS;
+    const round = Math.floor(local / STAMP_ROUND);
+    const age = local - round * STAMP_ROUND;
+    const life = 5;
+    if (age > life) return null;
+    const rand = seeded(seed + slot * 997 + round * 7907);
+    const x = 0.06 + rand() * 0.88;
+    const y = 0.08 + rand() * 0.84;
+    const kind = rand() < 0.6 ? "ok" : "check";
+    const tilt = (rand() - 0.5) * 0.5;
+    const settle = Math.min(1, age / 0.18);
+    const scale = 1.35 - 0.35 * settle;
+    const alpha = age < 0.18 ? settle : age > life - 1.2 ? Math.max(0, (life - age) / 1.2) : 1;
+    return { x, y, kind, alpha, scale, tilt };
 }

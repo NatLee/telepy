@@ -3,17 +3,19 @@
 /**
  * `telepy login` 完成後瀏覽器停的那一頁（/oauth/done），跟著授權頁的樣子：一般 = CLI 的流程面板（第三步「回到終端機」）+
  * 結果、可以在終端機試的指令、這個 CLI 能做什麼（權限與隧道，從這個瀏覽器的登入讀 grant）與 CLI 說明的連結；
- * 低調 = 只寫 Telepy 的低調外框，一句結果、一句「回到終端機」。拒絕或沒完成時說原因（只有固定的幾種）。
+ * 低調 = 只寫 Telepy 的低調外框，一句結果、一句「回到終端機」；Tapi = 終端機場景，Tapi 照結果反應，卡片是結果與可以試的指令。拒絕或沒完成時說原因（只有固定的幾種）。
  * The page the browser lands on after `telepy login` (/oauth/done), in the approval page's look: standard = the CLI
  * flow panel (step three, back to the terminal) plus the result, commands to try, what this CLI may do (scopes and
  * tunnels, read from the grant with this browser's sign-in) and a link to the CLI guide; discreet = the plain
- * "Telepy" frame with the result and "go back to the terminal". A denial or failure says why (fixed reasons only).
+ * "Telepy" frame with the result and "go back to the terminal"; Tapi = the terminal scene with Tapi reacting to the
+ * outcome, the card holding the result and commands to try. A denial or failure says why (fixed reasons only).
  */
 import React from "react";
 import Link from "next/link";
 import { BookOpen, CircleCheck, CircleX, Settings2, ShieldAlert } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { DiscreetShell } from "@/components/auth/DiscreetShell";
+import { TapiShell } from "@/components/auth/TapiShell";
 import { ConnectAppAside, ConnectProgress, SCOPE_META } from "@/components/oauth/ConnectFlow";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip } from "@/components/ui/section";
@@ -144,6 +146,18 @@ export function CliDoneScreen({ style, message, outcome, grant, username, loadin
 
     const ok = outcome.kind === "ok";
     const firstTunnel = grant?.tunnels?.[0]?.name ?? null;
+    // Tapi 版：終端機場景，Tapi 照結果開心 / 揮手 / 驚訝；卡片是結果與可以試的指令。
+    // The Tapi look: the terminal scene, Tapi happy / waving / surprised by the outcome; the card holds the result and commands to try.
+    if (style === "tapi") {
+        return (
+            <TapiShell scene="terminal" message={message} fixedMood={ok ? "done" : outcome.kind === "denied" ? "bye" : "oops"}>
+                <div className="space-y-6">
+                    <OutcomeHeading outcome={outcome} host={host} username={username} brief />
+                    {ok && <TryCommands tunnel={firstTunnel} />}
+                </div>
+            </TapiShell>
+        );
+    }
     // 成功 = 三步都完成；拒絕 / 沒完成 = 停在「回到終端機」。/ Success = all three done; otherwise it stops at "back to the terminal".
     const step = ok ? 3 : 2;
     return (
