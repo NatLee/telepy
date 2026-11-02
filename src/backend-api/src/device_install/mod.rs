@@ -45,15 +45,22 @@ const MAX_OUTPUT: usize = 128 * 1024;
 /// 背景盤點的間隔。/ How old a survey may get before the daily probe redoes it.
 pub const SURVEY_EVERY_DAYS: i64 = 7;
 
-/// 正在改名的隧道（以 reverse port 記：一個 port 一條隧道；同一條同時只跑一個）。
-/// Tunnels being renamed right now, keyed by reverse port (one tunnel per port; one rename at a time each).
-static BUSY: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// 正在改名的通道（以 reverse port 加建立時間記：一個 port 一條通道；測試裡每個 app 各有自己的 DB，port 會重複，
+/// 建立時間不會；同一條同時只跑一個）。
+/// Tunnels being renamed right now, keyed by reverse port plus creation time (in tests every app has its own DB, so ports
+/// repeat but creation times do not); one rename at a time each.
+type BusyKey = (i64, String);
+static BUSY: LazyLock<Mutex<HashSet<BusyKey>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-pub fn busy(tunnel: &Tunnel) -> bool {
-    BUSY.lock().unwrap().contains(&tunnel.reverse_port)
+fn busy_key(tunnel: &Tunnel) -> BusyKey {
+    (tunnel.reverse_port, tunnel.created_at.clone())
 }
 
-struct BusyGuard(i64);
+pub fn busy(tunnel: &Tunnel) -> bool {
+    BUSY.lock().unwrap().contains(&busy_key(tunnel))
+}
+
+struct BusyGuard(BusyKey);
 impl Drop for BusyGuard {
     fn drop(&mut self) {
         BUSY.lock().unwrap().remove(&self.0);
@@ -340,11 +347,11 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
     }
     {
         let mut b = BUSY.lock().unwrap();
-        if !b.insert(tunnel.reverse_port) {
+        if !b.insert(busy_key(tunnel)) {
             return Err(RenameError::Busy);
         }
     }
-    let _guard = BusyGuard(tunnel.reverse_port);
+    let _guard = BusyGuard(busy_key(tunnel));
     if !online(state, tunnel) {
         return Err(RenameError::Offline);
     }
@@ -581,11 +588,11 @@ pub async fn tidy(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Report,
     }
     {
         let mut b = BUSY.lock().unwrap();
-        if !b.insert(tunnel.reverse_port) {
+        if !b.insert(busy_key(tunnel)) {
             return Err(RenameError::Busy);
         }
     }
-    let _guard = BusyGuard(tunnel.reverse_port);
+    let _guard = BusyGuard(busy_key(tunnel));
     if !online(state, tunnel) {
         return Err(RenameError::Offline);
     }
