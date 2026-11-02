@@ -31,7 +31,7 @@ use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicK
 use russh::{Channel, Disconnect, Preferred};
 use tokio::net::TcpStream;
 
-use crate::{connect_link, proxy_choice, split_host_port, ws_endpoint, VERSION};
+use crate::{connect_link, proxy_choice, split_host_port, wait_ssh_port_back, ws_endpoint, Link, VERSION};
 
 /// 結束碼。/ Exit codes.
 pub const EXIT_OK: i32 = 0;
@@ -131,7 +131,9 @@ usage: telepy-carrier tunnel --identity KEY (--host-key 'TYPE BASE64' | --known-
   --known-hosts FILE  read the gateway's host keys from this file (every key in it is trusted; the host names are ignored)\n\
   --server HOST:PORT  Telepy's SSH port; with --ws too it is tried first (success = its SSH banner)\n\
   --ws URL            Telepy's web port (/ws/gateway/), used when the SSH port is blocked or not given;\n\
-                      a working web port is remembered for 30 minutes, then the SSH port is tried first again\n\
+                      a working web port is remembered for 30 minutes, then the SSH port is tried first again;\n\
+                      on the web port the SSH port is tried again for about 10 minutes, and once it answers the\n\
+                      tunnel ends (exit 1) so the service restarts it there\n\
   --forward SPEC      where forwarded connections go on this machine (default 0:127.0.0.1:22; 0 = Telepy assigns\n\
                       this tunnel's own port from the key)\n\
   --proxy URL         go through this HTTP proxy (CONNECT); without it HTTPS_PROXY / ALL_PROXY and NO_PROXY apply\n\
@@ -487,6 +489,8 @@ async fn session(args: &TunnelArgs, note: &dyn Fn(&str), seen: &Arc<Mutex<Option
         .map_err(|e| fail(EXIT_UNREACHABLE, "unreachable", format!("cannot connect: {e:#}")))?;
     let way = link.way();
     *way_out = Some(way);
+    // 自動模式走了網頁 port：之後 SSH 的 port 回來就換過去。/ Automatic on the web port: move once the SSH port is back.
+    let on_web = matches!(link, Link::Web(_));
 
     // 2. SSH 握手，host key 一定要對。/ The SSH handshake; the host key must match.
     let handler = Client { known: Arc::new(known.clone()), strict, seen: seen.clone(), target: Arc::new(args.forward.clone()) };
@@ -541,21 +545,42 @@ async fn session(args: &TunnelArgs, note: &dyn Fn(&str), seen: &Arc<Mutex<Option
 
     // 5. 等：連線斷了 = 1（服務管理器重啟）；SIGTERM / Ctrl-C = 乾淨地結束（0）。
     // Wait: a lost connection = 1 (the service manager restarts it); SIGTERM / Ctrl-C = a clean end (0).
+    // SSH 的 port 回來（只在自動模式走網頁 port 時）= 好好斷線、回 1，服務管理器重啟後走 SSH 的 port。
+    // The SSH port back (automatic on the web port only) = a clean disconnect and 1; the restart takes the SSH port.
     enum End {
         Lost(String),
         Stop,
+        SshPortBack,
     }
+    let back = async {
+        if on_web {
+            wait_ssh_port_back(args.server.as_deref(), args.ws.as_deref(), proxy.as_ref(), note).await
+        } else {
+            std::future::pending().await
+        }
+    };
     let end = tokio::select! {
         r = &mut handle => End::Lost(match r { Ok(()) => String::new(), Err(e) => format!(": {e}") }),
         _ = shutdown_signal() => End::Stop,
+        _ = back => End::SshPortBack,
+    };
+    let leave = |why: &'static str| {
+        let handle = &handle;
+        async move {
+            let _ = tokio::time::timeout(Duration::from_secs(3), handle.cancel_tcpip_forward("localhost", port)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(3), handle.disconnect(Disconnect::ByApplication, why, "en")).await;
+        }
     };
     match end {
         End::Lost(why) => Err(fail(EXIT_FAILED, "other", format!("the connection to Telepy ended{why}"))),
         End::Stop => {
-            let _ = tokio::time::timeout(Duration::from_secs(3), handle.cancel_tcpip_forward("localhost", port)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(3), handle.disconnect(Disconnect::ByApplication, "stopped", "en")).await;
+            leave("stopped").await;
             note("stopped");
             Ok(EXIT_OK)
+        }
+        End::SshPortBack => {
+            leave("moving to the SSH port").await;
+            Ok(EXIT_FAILED)
         }
     }
 }

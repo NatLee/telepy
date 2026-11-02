@@ -307,3 +307,92 @@ async fn the_built_in_client_runs_the_tunnel_without_any_ssh_on_the_device() {
     let out = std::process::Command::new("ssh-keygen").args(["-y", "-f"]).arg(&made).output().unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).starts_with(public.rsplit_once(' ').unwrap().0), "OpenSSH reads the key");
 }
+
+// ------------------------------------------------------------------ back to the SSH port
+
+/// 讓 `port` 變成 gateway 的 SSH port（一個轉到 gateway 的 TCP 轉發）：像重啟後晚幾秒才開的 port 轉發。
+/// Make `port` Telepy's SSH port (a TCP relay to the gateway), like port publishing that opens a few seconds late.
+async fn open_ssh_port(port: u16, gateway: u16) {
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut up) = TcpStream::connect(("127.0.0.1", gateway)).await {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+                }
+            });
+        }
+    });
+}
+
+fn remembers_web_port(tmp: &std::path::Path) -> bool {
+    std::fs::read_dir(tmp).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("telepy-ws-"))
+}
+
+/// 伺服器重啟的那幾秒，SSH 的 port 還沒開、網頁 port 已經通，裝置就走了網頁 port。SSH 的 port 一回來，ProxyCommand 與
+/// 內建的 client 都會結束網頁 port 的連線、忘掉「網頁 port 走得通」，服務重啟後就走 SSH 的 port。
+/// For a few seconds after a server restart the SSH port is still closed while the web port works, so a device takes
+/// the web port. Once the SSH port answers, the ProxyCommand and the built-in client both end the web-port connection
+/// and forget that the web port worked; the service's next start takes the SSH port.
+#[tokio::test]
+async fn the_carrier_returns_to_the_ssh_port_once_it_answers_again() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let url = format!("{}/ws/gateway/", lab.ws_base().await);
+    let retry = "TELEPY_SSH_PORT_RETRY=1,1,1,1,1,1,1,1,1,1";
+
+    // ProxyCommand（ssh 經 telepy-carrier）。/ As ssh's ProxyCommand.
+    let tmp = lab.dir.path().join("back-tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let port = common::lab::free_port();
+    let a = lab.machine("back-a", &[("ubuntu", &[&lab.service])], false).await;
+    let opts = ["-o".to_string(), format!("ProxyCommand=env TMPDIR={} {retry} NO_PROXY= HTTPS_PROXY= https_proxy= ALL_PROXY= {BIN} --tcp 127.0.0.1:{port} {url}", tmp.display())];
+    let dev = lab.device_via_port(&alice, "back-a", &a, 1, &opts).await;
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "websocket", "the SSH port was closed: {}", r.text);
+    assert!(remembers_web_port(&tmp));
+    open_ssh_port(port, lab.gw_port).await;
+    assert!(wait_released(&lab, dev.reverse_port).await, "the carrier left the web port once the SSH port answered");
+    assert!(!remembers_web_port(&tmp), "and forgot that the web port worked");
+    let again: Vec<String> = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"].map(String::from).into_iter().chain(opts.iter().cloned()).collect();
+    let _ssh = lab.spawn_tunnel_to(&dev.key, dev.reverse_port, a.port, "back-a", 1, &again).await;
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "tcp", "the next connection takes the SSH port: {}", r.text);
+
+    // 內建的 client：好好斷線、結束碼 1（服務管理器重啟它）。/ The built-in client: a clean disconnect, exit 1.
+    let tmp = lab.dir.path().join("back-tmp-builtin");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let port = common::lab::free_port();
+    let host_key = lab.app.state.gateway.host_public_keys()[0].clone();
+    let b = lab.machine("back-b", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = tunnel_row(&lab, &alice, "back-b", &b).await;
+    let args: Vec<String> = ["--identity", &dev.key.path.display().to_string(), "--host-key", &host_key, "--server", &format!("127.0.0.1:{port}"), "--ws", &url, "--forward", &format!("127.0.0.1:{}", b.port)].map(String::from).to_vec();
+    let start = |tmp: &std::path::Path| {
+        let mut c = tokio::process::Command::new(BIN);
+        c.arg("tunnel").args(&args).env("TMPDIR", tmp).env("TELEPY_SSH_PORT_RETRY", "1,1,1,1,1,1,1,1,1,1").env_remove("HTTPS_PROXY").env_remove("https_proxy").env_remove("ALL_PROXY").env_remove("all_proxy");
+        c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+        c.spawn().unwrap()
+    };
+    let mut child = start(&tmp);
+    if !wait_forward(&lab, dev.reverse_port).await {
+        let _ = child.start_kill();
+        panic!("built-in client, web port: no forward; stderr: {}", stderr_of(&mut child).await);
+    }
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "websocket", "{}", r.text);
+    open_ssh_port(port, lab.gw_port).await;
+    let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await.expect("the client ends once the SSH port answers").unwrap();
+    let err = stderr_of(&mut child).await;
+    assert_eq!(status.code(), Some(1), "exit 1 so the service manager restarts it: {err}");
+    assert!(err.contains("answers again"), "{err}");
+    assert!(wait_released(&lab, dev.reverse_port).await, "the forward was released");
+    assert!(!remembers_web_port(&tmp), "the web port is forgotten");
+    let mut child = start(&tmp);
+    if !wait_forward(&lab, dev.reverse_port).await {
+        let _ = child.start_kill();
+        panic!("built-in client, back on the SSH port: no forward; stderr: {}", stderr_of(&mut child).await);
+    }
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "tcp", "{}", r.text);
+    let _ = child.start_kill();
+}

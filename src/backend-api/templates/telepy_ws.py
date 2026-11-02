@@ -12,7 +12,9 @@
 # With --tcp it picks the way by itself: the SSH port first (the server must answer with its "SSH-" banner), the
 # WebSocket when that port cannot be reached (a firewall, or a web name behind a proxy such as Cloudflare's that
 # only carries web ports). The way that worked is remembered for a while, so a blocked port does not slow every
-# reconnect, and the SSH port is tried again later. It says on stderr which way it took.
+# reconnect, and the SSH port is tried again later. On the WebSocket the SSH port is also tried again during the
+# connection's first minutes (a restarting server may open its web port before its SSH port); once it answers this
+# connection ends, so ssh reconnects there. It says on stderr which way it took.
 #
 # Everything ssh writes to stdin goes out as binary WebSocket frames; every frame that comes back goes to
 # stdout. Only the Python standard library is used, so it runs wherever python3 does. The SSH session inside
@@ -264,6 +266,9 @@ CONNECT_TIMEOUT = 6
 BANNER_TIMEOUT = 8
 # How long a working WebSocket is preferred before the SSH port is tried first again.
 REMEMBER_SECONDS = 1800
+# On the WebSocket: the waits before each new try of the SSH port (six tries within about 10 minutes, then none, so a
+# connection in use is not cut later). TELEPY_SSH_PORT_RETRY overrides it: comma-separated seconds, "off" = never.
+RETRY_SSH_PORT = (10, 20, 40, 80, 160, 320)
 
 
 def split_host_port(value):
@@ -359,6 +364,36 @@ def note(message):
     sys.stderr.flush()
 
 
+def retry_schedule(value):
+    if value is None or not value.strip():
+        return list(RETRY_SSH_PORT)
+    if value.strip() == "off":
+        return []
+    try:
+        waits = [int(v.strip()) for v in value.split(",")]
+    except ValueError:
+        return list(RETRY_SSH_PORT)
+    return waits if all(w >= 0 for w in waits) else list(RETRY_SSH_PORT)
+
+
+def watch_ssh_port(host, port, memory, ws):
+    """On the WebSocket: try the SSH port again on the schedule; once it answers, end so ssh reconnects there."""
+    for wait in retry_schedule(os.environ.get("TELEPY_SSH_PORT_RETRY")):
+        time.sleep(wait)
+        try:
+            probe, _ = direct(host, port)
+        except (OSError, ssl.SSLError):
+            continue
+        probe.close()
+        remember(memory, False)
+        note("the SSH port %s:%d answers again: leaving the web port to reconnect there" % (host, port))
+        try:
+            ws.close()
+        except OSError:
+            pass
+        os._exit(0)
+
+
 def relay_ws(sock, pending):
     t = threading.Thread(target=pump_in, args=(sock,), daemon=True)
     t.start()
@@ -390,6 +425,7 @@ def auto(tcp, url):
                 sock, pending = connect(url)
                 remember(memory, True)
                 note("connected through the web port (%s)%s" % (url, "; the SSH port %s:%d: %s" % (host, port, errors[0]) if errors else ""))
+                threading.Thread(target=watch_ssh_port, args=(host, port, memory, sock), daemon=True).start()
                 relay_ws(sock, pending)
         except (OSError, ssl.SSLError) as e:
             errors.append(str(e) or e.__class__.__name__)

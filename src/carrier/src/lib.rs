@@ -1,7 +1,7 @@
 //! `telepy-carrier`：裝置端 ssh 的 ProxyCommand。把 stdin / stdout 接到 Telepy：先試 SSH 的 port（看到 gateway 的 `SSH-`
 //! banner 才算），連不上就把位元組包進 `/ws/gateway/` 的 WebSocket 二進位 frame（只放行網頁 port 的網路）。裡面的 SSH
 //! 一模一樣：同一組金鑰、同一個 host key 檢查，沒有多信任任何東西。走網頁 port 成功會記 30 分鐘（暫存目錄的小檔），
-//! 之後再先試 SSH 的 port。
+//! 之後再先試 SSH 的 port；走網頁 port 的頭 10 分鐘會再試 SSH 的 port，通了就結束連線讓 ssh 重連過去。
 //!
 //! 這是 `templates/telepy_ws.py` 的 Rust 版：靜態 binary，裝置不需要 python3，也不會碰裝置主人的 Python 環境；
 //! 多了 HTTP CONNECT 代理（`HTTPS_PROXY` / `--proxy`，公司內網只能經代理出去時）與內建的根憑證（沒裝 ca-certificates 的
@@ -10,7 +10,9 @@
 //! `telepy-carrier`: the device's ssh ProxyCommand. stdin / stdout become a connection to Telepy: the SSH port first
 //! (counted only once the gateway's `SSH-` banner arrives), else the bytes ride binary WebSocket frames to
 //! `/ws/gateway/` (networks that only let the web port out). The SSH inside is unchanged — same keys, same host-key
-//! check, nothing extra trusted. A working web port is remembered for 30 minutes, then the SSH port is tried first again.
+//! check, nothing extra trusted. A working web port is remembered for 30 minutes, then the SSH port is tried first again;
+//! during a web-port connection's first 10 minutes the SSH port is tried again, and once it answers the connection ends
+//! so ssh reconnects there.
 //!
 //! The Rust twin of `templates/telepy_ws.py`: a static binary, so the device needs no python3 and its owner's Python
 //! setup is never touched; plus an HTTP CONNECT proxy (`HTTPS_PROXY` / `--proxy`) and built-in root certificates.
@@ -50,6 +52,18 @@ pub const BANNER_TIMEOUT: Duration = Duration::from_secs(8);
 pub const WS_TIMEOUT: Duration = Duration::from_secs(20);
 /// 走通的網頁 port 記多久。/ How long a working web port is preferred.
 pub const REMEMBER: Duration = Duration::from_secs(1800);
+/// 自動模式走了網頁 port 之後，再試 SSH 的 port 前各等多久（約 10 分鐘內試六次）：伺服器重啟那幾秒，SSH 的 port 可能
+/// 還沒開、網頁 port 已經通（容器的 port 轉發比容器之間的網路慢），裝置這時連進來就整條連線都留在較慢的網頁 port 上。
+/// SSH 的 port 回來了就結束這條連線，讓 ssh 重連到 SSH 的 port（服務會重啟它）。之後就不再試，免得打斷正在用的連線。
+/// After automatic mode took the web port, the waits before each new try of the SSH port (six tries within about 10
+/// minutes): for a few seconds after a server restart its SSH port may still be closed while the web port already works
+/// (container port publishing lags behind the containers' own network), and a device that reconnects then would stay on
+/// the slower web port for the whole connection. When the SSH port answers again the connection is ended so ssh
+/// reconnects there (the service restarts it). No tries after that, so a connection in use is not cut later.
+pub const RETRY_SSH_PORT: [u64; 6] = [10, 20, 40, 80, 160, 320];
+/// 蓋掉 [`RETRY_SSH_PORT`]：逗號分隔的秒數，`off` = 不再試（測試用）。/ Overrides [`RETRY_SSH_PORT`]: comma-separated
+/// seconds, `off` = never (for tests).
+pub const RETRY_SSH_PORT_ENV: &str = "TELEPY_SSH_PORT_RETRY";
 
 // ------------------------------------------------------------------ HTTP CONNECT proxy
 
@@ -290,6 +304,30 @@ pub fn has_banner(seen: &[u8]) -> bool {
     seen.split(|b| *b == b'\n').any(|l| l.starts_with(b"SSH-"))
 }
 
+/// 再試 SSH 的 port 的時間表：[`RETRY_SSH_PORT_ENV`] 的值（看不懂的值 = 預設），沒有就用 [`RETRY_SSH_PORT`]。
+/// When to try the SSH port again: the [`RETRY_SSH_PORT_ENV`] value (unreadable = the default), else [`RETRY_SSH_PORT`].
+pub fn retry_schedule(env: Option<&str>) -> Vec<Duration> {
+    let default = || RETRY_SSH_PORT.iter().map(|s| Duration::from_secs(*s)).collect();
+    match env.map(str::trim) {
+        None | Some("") => default(),
+        Some("off") => Vec::new(),
+        Some(v) => v.split(',').map(|s| s.trim().parse::<u64>().ok().map(Duration::from_secs)).collect::<Option<Vec<_>>>().unwrap_or_else(default),
+    }
+}
+
+/// 照時間表一次次試 SSH 的 port（看到 banner 才算，探完就關）；通了就回來，全部不通就一直等下去。
+/// Tries the SSH port on the schedule (a banner counts; each probe is closed at once); returns once it answers, waits
+/// forever when every try failed.
+pub async fn ssh_port_back(host: &str, port: u16, proxy: Option<&Proxy>, schedule: &[Duration]) {
+    for wait in schedule {
+        tokio::time::sleep(*wait).await;
+        if connect_ssh_port(host, port, proxy).await.is_ok() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await
+}
+
 // ------------------------------------------------------------------ relays
 
 /// stdin ↔ WebSocket 二進位 frame；Ping 回 Pong，Close = 結束。/ stdin ↔ binary frames; Ping → Pong, Close = done.
@@ -523,7 +561,12 @@ pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, not
             0
         }
         Ok(Link::Web(ws)) => {
-            relay_ws(*ws).await;
+            // 自動模式：SSH 的 port 回來就結束，ssh 結束、服務重啟後連到 SSH 的 port。
+            // Automatic: end once the SSH port answers again; ssh ends and the service reconnects on the SSH port.
+            tokio::select! {
+                _ = relay_ws(*ws) => {}
+                _ = wait_ssh_port_back(tcp, Some(url), proxy, note) => {}
+            }
             0
         }
         Err(e) => {
@@ -531,6 +574,20 @@ pub async fn run_device(tcp: Option<&str>, url: &str, proxy: Option<&Proxy>, not
             255
         }
     }
+}
+
+/// 自動模式（`tcp` 與 `url` 都有）走了網頁 port 時呼叫：照時間表再試 SSH 的 port，通了就清掉「網頁 port 走得通」的
+/// 記憶、說一聲再回來，呼叫的人結束這條連線。不是自動模式、或每次都不通，就一直等下去。
+/// Called after automatic mode (`tcp` and `url`) took the web port: tries the SSH port on the schedule; once it answers,
+/// forgets that the web port worked, says so and returns, and the caller ends the connection. Waits forever when not
+/// automatic or when no try succeeds.
+pub async fn wait_ssh_port_back(tcp: Option<&str>, url: Option<&str>, proxy: Option<&Proxy>, note: &dyn Fn(&str)) {
+    let (Some(tcp), Some(url)) = (tcp, url) else { return std::future::pending().await };
+    let Some((host, port)) = split_host_port(tcp) else { return std::future::pending().await };
+    let schedule = retry_schedule(std::env::var(RETRY_SSH_PORT_ENV).ok().as_deref());
+    ssh_port_back(&host, port, proxy, &schedule).await;
+    Memory::for_route(tcp, url).remember(false);
+    note(&format!("the SSH port {host}:{port} answers again: leaving the web port to reconnect there"));
 }
 
 pub fn via(proxy: Option<&Proxy>) -> String {
@@ -586,7 +643,9 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String
 pub const USAGE: &str = "telepy-carrier: carries a device's SSH connection to Telepy (ssh ProxyCommand)\n\n\
 usage: telepy-carrier [--tcp host:port] [--proxy http://[user:pass@]host:port | --no-proxy] wss://host/ws/gateway/\n\n\
   --tcp host:port   try Telepy's SSH port first (success = its SSH banner), the web port only when that fails;\n\
-                    a working web port is remembered for 30 minutes, then the SSH port is tried first again\n\
+                    a working web port is remembered for 30 minutes, then the SSH port is tried first again;\n\
+                    on the web port the SSH port is tried again for about 10 minutes, and once it answers\n\
+                    the connection ends so ssh reconnects there\n\
   --proxy URL       go through this HTTP proxy (CONNECT); without it HTTPS_PROXY / ALL_PROXY and NO_PROXY apply\n\
   --no-proxy        ignore the proxy variables\n\
   --version         print the version\n\n\
@@ -667,6 +726,39 @@ mod tests {
         assert!(!remembers_ws_at(&b, 1000));
         std::fs::write(&a, "garbage").unwrap();
         assert!(!remembers_ws_at(&a, 1000));
+    }
+
+    #[test]
+    fn the_ssh_port_is_tried_again_on_a_schedule() {
+        let secs = |v: Vec<Duration>| v.iter().map(|d| d.as_secs()).collect::<Vec<_>>();
+        assert_eq!(secs(retry_schedule(None)), RETRY_SSH_PORT.to_vec());
+        assert!(RETRY_SSH_PORT.iter().sum::<u64>() <= 15 * 60, "only the first minutes of a connection");
+        assert_eq!(secs(retry_schedule(Some("1, 2,3"))), vec![1, 2, 3]);
+        assert!(retry_schedule(Some("off")).is_empty());
+        assert_eq!(secs(retry_schedule(Some(""))), RETRY_SSH_PORT.to_vec());
+        assert_eq!(secs(retry_schedule(Some("1,x"))), RETRY_SSH_PORT.to_vec(), "unreadable = the default");
+    }
+
+    #[tokio::test]
+    async fn the_ssh_port_counts_as_back_only_with_a_banner() {
+        // 先是只會回 HTTP 的 port（像只轉網頁的代理）：不算；換成會回 banner 的就算。
+        // First a port that answers HTTP (like a web-only proxy): not back; one that sends a banner: back.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let answers = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let n = answers.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                let first = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                let _ = s.write_all(if first { b"HTTP/1.1 400 Bad Request\r\n\r\n".as_slice() } else { b"SSH-2.0-test\r\n".as_slice() }).await;
+            }
+        });
+        let ms = |v: &[u64]| v.iter().map(|m| Duration::from_millis(*m)).collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(5), ssh_port_back("127.0.0.1", port, None, &ms(&[10, 10]))).await.expect("back on the second try");
+        assert_eq!(answers.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // 一直不通：不回來。/ Never answering: never returns.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(tokio::time::timeout(Duration::from_millis(300), ssh_port_back("127.0.0.1", closed, None, &ms(&[10, 10]))).await.is_err());
     }
 
     #[test]

@@ -131,6 +131,7 @@ Laptops can come in this way too. In the SSH config dialog, set "Reach Telepy vi
 - The carrier gets `--tcp <SSH host>:<port>`. Each connection tries the SSH port directly first, and only counts it once the gateway's `SSH-` banner arrives.
 - If that fails (a firewall, or a web name behind a proxy that only carries web ports), it falls back to the WebSocket.
 - A working WebSocket is remembered for 30 minutes (a small file in the temp directory). After that, the SSH port is tried first again.
+- On the WebSocket, the SSH port is tried again during the connection's first 10 minutes or so (after 10 s, 30 s, 70 s and so on, six tries). Once it answers, the carrier ends the connection and forgets the WebSocket, so the service reconnects over the SSH port a few seconds later. Why: right after a server restart, its SSH port can open a few seconds after its web port (port publishing in front of a container lags behind the containers' own network). A device that reconnects in that gap would otherwise stay on the slower way until its connection next drops. After those tries it stops, so a connection in use is never cut later.
 - Which way it took is written to stderr, which ends up in the service's log.
 - A device with no carrier at all (no prebuilt binary for its CPU and no python3) uses only the SSH port, and the join says so.
 

@@ -277,6 +277,66 @@ async fn the_python_carrier_goes_through_a_connect_proxy() {
     assert!(count.load(Ordering::SeqCst) > before, "HTTPS_PROXY was honoured");
 }
 
+/// 伺服器重啟的那幾秒，SSH 的 port 還沒開、網頁 port 已經通（容器的 port 轉發比容器之間的網路慢），裝置就走了網頁
+/// port。python3 版的小程式也一樣：SSH 的 port 回來就結束網頁 port 的連線、忘掉「網頁 port 走得通」，下一次走 SSH 的 port。
+/// For a few seconds after a server restart the SSH port is still closed while the web port works (container port
+/// publishing lags behind the containers' own network), so a device takes the web port. The python3 carrier, too, ends
+/// that connection once the SSH port answers and forgets the web port; the next connection takes the SSH port.
+#[tokio::test]
+async fn the_python_carrier_returns_to_the_ssh_port_once_it_answers_again() {
+    let Some(lab) = Lab::start().await else { return };
+    if !common::lab::have("python3") {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let script = lab.app.get("/api/join/telepy-ws.py", None).await.text;
+    let path = lab.dir.path().join("telepy-ws.py");
+    std::fs::write(&path, script).unwrap();
+    let url = format!("{}/ws/gateway/", lab.ws_base().await);
+    let tmp = lab.dir.path().join("back-tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let remembered = || std::fs::read_dir(&tmp).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("telepy-ws-"));
+    let transport_of = |r: &common::Resp, id: i64| r.json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()["endpoint"]["transport"].clone();
+
+    let port = common::lab::free_port();
+    let m = lab.machine("back-py", &[("ubuntu", &[&lab.service])], false).await;
+    let opts = ["-o".to_string(), format!("ProxyCommand=env TMPDIR={} TELEPY_SSH_PORT_RETRY=1,1,1,1,1,1,1,1,1,1 python3 {} --tcp 127.0.0.1:{port} {url}", tmp.display(), path.display())];
+    let dev = lab.device_via_port(&alice, "back-py", &m, 1, &opts).await;
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "websocket", "the SSH port was closed: {}", r.text);
+    assert!(remembered());
+
+    // SSH 的 port 開了（轉到 gateway）。/ The SSH port opens (a relay to the gateway).
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    let gw = lab.gw_port;
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut up) = tokio::net::TcpStream::connect(("127.0.0.1", gw)).await {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+                }
+            });
+        }
+    });
+    let mut released = false;
+    for _ in 0..300 {
+        if !lab.app.state.status.listen_ports().is_some_and(|p| p.contains(&dev.reverse_port)) {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(released, "the carrier left the web port once the SSH port answered");
+    assert!(!remembered(), "and forgot that the web port worked");
+
+    // 服務重啟 ssh：這次走 SSH 的 port。/ The service starts ssh again: the SSH port this time.
+    let again: Vec<String> = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"].map(String::from).into_iter().chain(opts.iter().cloned()).collect();
+    let _ssh = lab.spawn_tunnel_to(&dev.key, dev.reverse_port, m.port, "back-py", 1, &again).await;
+    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+    assert_eq!(transport_of(&r, dev.tunnel_id), "tcp", "{}", r.text);
+}
+
 /// 自動：小程式先連 SSH 的 port（拿到 gateway 的 banner 才算），連不上（關掉的 port、只轉網頁的代理）才走 WebSocket；
 /// 每次連線都重新判斷。一鍵加入的指令多 `--auto`，腳本與筆電的 ssh config 帶 `--tcp <SSH 主機>:<port>`。
 /// Automatic: the carrier dials the SSH port first (it must see the gateway's banner) and takes the WebSocket only
