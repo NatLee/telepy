@@ -69,6 +69,8 @@ impl Mode {
 
 /// 腳本回報的一行：`TELEPY|<kind>|<what>|<detail>`。
 /// kind：platform / found / removed / scheduled / needs_root / kept / note / failed / stopscript / launched / done。
+/// `step` 行（腳本正在看哪一部分）不在這裡，逾時的時候用 [`last_step`] 說它停在哪。
+/// `step` lines (which part the script is looking at) are left out; on a timeout [`last_step`] says where it stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Item {
     pub kind: String,
@@ -87,8 +89,27 @@ pub fn parse_items(stdout: &str) -> Vec<Item> {
             let detail = it.next().unwrap_or("").to_string();
             Item { kind, what, detail }
         })
-        .filter(|i| !i.kind.is_empty())
+        .filter(|i| !i.kind.is_empty() && i.kind != "step")
         .collect()
+}
+
+/// 腳本最後回報在看的部分（`TELEPY|step|<part>|`）。/ The part the script last said it was looking at.
+pub fn last_step(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .filter_map(|l| l.trim_end_matches('\r').strip_prefix("TELEPY|step|"))
+        .last()
+        .map(|rest| rest.split('|').next().unwrap_or("").to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 逾時的說明：多久、停在哪一部分（裝置上卡住的通常是那部分問的外部程式：docker、sudo、crontab…）。
+/// The timeout message: how long, and the part it stopped in (what hangs is usually an outside program that part asks).
+pub fn timeout_message(secs: u64, step: Option<&str>) -> String {
+    match step {
+        Some(step) => format!("timed out after {secs} s while looking at {step} on the device"),
+        None => format!("timed out after {secs} s"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -296,7 +317,7 @@ pub async fn prepare_with(state: &AppState, tunnel: &Tunnel, accounts: &[String]
             Ok(r) => {
                 result.items = parse_items(&r.stdout.text);
                 if r.timed_out {
-                    result.error = Some("timed out".to_string());
+                    result.error = Some(timeout_message(SCRIPT_TIMEOUT.as_secs(), last_step(&r.stdout.text).as_deref()));
                 } else if !result.items.iter().any(|i| i.kind == "done") {
                     let err = r.stderr.text.trim();
                     result.error = Some(if err.is_empty() { format!("the script stopped early (exit {:?})", r.exit_code) } else { err.chars().take(500).collect() });
@@ -469,6 +490,17 @@ mod tests {
             terminal_detach_policy: "user".into(),
             way_in: None,
         }
+    }
+
+    #[test]
+    fn step_lines_say_where_a_timed_out_script_stopped() {
+        let out = "TELEPY|platform|Darwin|gil root=0\nTELEPY|step|launchd|\nTELEPY|found|launchd|/x.plist\nTELEPY|step|docker|\r\n";
+        assert_eq!(last_step(out).as_deref(), Some("docker"));
+        assert!(parse_items(out).iter().all(|i| i.kind != "step"));
+        assert_eq!(parse_items(out).len(), 2);
+        assert_eq!(last_step("TELEPY|platform|Linux|x\n"), None);
+        assert_eq!(timeout_message(90, Some("docker")), "timed out after 90 s while looking at docker on the device");
+        assert_eq!(timeout_message(90, None), "timed out after 90 s");
     }
 
     #[test]

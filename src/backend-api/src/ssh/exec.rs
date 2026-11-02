@@ -161,6 +161,10 @@ pub async fn run_on(mut ch: Channel<Msg>, command: &str, timeout: Duration, max_
         let _ = ch.close().await;
         return Err(e).context("send the command");
     }
+    // Telepy 從不寫 stdin：馬上送 EOF。不送的話，裝置上任何讀 stdin 的程式（某個 CLI 問問題、`cat -`、PowerShell
+    // 結束前等輸入）會一直等到逾時。/ Telepy never writes to stdin: send EOF at once. Without it, anything on the device
+    // that reads stdin (a CLI asking a question, `cat -`, PowerShell waiting for input before it exits) waited until the timeout.
+    let _ = ch.eof().await;
     let mut out = HeadTail::new(max_output);
     let mut err = HeadTail::new(max_output);
     let (mut exit_code, mut signal, mut timed_out) = (None, None, false);

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { DELETE_STEPS, deletePlan, deleteSteps, deleteVerdict, flowStates, stepLine, type DeleteStepEvent } from "./deleteTunnel.ts";
+import { DELETE_STEPS, deletePlan, deleteSteps, deleteVerdict, flowStates, stepLine, waitingOnDevice, type DeleteStepEvent } from "./deleteTunnel.ts";
 import { activeNumber, countdown, stepViews } from "./progressSteps.ts";
 
 const states = (v: { state: string }[]) => v.map((s) => s.state);
@@ -89,4 +89,16 @@ test("countdown of a waiting step", () => {
     assert.equal(countdown({ secs: 25 }, 0), null);
     assert.deepEqual(countdown({ secs: 25, at: 1000 }, 11_500), { elapsed: 10, left: 15, progress: 0.42 });
     assert.deepEqual(countdown({ secs: 10, at: 0 }, 60_000), { elapsed: 60, left: 0, progress: 1 });
+});
+
+test("skipping the device: the lines and the verdict say so, and only device steps can be skipped", () => {
+    const ctx = { keys: 2, lanHosts: 0 };
+    const forced = (step: DeleteStepEvent["step"]) => ev(step, "skipped", { reason: "forced" });
+    const running = deleteSteps(true, true, [ev("service", "active")], "running");
+    assert.equal(waitingOnDevice(running), true);
+    assert.equal(waitingOnDevice(deleteSteps(true, true, [forced("service"), forced("keys"), forced("stop"), forced("watch"), ev("telepy", "active")], "running")), false);
+    const done = deleteSteps(true, true, [forced("service"), ev("keys", "skipped", { reason: "forced", keys_left: 3 }), forced("stop"), forced("watch"), ev("telepy", "done"), ev("disconnect", "done")], "done");
+    assert.deepEqual(done.slice(0, 4).map((v) => stepLine(v, ctx).key), ["deleteTunnel.line.serviceForced", "deleteTunnel.line.keysForced", "deleteTunnel.line.stopForced", "deleteTunnel.line.watchForced"]);
+    assert.deepEqual(stepLine(done[1], ctx).vars, { count: 3 });
+    assert.deepEqual(deleteVerdict(done), { tone: "warning", key: "deleteTunnel.verdict.forced" });
 });

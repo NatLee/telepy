@@ -12,13 +12,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
+import { formatApiError } from "@/lib/formatApiError";
+import { LongRequestLost, longFetch } from "@/lib/longFetch";
+import type { TranslationKey } from "@/locales/en";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import { RENAME_STEPS, type DeviceInstallView, type RenameReport, type ReportedStep, type WayInSetup } from "@/lib/deviceInstall";
 
 export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabled: boolean, onChanged?: () => void) {
     const { t } = useI18n();
-    const { showError, showSuccess } = useToast();
+    const { showError, showSuccess, showToast } = useToast();
     const [view, setView] = useState<{ id: number; view: DeviceInstallView } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [surveying, setSurveying] = useState(false);
@@ -43,27 +46,30 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
         }
     }, [tunnelId, t]);
 
+    // 前面的代理切斷了請求（伺服器照樣做完）：說一聲，結果到了再顯示。/ A proxy cut the request: say so, the result follows.
+    const onCut = useCallback(() => showToast(t("deviceInstall.cutNote"), "info"), [showToast, t]);
+
     const survey = useCallback(
         async (quiet = false) => {
             if (!tunnelId) return;
             setSurveying(true);
             try {
-                const res = await apiFetch(`/api/reverse/server/${tunnelId}/device-install/survey`, { method: "POST" });
-                const body = await readJson<DeviceInstallView & { code?: string; error?: string }>(res);
-                if (res.ok && body) {
+                const r = await longFetch<DeviceInstallView & { code?: string; error?: string }>(`/api/reverse/server/${tunnelId}/device-install/survey`, { method: "POST" }, { onCut: quiet ? undefined : onCut });
+                const body = r.body;
+                if (r.ok && body) {
                     setView({ id: tunnelId, view: body });
                     if (!quiet) showSuccess(t("deviceInstall.surveyed"));
                 } else if (!quiet) {
-                    showError(body?.code === "device_offline" ? t("deviceInstall.offline") : body?.code === "busy" ? t("deviceInstall.busy") : t("deviceInstall.surveyFailed", { error: body?.error ?? responseError(res, body, "") }));
+                    showError(body?.code === "device_offline" ? t("deviceInstall.offline") : body?.code === "busy" ? t("deviceInstall.busy") : t("deviceInstall.surveyFailed", { error: body?.error ?? formatApiError(body, `HTTP ${r.status}`) }));
                 }
             } catch (e) {
-                if (!quiet) showError(e instanceof Error ? e.message : t("deviceInstall.surveyFailed", { error: "" }));
+                if (!quiet) showError(e instanceof LongRequestLost ? t("api.cutNoResult") : e instanceof Error ? e.message : t("deviceInstall.surveyFailed", { error: "" }));
             } finally {
                 setSurveying(false);
                 void load();
             }
         },
-        [tunnelId, load, showError, showSuccess, t]
+        [tunnelId, load, onCut, showError, showSuccess, t]
     );
 
     useEffect(() => {
@@ -97,82 +103,39 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
     );
     useNotificationHandlers(handlers);
 
-    const rename = useCallback(async () => {
-        if (!tunnelId || renaming) return;
-        setRenaming(true);
-        setSteps([]);
-        setReport(null);
-        try {
-            const res = await apiFetch(`/api/reverse/server/${tunnelId}/device-install/rename`, { method: "POST" });
-            const body = await readJson<{ report?: RenameReport; view?: DeviceInstallView; code?: string; error?: string }>(res);
-            if (res.ok && body?.report) {
-                setReport(body.report);
-                setSteps(body.report.steps);
-                if (body.view) setView({ id: tunnelId, view: body.view });
-                if (body.report.ok) showSuccess(t("deviceInstall.renamed"));
-                onChanged?.();
-            } else {
-                const code = body?.code ?? "other";
-                setReport({ ok: false, steps: [], code, error: body?.error, old: [] });
-            }
-        } catch (e) {
-            setReport({ ok: false, steps: [], code: "other", error: e instanceof Error ? e.message : undefined, old: [] });
-        } finally {
-            setRenaming(false);
-        }
-    }, [tunnelId, renaming, onChanged, showSuccess, t]);
-
-    // 拿掉多出來的那份：同一份步驟 / 回報結構（三步）。/ Remove the extra copies: same steps / report shape (three steps).
-    const tidy = useCallback(async () => {
-        if (!tunnelId || renaming) return;
-        setRenaming(true);
-        setSteps([]);
-        setReport(null);
-        try {
-            const res = await apiFetch(`/api/reverse/server/${tunnelId}/device-install/tidy`, { method: "POST" });
-            const body = await readJson<{ report?: RenameReport; view?: DeviceInstallView; code?: string; error?: string }>(res);
-            if (res.ok && body?.report) {
-                setReport(body.report);
-                setSteps(body.report.steps);
-                if (body.view) setView({ id: tunnelId, view: body.view });
-                if (body.report.ok) showSuccess(t("deviceInstall.tidied"));
-                onChanged?.();
-            } else {
-                setReport({ ok: false, steps: [], code: body?.code ?? "other", error: body?.error, old: [] });
-            }
-        } catch (e) {
-            setReport({ ok: false, steps: [], code: "other", error: e instanceof Error ? e.message : undefined, old: [] });
-        } finally {
-            setRenaming(false);
-        }
-    }, [tunnelId, renaming, onChanged, showSuccess, t]);
-
-    // 換連線方式：跟改名同一套步驟與回報。/ Switching how it connects: the rename's steps and report.
-    const switchTransport = useCallback(
-        async (transport: WayInSetup) => {
+    // 改名、拿掉多的那份、換連線方式：同一份步驟 / 回報結構，交接要等一兩分鐘，所以走 longFetch。
+    // Rename, remove the extra copies, switch how it connects: one steps / report shape; a handover takes a minute or two.
+    const change = useCallback(
+        async (path: "rename" | "tidy" | "switch", init: RequestInit, successKey: TranslationKey) => {
             if (!tunnelId || renaming) return;
             setRenaming(true);
             setSteps([]);
             setReport(null);
             try {
-                const res = await apiFetch(`/api/reverse/server/${tunnelId}/device-install/switch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transport }) });
-                const body = await readJson<{ report?: RenameReport; view?: DeviceInstallView; code?: string; error?: string }>(res);
-                if (res.ok && body?.report) {
+                const r = await longFetch<{ report?: RenameReport; view?: DeviceInstallView; code?: string; error?: string }>(`/api/reverse/server/${tunnelId}/device-install/${path}`, { method: "POST", ...init }, { onCut });
+                const body = r.body;
+                if (r.ok && body?.report) {
                     setReport(body.report);
                     setSteps(body.report.steps);
                     if (body.view) setView({ id: tunnelId, view: body.view });
-                    if (body.report.ok) showSuccess(t("deviceInstall.switch.doneToast"));
+                    if (body.report.ok) showSuccess(t(successKey));
                     onChanged?.();
                 } else {
-                    setReport({ ok: false, steps: [], code: body?.code ?? "other", error: body?.error, old: [] });
+                    setReport({ ok: false, steps: [], code: body?.code ?? "other", error: body?.error ?? formatApiError(body, `HTTP ${r.status}`), old: [] });
                 }
             } catch (e) {
-                setReport({ ok: false, steps: [], code: "other", error: e instanceof Error ? e.message : undefined, old: [] });
+                setReport({ ok: false, steps: [], code: "other", error: e instanceof LongRequestLost ? t("api.cutNoResult") : e instanceof Error ? e.message : undefined, old: [] });
             } finally {
                 setRenaming(false);
             }
         },
-        [tunnelId, renaming, onChanged, showSuccess, t]
+        [tunnelId, renaming, onChanged, onCut, showSuccess, t]
+    );
+    const rename = useCallback(() => change("rename", {}, "deviceInstall.renamed"), [change]);
+    const tidy = useCallback(() => change("tidy", {}, "deviceInstall.tidied"), [change]);
+    const switchTransport = useCallback(
+        (transport: WayInSetup) => change("switch", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transport }) }, "deviceInstall.switch.doneToast"),
+        [change]
     );
 
     const resetRename = useCallback(() => {

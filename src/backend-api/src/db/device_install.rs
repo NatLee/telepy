@@ -97,8 +97,13 @@ pub async fn record_rename(db: &Db, tunnel_id: i64, from: &[String]) -> sqlx::Re
 
 /// 還沒盤點過，或上次盤點超過 `older_than_days` 天。/ Never surveyed, or not within `older_than_days`.
 pub async fn survey_due(db: &Db, tunnel_id: i64, older_than_days: i64) -> sqlx::Result<bool> {
-    let at: Option<Option<String>> = sqlx::query_scalar("SELECT surveyed_at FROM telepy_device_install WHERE tunnel_id = ?").bind(tunnel_id).fetch_optional(&db.read).await?;
-    let Some(Some(at)) = at else { return Ok(true) };
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT surveyed_at, survey_error FROM telepy_device_install WHERE tunnel_id = ?").bind(tunnel_id).fetch_optional(&db.read).await?;
+    let Some((Some(at), error)) = row else { return Ok(true) };
+    // 上次失敗（逾時、登不進去）：下一趟就再試，不要等一週。/ The last one failed: try again on the next pass, not a week later.
+    if error.is_some() {
+        return Ok(true);
+    }
     let cutoff = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(older_than_days));
     Ok(at < cutoff)
 }

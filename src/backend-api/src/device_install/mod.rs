@@ -334,6 +334,10 @@ pub async fn switch_transport(state: &AppState, tunnel: &Tunnel, by: &str, switc
 }
 
 async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Switch>) -> Result<Report, RenameError> {
+    // 正在刪這條通道時也不動它的服務。/ Not while the tunnel is being deleted either.
+    if crate::delete_runs::running(tunnel) {
+        return Err(RenameError::Busy);
+    }
     {
         let mut b = BUSY.lock().unwrap();
         if !b.insert(tunnel.reverse_port) {
@@ -571,6 +575,10 @@ async fn replace(state: &AppState, tunnel: &Tunnel, by: &str, switch: Option<Swi
 /// init script that would fight it on boot) go over the current connection in relabel mode — the key and everything
 /// named after the install id stay, so the connection never drops.
 pub async fn tidy(state: &AppState, tunnel: &Tunnel, by: &str) -> Result<Report, RenameError> {
+    // 正在刪這條通道時也不動它的服務。/ Not while the tunnel is being deleted either.
+    if crate::delete_runs::running(tunnel) {
+        return Err(RenameError::Busy);
+    }
     {
         let mut b = BUSY.lock().unwrap();
         if !b.insert(tunnel.reverse_port) {

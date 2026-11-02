@@ -30,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list, create))
         .routes(routes!(retrieve, update, partial_update, destroy))
         .routes(routes!(delete_check))
+        .routes(routes!(delete_skip_device))
         .routes(routes!(usernames_for_server))
         .routes(routes!(set_default_username))
         .routes(routes!(service_keys))
@@ -501,8 +502,25 @@ struct DeleteOptions {
     ("revoke_grant_ids" = Option<String>, Query, description = "Comma-separated grant ids from the delete check to revoke entirely; only those with can_revoke (your own, admins, or limited to this tunnel) are honoured"),
     ("remove_service" = Option<bool>, Query, description = "Also remove what runs the tunnel on the device (one-command install, systemd, launchd, cron / background loop, Docker, ssh / autossh scripts, Windows tasks / services / loops) with its files and logs; every login account is tried, root first (default false; needs the device online)"),
 ), responses((status = 200, description = "Deleted (usernames, shares, LAN hosts cascade; AI sessions closed; the device is disconnected). Body = what was cleaned up", body = super::schemas::TunnelDeleteReport), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, Query(opts): Query<DeleteOptions>) -> ApiResult<Json<Value>> {
+async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, Query(opts): Query<DeleteOptions>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    // 一兩分鐘的事：在自己的 task 裡做完，前面的代理放棄這個請求也不會停在半路（見 `super::detached`）。
+    // A minute or two of work: it runs to the end even when a proxy in front gives up on the request.
+    let st = state.clone();
+    let user_id = user.id;
+    super::detached::run(&state, user_id, &headers, "tunnel.delete", Some(id), async move { destroy_now(&st, &user, id, opts).await }).await
+}
+
+async fn destroy_now(state: &AppState, user: &User, id: i64, opts: DeleteOptions) -> ApiResult<Json<Value>> {
+    let state = state.clone();
     let t = deletable_tunnel(&state, user.id, id).await?;
+    // 同一條同時只刪一次；改名 / 換連線方式跑著時也先不刪（兩邊都在動裝置上的服務）。
+    // One delete per tunnel at a time, and none while a rename / switch changes the device's service.
+    let Some(run) = crate::delete_runs::begin(&t) else {
+        return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": "This tunnel is already being deleted.", "code": "deleting" })));
+    };
+    if crate::device_install::busy(&t) {
+        return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": "The device's service is being changed right now; delete the tunnel once that is done.", "code": "busy" })));
+    }
     let audience = notify::tunnel_audience(&state, &t).await?;
     let accounts: Vec<String> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| u.username).collect();
     // 要整個撤銷的 grant：只接受碰得到這條隧道、而且這個人可以撤銷的。/ Only grants that reach the tunnel and may be revoked.
@@ -515,14 +533,26 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         .collect();
     let mut steps = DeleteSteps { state: &state, user: user.id, tunnel: t.id, done: Vec::new() };
     // 裝置上的金鑰要趁隧道還連著時清（之後裝置就被踢掉了）。/ Clean the device while the tunnel is still up.
-    let cleanup_opts = crate::device_keys::CleanupOptions {
+    let mut cleanup_opts = crate::device_keys::CleanupOptions {
         device_keys: opts.remove_device_keys.unwrap_or(true),
         service_key: opts.remove_service_key.unwrap_or(false),
+        device: true,
     };
+    // 每個碰裝置的步驟都跟「跳過裝置」賽跑（`delete_runs::skip_device`）：被叫跳過就不再等裝置，Telepy 自己的部分照做。
+    // Every device step races "skip the device": once told, Telepy stops waiting for the device and does its own part.
     // 裝置上的服務：先找出並刪檔（連線留著，等一下服務金鑰可能被移掉），金鑰清完再停它、看它有沒有真的停。
     // The device service: files first (keeping the sessions, the service key may go next), stop it after the keys.
     let service_wanted = opts.remove_service.unwrap_or(false);
-    let service_skip = if !service_wanted { Some("off") } else if !crate::device_keys::online(&state, t.reverse_port) { Some("offline") } else { None };
+    let service_skip = if !service_wanted {
+        Some("off")
+    } else if !crate::device_keys::online(&state, t.reverse_port) {
+        Some("offline")
+    } else if run.skipped() {
+        Some("forced")
+    } else {
+        None
+    };
+    let mut service_skip_reason = service_skip;
     let service_prep = match service_skip {
         Some(reason) => {
             steps.end("service", "skipped", json!({ "reason": reason }));
@@ -530,19 +560,52 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         }
         None => {
             steps.start("service", json!({}));
-            let p = crate::tunnel_service::prepare(&state, &t, &accounts).await;
-            let (found, errors, tried) = p.summary();
-            let outcome = if errors > 0 && errors == tried { "failed" } else if errors > 0 || found == 0 { "warn" } else { "done" };
-            steps.end("service", outcome, json!({ "found": found, "errors": errors }));
-            Some(p)
+            let prepared = tokio::select! {
+                p = crate::tunnel_service::prepare(&state, &t, &accounts) => Some(p),
+                _ = run.skip_requested() => None,
+            };
+            match prepared {
+                Some(p) => {
+                    let (found, errors, tried) = p.summary();
+                    let outcome = if errors > 0 && errors == tried { "failed" } else if errors > 0 || found == 0 { "warn" } else { "done" };
+                    steps.end("service", outcome, json!({ "found": found, "errors": errors }));
+                    Some(p)
+                }
+                None => {
+                    steps.end("service", "skipped", json!({ "reason": "forced" }));
+                    service_skip_reason = Some("forced");
+                    None
+                }
+            }
         }
     };
     let keys_online = crate::device_keys::online(&state, t.reverse_port);
-    if keys_online {
+    // 金鑰還沒動之前先記下 Telepy 裝過幾把：中途被叫跳過時，回報「可能還在裝置上」的數量。
+    // How many keys Telepy installed, read first: when skipped halfway, that many may still be on the device.
+    let keys_before = crate::device_keys::installed_summary(&state.db, t.id).await.map(|k| k.len()).unwrap_or(0);
+    let mut keys_forced = run.skipped();
+    if keys_forced {
+        cleanup_opts.device = false;
+    } else if keys_online {
         steps.start("keys", json!({}));
     }
-    let cleanup = crate::device_keys::forget_tunnel(&state, &t, cleanup_opts, &accounts).await;
-    if cleanup.online {
+    let cleanup = tokio::select! {
+        c = crate::device_keys::forget_tunnel(&state, &t, cleanup_opts, &accounts) => Some(c),
+        _ = run.skip_requested(), if !keys_forced => None,
+    };
+    let cleanup = match cleanup {
+        Some(c) => c,
+        None => {
+            // 跳過：只把 Telepy 這邊的紀錄清掉（重跑一次不連裝置）。/ Skipped: only Telepy's rows (run again without the device).
+            keys_forced = true;
+            let mut c = crate::device_keys::forget_tunnel(&state, &t, crate::device_keys::CleanupOptions { device: false, ..cleanup_opts }, &accounts).await;
+            c.keys_left = c.keys_left.max(keys_before);
+            c
+        }
+    };
+    if keys_forced && keys_online {
+        steps.end("keys", "skipped", json!({ "reason": "forced", "keys_left": cleanup.keys_left }));
+    } else if cleanup.online {
         let removed: usize = cleanup.accounts.iter().map(|a| a.removed).sum();
         let failed = cleanup.accounts.iter().filter(|a| a.error.is_some()).count();
         let service_key = cleanup.accounts.iter().any(|a| a.service_key_removed);
@@ -551,9 +614,9 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     } else {
         steps.end("keys", "skipped", json!({ "reason": "offline", "keys_left": cleanup.keys_left }));
     }
-    let service = match service_prep {
-        Some(p) => Some(
-            crate::tunnel_service::finish_observed(&state, &t, p, |phase| {
+    let service = match service_prep.filter(|_| !run.skipped()) {
+        Some(p) => tokio::select! {
+            r = crate::tunnel_service::finish_observed(&state, &t, p, |phase| {
                 use crate::tunnel_service::FinishPhase;
                 match phase {
                     FinishPhase::Stopping { secs } => steps.start("stop", json!({ "secs": secs })),
@@ -571,16 +634,23 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
                         }
                     }
                 }
-            })
-            .await,
-        ),
-        None => {
-            let reason = service_skip.unwrap_or("off");
-            steps.end("stop", "skipped", json!({ "reason": reason }));
-            steps.end("watch", "skipped", json!({ "reason": reason }));
-            None
-        }
+            }) => Some(r),
+            _ = run.skip_requested() => None,
+        },
+        None => None,
     };
+    if service.is_none() {
+        // 沒跑到、或停止 / 觀察途中被叫跳過：還沒結束的步驟記成跳過。/ Not run, or skipped while stopping / watching.
+        let reason = if run.skipped() { "forced" } else { service_skip_reason.unwrap_or("off") };
+        let ended: Vec<&str> = steps.done.iter().filter_map(|e| e.get("step").and_then(Value::as_str)).collect();
+        let (stop_open, watch_open) = (!ended.contains(&"stop"), !ended.contains(&"watch"));
+        if stop_open {
+            steps.end("stop", "skipped", json!({ "reason": reason }));
+        }
+        if watch_open {
+            steps.end("watch", "skipped", json!({ "reason": reason }));
+        }
+    }
     steps.start("telepy", json!({}));
     let ai_closed = crate::ai::close_for_tunnel(&state, t.id, crate::ai::CloseReason::TunnelDeleted).await;
     // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
@@ -626,6 +696,20 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         "service": service,
         "steps": steps,
     })))
+}
+
+/// 正在跑的刪除不再等裝置（強制刪除）：還沒做完的裝置步驟立刻結束成「跳過」，Telepy 自己的部分照做。
+/// 誰能刪就誰能叫；沒有在刪 → 409 `not_deleting`。
+/// Tell a running delete to stop waiting for the device (force delete): the device steps not finished yet end as
+/// skipped and Telepy's own part still runs. Whoever may delete may ask; nothing running → 409 `not_deleting`.
+#[utoipa::path(post, path = "/api/reverse/server/{id}/delete/skip-device", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The running delete was told to skip the device", body = super::schemas::DeleteSkipDevice), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = not_deleting", body = super::schemas::ErrorBody)))]
+async fn delete_skip_device(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = deletable_tunnel(&state, user.id, id).await?;
+    if !crate::delete_runs::skip_device(&t) {
+        return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": "This tunnel is not being deleted right now.", "code": "not_deleting" })));
+    }
+    tracing::info!(tunnel = t.id, by = %user.username, "tunnel delete told to skip the device");
+    Ok(Json(json!({ "skipped": true })))
 }
 
 /// 刪除的進度：每一步開始（`active`）與結束（`done` / `warn` / `failed` / `skipped`）即時送給按刪除的人（請求還在跑，
