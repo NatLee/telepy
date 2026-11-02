@@ -234,9 +234,13 @@ export const WAY_IN_KEY: Record<WayInSetup, TranslationKey> = {
     websocket: "deviceInstall.switch.wayWeb",
 };
 
-/** 要不要提議改成自動：還不是自動、而且做得到。/ Whether to offer switching to automatic. */
-export function offerAutomatic(view: Pick<DeviceInstallView, "switch" | "online">): boolean {
-    return !!view.switch?.possible && view.switch.way_in !== "auto";
+/**
+ * 能不能在這裡換連線方式：盤點看得懂現在跑通道的服務就能換，換成哪一種（包括換回來、或重裝同一種）都一樣。
+ * Whether the way in can be switched here: whenever the survey understood the service running the tunnel, to any of
+ * the three ways (back again, or the same way reinstalled, included).
+ */
+export function canSwitch(view: Pick<DeviceInstallView, "switch" | "online">): boolean {
+    return !!view.switch?.possible;
 }
 
 /** 失敗的說明：先看是不是盤點擋下（blocker），再看失敗代碼。/ Explain a failure: a blocker first, then the code. */

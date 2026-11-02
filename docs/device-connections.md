@@ -137,6 +137,17 @@ Laptops can come in this way too. In the SSH config dialog, set "Reach Telepy vi
 
 The one-command join uses `--auto` and reports what it actually installed at registration (`facts.transport`, `facts.carrier`). Telepy stores that as the tunnel's way in (`way_in`).
 
+### Switching a device that is already installed
+
+A device keeps the way in it was set up with until someone changes it. The tunnel's owner and Admins do that in the tunnel details, under Device → "How it connects" → **Change how it connects**. The device has to be online.
+
+- Pick **Automatic**, **SSH port only** or **Web port only**. Any of them can be switched again later, back included.
+- Picking the way it already has is a reinstall: the new service dials the server's current SSH host with the current helper. That is handy after changing the SSH host, or to pick up a newer carrier.
+- It is make-before-break. The new service starts next to the old one under a new install id, and takes over only once Telepy has logged in through it. Then the old one and its helper files are removed.
+- If the new way can't connect (say you pick SSH port only from a network that blocks that port), Telepy removes the new service again and nothing changes. Trying is safe, just slightly slower than not trying.
+- **How do they differ?** opens a diagram of both paths. Two "what if" switches block the SSH port or the web port, and the diagram shows where each way ends up. The same dialog opens from the SSH / SSH over WSS badge on the tunnel list.
+- It works wherever Telepy understood the service running the tunnel: systemd, launchd, a reconnect loop or OpenWrt's procd. Windows and a hand-written line in `/etc/rc.local` are listed but not switched.
+
 ### The built-in client
 
 Some devices have an SSH client that can't talk to the gateway (stock OpenWrt's dbclient), or no SSH client at all. There, the same `telepy-carrier` binary runs the whole tunnel itself. The one-command join picks it (`--client builtin`) when the device has no OpenSSH client:

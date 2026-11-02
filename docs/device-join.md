@@ -367,7 +367,7 @@ Nothing has been registered yet, so fix the cause and run the same command again
 - **Compat mode**: a workaround, not a fix. The SSH heartbeat is off and drops are noticed slowly.
 - **OpenWrt without root**: when `/etc/dropbear/*_host_key` isn't readable and there is no `/etc/ssh/*.pub` and no ssh-keyscan, the host key has no source. The script stops and explains.
 - **`/etc/rc.local`**: a hand-written tunnel line there isn't renamed or switched automatically.
-- **No helper for the web port**: ARM routers (aarch64, armv7, armv6) get the prebuilt `telepy-carrier`. A router with another CPU (MIPS) and no python3 has no helper, so **Switch to automatic** installs a new service that uses only the SSH port, and says so (`no_carrier`).
+- **No helper for the web port**: ARM routers (aarch64, armv7, armv6) get the prebuilt `telepy-carrier`. A router with another CPU (MIPS) and no python3 has no helper, so switching it to **Automatic** (Device → **Change how it connects**) installs a new service that uses only the SSH port, and says so (`no_carrier`).
 - **Several addresses**: the script uses the SSH server's bind address as the tunnel's target. If the server is bound to several non-loopback addresses, it takes the first.
 
 ## 10. Where it has been tested
@@ -405,7 +405,7 @@ Telepy's automated tests also run the served script with a real `/bin/sh` agains
 
 - `--check` picked the built-in client: the ed25519 host key from `dropbearkey -y` was verified with `tunnel --probe`, the gateway probe worked over the SSH port, and no compat mode.
 - A real join made the key with `telepy-carrier keygen` and reached connected → verified as the procd service `telepy-<id>` running `telepy-<id>-ws.bin tunnel …` (about 7 MB RSS). procd brought it back after a container restart.
-- **Switch to automatic** moved it, make-before-break, to a fresh install id with both `--server` and `--ws`.
+- Switching it to automatic moved it, make-before-break, to a fresh install id with both `--server` and `--ws`.
 - Deleting the tunnel together with the service and the service key left no Telepy file in `/etc/init.d` or `/root/.ssh`, and no process.
 
 **Alpine 3.20** (ash, Dropbear 2024.85 server, OpenSSH 9.7 client, no procd): `--check` passed with both the keyscan and the dropbearkey sources verified; a real join as a background loop with crond's `@reboot` reached verified; the uninstall removed the process and the crontab line.

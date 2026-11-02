@@ -1,7 +1,7 @@
 // node --test（Node 23 會直接拿掉型別）。/ Run with `npm test` (Node strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TIDY_STEPS, failureKey, groupParts, offerAutomatic, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
+import { TIDY_STEPS, failureKey, groupParts, canSwitch, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type InstallPart, type RenameReport, type ReportedStep } from "./deviceInstall.ts";
 
 const part = (kind: InstallPart["kind"], name: string, priv = false): InstallPart => ({ kind, what: "x", name, account: "pi", private: priv, earlier: false });
 
@@ -86,13 +86,13 @@ test("removing an extra copy has three steps of its own", () => {
     assert.deepEqual([s.survey, s.remove, s.confirm], ["ok", "active", "waiting"]);
 });
 
-test("switching to automatic is offered only when possible and not automatic yet", () => {
+test("switching is offered whenever the survey understood the service, whatever the way now", () => {
     const v = (possible: boolean, way_in: "ssh" | "websocket" | "auto" | null) => ({ online: true, switch: { possible, blocker: null, way_in } });
-    assert.equal(offerAutomatic(v(true, "ssh")), true);
-    assert.equal(offerAutomatic(v(true, null)), true, "unknown way in");
-    assert.equal(offerAutomatic(v(true, "websocket")), true);
-    assert.equal(offerAutomatic(v(true, "auto")), false, "already automatic");
-    assert.equal(offerAutomatic(v(false, "ssh")), false, "a blocker (Windows, no service found…)");
-    assert.equal(offerAutomatic({ online: true }), false, "an older backend");
+    assert.equal(canSwitch(v(true, "ssh")), true);
+    assert.equal(canSwitch(v(true, null)), true, "unknown way in");
+    assert.equal(canSwitch(v(true, "websocket")), true);
+    assert.equal(canSwitch(v(true, "auto")), true, "automatic can go back to one port");
+    assert.equal(canSwitch(v(false, "ssh")), false, "a blocker (Windows, no service found…)");
+    assert.equal(canSwitch({ online: true }), false, "an older backend");
     assert.equal(failureKey("no_carrier"), "deviceInstall.fail.no_carrier");
 });

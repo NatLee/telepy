@@ -7,7 +7,7 @@
  * both themes so dark pixels (the penguin) stay visible.
  */
 import React, { useState } from "react";
-import { ArrowRightLeft, Globe, KeyRound } from "lucide-react";
+import { ArrowRightLeft, Globe, Info, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n } from "@/lib/i18n";
@@ -18,6 +18,7 @@ import type { TranslationKey } from "@/locales/en";
 import type { Tunnel, TunnelEndpoint } from "@/types/tunnel";
 import { useHttps } from "@/components/tunnels/TransportVisibility";
 import { quiet, type RowVariant } from "@/components/tunnels/quiet";
+import { WayInInfoDialog } from "@/components/tunnels/WayIn";
 
 export const PLATFORM_NAME: Record<PlatformId, TranslationKey> = {
     linux: "platforms.name.linux",
@@ -102,13 +103,16 @@ export function TransportBadge({ tunnel, variant = "chip", className }: { tunnel
     const { t } = useI18n();
     const https = useHttps();
     const [open, setOpen] = useState(false);
+    const [compare, setCompare] = useState(false);
     const way = wayInOf(tunnel, https);
     if (!way) return null;
     const label = t(VIA_LABEL[way.via]);
     const lines = [t(VIA_TITLE[way.via]), t(STATE_TEXT[way.state]), way.auto ? t("platforms.via.auto") : null, way.setup ? t("platforms.via.setupDiffers", { way: t(VIA_LABEL[way.setup]) }) : null].filter((l): l is string => !!l);
     const Icon = way.via === "ssh" ? KeyRound : Globe;
-    // 滑鼠停著看 title；點一下（觸控也行）開一個小說明。/ Hover shows the title; a click (touch too) opens a short note.
+    // 滑鼠停著看 title；點一下（觸控也行）開一個小說明，裡面可以再開「三種方式差在哪」。
+    // Hover shows the title; a click (touch too) opens a short note, which links to "how the three ways differ".
     return (
+        <>
         <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
                 <button
@@ -146,7 +150,19 @@ export function TransportBadge({ tunnel, variant = "chip", className }: { tunnel
                         {l}
                     </p>
                 ))}
+                <button
+                    type="button"
+                    onClick={() => {
+                        setOpen(false);
+                        setCompare(true);
+                    }}
+                    className="inline-flex items-center gap-1 pt-0.5 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                    <Info size={13} aria-hidden /> {t("wayIn.compareButton")}
+                </button>
             </PopoverContent>
         </Popover>
+        {compare && <WayInInfoDialog isOpen onClose={() => setCompare(false)} current={tunnel.way_in?.setup ?? null} whereHint />}
+        </>
     );
 }
