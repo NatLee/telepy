@@ -367,7 +367,7 @@ Telepy 的盤點與刪除腳本大約 25 KB，所以長腳本會分段寫進裝�
 - **相容模式**：是繞道，不是修好。SSH 心跳關閉，斷線發現得慢。
 - **非 root 的 OpenWrt**：讀不到 `/etc/dropbear/*_host_key`，又沒有 `/etc/ssh/*.pub` 和 ssh-keyscan 時，主機金鑰沒有來源，腳本會停下來說明。
 - **`/etc/rc.local`**：那裡手寫的通道指令，不會被自動改名或切換。
-- **網頁連接埠沒有小幫手**：ARM 路由器（aarch64、armv7、armv6）有預編的 `telepy-carrier`。其他 CPU（MIPS）又沒有 python3 的路由器沒有小幫手，所以「改成自動」會裝一個只走 SSH 連接埠的新服務，並說明這件事（`no_carrier`）。
+- **網頁連接埠沒有小幫手**：ARM 路由器（aarch64、armv7、armv6）有預編的 `telepy-carrier`。其他 CPU（MIPS）又沒有 python3 的路由器沒有小幫手，所以在「改連線方式」選「自動」會裝一個只走 SSH 連接埠的新服務，並說明這件事（`no_carrier`）。
 - **多個位址**：腳本把 SSH 伺服器綁定的位址當成通道的目標。伺服器綁了多個非 loopback 位址時，取第一個。
 
 ## 十、測試過的環境
@@ -405,7 +405,7 @@ Telepy 的盤點與刪除腳本大約 25 KB，所以長腳本會分段寫進裝�
 
 - `--check` 選了內建 client：`dropbearkey -y` 的 ed25519 主機金鑰用 `tunnel --probe` 驗過，gateway 探測經 SSH 連接埠成功，沒有相容模式。
 - 真的加入時用 `telepy-carrier keygen` 產生金鑰，從連上到驗證成功，跑的是 procd 服務 `telepy-<代號>`，執行 `telepy-<代號>-ws.bin tunnel …`（RSS 約 7 MB）。容器重開後 procd 自己把它帶回來。
-- 「改成自動」先接上新的再拆舊的，換到新的安裝代號，同時帶 `--server` 與 `--ws`。
+- 改成自動時先接上新的再拆舊的，換到新的安裝代號，同時帶 `--server` 與 `--ws`。
 - 連同服務與服務金鑰一起刪除通道後，`/etc/init.d` 與 `/root/.ssh` 裡沒有任何 Telepy 的檔案，也沒有程序。
 
 **Alpine 3.20**（ash、Dropbear 2024.85 伺服器、OpenSSH 9.7 client、沒有 procd）：`--check` 通過，keyscan 與 dropbearkey 兩種來源都驗過；真的加入成背景迴圈加 crond 的 `@reboot`，驗證成功；移除後程序與 crontab 那一行都不見了。

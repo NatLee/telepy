@@ -472,12 +472,14 @@ async fn a_deleted_tunnels_leftover_is_an_extra_copy_removed_without_a_drop() {
 }
 
 /// 換成自動：新服務用新的安裝代號（才能跟現在的並存）、經小程式（`--tcp` 先 SSH 的 port）連上，先接上再拆舊的；之後
-/// 隧道用新代號，舊代號進紀錄（同一條隧道），`way_in` = auto。
+/// 隧道用新代號，舊代號進紀錄（同一條隧道），`way_in` = auto。接著再換回只走 SSH 的 port、再換成只走網頁的 port：
+/// 每次都是同一套，前一份（含它的小程式）跟著舊代號一起走。
 /// Switching to automatic: the new service gets a fresh install id (so it runs next to the current one) and comes in
 /// through the carrier (`--tcp`, the SSH port first), make-before-break; afterwards the tunnel uses the new id, the old
-/// one is in the ledger under the same tunnel, and `way_in` = auto.
+/// one is in the ledger under the same tunnel, and `way_in` = auto. Then back to the SSH port only, then the web port
+/// only: the same each time, and the previous install (its carrier included) goes with its id.
 #[tokio::test(flavor = "multi_thread")]
-async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
+async fn switching_moves_the_service_to_a_fresh_install_id_and_back() {
     let Some(lab) = Lab::start().await else { return };
     if !common::lab::have("python3") {
         eprintln!("skipping: no python3");
@@ -561,6 +563,46 @@ async fn switching_to_automatic_moves_the_service_to_a_fresh_install_id() {
     let ev = events(&lab);
     assert!(ev.iter().any(|e| e == "service_switched") && ev.iter().any(|e| e == "handover"), "{ev:?}");
     assert!(names(&r.json["view"], "older").is_empty(), "{}", r.json["view"]);
+    assert_eq!(r.json["view"]["switch"]["possible"], true, "an automatic device can be switched again: {}", r.json["view"]);
+
+    // 改回只走 SSH 的 port：同一套先接上再拆舊的，新服務沒有小程式，自動那份的小程式檔案跟著舊代號一起走。
+    // Back to the SSH port only: the same make-before-break, no carrier on the new service, and the automatic one's
+    // carrier files go with its install id.
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "ssh"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rep = &r.json["report"];
+    assert_eq!((rep["ok"].as_bool(), rep["transport"].as_str()), (Some(true), Some("ssh")), "{rep:#}");
+    let plain = r.json["view"]["install_id"].as_str().unwrap().to_string();
+    assert_ne!(plain, after);
+    let body = std::fs::read_to_string(home.join(format!(".ssh/telepy-{plain}.sh"))).unwrap();
+    assert!(!body.contains("ProxyCommand") && body.contains(&format!("'-p' '{}'", lab.gw_port)), "straight to the SSH port: {body}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while home.join(format!(".ssh/telepy-{after}.sh")).exists() || home.join(format!(".ssh/telepy-{after}-ws.sh")).exists() || alive(&format!("telepy-{after}.sh")) {
+        assert!(tokio::time::Instant::now() < deadline, "the automatic service was left behind: {rep:#}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!home.join(format!(".ssh/telepy-{plain}-ws.sh")).exists(), "no carrier for the SSH port");
+    wait_online(&lab, &dev, true).await;
+    let t = lab.app.get(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await;
+    assert_eq!((t.json["way_in"]["setup"].as_str(), t.json["way_in"]["last"].as_str()), (Some("ssh"), Some("ssh")), "{}", t.text);
+
+    // 只走網頁的 port：小程式只帶 /ws/gateway/，不先試 SSH 的 port。/ The web port only: the carrier without --tcp.
+    let r = lab.app.post(&format!("/api/reverse/server/{id}/device-install/switch"), Some(&alice.token), serde_json::json!({"transport": "websocket"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rep = &r.json["report"];
+    assert_eq!((rep["ok"].as_bool(), rep["transport"].as_str()), (Some(true), Some("websocket")), "{rep:#}");
+    let web = r.json["view"]["install_id"].as_str().unwrap().to_string();
+    let wrapper = std::fs::read_to_string(home.join(format!(".ssh/telepy-{web}-ws.sh"))).unwrap();
+    let exec = wrapper.lines().find(|l| l.starts_with("exec ")).unwrap_or_default();
+    assert!(!exec.contains("--tcp") && exec.contains("/ws/gateway/"), "{wrapper}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while home.join(format!(".ssh/telepy-{plain}.sh")).exists() || alive(&format!("telepy-{plain}.sh")) {
+        assert!(tokio::time::Instant::now() < deadline, "the SSH-port service was left behind: {rep:#}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    wait_online(&lab, &dev, true).await;
+    let t = lab.app.get(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await;
+    assert_eq!((t.json["way_in"]["setup"].as_str(), t.json["way_in"]["last"].as_str()), (Some("websocket"), Some("websocket")), "{}", t.text);
 }
 
 /// 編好的 telepy-carrier（共用 target 目錄的 debug 版）。/ The built telepy-carrier (the shared target dir's debug build).

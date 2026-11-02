@@ -18,6 +18,7 @@ import type { TranslationKey } from "@/locales/en";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import { RENAME_STEPS, type DeviceInstallView, type RenameReport, type ReportedStep, type WayInSetup } from "@/lib/deviceInstall";
+import { doneKeys } from "@/lib/wayIn";
 
 export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabled: boolean, onChanged?: () => void) {
     const { t } = useI18n();
@@ -106,7 +107,7 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
     // 改名、拿掉多的那份、換連線方式：同一份步驟 / 回報結構，交接要等一兩分鐘，所以走 longFetch。
     // Rename, remove the extra copies, switch how it connects: one steps / report shape; a handover takes a minute or two.
     const change = useCallback(
-        async (path: "rename" | "tidy" | "switch", init: RequestInit, successKey: TranslationKey) => {
+        async (path: "rename" | "tidy" | "switch", init: RequestInit, successKey: TranslationKey | ((report: RenameReport) => TranslationKey)) => {
             if (!tunnelId || renaming) return;
             setRenaming(true);
             setSteps([]);
@@ -118,7 +119,7 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
                     setReport(body.report);
                     setSteps(body.report.steps);
                     if (body.view) setView({ id: tunnelId, view: body.view });
-                    if (body.report.ok) showSuccess(t(successKey));
+                    if (body.report.ok) showSuccess(t(typeof successKey === "function" ? successKey(body.report) : successKey));
                     onChanged?.();
                 } else {
                     setReport({ ok: false, steps: [], code: body?.code ?? "other", error: body?.error ?? formatApiError(body, `HTTP ${r.status}`), old: [] });
@@ -134,7 +135,7 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
     const rename = useCallback(() => change("rename", {}, "deviceInstall.renamed"), [change]);
     const tidy = useCallback(() => change("tidy", {}, "deviceInstall.tidied"), [change]);
     const switchTransport = useCallback(
-        (transport: WayInSetup) => change("switch", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transport }) }, "deviceInstall.switch.doneToast"),
+        (transport: WayInSetup) => change("switch", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transport }) }, (r) => doneKeys(r.transport ?? transport, !!r.no_carrier).toast),
         [change]
     );
 
