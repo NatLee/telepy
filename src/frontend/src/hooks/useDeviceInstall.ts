@@ -146,3 +146,5 @@ export function useDeviceInstall(tunnelId: number | null, isOpen: boolean, enabl
 
     return { view: current, error, surveying, survey, renaming, steps, report, rename, tidy, switchTransport, resetRename, reload: load };
 }
+
+export type DeviceInstallState = ReturnType<typeof useDeviceInstall>;

@@ -61,13 +61,13 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80" title={t("tunnels.portTitle")}>
                             :{tunnel.reverse_port}
                         </span>
-                        <TransportBadge tunnel={tunnel} />
+                        <TransportBadge tunnel={tunnel} canManage={!!tunnel.can_share} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
                         <DeviceOsChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelLanChip endpoint={tunnel.endpoint} />
                         <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
                         <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
-                        <DeviceNameChip summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "device")} />
+                        <DeviceNameChip summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
                         <SshNameChip name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "general")} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} onShare={() => actions.onShare(tunnel.id)} />
                         <TunnelPresenceButton presence={tunnel.presence} tunnelId={tunnel.id} />

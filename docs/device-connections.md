@@ -93,7 +93,7 @@ The device's ssh gets `ProxyCommand ~/.ssh/telepy-<install id>-ws.sh`. That smal
 
 Inside is the very same SSH session: the same host key, the same key login and forward rules. Nothing extra is trusted, and there is no separate auth message, because authentication happens in the SSH inside.
 
-Choose it in the wizard's connection step or in the one-command join (`transport: websocket`). What got installed shows up on the Device tab as the `carrier` fact: `binary <target>`, `python3` or `none`.
+Choose it in the wizard's connection step or in the one-command join (`transport: websocket`). What got installed shows up on the tunnel details' How it connects tab as the `carrier` fact: `binary <target>`, `python3` or `none`.
 
 #### Which carrier a device gets
 
@@ -139,7 +139,9 @@ The one-command join uses `--auto` and reports what it actually installed at reg
 
 ### Switching a device that is already installed
 
-A device keeps the way in it was set up with until someone changes it. The tunnel's owner and Admins do that in the tunnel details, under Device → "How it connects" → **Change how it connects**. The device has to be online.
+A device keeps the way in it was set up with until someone changes it. The tunnel's owner and Admins do that on the **How it connects** tab of the tunnel details. Three ways lead there: the tab itself, **How it connects** in the tunnel's ⋯ menu, and **Change how it connects** in the popover of the SSH / SSH over WSS badge on the tunnel list. The device has to be online.
+
+The tab shows the way it was set up with, how it is connected right now and the two-lane diagram lit by that: an automatic device that is on the web port at the moment gets its SSH lane drawn blocked. Everyone who can see the tunnel sees this part; only owners and Admins get the switch and the "On the device" section below it.
 
 - Pick **Automatic**, **SSH port only** or **Web port only**. Any of them can be switched again later, back included.
 - Picking the way it already has is a reinstall: the new service dials the server's current SSH host with the current helper. That is handy after changing the SSH host, or to pick up a newer carrier.
@@ -179,7 +181,7 @@ What you give up:
 
 - The gateway sees the wstunnel container as the peer, so the device's public address only shows up later, from the daily probe.
 - The way-in badge reads SSH instead of SSH over WSS.
-- The Device tab knows nothing about a service you installed by hand.
+- The How it connects tab knows nothing about a service you installed by hand.
 
 What you must get right:
 
@@ -428,7 +430,7 @@ The result is stored and refreshed:
 
 - after a verified one-command join;
 - in the daily device check, when the device was never surveyed or the last survey is older than 7 days;
-- when you click "Check again" under "On the device" on the tunnel details' Device tab.
+- when you click "Check again" under "On the device" on the tunnel details' How it connects tab.
 
 On Windows the script only removes things; the survey isn't done yet and returns just the platform.
 
@@ -472,7 +474,7 @@ Two kinds of names don't need this:
 - Different Telepy accounts can't point tunnels at the same machine (see [One owner per machine](#one-owner-per-machine)).
 - Different OS accounts, or connections to different servers, used to collide on shared names: `telepy-tunnel.service`, the container `telepy-tunnel`, `/etc/ssh/telepy_known_hosts`, `~/.ssh/telepy_known_hosts`, and `telepy-tunnel-<n>` named by tunnel number (which two servers with a copied database share). All of them are named by the install id now.
 - One OS account connecting to two servers **with the same key**: on delete, `~/.ssh/telepy_tunnel_*` stays as long as something that dials the other server (a unit, a script, a running ssh) uses it (`kept key … another server`). The one-command join's loop stops only its own ssh, matched by its known_hosts file rather than by the key.
-- The survey reports things that dial another server as `kept other-server "<file or ssh> (port N)"`, and a shared key as `note key-shared <path>`. The Device tab's "Who this device connects to" diagram draws one row per server from them.
+- The survey reports things that dial another server as `kept other-server "<file or ssh> (port N)"`, and a shared key as `note key-shared <path>`. The How it connects tab's "Who this device connects to" diagram draws one row per server from them.
 
 > [!NOTE]
 > If you copy the whole database to run a second server, the install ids are copied too, so what the two servers install on the same device gets the same names.
@@ -493,7 +495,7 @@ So Telepy asks three questions, and only the last one is about the name:
 2. **Which one is running?** When every ssh the survey saw is the one named after the install id (its command line carries `telepy-<id>.known_hosts`), every other service or container of the tunnel is an **extra copy**, whatever it is called. It isn't a name to change, and a rename answers `extra`.
 3. **Does the name give a person away?** Only names made from the install id are private. When a tunnel is deleted, its id, name and owner go into a ledger, and new ids never reuse them. A `telepy-<x>` or `com.telepy.tunnel.<x>` in a name is marked as left over from that deleted tunnel only when it matches the ledger, and the tunnel's name is shown only to the same owner. Telepy's earlier standard names are a fixed list.
 
-"Remove the extra copy" on the Device tab (or `POST …/device-install/tidy`) needs no handover, because the extra copy isn't the one connected:
+"Remove the extra copy" on the How it connects tab (or `POST …/device-install/tidy`) needs no handover, because the extra copy isn't the one connected:
 
 1. Survey again. There has to be an extra copy, the device can't be Windows, and a system-level copy needs a root login.
 2. Over the **current** connection, run the same cleanup as a rename: everything named after the id is skipped and the key stays. An init script is disabled, then stopped and removed by the stop script, and of the known_hosts files only the one that copy used goes with it.

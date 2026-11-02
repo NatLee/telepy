@@ -14,7 +14,7 @@ import { useTunnelNameError } from "@/components/tunnels/TunnelNameHelp";
 import { keyProblem } from "@/lib/sshKeys";
 import { parseLabels, sameLabels } from "@/lib/tunnelLabels";
 import type { TranslationKey } from "@/locales/en";
-import type { TunnelEndpoint } from "@/types/tunnel";
+import type { TunnelEndpoint, TunnelWayIn } from "@/types/tunnel";
 
 export interface TunnelDetails {
     id: number;
@@ -37,6 +37,8 @@ export interface TunnelDetails {
     terminal_detach_policy?: "user" | "never";
     /** 裝置的位址與基本狀況（能登入裝置的人才有，否則 null）。/ Addresses and facts (null when hidden). */
     endpoint?: TunnelEndpoint | null;
+    /** 裝置怎麼連 Telepy（看得到通道的人都有）。/ How the device reaches Telepy (every viewer). */
+    way_in?: TunnelWayIn | null;
 }
 
 export type TunnelForm = { host_friendly_name: string; key: string; description: string };
