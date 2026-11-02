@@ -44,6 +44,18 @@ async fn telepy_env(home: &Path, args: &[&str], envs: &[(&str, &str)]) -> Out {
     Out { code: out.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&out.stdout).into(), stderr: String::from_utf8_lossy(&out.stderr).into() }
 }
 
+/// shell 按 Tab 時的那一次呼叫（bash 的樣子）：`words` 不含 `telepy`，最後一個是正在打的字。
+/// One Tab as bash asks it: `words` without `telepy`, the last one being typed.
+async fn tab(home: &Path, words: &[&str]) -> Vec<String> {
+    let index = words.len().to_string();
+    let mut args = vec!["--", "telepy"];
+    args.extend_from_slice(words);
+    let envs = [("TELEPY_COMPLETE", "bash"), ("_CLAP_COMPLETE_INDEX", index.as_str()), ("_CLAP_IFS", "\n"), ("_CLAP_COMPLETE_COMP_TYPE", "9")];
+    let o = telepy_env(home, &args, &envs).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    o.stdout.lines().map(str::to_string).collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cli_against_the_server() {
     let Some(lab) = Lab::start().await else { return };
@@ -81,6 +93,20 @@ async fn cli_against_the_server() {
     assert_eq!(telepy(h, &["ls", "--label", "env=prod", "--json"]).await.stdout.trim(), "[]");
     let table = telepy(h, &["ls"]).await.stdout;
     assert!(table.starts_with("NAME") && table.contains("box"), "{table}");
+    assert!(!table.contains('\x1b'), "a pipe never gets colour: {table:?}");
+    let coloured = telepy(h, &["--color", "always", "ls"]).await.stdout;
+    assert!(coloured.starts_with("\x1b[1mNAME\x1b[0m") && coloured.contains("box"), "{coloured:?}");
+
+    // Tab 補完：shell 叫 `TELEPY_COMPLETE=bash telepy -- <字>`。`ls` 已經記下名字和帳號；快取沒了就自己問伺服器。
+    // Tab completion: the shell runs `TELEPY_COMPLETE=bash telepy -- <words>`. `ls` noted the names and accounts; without a cache it asks the server.
+    assert!(h.join("config").join("completion.json").exists(), "ls fills the cache");
+    assert!(tab(h, &["ssh", "b"]).await.contains(&"box".to_string()));
+    assert_eq!(tab(h, &["ssh", "box@"]).await, ["box@pi"]);
+    assert_eq!(tab(h, &["ls", "--label", "e"]).await, ["env=lab"]);
+    assert!(tab(h, &["cp", "bo"]).await.contains(&"box:".to_string()));
+    std::fs::remove_file(h.join("config").join("completion.json")).unwrap();
+    assert_eq!(tab(h, &["status", "b"]).await, ["box"], "no cache: asked the server");
+    assert!(tab(h, &["s"]).await.contains(&"ssh".to_string()));
 
     // exec：輸出原樣、結束碼是裝置上的；用標籤選也行（多目標 = 前綴）。/ exec: raw output, the device's exit code; by label too.
     let o = telepy(h, &["exec", "box@pi", "--", "echo", "hello-$USER"]).await;
@@ -200,6 +226,7 @@ async fn cli_against_the_server() {
     assert!(o.stderr.contains("HTTP 401"), "{}", o.stderr);
     let o = telepy(h, &["logout"]).await;
     assert_eq!(o.code, 0);
+    assert!(!h.join("config").join("completion.json").exists(), "signing out forgets the names");
     assert!(!h.join("config").join("credentials.json").exists() || !std::fs::read_to_string(h.join("config").join("credentials.json")).unwrap().contains("tpt_"));
 }
 

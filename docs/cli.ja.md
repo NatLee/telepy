@@ -106,6 +106,39 @@ telepy があるフォルダーへの書き込み権限が必要です（`/usr/l
 
 `telepy doctor` はバージョンと、新しいものが出ているかどうかを表示します（警告であり、失敗にはなりません）。自分でビルドした telepy は、自分からは確認しません。
 
+### Tab 補完
+
+`telepy completions` を実行すると、シェルの設定ファイルに追加する 1 行が表示されます。zsh なら次のとおりです。
+
+```sh
+eval "$(telepy completions zsh)"     # ~/.zshrc に追加
+```
+
+| シェル | ファイル | 追加する行 |
+| --- | --- | --- |
+| bash | `~/.bashrc`（macOS は `~/.bash_profile`） | `eval "$(telepy completions bash)"` |
+| zsh | `~/.zshrc` | `eval "$(telepy completions zsh)"` |
+| fish | `~/.config/fish/config.fish` | `telepy completions fish \| source` |
+| PowerShell | `$PROFILE` | `telepy completions powershell \| Out-String \| Invoke-Expression` |
+| elvish | `~/.config/elvish/rc.elv` | `eval (telepy completions elvish \| slurp)` |
+
+コマンドとオプションに加えて、トンネル名、アカウント（`box@` の後に Tab）、`--label`、`--group`、`telepy run` で使うツールボックスのスニペット、`cp` / `scp` のデバイス側（`box:`）も補完します。Tab を押すたびに telepy が呼ばれ、設定ディレクトリの小さなキャッシュから答えます。サーバーへの問い合わせは多くても 30 秒に 1 回で、待つのは長くて 2 秒です。サーバーに届かないときに遅くなるのはその 1 回だけで、あとはキャッシュの名前が出てきます。サインアウトするとキャッシュも消えます。補完できるのは名前までで、どのデバイスを再起動するつもりだったかは補完してくれません。
+
+古いシェルについて：bash の行は macOS 付属の bash 3.2 でも動きます（そこでは `source <(…)` が黙って何もしないので `eval` を使います）。`~/.zshrc` が zsh の補完システムを読み込んでいなければ、zsh の行が読み込みます。素の `sh`、`dash`、BusyBox の `ash`（OpenWrt）にはプログラム可能な補完がないので、追加するものはありません。Tab はこれまでどおりファイル名を補完します。PowerShell は 5.0 以降が必要です。
+
+### 色
+
+ターミナルでは、いくつかの箇所に色が付きます。`ls` と `status` のトンネルの状態（オンラインは緑、低下は黄、オフラインは薄字）、`doctor` の ✓ / ✗ / !、複数のデバイスで `exec` したときの各デバイスのプレフィックスと終了コード、`api activity` の HTTP ステータスコード、そして `--help` です。使うのは基本の 16 色と太字・薄字だけなので、ターミナル自身の配色に従い、古いターミナルでも読めます。デバイス自身の出力（`exec` の出力）は手を加えずにそのまま流します。
+
+次の場合は色を付けません。
+
+- 出力がパイプやファイルのとき（`telepy ls | grep …` はプレーンテキストを受け取ります）
+- `NO_COLOR` が設定されているか、`CLICOLOR=0` のとき
+- `TERM` が `dumb`、または設定されていないとき（cron や一部のサービス）
+- Windows のコンソールを ANSI モードにできないとき（Windows 10 より前）。制御コードではなくプレーンテキストを出力します
+
+`--color always`（または `CLICOLOR_FORCE=1`）ならパイプにも色を付けます（`less -R` と組み合わせるときなど）。`--color never` はその回だけ色を消します。環境変数よりオプションが優先されます。
+
 ## サインイン
 
 ```sh
@@ -306,7 +339,7 @@ telepy browse close "$ID"
 
 ## コマンド一覧
 
-どのコマンドも `--server <url>` と `--token tpt_…`（または `TELEPY_URL` と `TELEPY_TOKEN`）を受け付け、その実行で使うサーバーと認証情報を選べます。
+どのコマンドも `--server <url>` と `--token tpt_…`（または `TELEPY_URL` と `TELEPY_TOKEN`）を受け付け、その実行で使うサーバーと認証情報を選べます。色は `--color auto|always|never` で選べます。
 
 <details>
 <summary>すべてのコマンド、その働きと必要なスコープ</summary>
@@ -341,6 +374,7 @@ telepy browse close "$ID"
 | `telepy api activity` | トークンと CLI のサインインによる呼び出し（[呼び出しログ](#呼び出しログ)を参照） | — |
 | `telepy doctor` | サーバー、サインイン、スコープ、有効期限、手元の ssh ツール、バージョンを確認 | — |
 | `telepy update` | telepy を更新。`--check`、`--to <version>` | — |
+| `telepy completions [shell]` | bash、zsh、fish、powershell、elvish の Tab 補完スクリプトを出力。シェルを省くと、どのファイルにどの行を追加するかを表示 | — |
 
 </details>
 
@@ -487,7 +521,9 @@ telepy api activity --all --user bob       # 管理者：全員分、または�
 | `TELEPY_RELEASES_URL` | リリースページのミラー。更新の確認と `telepy update` で使う |
 | `TELEPY_RELEASE_KEYS` | 内蔵の鍵の代わりに信頼するリリース公開鍵（署名し直すミラー向け） |
 | `TELEPY_NO_MASCOT=1` | `login` と `doctor` の横に Tapi を表示しない |
-| `NO_COLOR` | Tapi を色なしで描く |
+| `NO_COLOR` | 色を付けない。Tapi も同じ（`--color` が優先） |
+| `CLICOLOR=0` | これも色を付けない |
+| `CLICOLOR_FORCE=1` | パイプやファイルにも色を付ける（`--color always` と同じ） |
 | `CI` | 設定されていれば、更新を確認しない |
 | `TELEPY_VERSION` | ビルド時に使用：バイナリーに刻印するバージョン |
 

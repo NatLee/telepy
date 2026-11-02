@@ -5,16 +5,19 @@
  * 與環境變數。指令表是 `lib/cliGuide.CLI_COMMANDS`（測試會比對 `src/cli/src/lib.rs` 的子指令）。
  * 彩蛋：隱藏的 `telepy dig` 不在表裡，只有在搜尋框打 `dig` 才出現。
  * The CLI page's reference: every command (searchable over the command and its text), `telepy doctor` (a happy Tapi
- * beside a clean run, like the real CLI) and the environment variables. The egg: the hidden `telepy dig` is not in
+ * beside a clean run, like the real CLI), Tab completion (the line for each shell, as `telepy completions` prints it)
+ * and the environment variables. The egg: the hidden `telepy dig` is not in
  * the list; it only shows up when you search for `dig`.
  */
 import React, { useState } from "react";
-import { Search, Stethoscope } from "lucide-react";
+import { Keyboard, Search, Stethoscope } from "lucide-react";
 import { Tapi } from "@/components/brand/Tapi";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Segmented } from "@/components/ui/segmented";
 import { CliTerminal, CommandLine, CommandText, NeedChips } from "@/components/cli/CliBlocks";
 import { useI18n } from "@/lib/i18n";
-import { CLI_COMMANDS, CLI_ENV, HIDDEN_COMMAND, doctorSample, filterCommands, revealsHidden, type CliCommand, type CliOs } from "@/lib/cliGuide";
+import { CLI_COMMANDS, CLI_ENV, COMPLETION_SETUP, HIDDEN_COMMAND, defaultShell, doctorSample, filterCommands, revealsHidden, type CliCommand, type CliOs, type CompletionShell } from "@/lib/cliGuide";
 import type { TranslationKey } from "@/locales/en";
 
 export function CliCommands() {
@@ -62,6 +65,40 @@ export function CliCommands() {
     );
 }
 
+const SHELL_LABEL: Record<CompletionShell, string> = { bash: "bash", zsh: "zsh", fish: "fish", powershell: "PowerShell", elvish: "elvish" };
+
+/**
+ * Tab 補完：選 shell（預設照猜到的系統）→ 要加的那一行與加在哪個檔；補得出什麼、哪些 shell 沒有補完。
+ * Tab completion: pick the shell (the guessed system's by default) → the line and the file it goes into; what it
+ * completes, and which shells have no completion at all.
+ */
+function CompletionCard({ os }: { os: CliOs }) {
+    const { t, tn } = useI18n();
+    const [picked, setPicked] = useState<CompletionShell | null>(null);
+    const shell = picked ?? defaultShell(os);
+    const setup = COMPLETION_SETUP.find((s) => s.shell === shell) ?? COMPLETION_SETUP[0];
+    return (
+        <div className="space-y-3 rounded-xl border border-border bg-card p-4 text-card-foreground shadow-card">
+            <p className="flex items-start gap-2 text-sm leading-relaxed text-foreground">
+                <Keyboard size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+                <span>{t("cli.complete.what")}</span>
+            </p>
+            {/* 五個 shell 在手機上擠不下（PowerShell 撞到 elvish）：手機用下拉選單。/ Five shells don't fit a phone row: a select there. */}
+            <NativeSelect value={shell} onChange={(e) => setPicked(e.target.value as CompletionShell)} aria-label={t("cli.complete.shell")} className="w-full sm:hidden">
+                {COMPLETION_SETUP.map((s) => (
+                    <option key={s.shell} value={s.shell}>
+                        {SHELL_LABEL[s.shell]}
+                    </option>
+                ))}
+            </NativeSelect>
+            <Segmented size="sm" className="hidden sm:inline-flex" aria-label={t("cli.complete.shell")} value={shell} onChange={setPicked} options={COMPLETION_SETUP.map((s) => ({ value: s.shell, label: SHELL_LABEL[s.shell] }))} />
+            <p className="text-sm leading-relaxed text-muted-foreground">{tn("cli.complete.addTo", { file: <code className="font-mono text-foreground [overflow-wrap:anywhere]">{setup.file}</code> })}</p>
+            <CommandLine value={setup.line} />
+            <p className="text-sm leading-relaxed text-muted-foreground">{tn("cli.complete.old", { cmd: <code className="font-mono text-foreground">telepy completions</code> })}</p>
+        </div>
+    );
+}
+
 export function CliEnvironment({ base, username, os }: { base: string; username: string; os: CliOs }) {
     const { t, tn } = useI18n();
     return (
@@ -74,6 +111,7 @@ export function CliEnvironment({ base, username, os }: { base: string; username:
                 <CommandLine value="telepy doctor" />
                 <CliTerminal label={t("cli.env.doctorSample")} lines={doctorSample(base || "https://telepy.example.com", username, os)} art={<Tapi pose="happy" size={52} label={t("eggs.tapiLabel")} />} />
             </div>
+            <CompletionCard os={os} />
             {/* 變數名很長（TELEPY_CONFIG_DIR）：手機上名字在上、說明在下。/ Long names: stacked on phones. */}
             <dl className="divide-y divide-border rounded-xl border border-border bg-card text-card-foreground shadow-card">
                 {CLI_ENV.map((v) => (

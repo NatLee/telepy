@@ -65,7 +65,7 @@ pub fn home_dir() -> PathBuf {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn write_private(path: &std::path::Path, data: &str) -> Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, data: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }

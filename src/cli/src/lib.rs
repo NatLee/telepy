@@ -12,6 +12,8 @@ pub mod activity;
 pub mod api;
 pub mod carrier;
 pub mod cast;
+pub mod color;
+pub mod complete;
 pub mod creds;
 pub mod tapi;
 /// Tapi 的像素格：與伺服器共用同一個檔（網頁的 `lib/mascot.ts` 是同一份）。/ Tapi's grids, shared with the server.
@@ -39,7 +41,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::engine::ArgValueCompleter;
 use reqwest::Method;
 use serde_json::{json, Value};
 
@@ -60,7 +63,7 @@ pub const VERSION: &str = match option_env!("TELEPY_VERSION") {
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "telepy", version = VERSION, about = "Telepy from the command line: tunnels, SSH, commands, files, sessions and recordings.")]
+#[command(name = "telepy", version = VERSION, about = "Telepy from the command line: tunnels, SSH, commands, files, sessions and recordings.", styles = color::styles())]
 pub struct Cli {
     /// Telepy server URL (default: the one you signed in to)
     #[arg(long, global = true, env = "TELEPY_URL")]
@@ -68,8 +71,16 @@ pub struct Cli {
     /// Personal API token (tpt_…) instead of the stored sign-in; handy in CI
     #[arg(long, global = true, env = "TELEPY_TOKEN", hide_env_values = true)]
     pub token: Option<String>,
+    /// Colour the output: auto (a terminal that shows colour; NO_COLOR turns it off), always or never
+    #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = color::When::Auto)]
+    pub color: color::When,
     #[command(subcommand)]
     pub command: Cmd,
+}
+
+/// `telepy` 的 clap 指令（Tab 補完與 `main` 用）。/ telepy's clap command (for Tab completion and `main`).
+pub fn command() -> clap::Command {
+    Cli::command()
 }
 
 #[derive(Subcommand, Debug)]
@@ -114,6 +125,8 @@ pub enum Cmd {
     Doctor,
     /// Update telepy to the latest release (checked against the release's SHA256SUMS); --check only reports
     Update(UpdateArgs),
+    /// Tab completion for your shell, tunnel names included: `eval "$(telepy completions zsh)"`; without a shell it says what to add where
+    Completions(CompletionsArgs),
     #[command(hide = true)]
     Dig,
     /// The ProxyCommand `telepy ssh` writes for the hop to Telepy (SSH inside a WebSocket on the web port)
@@ -135,6 +148,13 @@ pub struct CarrierArgs {
     /// The Telepy server (where an "always" answer is saved)
     #[arg(long)]
     pub server: String,
+}
+
+#[derive(Args, Debug)]
+pub struct CompletionsArgs {
+    /// The shell; omit it to see the line for yours
+    #[arg(value_parser = ["bash", "zsh", "fish", "powershell", "elvish"])]
+    pub shell: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -172,10 +192,10 @@ pub struct LoginArgs {
 #[derive(Args, Debug)]
 pub struct LsArgs {
     /// Only tunnels with this label (k or k=v; repeat to require several)
-    #[arg(long)]
+    #[arg(long, add = ArgValueCompleter::new(complete::label))]
     pub label: Vec<String>,
     /// Only tunnels in this group of yours
-    #[arg(long)]
+    #[arg(long, add = ArgValueCompleter::new(complete::group))]
     pub group: Option<String>,
     /// Only tunnels that are online
     #[arg(long)]
@@ -188,6 +208,7 @@ pub struct LsArgs {
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Tunnel name or id
+    #[arg(add = ArgValueCompleter::new(complete::tunnel))]
     pub tunnel: String,
     #[arg(long)]
     pub json: bool,
@@ -196,7 +217,7 @@ pub struct StatusArgs {
 #[derive(Args, Debug, Clone, Default)]
 pub struct SshOpts {
     /// Private key for both hops (adds IdentityFile + IdentitiesOnly)
-    #[arg(short = 'i', long)]
+    #[arg(short = 'i', long, value_hint = clap::ValueHint::FilePath)]
     pub identity: Option<PathBuf>,
     /// Extra option for ssh, e.g. --ssh-opt "-L 8080:localhost:80" (repeatable)
     #[arg(long = "ssh-opt", allow_hyphen_values = true)]
@@ -212,6 +233,7 @@ pub struct SshOpts {
 #[derive(Args, Debug)]
 pub struct SshArgs {
     /// <tunnel>[@account] (account@tunnel works too)
+    #[arg(add = ArgValueCompleter::new(complete::target))]
     pub target: String,
     #[command(flatten)]
     pub opts: SshOpts,
@@ -234,12 +256,13 @@ pub struct ScpArgs {
     #[command(flatten)]
     pub opts: SshOpts,
     /// Sources and destination; the remote one as <tunnel>[@account]:<path>
-    #[arg(required = true, num_args = 2..)]
+    #[arg(required = true, num_args = 2.., add = ArgValueCompleter::new(complete::remote_or_path))]
     pub paths: Vec<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct SftpArgs {
+    #[arg(add = ArgValueCompleter::new(complete::target))]
     pub target: String,
     #[command(flatten)]
     pub opts: SshOpts,
@@ -256,6 +279,7 @@ pub enum ConfigAction {
     /// Add (or refresh) the blocks for these tunnels in ~/.ssh/config
     Install {
         /// Tunnels (names or ids); omit with --all
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
         tunnels: Vec<String>,
         /// Every tunnel you can use
         #[arg(long)]
@@ -264,7 +288,7 @@ pub enum ConfigAction {
         #[arg(long)]
         print: bool,
         /// Write to this file instead of ~/.ssh/config
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
         file: Option<PathBuf>,
     },
     /// When `telepy ssh / scp / sftp` can't reach Telepy's web port: ask (default), always or never use the SSH port instead
@@ -276,7 +300,7 @@ pub enum ConfigAction {
     /// Simplify ~/.ssh/config: shared lines once, repeats ssh never reads dropped; every name checked to read the same
     Tidy {
         /// Simplify this file instead of ~/.ssh/config
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
         file: Option<PathBuf>,
         /// Also use a wildcard where names share a start or an end (it then applies to other matching names too)
         #[arg(long)]
@@ -293,12 +317,13 @@ pub enum ConfigAction {
 #[derive(Args, Debug)]
 pub struct ExecArgs {
     /// Targets: <tunnel>[@account] (several allowed)
+    #[arg(add = ArgValueCompleter::new(complete::target))]
     pub targets: Vec<String>,
     /// Every tunnel with this label (k or k=v)
-    #[arg(long)]
+    #[arg(long, add = ArgValueCompleter::new(complete::label))]
     pub label: Vec<String>,
     /// Every tunnel in this group of yours
-    #[arg(long)]
+    #[arg(long, add = ArgValueCompleter::new(complete::group))]
     pub group: Option<String>,
     /// Account on the device for --label / --group targets (default: each tunnel's default)
     #[arg(long, short = 'u')]
@@ -319,7 +344,9 @@ pub struct ExecArgs {
 
 #[derive(Args, Debug)]
 pub struct CpArgs {
+    #[arg(add = ArgValueCompleter::new(complete::remote_or_path))]
     pub from: String,
+    #[arg(add = ArgValueCompleter::new(complete::remote_or_path))]
     pub to: String,
 }
 
@@ -348,7 +375,7 @@ pub enum RecordingsAction {
     /// List recordings (newest first)
     Ls {
         /// Only this tunnel
-        #[arg(long)]
+        #[arg(long, add = ArgValueCompleter::new(complete::tunnel))]
         tunnel: Option<String>,
         #[arg(long)]
         json: bool,
@@ -375,7 +402,7 @@ pub struct SnippetsArgs {
 pub enum SnippetsAction {
     /// List snippets (yours, the site's, and a tunnel's with --tunnel)
     Ls {
-        #[arg(long)]
+        #[arg(long, add = ArgValueCompleter::new(complete::tunnel))]
         tunnel: Option<String>,
         #[arg(long)]
         json: bool,
@@ -385,8 +412,10 @@ pub enum SnippetsAction {
 #[derive(Args, Debug)]
 pub struct RunArgs {
     /// Snippet name or id
+    #[arg(add = ArgValueCompleter::new(complete::snippet))]
     pub snippet: String,
     /// <tunnel>[@account]
+    #[arg(add = ArgValueCompleter::new(complete::target))]
     pub target: String,
     /// Variable value: --var name=value (repeatable)
     #[arg(long = "var")]
@@ -404,6 +433,7 @@ pub struct BrowseArgs {
     #[command(subcommand)]
     pub action: Option<BrowseAction>,
     /// <tunnel>[@account] to open a browser through (same as `browse open`)
+    #[arg(add = ArgValueCompleter::new(complete::target))]
     pub target: Option<String>,
     /// First page to load (http / https)
     pub url: Option<String>,
@@ -417,6 +447,7 @@ pub enum BrowseAction {
     /// Open a browser through a device and print its id
     Open {
         /// <tunnel>[@account]
+        #[arg(add = ArgValueCompleter::new(complete::target))]
         target: String,
         url: Option<String>,
     },
@@ -471,12 +502,14 @@ pub enum LanAction {
     /// List the LAN hosts Telepy knows behind a device
     Ls {
         /// Tunnel name or id
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
         tunnel: String,
         #[arg(long)]
         json: bool,
     },
     /// Add a host by hand
     Add {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
         tunnel: String,
         /// Private IPv4 address
         address: String,
@@ -490,7 +523,11 @@ pub enum LanAction {
         port: Option<u16>,
     },
     /// Remove a host (by id, address or label); a later scan finds it again if it is still there
-    Rm { tunnel: String, host: String },
+    Rm {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        host: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -554,7 +591,8 @@ pub fn run(cli: Cli) -> Result<i32> {
         // Windows 刪不掉正在跑的舊檔，上次更新的備份留到現在才清。/ Windows leaves the previous update's backup for now.
         update::clean_leftovers(&exe);
     }
-    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig | Cmd::Carrier(_)) { None } else { update::start() };
+    // `completions` 在每個 shell 開啟時跑（設定檔裡的那行），不該順便查新版。/ `completions` runs at every shell start; no update check there.
+    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_)) { None } else { update::start() };
     let result = run_command(cli);
     if matches!(result, Ok(0)) {
         update::finish(check);
@@ -571,6 +609,7 @@ fn run_command(cli: Cli) -> Result<i32> {
         Cmd::Doctor => doctor(server, token),
         Cmd::Update(a) => update_cmd(a),
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
+        Cmd::Completions(a) => complete::run(a.shell.as_deref()),
         // ssh 執行的 ProxyCommand：不用登入（網址與退回的設定都在參數裡）。/ Run by ssh; everything it needs is in its arguments.
         Cmd::Carrier(a) => carrier::run(&a.url, a.tcp.as_deref(), prefs::Fallback::parse(&a.fallback).unwrap_or_default(), &a.server),
         // 只讀寫本機的檔，不用登入。/ Only touches a local file: no sign-in needed.
@@ -594,10 +633,19 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
-                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) => unreachable!(),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_) => unreachable!(),
             }
         }
     }
+}
+
+/// 表格印到標準輸出：終端機上標題粗體、每格照 `style(欄, 字)` 上色。/ A table on stdout: in a terminal, bold headers and cells styled by `style(column, text)`.
+fn print_table(headers: &[&str], rows: &[Vec<String>], style: impl Fn(usize, &str) -> anstyle::Style) {
+    print!("{}", table::render_styled(headers, rows, color::enabled(color::Stream::Out), style));
+}
+
+fn plain(_: usize, _: &str) -> anstyle::Style {
+    color::PLAIN
 }
 
 fn print_json(v: &Value) -> Result<()> {
@@ -636,7 +684,7 @@ fn login(a: LoginArgs, global_token: Option<&str>) -> Result<()> {
     let store = creds::save_secret(&server, &secret)?;
     creds::save_profile(&api::profile_of(kind, &server, client_id, Some(s(&me, "username").to_string()), store))?;
     let msg = format!("Signed in to {server} as {} (credentials in the {}).", s(&me, "username"), if store == "keyring" { "system keyring" } else { "config file" });
-    match tapi::paint_for(&std::io::stderr()) {
+    match tapi::paint_for(color::Stream::Err) {
         // 終端機：Tapi 揮手，訊息在旁邊；不是終端機時輸出跟以前一樣。/ A terminal gets Tapi waving beside it; otherwise unchanged.
         Some(paint) => {
             // 十字髮夾用帳號選的顏色（「每天換一個」照 UTC 日期）。/ The clips wear the account's colour.
@@ -664,6 +712,7 @@ fn logout() -> Result<()> {
         }
     }
     creds::forget(&p.server)?;
+    complete::forget();
     eprintln!("Signed out of {}.", p.server);
     if p.kind == Kind::Token {
         eprintln!("The API token itself still works until you revoke it in Telepy (the API page → Your tokens).");
@@ -676,7 +725,7 @@ fn whoami(api: &Api, as_json: bool) -> Result<()> {
     if as_json {
         return print_json(&json!({ "server": api.server, "user": me }));
     }
-    println!("{} on {}", s(&me, "username"), api.server);
+    println!("{} on {}", color::out(color::BOLD, s(&me, "username")), api.server);
     if let Some(c) = me.get("credential").filter(|c| c.is_object()) {
         let scopes: Vec<&str> = c["scopes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         println!("  via {} · {}", s(c, "name"), scopes.join(" "));
@@ -698,7 +747,12 @@ struct Dashboard {
 
 fn dashboard(api: &Api) -> Result<Dashboard> {
     let d = api.get("/api/reverse/server/dashboard")?;
-    Ok(Dashboard { tunnels: d["tunnels"].as_array().cloned().unwrap_or_default(), latency: d["latency"].clone() })
+    let tunnels = d["tunnels"].as_array().cloned().unwrap_or_default();
+    // Tab 補完的名字順手更新；CI 用環境變數的 token 時不留檔。/ Tab completion's names, refreshed on the way; none written for a token from the environment (CI).
+    if api.is_stored() {
+        complete::remember_tunnels(&api.server, &tunnels);
+    }
+    Ok(Dashboard { tunnels, latency: d["latency"].clone() })
 }
 
 fn name_of(t: &Value) -> &str {
@@ -785,8 +839,17 @@ fn filter_tunnels(api: &Api, d: &Dashboard, labels: &[String], group: Option<&st
         .collect())
 }
 
-/// 每條隧道我能用的帳號（並行查）。/ The accounts I may use on each tunnel, fetched in parallel.
+/// 每條隧道我能用的帳號（並行查；也記給 Tab 補完）。/ The accounts I may use on each tunnel, fetched in parallel (and noted for Tab completion).
 fn accounts_of(api: &Api, tunnels: &[Value]) -> Vec<Vec<String>> {
+    let found = accounts_fetch(api, tunnels);
+    if api.is_stored() {
+        let ids = tunnels.iter().map(|t| t["id"].as_i64().unwrap_or_default());
+        complete::remember_accounts(&api.server, &ids.zip(found.iter().cloned()).collect::<Vec<_>>());
+    }
+    found
+}
+
+fn accounts_fetch(api: &Api, tunnels: &[Value]) -> Vec<Vec<String>> {
     std::thread::scope(|scope| {
         let handles: Vec<_> = tunnels
             .iter()
@@ -843,7 +906,11 @@ fn ls(api: &Api, a: &LsArgs) -> Result<()> {
             ]
         })
         .collect();
-    print!("{}", table::render(&["NAME", "HEALTH", "LATENCY", "ACCOUNTS", "LABELS", "GROUP", "SEEN"], &rows));
+    print_table(&["NAME", "HEALTH", "LATENCY", "ACCOUNTS", "LABELS", "GROUP", "SEEN"], &rows, |col, text| match col {
+        1 => color::health(text),
+        _ if text == "-" => color::DIM,
+        _ => color::PLAIN,
+    });
     Ok(())
 }
 
@@ -858,8 +925,8 @@ fn status(api: &Api, a: &StatusArgs) -> Result<()> {
         return print_json(&json!({ "tunnel": t, "latency_ms": latency_of(&d, &t), "accounts": acc, "connections": conn, "facts": facts }));
     }
     let line = |k: &str, v: String| println!("{k:<12} {v}");
-    line("name", name_of(&t).into());
-    line("health", s(&t, "health").into());
+    line("name", color::out(color::BOLD, name_of(&t)));
+    line("health", color::out(color::health(s(&t, "health")), s(&t, "health")));
     line("latency", table::ms(latency_of(&d, &t)));
     line("accounts", if acc.is_empty() { "-".into() } else { acc.join(", ") });
     line("labels", label_list(&t).join(" "));
@@ -882,7 +949,7 @@ fn status(api: &Api, a: &StatusArgs) -> Result<()> {
             }
         }
         for w in facts["warnings"].as_array().cloned().unwrap_or_default() {
-            println!("warning      {}", w.as_str().map(str::to_string).or_else(|| w.get("message").and_then(Value::as_str).map(str::to_string)).unwrap_or_else(|| w.to_string()));
+            println!("{}      {}", color::out(color::WARN, "warning"), w.as_str().map(str::to_string).or_else(|| w.get("message").and_then(Value::as_str).map(str::to_string)).unwrap_or_else(|| w.to_string()));
         }
     }
     if t["require_step_up"].as_bool() == Some(true) {
@@ -1035,8 +1102,7 @@ fn config_tidy(file: Option<PathBuf>, wildcards: bool, check: bool, yes: bool) -
     let target = file.unwrap_or_else(|| creds::home_dir().join(".ssh").join("config"));
     let text = std::fs::read_to_string(&target).with_context(|| format!("reading {}", target.display()))?;
     let r = tidy::tidy(&text, wildcards);
-    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let paint = |code: &str, s: &str| if color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() };
+    let paint = |style: anstyle::Style, s: &str| color::out(style, s);
     if !r.failed.is_empty() {
         bail!("The final check found a difference for {}, so nothing was changed. Please report this config.", r.failed.join(", "));
     }
@@ -1080,19 +1146,19 @@ fn config_tidy(file: Option<PathBuf>, wildcards: bool, check: bool, yes: bool) -
                 tidy::Note::Invalid { n } => format!("line {n} can't be read (an unclosed quote?); its block is left alone"),
                 tidy::Note::Wall { .. } => unreachable!(),
             };
-            println!("  {} {line}", paint("33", "!"));
+            println!("  {} {line}", paint(color::WARN, "!"));
         }
         println!("  The SSH config editor in Telepy (SSH config editor in the sidebar) offers one-click fixes for these.");
     }
     if changed {
         println!();
-        println!("{}", paint("1", &format!("--- {}", target.display())));
-        println!("{}", paint("1", "+++ simplified"));
+        println!("{}", paint(color::BOLD, &format!("--- {}", target.display())));
+        println!("{}", paint(color::BOLD, "+++ simplified"));
         for h in tidy::hunks(&tidy::diff(&text, &r), 2) {
             match h {
-                None => println!("{}", paint("36", "@@")),
-                Some(l) if l.sign == '-' => println!("{}", paint("31", &format!("-{}", l.text))),
-                Some(l) if l.sign == '+' => println!("{}", paint("32", &format!("+{}", l.text))),
+                None => println!("{}", paint(color::CODE, "@@")),
+                Some(l) if l.sign == '-' => println!("{}", paint(color::BAD, &format!("-{}", l.text))),
+                Some(l) if l.sign == '+' => println!("{}", paint(color::GOOD, &format!("+{}", l.text))),
                 Some(l) => println!(" {}", l.text),
             }
         }
@@ -1301,13 +1367,14 @@ fn run_jobs(api: &Api, jobs: &[Job], command: &str, timeout: u64, wait: bool, as
     let outcomes: Vec<Outcome> = std::thread::scope(|scope| {
         let handles: Vec<_> = jobs
             .iter()
-            .map(|job| {
+            .enumerate()
+            .map(|(i, job)| {
                 let stdout = &stdout;
                 scope.spawn(move || {
                     let o = run_on(api, job, command, timeout, wait);
                     if !as_json {
                         let _g = stdout.lock().unwrap();
-                        print_outcome(&o, single);
+                        print_outcome(&o, single, color::PREFIXES[i % color::PREFIXES.len()]);
                     }
                     o
                 })
@@ -1334,13 +1401,17 @@ fn run_jobs(api: &Api, jobs: &[Job], command: &str, timeout: u64, wait: bool, as
     }
     let failed = outcomes.iter().filter(|o| code_of(o) != 0).count();
     if !as_json {
-        eprintln!("{} ok, {failed} failed", outcomes.len() - failed);
+        let ok = format!("{} ok", outcomes.len() - failed);
+        let bad = format!("{failed} failed");
+        eprintln!("{}, {}", color::err(color::GOOD, &ok), if failed > 0 { color::err(color::BAD, &bad) } else { bad });
     }
     Ok(if failed > 0 { 1 } else { 0 })
 }
 
-fn print_outcome(o: &Outcome, single: bool) {
-    let prefix = if single { String::new() } else { format!("{} | ", o.name) };
+fn print_outcome(o: &Outcome, single: bool, style: anstyle::Style) {
+    // 前綴上色，裝置的輸出原樣轉過去（不管它有沒有自己的顏色碼）。/ The prefix is coloured; the device's output passes through as is.
+    let prefix = if single { String::new() } else { format!("{} {} ", color::out(style, &o.name), color::out(color::DIM, "|")) };
+    let eprefix = if single { String::new() } else { format!("{} {} ", color::err(style, &o.name), color::err(color::DIM, "|")) };
     let emit = |text: &str, err: bool| {
         if text.is_empty() {
             return;
@@ -1355,7 +1426,7 @@ fn print_outcome(o: &Outcome, single: bool) {
         }
         for line in text.lines() {
             if err {
-                eprintln!("{prefix}{line}");
+                eprintln!("{eprefix}{line}");
             } else {
                 println!("{prefix}{line}");
             }
@@ -1366,17 +1437,18 @@ fn print_outcome(o: &Outcome, single: bool) {
             emit(s(v, "stdout"), false);
             emit(s(v, "stderr"), true);
             if v["truncated"].as_bool() == Some(true) {
-                eprintln!("{prefix}(output truncated; the start and the end are kept)");
+                eprintln!("{eprefix}{}", color::err(color::WARN, "(output truncated; the start and the end are kept)"));
             }
             if v["timed_out"].as_bool() == Some(true) {
-                eprintln!("{prefix}(timed out and killed)");
+                eprintln!("{eprefix}{}", color::err(color::WARN, "(timed out and killed)"));
             }
             if !single {
-                let code = v["exit_code"].as_i64().map(|c| c.to_string()).unwrap_or_else(|| "-".into());
-                eprintln!("{prefix}exit {code}");
+                let code = v["exit_code"].as_i64();
+                let text = format!("exit {}", code.map(|c| c.to_string()).unwrap_or_else(|| "-".into()));
+                eprintln!("{eprefix}{}", color::err(if code == Some(0) { color::GOOD } else { color::BAD }, &text));
             }
         }
-        Err(e) => eprintln!("{prefix}error: {e}"),
+        Err(e) => eprintln!("{eprefix}{} {e}", color::err(color::BAD, "error:")),
     }
     let _ = std::io::stdout().flush();
 }
@@ -1461,7 +1533,7 @@ fn sessions(api: &Api, a: &SessionsArgs) -> Result<()> {
             ]
         })
         .collect();
-    print!("{}", table::render(&["ID", "TUNNEL", "USER", "KIND", "IP", "SINCE", "CLIENT"], &rows));
+    print_table(&["ID", "TUNNEL", "USER", "KIND", "IP", "SINCE", "CLIENT"], &rows, plain);
     Ok(())
 }
 
@@ -1499,7 +1571,7 @@ fn recordings(api: &Api, a: RecordingsArgs) -> Result<i32> {
                     ]
                 })
                 .collect();
-            print!("{}", table::render(&["ID", "TUNNEL", "USER", "ACCOUNT", "STARTED", "LENGTH"], &rows));
+            print_table(&["ID", "TUNNEL", "USER", "ACCOUNT", "STARTED", "LENGTH"], &rows, plain);
             Ok(0)
         }
         RecordingsAction::Play { id, speed, idle_limit } => {
@@ -1538,7 +1610,7 @@ fn snippet_list(api: &Api, a: SnippetsArgs) -> Result<()> {
         return Ok(());
     }
     let rows: Vec<Vec<String>> = v.iter().map(|x| vec![x["id"].to_string(), s(x, "scope").into(), s(x, "name").into(), s(x, "command").replace('\n', " ⏎ ")]).collect();
-    print!("{}", table::render(&["ID", "SCOPE", "NAME", "COMMAND"], &rows));
+    print_table(&["ID", "SCOPE", "NAME", "COMMAND"], &rows, plain);
     Ok(())
 }
 
@@ -1592,8 +1664,10 @@ fn run_snippet(api: &Api, a: &RunArgs) -> Result<i32> {
 
 fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     let mut bad = 0;
+    let warn = || color::out(color::WARN, "!");
     let mut check = |ok: bool, what: &str, detail: String| {
-        println!("{} {what}{}", if ok { "✓" } else { "✗" }, if detail.is_empty() { String::new() } else { format!(": {detail}") });
+        let mark = if ok { color::out(color::GOOD, "✓") } else { color::out(color::BAD, "✗") };
+        println!("{mark} {what}{}", if detail.is_empty() { String::new() } else { format!(": {detail}") });
         if !ok {
             bad += 1;
         }
@@ -1601,9 +1675,9 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     // 這個 telepy 的版本與有沒有新版（舊版不算錯，只提醒）。/ This telepy's version and whether a newer one is out (a warning, not a failure).
     if update::release_build() {
         match update::latest_tag(Duration::from_secs(5)) {
-            Ok(tag) if update::newer(&tag, VERSION) => println!("! telepy: {VERSION} ({} is out: run `telepy update`)", update::plain(&tag)),
+            Ok(tag) if update::newer(&tag, VERSION) => println!("{} telepy: {VERSION} ({} is out: run `telepy update`)", warn(), update::plain(&tag)),
             Ok(_) => check(true, "telepy", format!("{VERSION} (latest)")),
-            Err(e) => println!("! telepy: {VERSION} (couldn't check for a newer release: {e:#})"),
+            Err(e) => println!("{} telepy: {VERSION} (couldn't check for a newer release: {e:#})", warn()),
         }
     } else {
         check(true, "telepy", format!("{VERSION} (a local build, not checked for updates)"));
@@ -1657,7 +1731,7 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     }
     if bad == 0 {
         // 全部通過、而且是終端機：Tapi 開心一下。/ All good in a terminal: a happy Tapi.
-        if let Some(paint) = tapi::paint_for(&std::io::stdout()) {
+        if let Some(paint) = tapi::paint_for(color::Stream::Out) {
             println!();
             let clip = mascot::clip_color(mascot::clip_name(&tapi_color, mascot::unix_day()));
             for line in tapi::beside(&mascot::render_with(mascot::HAPPY, paint, clip), &["Everything looks good."], tapi::columns(tapi::Out::Stdout)) {
@@ -1760,7 +1834,7 @@ fn browse(api: &Api, a: BrowseArgs) -> Result<()> {
                 }
                 let n = now();
                 let rows: Vec<Vec<String>> = list.iter().map(|b| vec![s(b, "id").to_string(), s(&b["tunnel"], "name").to_string(), s(b, "username").to_string(), b["actions"].to_string(), table::ago(b["last_used_at"].as_str(), n)]).collect();
-                print!("{}", table::render(&["ID", "TUNNEL", "ACCOUNT", "ACTIONS", "LAST USED"], &rows));
+                print_table(&["ID", "TUNNEL", "ACCOUNT", "ACTIONS", "LAST USED"], &rows, plain);
                 return Ok(());
             }
             v
@@ -1864,7 +1938,7 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                     vec![h["id"].to_string(), s(h, "address").to_string(), name, s(h, "username").to_string(), ports, s(h, "source").to_string()]
                 })
                 .collect();
-            print!("{}", table::render(&["ID", "ADDRESS", "NAME", "LOGIN", "OPEN PORTS", "SOURCE"], &rows));
+            print_table(&["ID", "ADDRESS", "NAME", "LOGIN", "OPEN PORTS", "SOURCE"], &rows, plain);
         }
         LanAction::Add { tunnel, address, label, user, port } => {
             let t = tunnel_of(&tunnel)?;
@@ -1905,7 +1979,12 @@ fn api_cmd(api: &Api, a: ApiArgs) -> Result<()> {
             }
             let (n, off) = (now(), local_offset());
             let rows: Vec<Vec<String>> = list.iter().map(|t| activity::token_row(t, n, off)).collect();
-            print!("{}", table::render(activity::TOKEN_HEADERS, &rows));
+            print_table(activity::TOKEN_HEADERS, &rows, |col, text| match (activity::TOKEN_HEADERS[col], text) {
+                ("STATE", "active") => color::GOOD,
+                ("STATE", _) => color::DIM,
+                ("ERRORS 7D", n) if n != "0" => color::WARN,
+                _ => color::PLAIN,
+            });
             Ok(())
         }
         ApiAction::Activity(a) => api_activity(api, &a),
@@ -1970,7 +2049,8 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
             return Ok(());
         }
         let cells: Vec<Vec<String>> = rows.iter().map(|c| activity::row(c, off, show_user)).collect();
-        print!("{}", table::render(&activity::headers(show_user), &cells));
+        let headers = activity::headers(show_user);
+        print_table(&headers, &cells, |col, text| if headers[col] == "STATUS" { color::status_code(text) } else { color::PLAIN });
         return Ok(());
     }
     // --follow：先印最近的（舊的在上，像 tail），再每 2 秒印新的；自己的輪詢不印。

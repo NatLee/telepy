@@ -6,16 +6,19 @@
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
+use crate::color::{self, Stream};
 use crate::mascot::{self, Paint};
 
-/// 純判斷：`tty` = 這條輸出是終端機；`egg` = `telepy dig`（彩蛋本身，不理 `TELEPY_NO_MASCOT`）。
-/// Pure decision: `tty` = the stream is a terminal; `egg` = `telepy dig` itself (ignores `TELEPY_NO_MASCOT`).
-pub fn choose(tty: bool, egg: bool, env: impl Fn(&str) -> Option<String>) -> Option<Paint> {
+/// 純判斷：`tty` = 這條輸出是終端機；`egg` = `telepy dig`（彩蛋本身，不理 `TELEPY_NO_MASCOT`）；
+/// `colour` = 這條輸出可以上色（`color::enabled`：`--color`、`NO_COLOR`、`TERM=dumb`、舊的 Windows 主控台…），不行就畫黑白的。
+/// Pure decision: `tty` = the stream is a terminal; `egg` = `telepy dig` itself (ignores `TELEPY_NO_MASCOT`);
+/// `colour` = the stream may get colour (`color::enabled`: `--color`, `NO_COLOR`, `TERM=dumb`, an old Windows console…), else Tapi is drawn in mono.
+pub fn choose(tty: bool, egg: bool, colour: bool, env: impl Fn(&str) -> Option<String>) -> Option<Paint> {
     let set = |k: &str| env(k).is_some_and(|v| !v.is_empty());
     if !tty || (!egg && set("TELEPY_NO_MASCOT")) {
         return None;
     }
-    if set("NO_COLOR") {
+    if !colour {
         return Some(Paint::Mono);
     }
     match env("COLORTERM").map(|v| v.to_ascii_lowercase()).as_deref() {
@@ -24,9 +27,16 @@ pub fn choose(tty: bool, egg: bool, env: impl Fn(&str) -> Option<String>) -> Opt
     }
 }
 
+fn is_tty(stream: Stream) -> bool {
+    match stream {
+        Stream::Out => std::io::stdout().is_terminal(),
+        Stream::Err => std::io::stderr().is_terminal(),
+    }
+}
+
 /// 這條輸出要不要畫 Tapi、怎麼上色。/ Whether (and how) to draw Tapi on this stream.
-pub fn paint_for(stream: &impl IsTerminal) -> Option<Paint> {
-    choose(stream.is_terminal(), false, |k| std::env::var(k).ok())
+pub fn paint_for(stream: Stream) -> Option<Paint> {
+    choose(is_tty(stream), false, color::enabled(stream), |k| std::env::var(k).ok())
 }
 
 /// 寫到哪條輸出（量它的終端機寬度）。/ Which stream is written to (whose terminal width counts).
@@ -356,8 +366,10 @@ pub fn dig() -> std::io::Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let cols = columns(Out::Stdout);
-    let paint = choose(std::io::stdout().is_terminal(), true, |k| std::env::var(k).ok());
-    let Some(paint) = paint.filter(|_| animates(cols)) else {
+    let paint = choose(is_tty(Stream::Out), true, color::enabled(Stream::Out), |k| std::env::var(k).ok());
+    // 動畫靠游標控制碼：終端機不吃 ANSI（`TERM=dumb`、舊的 Windows 主控台）就印靜態的。
+    // The animation moves the cursor with escape codes: a terminal without ANSI gets the still picture.
+    let Some(paint) = paint.filter(|_| animates(cols) && color::escapes(Stream::Out)) else {
         for line in beside(&mascot::render(mascot::WAVE, paint.unwrap_or(Paint::Mono)), &EXPLAIN, cols) {
             writeln!(out, "{line}")?;
         }
@@ -390,15 +402,15 @@ mod tests {
 
     #[test]
     fn painting_follows_the_terminal_and_the_environment() {
-        assert_eq!(choose(false, false, env(&[])), None);
-        assert_eq!(choose(false, true, env(&[])), None);
-        assert_eq!(choose(true, false, env(&[])), Some(Paint::Ansi256));
-        assert_eq!(choose(true, false, env(&[("TELEPY_NO_MASCOT", "1")])), None);
-        assert_eq!(choose(true, false, env(&[("TELEPY_NO_MASCOT", "")])), Some(Paint::Ansi256));
-        assert_eq!(choose(true, true, env(&[("TELEPY_NO_MASCOT", "1")])), Some(Paint::Ansi256), "dig is the egg itself");
-        assert_eq!(choose(true, false, env(&[("NO_COLOR", "1"), ("COLORTERM", "truecolor")])), Some(Paint::Mono));
-        assert_eq!(choose(true, false, env(&[("COLORTERM", "truecolor")])), Some(Paint::TrueColor));
-        assert_eq!(choose(true, false, env(&[("COLORTERM", "24bit")])), Some(Paint::TrueColor));
+        assert_eq!(choose(false, false, true, env(&[])), None);
+        assert_eq!(choose(false, true, true, env(&[])), None);
+        assert_eq!(choose(true, false, true, env(&[])), Some(Paint::Ansi256));
+        assert_eq!(choose(true, false, true, env(&[("TELEPY_NO_MASCOT", "1")])), None);
+        assert_eq!(choose(true, false, true, env(&[("TELEPY_NO_MASCOT", "")])), Some(Paint::Ansi256));
+        assert_eq!(choose(true, true, true, env(&[("TELEPY_NO_MASCOT", "1")])), Some(Paint::Ansi256), "dig is the egg itself");
+        assert_eq!(choose(true, false, false, env(&[("COLORTERM", "truecolor")])), Some(Paint::Mono), "no colour on this stream");
+        assert_eq!(choose(true, false, true, env(&[("COLORTERM", "truecolor")])), Some(Paint::TrueColor));
+        assert_eq!(choose(true, false, true, env(&[("COLORTERM", "24bit")])), Some(Paint::TrueColor));
     }
 
     #[test]
