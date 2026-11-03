@@ -93,7 +93,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- | --- |
 | `tunnels:read` | トンネルの閲覧 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
 | `ssh:exec` | デバイスでコマンドを実行 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
-| `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
+| `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`（自分が所有する、または ADMIN のトンネルのみ） |
 | `browser:use` | デバイスとして Web を閲覧 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
@@ -152,6 +152,7 @@ MCP client ── POST /mcp ─────────────────�
 | `sftp_list(session_id, path?)` | ディレクトリを一覧する（`~` = ホームディレクトリ） |
 | `sftp_read(session_id, path, offset?, max_bytes?)` | ファイルを読む。テキストは UTF-8、それ以外は base64 で返す。分割して読める |
 | `sftp_write(session_id, path, content, encoding?, append?)` | ファイルを書く、または追記する（`encoding`：`utf-8` / `base64`） |
+| `lan_files(tunnel_id, host, action, path?, content?, encoding?, append?, offset?, max_bytes?, login?, username?, credential_id?)` | 同じことを、デバイスの奥の LAN ホストに対して、セッションなしで行います：`action` = `list` / `read` / `write`。デバイスの sshd が中継を開き、Telepy は自分の鍵（このトンネルのサービス鍵、次に共有鍵）またはユーザーが保存した ssh ログイン（`credential_id`）でホストにログインします。ログインは 10 分間保たれ、その間は再利用します。ホストが Telepy の鍵を受け付けないときはツールがそう伝えるので、鍵をそのホストに追加するか、ログインを保存するようユーザーに頼んでください |
 
 ### LAN をスキャンする（`network:scan`）
 
@@ -256,7 +257,7 @@ Telepy は 30 秒ごとに確認します。grant やトークンを失効させ
 | --- | --- |
 | `ssh:exec` のツール | Web ターミナル |
 | `ssh:files` のツール | ファイルマネージャー |
-| `lan_hosts`、`lan_scan`、`lan_check` | LAN 探索 |
+| `lan_hosts`、`lan_scan`、`lan_check`（`lan_files` はファイルマネージャーも必要） | LAN 探索 |
 | `browser:use` のツール | リモートブラウザ |
 
 アプリにスコープが与えられていないだけの場合は、再接続してそのスコープを承認してもらうよう、エラーがエージェントに伝えます。

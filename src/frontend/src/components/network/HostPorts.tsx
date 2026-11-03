@@ -14,7 +14,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ArrowDownToLine, ExternalLink, Globe, Info, ScreenShare, Terminal } from "lucide-react";
+import { ArrowDownToLine, ExternalLink, FolderOpen, Globe, Info, ScreenShare, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/ui/section";
@@ -84,6 +84,8 @@ export interface TerminalRowAction {
     /** dock 裡有開著的終端機時「終端機頁」開新分頁。/ Open terminals make "Terminal page" open a new tab. */
     newTab: boolean;
     onNavigate?: () => void;
+    /** 這台主機的檔案（同一組登入設定）；沒有 = 不能用（功能關了）。/ The host's files (same login settings); absent = not available. */
+    onFiles?: () => void;
 }
 
 const DESKTOP_LABEL: Record<string, string> = { rdp: "RDP", vnc: "VNC", rustdesk: "RustDesk" };
@@ -135,6 +137,12 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
                     );
                 }
                 return (
+                    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                    {terminal.onFiles && (
+                        <Button type="button" size="sm" variant="outline" onClick={terminal.onFiles} disabled={!!terminal.reason} title={terminal.reason ?? t("lanFiles.openHint")}>
+                            <FolderOpen size={15} /> {t("lanFiles.open")}
+                        </Button>
+                    )}
                     <div className="inline-flex shrink-0" role="group" aria-label={t("network.open.group")}>
                         <Button type="button" size="sm" onClick={terminal.onOpenHere} disabled={!!terminal.reason} title={terminal.reason ?? t("network.open.hereHint")} className="rounded-r-none">
                             <Terminal size={15} /> {t("network.open.here")}
@@ -150,6 +158,7 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
                                 </Link>
                             </Button>
                         )}
+                    </div>
                     </div>
                 );
             case "desktop":

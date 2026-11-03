@@ -318,9 +318,10 @@ The commands show up on the **AI activity** page under the token's name, or unde
 ```sh
 telepy cp box@pi:/var/log/syslog ./syslog
 telepy cp ./config.yml box@pi:/etc/app/
+telepy cp box/admin@nas:/srv/backup/db.tgz .   # a machine behind the device
 ```
 
-`cp` copies over SFTP through Telepy's API and needs the `ssh:files` scope. `scp` is the OpenSSH way and needs your personal SSH key.
+`cp` copies over SFTP through Telepy's API and needs the `ssh:files` scope. To reach a machine behind the device, write it after a slash: `<tunnel>[@account]/[login@]<host>:<path>`, the host by its label, address or id from `lan ls`. The device's sshd opens the hop and Telepy logs in there with its key; set `TELEPY_LAN_PASSWORD` to log in with a password instead (it's used once and never stored). Nothing is installed on either machine. `scp` is the OpenSSH way and needs your personal SSH key.
 
 A download is written straight to disk (a device folder arrives as one zip). An upload goes in 8 MiB parts, so a proxy in front of Telepy with a request size limit (Cloudflare allows 100 MB) doesn't stop a big file, and a part that drops is sent again.
 
@@ -416,7 +417,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy config fallback` | Show or set what to do when the web port can't be reached: `ask`, `always`, `never` | — |
 | `telepy config tidy` | Simplify an ssh config; `--check`, `--wildcards`, `--yes`, `--file`; no sign-in needed | — |
 | `telepy exec <targets> -- <command>` | Run a command on one or more devices; `--label`, `--group`, `-u`, `--timeout` (default 60, at most 600), `--wait-approval`, `--json` | `ssh:exec` |
-| `telepy cp <from> <to>` | Copy a file to or from a device over SFTP | `ssh:files` |
+| `telepy cp <from> <to>` | Copy a file to or from a device (or a machine behind it: `<tunnel>/[login@]<host>:<path>`) over SFTP | `ssh:files` |
 | `telepy sessions` | Live sessions on your tunnels | `tunnels:read` |
 | `telepy sessions end <id>` | End one live session | `tunnels:manage` |
 | `telepy recordings ls` | List recordings, newest first; `--tunnel` | `ssh:exec` |

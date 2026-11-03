@@ -32,7 +32,9 @@ export const STABLE_CONNECTION_MS = 10000;
 export const SIGNED_OUT_CLOSE_CODE = 4010;
 // 4012 = 管理員替這個人關掉了這個功能（close reason = 功能 id）。/ 4012 = the feature is turned off for this person.
 export const FEATURE_DISABLED_CLOSE_CODE = 4012;
-export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006, 4009, SIGNED_OUT_CLOSE_CODE, FEATURE_DISABLED_CLOSE_CODE]);
+// 4017 = 區網主機的檔案 session 已經關了，要從網路頁重新打開。/ 4017 = the LAN host's file session ended; open it again.
+export const LAN_FILES_GONE_CLOSE_CODE = 4017;
+export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006, 4009, SIGNED_OUT_CLOSE_CODE, FEATURE_DISABLED_CLOSE_CODE, LAN_FILES_GONE_CLOSE_CODE]);
 
 /** full-jitter 指數退避：delay ∈ [0, min(ceiling, base * 2^attempt)] */
 export function backoffDelay(attempt: number): number {

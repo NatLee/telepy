@@ -251,6 +251,7 @@ export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
                 r("lanScan", `telepy lan scan ${T}\ntelepy lan show ${T} 192.168.1.20`, ["network:scan"]),
                 r("lanWatch", `telepy lan schedule ${T} --every 6h\ntelepy lan watch ${T} 192.168.1.20\ntelepy lan check ${T} 192.168.1.20`, ["network:scan"]),
                 r("lanWake", `telepy lan wake ${T} 192.168.1.20\ntelepy lan check ${T} 192.168.1.20`, ["ssh:exec"]),
+                r("lanCp", `telepy cp ${T}/admin@192.168.1.20:/etc/hosts ./hosts\nTELEPY_LAN_PASSWORD=… telepy cp ./backup.tgz ${T}/nas:/srv/backup/`, ["ssh:files"]),
                 r("lanAdd", `telepy lan add ${T} 192.168.1.20 --label nas --user admin\ntelepy lan edit ${T} nas --labels rack-2,prod --note "top shelf, UPS on the left"`, ["tunnels:manage"]),
                 r("lanWeb", `telepy forward ${TA} 192.168.1.20:8080 --open`, ["tunnels:read", "ssh-key"]),
                 r("browse", `ID=$(telepy browse ${T} http://192.168.1.1/)\ntelepy browse text "$ID" --selector main\ntelepy browse shot "$ID" -o router.png\ntelepy browse close "$ID"`, ["browser:use"]),

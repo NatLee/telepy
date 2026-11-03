@@ -236,6 +236,10 @@ pub struct MachineOpts {
     /// rc），所以歷史檔也寫在那裡。/ The account's login shell: exec sees it as `$SHELL`, and a shell request with a PTY
     /// runs the real thing, interactive, with HOME (and its rc file and history file) in the account's scratch home.
     pub login_shell: Option<&'static str>,
+    /// 這台也收這個密碼（給列出的帳號）；登入記成金鑰名字 `password`。/ Also accept this password for the listed accounts.
+    pub password: Option<&'static str>,
+    /// 密碼只走 keyboard-interactive（`password` 方式拒絕），像很多 PAM 設定的 sshd。/ Only via keyboard-interactive.
+    pub password_kbd_only: bool,
 }
 
 struct MachineState {
@@ -282,6 +286,10 @@ impl Drop for SshdHandler {
 }
 
 impl SshdHandler {
+    fn password_ok(&self, user: &str, given: &str) -> bool {
+        self.m.opts.password.is_some_and(|p| p == given) && self.m.accounts.contains_key(user)
+    }
+
     /// (金鑰名字, `type base64`)：建立時給的金鑰，或帳號家目錄 `.ssh/authorized_keys` 裡的。
     fn key_for(&self, user: &str, key: &PublicKey) -> Option<(String, String)> {
         let offered = key.to_openssh().ok()?.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
@@ -308,6 +316,31 @@ impl server::Handler for SshdHandler {
     async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
         let Some((name, bare)) = self.key_for(user, key) else { return Ok(Auth::reject()) };
         self.m.logins.lock().unwrap().push(Login { user: user.to_string(), key: name, bare });
+        self.user = Some(user.to_string());
+        Ok(Auth::Accept)
+    }
+
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        if self.m.opts.password_kbd_only || !self.password_ok(user, password) {
+            return Ok(Auth::reject());
+        }
+        self.m.logins.lock().unwrap().push(Login { user: user.to_string(), key: "password".into(), bare: String::new() });
+        self.user = Some(user.to_string());
+        Ok(Auth::Accept)
+    }
+
+    async fn auth_keyboard_interactive<'a>(&'a mut self, user: &str, _submethods: &str, response: Option<server::Response<'a>>) -> Result<Auth, Self::Error> {
+        if self.m.opts.password.is_none() {
+            return Ok(Auth::reject());
+        }
+        let Some(mut answers) = response else {
+            return Ok(Auth::Partial { name: "".into(), instructions: "".into(), prompts: vec![("Password: ".into(), false)].into() });
+        };
+        let given = answers.next().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        if !self.password_ok(user, &given) {
+            return Ok(Auth::reject());
+        }
+        self.m.logins.lock().unwrap().push(Login { user: user.to_string(), key: "password".into(), bare: String::new() });
         self.user = Some(user.to_string());
         Ok(Auth::Accept)
     }

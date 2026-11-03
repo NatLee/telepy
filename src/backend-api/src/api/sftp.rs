@@ -30,7 +30,7 @@ use crate::db::upload_parts::{self, NewPart, PartRow};
 use crate::sftp::ops::{self, PartStep};
 use crate::uploads::{self, Resume};
 use crate::sftp;
-use crate::ssh::pool::{PooledSftp, TransferSftp};
+use crate::sftp::target::{Bulk, Shared, Target};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -58,28 +58,44 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// 權限：VIEW（否則 404）+ 敏感隧道的 step-up（否則 403）+ username 在允許清單（否則 400），與 Django 版訊息相同。
-async fn access(state: &AppState, user_id: i64, id: i64, username: &str, headers: &HeaderMap) -> ApiResult<Tunnel> {
+/// 帳號位置是 `~<代號>` = 這個人開的區網檔案 session（`lan::files`）：還在、屬於這條隧道、經過的裝置帳號還允許、
+/// 「網路」功能還開著（否則 404 `lan_files_gone` / 403）。
+/// Access: VIEW + step-up + an allowed account. `~<id>` = this person's LAN file session: still open, on this tunnel,
+/// its device account still allowed and the network feature on.
+async fn access(state: &AppState, user: &crate::db::users::User, id: i64, username: &str, headers: &HeaderMap) -> ApiResult<(Tunnel, Target)> {
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Reverse server keys not found"))?;
-    if !permissions::check_access(&state.db, user_id, &t, Permission::View).await? {
+    if !permissions::check_access(&state.db, user.id, &t, Permission::View).await? {
         return Err(ApiError::not_found("Reverse server keys not found"));
     }
-    super::step_up::check(state, user_id, &t, headers)?;
-    let allowed = permissions::allowed_usernames(&state.db, user_id, &t).await?;
-    if !allowed.iter().any(|u| u.username == username) {
+    super::step_up::check(state, user.id, &t, headers)?;
+    let target = Target::of(state, user.id, t.reverse_port, username).filter(|g| g.lan().is_none_or(|f| f.tunnel_id == t.id)).ok_or_else(lan_gone)?;
+    let account = match &target {
+        Target::Device { username, .. } => username.clone(),
+        Target::Lan(f) => {
+            crate::features::check(state, user, crate::features::Feature::Network).await?;
+            f.account.clone()
+        }
+    };
+    let allowed = permissions::allowed_usernames(&state.db, user.id, &t).await?;
+    if !allowed.iter().any(|u| u.username == account) {
         return Err(ApiError::bad_request("Username not found"));
     }
-    Ok(t)
+    Ok((t, target))
 }
 
-/// 共用連線池借一條 SFTP channel（同一台、同一個 OS 帳號只握手一次）。
-async fn connect(state: &AppState, username: &str, t: &Tunnel) -> ApiResult<PooledSftp> {
-    state.pool.sftp(state, t.reverse_port, username).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
+fn lan_gone() -> ApiError {
+    coded(StatusCode::NOT_FOUND, "lan_files_gone", "This LAN host's file session has ended; open its files again")
+}
+
+/// 共用連線池借一條 SFTP channel（同一台、同一個 OS 帳號只握手一次；區網主機 = 它那個 session 的）。
+async fn connect(state: &AppState, target: &Target) -> ApiResult<Shared> {
+    target.sftp(state).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
 }
 
 #[utoipa::path(get, path = "/api/sftp/shell/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), responses((status = 200, body = super::schemas::SftpShell), (status = 400, description = "Username not allowed or device unreachable", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username, &headers).await?;
-    let sftp = connect(&state, &username, &t).await?;
+    let (_t, target) = access(&state, &user, id, &username, &headers).await?;
+    let sftp = connect(&state, &target).await?;
     Ok(Json(json!({ "shell": sftp::detect_shell(&sftp).await })))
 }
 
@@ -91,8 +107,8 @@ async fn list(
     Path((id, username)): Path<(i64, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username, &headers).await?;
-    let sftp = connect(&state, &username, &t).await?;
+    let (_t, target) = access(&state, &user, id, &username, &headers).await?;
+    let sftp = connect(&state, &target).await?;
     let home = sftp::home(&sftp).await;
     let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
     let raw = q.get("path").cloned().unwrap_or_else(|| if shell == "powershell" { "C:\\".into() } else { "~/".into() });
@@ -168,8 +184,8 @@ fn zip_name(paths: &[String]) -> String {
 }
 
 /// 大量傳輸用的 SFTP（自己的 channel，開不了就共用那條；見 `ssh::pool`）。/ SFTP for a bulk transfer (see `ssh::pool`).
-async fn transfer(state: &AppState, t: &Tunnel, username: &str) -> ApiResult<TransferSftp> {
-    state.pool.bulk_sftp(state, t.reverse_port, username).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
+async fn transfer(state: &AppState, target: &Target) -> ApiResult<Bulk> {
+    target.bulk(state).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
 }
 
 #[utoipa::path(get, path = "/api/sftp/download/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "File or directory (directories are zipped as they stream)")), responses((status = 200, description = "Streamed file (application/octet-stream, with Content-Length) or zip (application/zip, streamed while it is built) with Content-Disposition", content_type = "application/octet-stream"), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
@@ -180,14 +196,14 @@ async fn download(
     Path((id, username)): Path<(i64, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let t = access(&state, user.id, id, &username, &headers).await?;
+    let (_t, target) = access(&state, &user, id, &username, &headers).await?;
     let raw = q.get("path").cloned().filter(|p| !p.is_empty()).ok_or_else(|| ApiError::bad_request("path is required"))?;
-    let sftp = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &target).await?;
     let home = sftp::home(&sftp).await;
     let path = sftp::resolve_path(&raw, &home);
     let meta = sftp.metadata(&path).await.map_err(|_| ApiError::bad_request("Failed to download file or directory"))?;
     drop(sftp);
-    let bulk = transfer(&state, &t, &username).await?;
+    let bulk = transfer(&state, &target).await?;
     if meta.is_dir() {
         let name = zip_name(std::slice::from_ref(&path));
         Ok(zip_response(&state, bulk, vec![path], &name))
@@ -230,12 +246,22 @@ async fn fetch_link(state: &AppState, token: &str) -> Result<Response, (StatusCo
         return Err((StatusCode::FORBIDDEN, crate::features::disabled_message(crate::features::Feature::Files)));
     }
     let t = db::tunnels::by_id(&state.db, link.tunnel_id).await.ok().flatten().ok_or_else(gone)?;
+    let target = Target::of(state, user.id, t.reverse_port, &link.username).filter(|g| g.lan().is_none_or(|f| f.tunnel_id == t.id)).ok_or_else(gone)?;
+    let account = match &target {
+        Target::Device { username, .. } => username.clone(),
+        Target::Lan(f) => {
+            if !state.features.allowed(&user, crate::features::Feature::Network).await.unwrap_or(false) {
+                return Err((StatusCode::FORBIDDEN, crate::features::disabled_message(crate::features::Feature::Network)));
+            }
+            f.account.clone()
+        }
+    };
     let can_view = permissions::check_access(&state.db, user.id, &t, Permission::View).await.unwrap_or(false);
-    let allowed = can_view && permissions::allowed_usernames(&state.db, user.id, &t).await.is_ok_and(|a| a.iter().any(|u| u.username == link.username));
+    let allowed = can_view && permissions::allowed_usernames(&state.db, user.id, &t).await.is_ok_and(|a| a.iter().any(|u| u.username == account));
     if !allowed {
         return Err(gone());
     }
-    let sftp = state.pool.bulk_sftp(state, t.reverse_port, &link.username).await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let sftp = target.bulk(state).await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     let failed = |e: SftpError| {
         let (status, _) = ops::classify(&e);
         (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), e.to_string())
@@ -296,7 +322,7 @@ async fn finish_part(state: &AppState, op: &Op, part: &str, target: &str, overwr
 /// 建暫存檔的錯誤：資料夾不能寫 = `dir_not_writable`。/ Creating the part file: an unwritable folder is its own code.
 fn create_error(op: &Op, e: &SftpError, target: &str) -> ApiError {
     match ops::classify(e) {
-        (403, _) => coded(StatusCode::FORBIDDEN, "dir_not_writable", format!("{} can't create files in {}", op.username, ops::parent(target))),
+        (403, _) => coded(StatusCode::FORBIDDEN, "dir_not_writable", format!("{} can't create files in {}", op.target.label(), ops::parent(target))),
         _ => sftp_error(e, "upload"),
     }
 }
@@ -310,14 +336,14 @@ async fn upload(
     Query(q): Query<HashMap<String, String>>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username, &headers).await?;
+    let (t, target) = access(&state, &user, id, &username, &headers).await?;
     let Some(destination) = q.get("destination_path").cloned().filter(|p| !p.is_empty()) else {
         return Err(ApiError::bad_request("File and destination path required"));
     };
-    let sftp = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &target).await?;
     let home = sftp::home(&sftp).await;
     let dest = sftp::resolve_path(&destination, &home);
-    let op = Op { t, username: username.clone(), by: user.username.clone(), sftp, home };
+    let op = Op { t, username: username.clone(), by: user.username.clone(), sftp, home, target };
     // multipart 的 Field 借用 Multipart，所以在迴圈內直接串流寫入。/ Stream the field inside the loop.
     // 先寫到旁邊的暫存檔、完成才改名：上傳失敗不會弄壞原本的檔案。/ Write next to it, rename when complete.
     while let Ok(Some(mut field)) = multipart.next_field().await {
@@ -539,7 +565,7 @@ async fn upload_part(
     // 大的一段寫在自己的 sftp channel 上（列目錄不必排在後面、慢的裝置也不會逾時）；小的走共用那條，省掉開 channel。
     // A big part is written on its own SFTP channel; small ones (most files of a folder) use the shared one.
     let big = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n >= BULK_PART);
-    let mut bulk: Option<TransferSftp> = None;
+    let mut bulk: Option<Bulk> = None;
     let row_id;
     let mut file = match ops::part_step(offset, part_size) {
         PartStep::Start => {
@@ -559,7 +585,7 @@ async fn upload_part(
                 ops::mkdir_all(&op.sftp, &ops::parent(&target)).await.map_err(|e| sftp_error(&e, "mkdir"))?;
             }
             if big {
-                bulk = Some(transfer(&state, &op.t, &op.username).await?);
+                bulk = Some(transfer(&state, &op.target).await?);
             }
             let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
             let f = writer.create(part.as_str()).await.map_err(|e| create_error(&op, &e, &target))?;
@@ -579,7 +605,7 @@ async fn upload_part(
                 }
             }
             if big {
-                bulk = Some(transfer(&state, &op.t, &op.username).await?);
+                bulk = Some(transfer(&state, &op.target).await?);
             }
             let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
             let mut f = writer.open_with_flags(part.as_str(), russh_sftp::protocol::OpenFlags::WRITE).await.map_err(|e| sftp_error(&e, "open"))?;
@@ -685,21 +711,23 @@ fn sftp_error(e: &SftpError, what: &str) -> ApiError {
     coded(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST), code, format!("{what}: {e}"))
 }
 
-/// 一次操作要的東西：隧道、共用 SFTP、家目錄。/ What one operation needs.
+/// 一次操作要的東西：隧道、共用 SFTP、家目錄。`username` = URL 的帳號位置（上傳帳本用；區網主機 = `~<代號>`）。
+/// What one operation needs. `username` = the URL's account segment (the upload ledger's key; `~<id>` for a LAN host).
 struct Op {
     t: Tunnel,
     username: String,
     by: String,
-    sftp: PooledSftp,
+    sftp: Shared,
     home: String,
+    target: Target,
 }
 
 impl Op {
     async fn open(state: &AppState, user: &crate::db::users::User, id: i64, username: &str, headers: &HeaderMap) -> ApiResult<Self> {
-        let t = access(state, user.id, id, username, headers).await?;
-        let sftp = state.pool.sftp(state, t.reverse_port, username).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device", format!("{e:#}")))?;
+        let (t, target) = access(state, user, id, username, headers).await?;
+        let sftp = target.sftp(state).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device", format!("{e:#}")))?;
         let home = sftp::home(&sftp).await;
-        Ok(Self { t, username: username.to_string(), by: user.username.clone(), sftp, home })
+        Ok(Self { t, username: username.to_string(), by: user.username.clone(), sftp, home, target })
     }
 
     /// 前端送來的路徑 → SFTP 路徑；空的回 400。/ Resolve a client path; empty = 400.
@@ -868,7 +896,7 @@ async fn delete(
     if removed > 0 {
         // 只記路徑與數量，不記內容。/ Paths and counts only, never content.
         let what = if gone.is_empty() { path_summary(&paths) } else { path_summary(&gone) };
-        op.event(&state, "files_delete", format!("{} deleted {removed} entr{} as {}: {what}", op.by, if removed == 1 { "y" } else { "ies" }, op.username)).await;
+        op.event(&state, "files_delete", format!("{} deleted {removed} entr{} as {}: {what}", op.by, if removed == 1 { "y" } else { "ies" }, op.target.label())).await;
     }
     Ok(Json(json!({ "removed": removed, "failed": failed })))
 }
@@ -893,7 +921,7 @@ async fn chmod(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
 /// Run `cp -R` on the device; `Ok(None)` = the device can't (no shell / cp, exec refused): stream instead.
 async fn device_copy(state: &AppState, op: &Op, from: &str, to: &str) -> Option<ApiResult<()>> {
     let ran = async {
-        let (_lease, channel) = state.pool.session_channel(state, op.t.reverse_port, &op.username).await?;
+        let (_keep, channel) = op.target.session_channel(state).await?;
         crate::ssh::exec::run_on(channel, &ops::cp_command(from, to), COPY_TIMEOUT, 16 * 1024).await
     };
     match ran.await {
@@ -954,7 +982,7 @@ async fn zip(State(state): State<AppState>, AuthUser(user): AuthUser, headers: H
         op.sftp.metadata(p.as_str()).await.map_err(|e| sftp_error(&e, p))?;
     }
     let name = zip_name(&paths);
-    let bulk = transfer(&state, &op.t, &op.username).await?;
+    let bulk = transfer(&state, &op.target).await?;
     Ok(zip_response(&state, bulk, paths, &name))
 }
 
@@ -1058,7 +1086,7 @@ async fn replace_file(state: &AppState, op: &Op, tmp: &str, target: &str) -> Res
 async fn posix_rename(state: &AppState, op: &Op, tmp: &str, target: &str) -> anyhow::Result<bool> {
     use russh_sftp::protocol::{Packet, StatusCode as Sc};
     const POSIX_RENAME: &str = "posix-rename@openssh.com";
-    let (_lease, channel) = state.pool.session_channel(state, op.t.reverse_port, &op.username).await?;
+    let (_keep, channel) = op.target.session_channel(state).await?;
     channel.request_subsystem(true, "sftp").await?;
     let raw = russh_sftp::client::RawSftpSession::new(channel.into_stream());
     raw.set_timeout(10);
@@ -1112,7 +1140,7 @@ async fn save_text(State(state): State<AppState>, AuthUser(user): AuthUser, head
     if let Err(e) = ops::write_new(&op.sftp, &tmp, content.as_bytes(), mode).await {
         let _ = op.sftp.remove_file(tmp.as_str()).await;
         return Err(match ops::classify(&e) {
-            (403, _) => coded(StatusCode::FORBIDDEN, "dir_not_writable", format!("{} can't create files in {}", op.username, ops::parent(&target))),
+            (403, _) => coded(StatusCode::FORBIDDEN, "dir_not_writable", format!("{} can't create files in {}", op.target.label(), ops::parent(&target))),
             _ => sftp_error(&e, "save"),
         });
     }
@@ -1121,7 +1149,7 @@ async fn save_text(State(state): State<AppState>, AuthUser(user): AuthUser, head
         return Err(sftp_error(&e, "save"));
     }
     let after = op.sftp.metadata(target.as_str()).await.map_err(|e| sftp_error(&e, "stat"))?;
-    op.event(&state, "files_edit", format!("{} edited {target} as {} ({})", op.by, op.username, crate::ws::filemanager::format_size(content.len() as f64))).await;
+    op.event(&state, "files_edit", format!("{} edited {target} as {} ({})", op.by, op.target.label(), crate::ws::filemanager::format_size(content.len() as f64))).await;
     Ok(Json(json!({
         "path": target,
         "name": sftp::basename(&target),

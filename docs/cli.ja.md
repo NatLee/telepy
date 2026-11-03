@@ -318,9 +318,10 @@ telepy exec box --wait-approval -- sudo reboot   # コマンドルールが承�
 ```sh
 telepy cp box@pi:/var/log/syslog ./syslog
 telepy cp ./config.yml box@pi:/etc/app/
+telepy cp box/admin@nas:/srv/backup/db.tgz .   # デバイスの奥のマシン
 ```
 
-`cp` は Telepy の API を通して SFTP でコピーし、`ssh:files` スコープが必要です。`scp` は OpenSSH を使う方法で、個人用 SSH 鍵が必要です。
+`cp` は Telepy の API を通して SFTP でコピーし、`ssh:files` スコープが必要です。デバイスの奥のマシンには、スラッシュの後にそのマシンを書きます：`<tunnel>[@account]/[login@]<host>:<path>`。ホストは `lan ls` に出るラベル・アドレス・id のどれでも構いません。デバイスの sshd が中継を開き、Telepy は自分の鍵でそのマシンにログインします。パスワードを使うには `TELEPY_LAN_PASSWORD` を設定します（一度だけ使い、保存しません）。どちらのマシンにも何もインストールしません。`scp` は OpenSSH を使う方法で、個人用 SSH 鍵が必要です。
 
 ダウンロードはそのままディスクに書き込みます（デバイス上のフォルダーは 1 つの zip になります）。アップロードは 8 MiB ずつ送るので、Telepy の前にあるプロキシがリクエストサイズを制限していても（Cloudflare は 100 MB）大きなファイルを送れ、途切れた部分だけ送り直します。
 
@@ -416,7 +417,7 @@ telepy browse close "$ID"
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |
 | `telepy config tidy` | ssh の設定を簡略化。`--check`、`--wildcards`、`--yes`、`--file`。サインイン不要 | — |
 | `telepy exec <targets> -- <command>` | 1 台以上のデバイスでコマンドを実行。`--label`、`--group`、`-u`、`--timeout`（デフォルト 60、最大 600）、`--wait-approval`、`--json` | `ssh:exec` |
-| `telepy cp <from> <to>` | SFTP でデバイスとファイルをやり取り | `ssh:files` |
+| `telepy cp <from> <to>` | SFTP でデバイス（またはその奥のマシン：`<tunnel>/[login@]<host>:<path>`）とファイルをやり取り | `ssh:files` |
 | `telepy sessions` | 自分のトンネルのライブセッション | `tunnels:read` |
 | `telepy sessions end <id>` | ライブセッションを 1 つ終了 | `tunnels:manage` |
 | `telepy recordings ls` | 録画の一覧（新しい順）。`--tunnel` | `ssh:exec` |

@@ -354,6 +354,7 @@ export function uploadListRows<T extends Pick<UploadJob, "state">>(jobs: readonl
 
 const ERROR_KEYS: Record<string, TranslationKey> = {
     path_required: "files.err.path_required",
+    lan_files_gone: "files.err.lan_files_gone",
     invalid_name: "files.err.invalid_name",
     exists: "files.err.exists",
     not_found: "files.err.not_found",
@@ -395,12 +396,14 @@ const SPOTS: readonly FileSpot[] = ["browser", "web", "telepy", "channel", "acco
  * 連線狀態：connecting / open / retrying（斷了、等一下重連）/ offline（4005 裝置離線）/ stepup（4008 要先確認是你）/
  * stopped（權限之類，不會重連）。/ The socket's state as the diagram sees it.
  */
-export type FileLink = "connecting" | "open" | "retrying" | "offline" | "stepup" | "stopped";
+export type FileLink = "connecting" | "open" | "retrying" | "offline" | "stepup" | "stopped" | "lanGone";
 
 /** 關閉碼 → 狀態。/ A close code → the link state. */
 export function linkFromClose(code: number): FileLink {
     if (code === 4005) return "offline";
     if (code === 4008) return "stepup";
+    // 區網主機的檔案 session 關了（閒置、權限沒了、被新的取代）。/ The LAN host's file session ended.
+    if (code === 4017) return "lanGone";
     if ([4000, 4001, 4002, 4003, 4004, 4006, 4009, 4012].includes(code)) return "stopped";
     return "retrying";
 }
@@ -423,6 +426,7 @@ export function fileSpotStates(link: FileLink, busy: Busy | null): Record<FileSp
         case "connecting":
             return statesAlong(SPOTS, { activeFrom: "web", activeTo: "telepy" });
         case "offline":
+        case "lanGone":
             return statesAlong(SPOTS, { failedAt: "channel" });
         case "stepup":
             return statesAlong(SPOTS, { failedAt: "telepy" });
@@ -462,8 +466,35 @@ export function flowNow(link: FileLink, busy: Busy | null): { key: TranslationKe
             return { key: "files.flow.now.retrying" };
         case "stopped":
             return { key: "files.flow.now.stopped" };
+        case "lanGone":
+            return { key: "files.flow.now.lanGone" };
         case "open":
             return busy ? { key: BUSY_KEYS[busy.kind], vars: { count: busy.count ?? 1 } } : { key: "files.flow.now.idle" };
+    }
+}
+
+/**
+ * 區網主機的檔案多一跳：你的瀏覽器 ─web─ Telepy ─隧道─ 裝置（它的 sshd 開往那台）─SSH + SFTP─ 那台主機上的帳號。
+ * The LAN host's files take one more hop: browser ─ Telepy ─ tunnel ─ device (its sshd opens the hop) ─ the host.
+ */
+export type LanFileSpot = "browser" | "web" | "telepy" | "tunnel" | "device" | "hop" | "host";
+const LAN_SPOTS: readonly LanFileSpot[] = ["browser", "web", "telepy", "tunnel", "device", "hop", "host"];
+
+export function lanSpotStates(link: FileLink, busy: Busy | null): Record<LanFileSpot, SpotState> {
+    switch (link) {
+        case "connecting":
+            return statesAlong(LAN_SPOTS, { activeFrom: "web", activeTo: "telepy" });
+        case "offline":
+            return statesAlong(LAN_SPOTS, { failedAt: "tunnel" });
+        case "stepup":
+            return statesAlong(LAN_SPOTS, { failedAt: "telepy" });
+        case "lanGone":
+            return statesAlong(LAN_SPOTS, { failedAt: "hop" });
+        case "retrying":
+        case "stopped":
+            return statesAlong(LAN_SPOTS, { failedAt: "web" });
+        case "open":
+            return busy ? statesAlong(LAN_SPOTS, { activeFrom: "hop", activeTo: "host" }) : statesAlong(LAN_SPOTS, { done: true });
     }
 }
 

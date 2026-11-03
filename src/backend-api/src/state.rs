@@ -67,6 +67,8 @@ pub struct Inner {
     pub mfa: MfaStores,
     /// 區網掃描的進度 / 最近結果（每條隧道一筆）。/ LAN scan status per tunnel.
     pub lan_scans: LanScans,
+    /// 區網主機的檔案 session（`lan::files`）。/ LAN host file sessions.
+    pub lan_files: crate::lan::files::LanFileSessions,
     /// 裝置金鑰清單的同步狀態（kick / 鎖 / 重試）。/ Device key list sync state.
     pub device_keys: DeviceKeys,
     /// 一行指令加入裝置的票（記憶體）。/ One-command device join tickets (in memory).
@@ -157,6 +159,7 @@ impl AppState {
             sessions: Default::default(),
             mfa: MfaStores::new(&config.secret_key),
             lan_scans: LanScans::default(),
+            lan_files: Default::default(),
             device_keys: DeviceKeys::default(),
             join: JoinTickets::default(),
             downloads: Default::default(),

@@ -25,6 +25,7 @@ pub mod ssh_host;
 pub mod host_keys;
 pub mod join;
 pub mod lan;
+pub mod lan_files;
 pub mod logs;
 pub mod mfa;
 pub mod notify;

@@ -621,3 +621,56 @@ async fn lan_scan_recognises_and_shows() {
     assert!(o.stdout.contains("is: OpenWrt") && o.stdout.contains(&format!("{web_port}/http  200  title: OpenWrt - LuCI")), "{}", o.stdout);
     assert!(o.stdout.contains(&format!("web: http://127.0.0.1:{web_port}/")), "{}", o.stdout);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cp_reaches_a_lan_host_through_the_device() {
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service])], MachineOpts { allow_jump: true, ..Default::default() }).await;
+    let nas = lab.machine_with("nas", &[("admin", &[]), ("backup", &[])], MachineOpts { password: Some("pw-123"), ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    let tunnel_key = lab.tunnel_service_key(&dev).await;
+    let admin_home = nas.account_home("admin");
+    std::fs::create_dir_all(admin_home.join(".ssh")).unwrap();
+    std::fs::write(admin_home.join(".ssh/authorized_keys"), format!("{tunnel_key}\n")).unwrap();
+    std::fs::create_dir_all(nas.account_home("backup")).unwrap();
+    let r = lab.app.post(&format!("/api/reverse/server/{}/lan/hosts", dev.tunnel_id), Some(&alice.token), json!({"address": "127.0.0.1", "label": "nas", "username": "admin", "ssh_port": nas.port})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "lan cp", "scopes": ["tunnels:read", "ssh:files"], "expires_at": expires})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    // Telepy 的金鑰（預設）：上傳到 nas 的 admin，再下載回來；裝置上什麼都沒有。
+    // Telepy's key (default): up to the nas as admin and back down; nothing lands on the device.
+    std::fs::write(h.join("up.txt"), "to the nas\n").unwrap();
+    let o = telepy(h, &["cp", h.join("up.txt").to_str().unwrap(), "box/nas:up.txt"]).await;
+    assert_eq!(o.code, 0, "cp up: {}", o.stderr);
+    assert!(o.stderr.contains("admin@127.0.0.1 through pi@box (Telepy's key)"), "{}", o.stderr);
+    assert_eq!(std::fs::read_to_string(admin_home.join("up.txt")).unwrap(), "to the nas\n");
+    assert!(!m.home.join("up.txt").exists());
+    let back = h.join("back.txt");
+    let o = telepy(h, &["cp", "box/nas:up.txt", back.to_str().unwrap()]).await;
+    assert_eq!(o.code, 0, "cp down: {}", o.stderr);
+    assert_eq!(std::fs::read_to_string(&back).unwrap(), "to the nas\n");
+    assert!(lab.app.state.lan_files.all().is_empty(), "each cp closed its session");
+
+    // backup 只收密碼：沒給就說怎麼給，給了就進得去。/ backup takes only a password: told how, then it works.
+    let o = telepy(h, &["cp", "box/backup@nas:x.txt", back.to_str().unwrap()]).await;
+    assert_ne!(o.code, 0);
+    assert!(o.stderr.contains("TELEPY_LAN_PASSWORD"), "{}", o.stderr);
+    std::fs::write(nas.account_home("backup").join("x.txt"), "backup file").unwrap();
+    let o = telepy_env(h, &["cp", "box/backup@nas:x.txt", back.to_str().unwrap()], &[("TELEPY_LAN_PASSWORD", "pw-123")]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(std::fs::read_to_string(&back).unwrap(), "backup file");
+    let o = telepy(h, &["cp", "box/nope:x.txt", back.to_str().unwrap()]).await;
+    assert!(o.stderr.contains("No LAN host 'nope' behind box"), "{}", o.stderr);
+}

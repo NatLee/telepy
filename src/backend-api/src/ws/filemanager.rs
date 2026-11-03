@@ -13,10 +13,13 @@ use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::sftp;
-use crate::ssh::pool::PooledSftp;
+use crate::sftp::target::{Shared, Target};
 use crate::state::AppState;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// 區網主機的檔案 session 已經關了（閒置、權限沒了、被新的取代）：重新從網路頁打開。
+/// The LAN host's file session has ended (idle, access lost, replaced): open it again from the Network page.
+pub const CLOSE_LAN_FILES_GONE: u16 = 4017;
 
 /// Python `format_size`：`f"{size:.1f} {unit}"`，0 → "0 B"。
 pub fn format_size(mut size: f64) -> String {
@@ -119,7 +122,7 @@ impl ExecSession {
 }
 
 enum Backend {
-    Sftp { sftp: PooledSftp, home: String, shell: &'static str },
+    Sftp { sftp: Shared, home: String, shell: &'static str },
     Exec(ExecSession),
 }
 
@@ -183,9 +186,19 @@ async fn send_response(socket: &mut WebSocket, action: &str, data: Value) -> boo
     send_json(socket, &json!({ "action": action, "data": data })).await
 }
 
-async fn open_backend(state: &AppState, username: &str, reverse_port: i64) -> Option<Backend> {
+async fn open_backend(state: &AppState, target: &Target) -> Option<Backend> {
+    // 區網主機：它那個 session 的 SFTP（沒有 exec 退路——開的時候就確認過有 SFTP）。
+    // A LAN host: its session's SFTP (no exec fallback; opening it already checked for SFTP).
+    if target.lan().is_some() {
+        let sftp = target.sftp(state).await.ok()?;
+        let home = sftp::home(&sftp).await;
+        let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
+        return Some(Backend::Sftp { sftp, home, shell });
+    }
+    let Target::Device { reverse_port, username } = target else { return None };
+    let (reverse_port, username) = (*reverse_port, username.as_str());
     // 共用連線池：同一台、同一個 OS 帳號的檔案管理 / SFTP REST 共用一條 SSH 連線，各自一條 channel。
-    match state.pool.sftp(state, reverse_port, username).await {
+    match target.sftp(state).await {
         Ok(sftp) => {
             let home = sftp::home(&sftp).await;
             let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
@@ -243,8 +256,20 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4006).await;
         return;
     }
+    // `~<代號>` = 這個人開的區網檔案 session（`lan::files`）；不在了 = 4017。/ `~<id>` = a LAN file session; gone = 4017.
+    let Some(target) = Target::of(&state, user.id, tunnel.reverse_port, &username).filter(|g| g.lan().is_none_or(|f| f.tunnel_id == tunnel.id)) else {
+        close_with(&mut socket, CLOSE_LAN_FILES_GONE, "lan_files_gone").await;
+        return;
+    };
+    if target.lan().is_some() {
+        if let Err(code) = auth::require_feature(&state, &user, crate::features::Feature::Network).await {
+            close_with(&mut socket, code, crate::features::Feature::Network.id()).await;
+            return;
+        }
+    }
+    let account = target.lan().map(|f| f.account.clone()).unwrap_or_else(|| username.clone());
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await.unwrap_or_default();
-    if !allowed.iter().any(|u| u.username == username) {
+    if !allowed.iter().any(|u| u.username == account) {
         close(&mut socket, 4003).await;
         return;
     }
@@ -257,14 +282,23 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4005).await;
         return;
     }
-    let Some(mut backend) = open_backend(&state, &username, tunnel.reverse_port).await else {
+    let Some(mut backend) = open_backend(&state, &target).await else {
         tracing::error!("Failed to initialize SSH session");
-        close(&mut socket, 4005).await;
+        if target.lan().is_some() {
+            close_with(&mut socket, CLOSE_LAN_FILES_GONE, "lan_files_gone").await;
+        } else {
+            close(&mut socket, 4005).await;
+        }
         return;
     };
-    let mut presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip).as_account(&username));
-    let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Files, tunnel.id, &user.username, Some(&username)).await;
-    crate::session_audit::webhook_started(&state, tunnel.id, user.id, &user.username, "files", Some(&username)).await;
+    let mut entry = crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip).as_account(&account);
+    let lan_note = target.lan().map(|_| format!("on the LAN host {}", target.label()));
+    if lan_note.is_some() {
+        entry.client = Some(target.label());
+    }
+    let mut presence = state.presence.join(entry);
+    let audit = crate::session_audit::ConsoleSession::open_for_with(&state, crate::session_audit::ConsoleKind::Files, tunnel.id, &user.username, Some(&account), lan_note.as_deref()).await;
+    crate::session_audit::webhook_started(&state, tunnel.id, user.id, &user.username, "files", Some(&account)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
     // 被結束時寫進 `files_close` 的那句（誰、為什麼）。/ Who ended it and why, for `files_close`.
     let mut ended_note: Option<String> = None;
@@ -309,6 +343,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         };
         let action = data.get("action").and_then(|a| a.as_str()).unwrap_or("").to_string();
         let payload = data.get("payload").cloned().unwrap_or_else(|| json!({}));
+        // 區網主機的 session 關了（閒置、權限沒了、被取代）：告訴瀏覽器重新打開。/ The LAN session ended: say so.
+        if target.lan().is_some_and(|f| state.lan_files.get(&f.id, user.id).is_none()) {
+            close_with(&mut socket, CLOSE_LAN_FILES_GONE, "lan_files_gone").await;
+            break;
+        }
         let ok = match action.as_str() {
             "list_files" => {
                 let requested = payload.get("path").and_then(|p| p.as_str()).map(str::to_string);

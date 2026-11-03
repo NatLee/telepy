@@ -27,6 +27,7 @@ const CATEGORIES: Record<string, ToolCategory> = {
     sftp_list: "files",
     sftp_read: "files",
     sftp_write: "files",
+    lan_files: "files",
     ssh_session_open: "session",
     ssh_session_close: "session",
     list_tunnels: "read",

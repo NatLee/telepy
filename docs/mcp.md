@@ -91,7 +91,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- | --- |
 | `tunnels:read` | See your tunnels | `list_tunnels`, `tunnel_status`, `lan_hosts` |
 | `ssh:exec` | Run commands on your devices | `ssh_session_open`, `ssh_exec`, `shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`, `lan_wake` |
-| `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write` |
+| `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write`, `lan_files` |
 | `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check` (only on tunnels you own or are ADMIN on) |
 | `browser:use` | Browse the web as your devices | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
@@ -150,6 +150,7 @@ These also work inside a session, opened with `ssh_session_open`.
 | `sftp_list(session_id, path?)` | Lists a directory (`~` = the home directory) |
 | `sftp_read(session_id, path, offset?, max_bytes?)` | Reads a file: text comes back as UTF-8, anything else as base64. Can be read in pieces |
 | `sftp_write(session_id, path, content, encoding?, append?)` | Writes or appends to a file (`encoding`: `utf-8` / `base64`) |
+| `lan_files(tunnel_id, host, action, path?, content?, encoding?, append?, offset?, max_bytes?, login?, username?, credential_id?)` | The same for a LAN host behind the device, without a session: `action` = `list` / `read` / `write`. The device's sshd opens the hop and Telepy logs in to the host with its key (the tunnel's service key, then the shared one) or a saved ssh login of the user's (`credential_id`); the login is kept for 10 minutes and reused. If the host refuses Telepy's key, the tool says so: ask the user to add the key there or save a login |
 
 ### Scan the LAN (`network:scan`)
 
@@ -254,7 +255,7 @@ An agent gets exactly what you would get in the web app:
 | --- | --- |
 | `ssh:exec` tools | Web terminal |
 | `ssh:files` tools | File manager |
-| `lan_hosts`, `lan_scan`, `lan_check` | LAN discovery |
+| `lan_hosts`, `lan_scan`, `lan_check` (and `lan_files`, which also needs the file manager) | LAN discovery |
 | `browser:use` tools | Remote browser |
 
 If the app simply wasn't given a scope, the error tells the agent to ask you to reconnect and approve it.
