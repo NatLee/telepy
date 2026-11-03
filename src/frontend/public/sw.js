@@ -1,11 +1,32 @@
-// Telepy 的 service worker：只負責系統通知——顯示（Android 的 Chrome 只准 service worker 發通知）、點下去回到 Telepy。
-// 不攔任何請求、不快取任何東西：每次部署打開的都是新版頁面，不會被舊版卡住。之後的推播（push）也接在這裡。
+// Telepy 的 service worker：只負責系統通知——顯示（Android 的 Chrome 只准 service worker 發通知）、收推播、點下去回到
+// Telepy。不攔任何請求、不快取任何東西：每次部署打開的都是新版頁面，不會被舊版卡住。
 // Telepy's service worker: system notifications only — showing them (Chrome on Android lets only a service worker do
-// that) and bringing Telepy back when one is clicked. It intercepts no requests and caches nothing, so every deploy
-// opens the new pages and no old version gets stuck. Push will hook in here later.
+// that), receiving pushes, and bringing Telepy back when one is clicked. It intercepts no requests and caches nothing,
+// so every deploy opens the new pages and no old version gets stuck.
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
+// 推播：後端加密過的 `{title, body, tag, path}`（瀏覽器已經解開）。每則都要顯示——瀏覽器規定推播一定要讓人看到。
+// A push: the backend's `{title, body, tag, path}` (already decrypted by the browser). Every one is shown — browsers
+// require pushes to be visible.
+self.addEventListener("push", (event) => {
+    let data = {};
+    try {
+        data = event.data ? event.data.json() : {};
+    } catch {
+        data = {};
+    }
+    const text = (v, fallback) => (typeof v === "string" && v ? v : fallback);
+    event.waitUntil(
+        self.registration.showNotification(text(data.title, "Telepy"), {
+            body: text(data.body, ""),
+            tag: text(data.tag, undefined),
+            icon: "/icons/icon-192.png",
+            data: { path: text(data.path, "/tunnels") },
+        }),
+    );
+});
 
 self.addEventListener("notificationclick", (event) => {
     event.notification.close();

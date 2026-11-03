@@ -5172,3 +5172,37 @@ pub struct ServerStatsWebhooks {
     /// Webhooks with a failed (non-test) delivery in the last 24 hours
     pub failing_recent: i64,
 }
+
+/// 推播通知：`GET /api/push` 等。/ Push notifications.
+#[derive(ToSchema)]
+pub struct PushView {
+    /// 網站設定 `notify_push`。/ The `notify_push` site setting.
+    pub enabled: bool,
+    /// 開著而且有 VAPID 金鑰。/ On and a VAPID key is available.
+    pub available: bool,
+    /// VAPID 公鑰（base64url、未壓縮），給瀏覽器的 `applicationServerKey`。/ The VAPID public key for `applicationServerKey`.
+    #[schema(example = "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8")]
+    pub public_key: Option<String>,
+    pub key_error: Option<String>,
+    /// 每台裝置每分鐘最多幾則。/ Pushes per device per minute.
+    pub per_minute: i64,
+    pub subscriptions: Vec<PushSubscriptionJson>,
+}
+
+#[derive(ToSchema)]
+pub struct PushSubscriptionJson {
+    pub id: i64,
+    pub user_agent: String,
+    #[schema(example = "zh-TW")]
+    pub lang: String,
+    /// 這台裝置的通知寫出指令內容。/ This device's notifications show commands.
+    pub details: bool,
+    /// google | apple | mozilla | microsoft
+    pub service: Option<String>,
+    /// 這次請求的登入開的。/ Made by this request's sign-in.
+    pub current: bool,
+    pub created_at: String,
+    pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+}

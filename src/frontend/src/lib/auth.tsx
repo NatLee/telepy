@@ -27,6 +27,7 @@ import { useRouter } from "next/navigation";
 
 import { UserProfile, AuthContextType } from "../types/auth";
 import { ACCESS_TOKEN_EVENT, refreshSession, revokeSession, takeSignedOutReason } from "./api";
+import { dropPushHere } from "@/hooks/usePush";
 import { useI18n } from "./i18n";
 import { useToast } from "@/components/ui/Toast";
 import { isAuthorizePath, loginPathFor } from "./oauthFlow";
@@ -255,6 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem("refreshToken");
         resetNotifyPrefs(); // 通知偏好也是帳號的 / notification preferences belong to the account too
         resetTerminalSchemes(); // 自訂配色是帳號的,別留給下一個登入的人看 / custom schemes belong to the account
+        void dropPushHere(); // 這台裝置的推播跟著登入結束 / this device's push ends with the sign-in
         setAccessToken(null);
         setUser(null);
         router.push(loginPathFor(next));

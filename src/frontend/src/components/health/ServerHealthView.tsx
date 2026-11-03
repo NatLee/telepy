@@ -638,6 +638,7 @@ function FixText({ id }: { id: HealthCheckId }) {
         service_key: { cmd: c("docker compose exec backend telepy-server keygen"), restart: c("docker compose restart backend") },
         shared_key: { setting: c("KEEP_SHARED_SERVICE_KEY"), env: c(".env") },
         gateway: { cmd: c("docker compose exec backend telepy-server keygen"), dir: c("ssh/ssh_host_keys") },
+        push: { file: c("telepy-data/push/vapid.key") },
         ssh_host: { setting: c("SSH_SERVER_DOMAIN"), env: c(".env") },
         guacd: { cmd: c("docker compose up -d guacd"), net: c("telepy-desktop") },
         kasm: { cmd: c("docker compose up -d kasm-browser"), token: c("INTERNAL_API_TOKEN") },

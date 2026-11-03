@@ -27,7 +27,7 @@ export const PATH_ORDER: HealthSpot[] = ["proxy", "backend", "disk", "gateway", 
 export const SPOT_CHECKS: Record<HealthSpot, readonly HealthCheckId[] | null> = {
     visitor: null,
     proxy: ["client_addresses"],
-    backend: ["secret_key", "public_url", "internal_api_token"],
+    backend: ["secret_key", "public_url", "internal_api_token", "push"],
     disk: ["data_dir", "log_dir", "database", "accounts", "audit_log"],
     gateway: ["tunnel_keys", "service_key", "shared_key", "gateway", "ssh_host"],
     devices: null,

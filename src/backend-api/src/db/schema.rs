@@ -756,6 +756,27 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("user_id", "tunnel_id")
         )"#,
     ),
+    // Rust 自有：推播訂閱（每台瀏覽器一筆，綁在開它的網頁登入上）；見 db/push.rs。
+    // Push subscriptions (one per browser, bound to the web sign-in that made it); see db/push.rs.
+    (
+        "telepy_push_subscription",
+        r#"CREATE TABLE "telepy_push_subscription" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "session_id" integer NOT NULL,
+            "endpoint" varchar(1024) NOT NULL UNIQUE,
+            "p256dh" varchar(128) NOT NULL,
+            "auth" varchar(64) NOT NULL,
+            "lang" varchar(8) NOT NULL,
+            "details" bool NOT NULL DEFAULT 0,
+            "user_agent" varchar(256) NOT NULL DEFAULT '',
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL,
+            "last_success_at" datetime NULL,
+            "last_error" varchar(300) NULL,
+            "last_error_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：網頁登入 session（refresh token 的 sid）；見 db/web_sessions.rs。
     // Web sign-in sessions (the refresh token's sid); see db/web_sessions.rs.
     (
@@ -1025,6 +1046,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_shell_history_pref_user_tunnel" ON "telepy_shell_history_pref" ("user_id", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_push_subscription_user" ON "telepy_push_subscription" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_push_subscription_session" ON "telepy_push_subscription" ("session_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
@@ -1277,6 +1300,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 裝成 app（PWA）時的名稱：telepy / domain / custom，custom 時用 app_name。/ The installed app's name: telepy / domain / custom (app_name).
     ("site_settings_sitesettings", "app_name_mode", "varchar(16) NOT NULL DEFAULT 'telepy'"),
     ("site_settings_sitesettings", "app_name", "varchar(64) NOT NULL DEFAULT ''"),
+    // 推播通知（Web Push）整站開關。/ Push notifications (Web Push), site-wide on / off.
+    ("site_settings_sitesettings", "notify_push", "bool NOT NULL DEFAULT 1"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

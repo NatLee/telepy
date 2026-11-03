@@ -150,6 +150,29 @@ pub fn resolve(kind: Kind, l: Layers) -> (bool, Source) {
     (true, Source::Builtin)
 }
 
+/**
+ * 一個人、一個事件 × 管道、一條隧道（沒有 = 帳號事件）的各層值，從三張表的列組出來（推播在伺服器端用；網頁在瀏覽器端
+ * 用 `lib/notifyPrefs`）。/ One person's layers for an event × channel and tunnel (none = an account event), built from
+ * the three tables' rows (push uses it on the server; the web uses `lib/notifyPrefs` in the browser).
+ */
+pub fn layers_for(
+    defaults: &[crate::db::notify_prefs::DefaultRow],
+    mine: &[crate::db::notify_prefs::PrefRow],
+    mutes: &[crate::db::notify_prefs::MuteRow],
+    kind: Kind,
+    channel: Channel,
+    tunnel_id: Option<i64>,
+) -> Layers {
+    let (event, ch) = (kind.name(), channel.as_str());
+    let site = defaults.iter().find(|d| d.event == event && d.channel == ch);
+    Layers {
+        locked: site.is_some_and(|d| d.locked),
+        site: site.and_then(|d| d.enabled),
+        mine: mine.iter().find(|p| p.event == event && p.channel == ch).map(|p| p.enabled),
+        mute: tunnel_id.and_then(|t| mutes.iter().find(|m| m.tunnel_id == t)).and_then(|m| Mute::parse(&m.scope)),
+    }
+}
+
 /// `"on"` / `"off"` / `"inherit"`（或 true / false / null）→ 值；認不得 = None。
 /// Parse a preference value: on / off / inherit, or true / false / null.
 pub fn parse_value(v: &serde_json::Value) -> Option<Option<bool>> {
@@ -169,6 +192,26 @@ pub fn parse_value(v: &serde_json::Value) -> Option<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layers_come_from_the_rows_for_that_event_channel_and_tunnel() {
+        use crate::db::notify_prefs::{DefaultRow, MuteRow, PrefRow};
+        let k = Kind::TunnelIpChanged;
+        let defaults = vec![
+            DefaultRow { event: k.name().into(), channel: "desktop".into(), enabled: Some(false), locked: false },
+            DefaultRow { event: k.name().into(), channel: "toast".into(), enabled: None, locked: true },
+        ];
+        let mine = vec![PrefRow { event: k.name().into(), channel: "desktop".into(), enabled: true }];
+        let mutes = vec![MuteRow { tunnel_id: 7, scope: "all".into(), tunnel_name: "lab".into() }];
+        let l = layers_for(&defaults, &mine, &mutes, k, Channel::Desktop, Some(3));
+        assert_eq!((l.locked, l.site, l.mine, l.mute), (false, Some(false), Some(true), None));
+        assert_eq!(resolve(k, l), (true, Source::Mine));
+        let muted = layers_for(&defaults, &mine, &mutes, k, Channel::Desktop, Some(7));
+        assert_eq!(resolve(k, muted), (false, Source::Muted), "a muted tunnel stays quiet");
+        assert!(layers_for(&defaults, &[], &[], k, Channel::Toast, Some(7)).locked);
+        let account = layers_for(&defaults, &[], &mutes, Kind::AccountSignInNewDevice, Channel::Desktop, None);
+        assert_eq!(resolve(Kind::AccountSignInNewDevice, account), (true, Source::Builtin));
+    }
 
     #[test]
     fn layers_resolve_in_order() {

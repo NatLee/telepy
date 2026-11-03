@@ -78,6 +78,8 @@ pub struct SiteSettings {
     pub app_name_mode: String,
     /// `app_name_mode = custom` 時的名稱。/ The name when `app_name_mode` is custom.
     pub app_name: String,
+    /// 推播通知（Web Push）整站開關。/ Push notifications (Web Push), site-wide.
+    pub notify_push: bool,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -134,6 +136,7 @@ pub const FIELDS: &[&str] = &[
     "server_ssh_host",
     "app_name_mode",
     "app_name",
+    "notify_push",
 ];
 
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
@@ -144,7 +147,7 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
     client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \
     server_gateway_proxy_protocol_from, server_log_level, server_openapi_enabled, server_google_client_id, server_public_url, server_ssh_host, \
-    app_name_mode, app_name";
+    app_name_mode, app_name, notify_push";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))
