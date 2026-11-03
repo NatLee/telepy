@@ -98,9 +98,11 @@ key_matches() {
 }
 # Key files a text (file contents or a command line) refers to: -i <path> (also quoted word by word: '-i' '/k'),
 # IdentityFile, docker's KEY_FILE=, <path>:/id_rsa and the built-in client's --identity <path>.
+# -i only as a word of its own: a path like ~/.ssh/telepy-id4tzeb5.known_hosts (an install id starting with i) names
+# no key, and taking it for one hid a command that uses the default keys.
 key_paths() {
     printf '%s\n' "$1" | grep -oE -- "--identity['\"]?[ =]['\"]?[^ '\"]+" | sed -E "s/^--identity['\"]?[ =]['\"]?//"
-    printf '%s\n' "$1" | grep -oE -- "-i['\"]? ?['\"]?[^ '\"]+" | sed -E "s/^-i['\"]? ?['\"]?//"
+    printf '%s\n' "$1" | grep -oE -- "(^|[ '\"=])-i['\"]? ?['\"]?[^ '\"]+" | sed -E "s/^[ '\"=]?-i['\"]? ?['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "IdentityFile[ =]['\"]?[^ '\"]+" | sed -E "s/^IdentityFile[ =]['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "KEY_FILE=['\"]?[^ '\"]+" | sed -E "s/^KEY_FILE=['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "[^\"' ]+:/id_rsa" | sed 's#:/id_rsa$##'

@@ -296,14 +296,17 @@ async fn a_service_without_a_key_file_is_found_by_the_default_key() {
     // 這個帳號的預設金鑰就是這條通道的金鑰。/ The account's default key is the tunnel key.
     std::fs::write(ssh.join("id_ed25519"), "private\n").unwrap();
     std::fs::write(ssh.join("id_ed25519.pub"), format!("{}\n", dev.key.public)).unwrap();
-    // 一個沒寫金鑰、連這台 gateway 的服務腳本，與一個看起來像那樣在跑的程序（假的 ssh，只是睡著）。
+    // 一個沒寫金鑰、連這台 gateway 的服務腳本，與一個看起來像那樣在跑的程序（假的 ssh，只是睡著）。路徑裡的 `-i`
+    // （安裝代號以 i 開頭：`telepy-id4tzeb5.known_hosts`）不是 `-i <金鑰>`：natlee-macbook 改名後就因此認不出來。
     // A script without a key that dials this gateway, and a process that looks like one (a fake ssh that sleeps).
+    // The `-i` inside a path (an install id starting with i) is no `-i <key>`: a renamed MacBook went unrecognised.
+    let known = format!("UserKnownHostsFile={}/.ssh/telepy-id4tzeb5.known_hosts", home.display());
     let unit = home.join("telepy-natlee.sh");
-    std::fs::write(&unit, format!("ssh -N -o BatchMode=yes -p {} -R '*:0:localhost:22' telepy@127.0.0.1\n", lab.gw_port)).unwrap();
+    std::fs::write(&unit, format!("ssh -N -o BatchMode=yes -o {known} -p {} -R '*:0:localhost:22' telepy@127.0.0.1\n", lab.gw_port)).unwrap();
     std::fs::create_dir_all(home.join("bin")).unwrap();
     write_exec(&home.join("bin/ssh"), "#!/bin/sh\nsleep 600\n");
     let _fake = Command::new(home.join("bin/ssh"))
-        .args(["-N", "-o", "BatchMode=yes", "-p", &lab.gw_port.to_string(), "-R", "*:0:localhost:22", "telepy@127.0.0.1"])
+        .args(["-N", "-o", "BatchMode=yes", "-o", &known, "-p", &lab.gw_port.to_string(), "-R", "*:0:localhost:22", "telepy@127.0.0.1"])
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
