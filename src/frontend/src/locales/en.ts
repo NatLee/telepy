@@ -7766,7 +7766,7 @@ export const en = {
     "tunnelPage.scriptHint": "Scripts that install or reinstall the tunnel on the device, for when the one-command join doesn't fit.",
     "tunnelPage.scriptOpen": "Open the install scripts",
     "tunnelPage.commandHistory": "Command rule history",
-    "tunnelPage.outline": "On this tab",
+    "tunnelPage.outline": "Blocks on this tab",
     "tunnelPage.historyMore": "More records",
     "tunnelPage.historyMoreHint": "Connection logs, live sessions, recordings and command rule history, each opened for this tunnel only.",
     "tunnelPage.backToList": "All tunnels",

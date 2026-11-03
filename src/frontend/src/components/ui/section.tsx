@@ -168,11 +168,11 @@ export function Section({
 }
 
 /**
- * 「這一頁有哪幾塊」:SectionPanels 裡的卡片標題,捲到哪一塊就標哪一塊(左邊一條直線,現在那塊是品牌色的一段),點了捲過去。
- * 少於兩塊不畫。/ The cards in SectionPanels by title: the one in view marked (a straight line on the left, the current
- * block a primary segment), a click scrolls to it. Nothing below two cards.
+ * 「這一頁有哪幾塊」:SectionPanels 裡的卡片標題,捲到哪一塊就標哪一塊,點了捲過去;不寫標題字(`label` 只給螢幕閱讀器)。
+ * 少於兩塊不畫。/ The cards in SectionPanels by title: the one in view marked, a click scrolls to it; no visible heading
+ * (`label` is for screen readers only). Nothing below two cards.
  */
-export function SectionOutline({ label, className }: { label: React.ReactNode; className?: string }) {
+export function SectionOutline({ label, className }: { label: string; className?: string }) {
     const store = React.useContext(OutlineContext);
     const empty = React.useMemo<OutlineEntry[]>(() => [], []);
     const entries = React.useSyncExternalStore(store?.subscribe ?? noopSubscribe, store?.get ?? (() => empty), () => empty);
@@ -225,30 +225,30 @@ export function SectionOutline({ label, className }: { label: React.ReactNode; c
         const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         e.el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
     };
+    // 放在目前那個分頁底下（NavTabs 的 `below`）：直線在分頁圖示底下，字跟分頁名稱對齊，現在那塊是品牌色的一段。
+    // Sits under the current tab (NavTabs' `below`): the line under the tab's icon, the text aligned with the tab's
+    // name, the current block a primary segment on the line.
     return (
-        <nav aria-label={typeof label === "string" ? label : undefined} className={cn("space-y-1.5", className)}>
-            <p className="px-3 text-xs text-muted-foreground">{label}</p>
-            <ol className="ml-[1.2rem] border-l border-border">
-                {entries.map((e) => {
-                    const on = e.id === marked;
-                    return (
-                        <li key={e.id}>
-                            <button
-                                type="button"
-                                onClick={() => go(e)}
-                                aria-current={on ? "location" : undefined}
-                                className={cn(
-                                    "-ml-px block w-full border-l-2 py-1 pr-2 pl-3 text-left text-sm leading-snug transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                                    on ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:border-foreground/30 hover:text-foreground",
-                                )}
-                            >
-                                {e.title}
-                            </button>
-                        </li>
-                    );
-                })}
-            </ol>
-        </nav>
+        <ol data-tab-below aria-label={typeof label === "string" ? label : undefined} className={cn("mb-2 ml-5 mr-2 border-l border-border", className)}>
+            {entries.map((e) => {
+                const on = e.id === marked;
+                return (
+                    <li key={e.id}>
+                        <button
+                            type="button"
+                            onClick={() => go(e)}
+                            aria-current={on ? "location" : undefined}
+                            className={cn(
+                                "-ml-px block w-full rounded-r-sm border-l-2 py-1 pr-1 pl-[1.0625rem] text-left text-[0.8125rem] leading-snug transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                                on ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+                            )}
+                        >
+                            {e.title}
+                        </button>
+                    </li>
+                );
+            })}
+        </ol>
     );
 }
 

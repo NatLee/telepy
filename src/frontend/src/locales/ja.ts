@@ -7748,7 +7748,7 @@ export const ja: Record<TranslationKey, string> = {
     "tunnelPage.scriptHint": "デバイスにトンネルを入れる・入れ直すスクリプト。1 行のコマンドが合わないとき用。",
     "tunnelPage.scriptOpen": "インストールスクリプトを開く",
     "tunnelPage.commandHistory": "コマンドルールの履歴",
-    "tunnelPage.outline": "このタブの内容",
+    "tunnelPage.outline": "このタブの項目",
     "tunnelPage.historyMore": "ほかの記録",
     "tunnelPage.historyMoreHint": "接続ログ・ライブセッション・ターミナル録画・コマンドルールの履歴を、このトンネルに絞って開きます。",
     "tunnelPage.backToList": "すべてのトンネル",

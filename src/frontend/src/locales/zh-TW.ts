@@ -7748,7 +7748,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "tunnelPage.scriptHint": "在裝置上安裝或重裝通道的腳本，給不適合用一行指令加入的情況。",
     "tunnelPage.scriptOpen": "打開安裝腳本",
     "tunnelPage.commandHistory": "指令規則紀錄",
-    "tunnelPage.outline": "這個分頁裡有",
+    "tunnelPage.outline": "這個分頁的區塊",
     "tunnelPage.historyMore": "更多紀錄",
     "tunnelPage.historyMoreHint": "連線日誌、即時工作階段、終端機錄影和指令規則紀錄，打開時都只看這條通道。",
     "tunnelPage.backToList": "所有通道",
