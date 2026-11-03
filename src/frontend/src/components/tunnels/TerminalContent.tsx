@@ -64,11 +64,14 @@ export interface TerminalContentProps {
     onSideTab?: (tab: SideTab) => void;
     /** 工具箱面板（桌機側欄裡）。/ The toolbox panel (in the desktop side panel). */
     toolbox?: React.ReactNode;
+    /** 遠端瀏覽器一開就打開這個網頁（並自動開始）。/ The remote browser starts on this page, right away. */
+    browserStartUrl?: string | null;
 }
 
 export type SideTab = "files" | "toolbox";
 
 export function TerminalContent({
+    browserStartUrl = null,
     mainView,
     setMainView,
     connected,
@@ -290,6 +293,8 @@ export function TerminalContent({
                                     serverId={serverId}
                                     username={username}
                                     onActiveChange={setIsBrowserActive}
+                                    startUrl={browserStartUrl}
+                                    autoStart={!!browserStartUrl}
                                 />
                             )}
                         </div>

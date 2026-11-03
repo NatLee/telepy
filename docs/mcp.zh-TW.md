@@ -119,7 +119,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `list_tunnels` | 你看得到的通道：id、名稱、是否在線、延遲、你的權限、可用的目標 username，以及這個 app 開著的 session |
 | `tunnel_status(tunnel_id)` | 健康狀態、延遲、24 小時在線率、裝置的 `facts` 與 `warnings`，以及最近 10 筆 gateway 事件 |
-| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號 |
+| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號，以及 `web`（每個網頁 port 和它的網址，可以直接交給同一條通道的 `browser_open`） |
 
 - 健康狀態分成 online、degraded（通道在，但裝置的 sshd 沒回應）和 offline。
 - `facts` 包含 OS、kernel、開機秒數、CPU、記憶體與根磁碟（KB）、負載、ssh 版本，以及要不要重開機。只有能登入裝置的人拿得到。

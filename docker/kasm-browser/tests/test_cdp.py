@@ -110,6 +110,54 @@ class ActionTest(unittest.TestCase):
         self.assertIn("null", cdp.read_js(None, 10))
 
 
+class NewTabTest(unittest.TestCase):
+    def test_the_whole_url_is_encoded_into_the_path(self):
+        path = cdp.tab_path("http://192.168.1.10:8080/a b?x=1&y=2#top")
+        self.assertTrue(path.startswith("/json/new?"))
+        self.assertNotIn("&", path)
+        self.assertNotIn("#", path)
+        self.assertNotIn(" ", path)
+
+    def test_opens_and_activates_a_tab(self):
+        calls = []
+
+        def call(port, method, path, timeout):
+            calls.append((method, path))
+            return {"id": "T1", "url": "about:blank"}
+
+        def raw(port, method, path, timeout):
+            calls.append((method, path))
+
+        out = cdp.new_tab(9300, "http://192.168.1.10:8080/", time.monotonic() + 5, call=call, raw=raw)
+        self.assertEqual(out, {"url": "http://192.168.1.10:8080/", "id": "T1"})
+        self.assertEqual(calls[0][0], "PUT")
+        self.assertEqual(calls[1], ("GET", "/json/activate/T1"))
+
+    def test_refuses_other_schemes(self):
+        with self.assertRaises(cdp.CdpError):
+            cdp.new_tab(9300, "file:///etc/passwd", time.monotonic() + 5, call=lambda *a: {}, raw=lambda *a: None)
+
+    def test_waits_for_devtools_to_come_up(self):
+        tries = []
+
+        def call(port, method, path, timeout):
+            tries.append(path)
+            if len(tries) < 3:
+                raise ConnectionRefusedError()
+            return {"Browser": "Chrome"}
+
+        with mock.patch.object(cdp, "RETRY_EVERY", 0.01):
+            self.assertEqual(cdp.wait_devtools(9300, time.monotonic() + 5, call=call), {"Browser": "Chrome"})
+        self.assertEqual(len(tries), 3)
+
+    def test_gives_up_at_the_deadline(self):
+        def call(port, method, path, timeout):
+            raise ConnectionRefusedError()
+
+        with mock.patch.object(cdp, "RETRY_EVERY", 0.01), self.assertRaises(cdp.CdpError):
+            cdp.wait_devtools(9300, time.monotonic() + 0.1, call=call)
+
+
 class ManagerTest(unittest.TestCase):
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")

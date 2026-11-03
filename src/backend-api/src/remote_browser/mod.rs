@@ -36,6 +36,8 @@ pub struct Session {
     pub proxy_port: u16,
     pub ws_port: Option<u16>,
     pub kasm_session_id: Option<String>,
+    /// 開始時要打開的網址的 `主機:port`（稽核事件用；不記路徑與查詢字串）。/ The start URL's `host:port` (for the audit event; no path or query).
+    pub start_target: Option<String>,
     proxy: Mutex<Option<SocksProxy>>,
     last_seen: std::sync::Mutex<Instant>,
 }
@@ -43,6 +45,22 @@ pub struct Session {
 pub struct RemoteBrowser {
     sessions: DashMap<String, Arc<Session>>,
     kasm: KasmClient,
+}
+
+/// 開始時導向網址的時限（Chromium 剛啟動，DevTools 可能還要幾秒）。/ How long the start page may take (Chromium is just starting).
+const START_NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 開新分頁的時限。/ How long opening a new tab may take.
+const OPEN_TAB_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 網址的 `主機:port`（沒寫 port 就是那個 scheme 的預設）：稽核只記這段，路徑和查詢字串常帶 token。
+/// The URL's `host:port` (the scheme's default port when none is given): audits keep only this, since paths and
+/// queries often carry tokens.
+pub fn url_target(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let host = u.host_str()?;
+    let port = u.port_or_known_default()?;
+    // IPv6 的 host_str 已經帶中括號。/ An IPv6 host_str already has its brackets.
+    Some(format!("{host}:{port}"))
 }
 
 /// 探測 SOCKS 代理是否還活著（埠沒在聽 = 已收掉）。
@@ -66,14 +84,20 @@ impl RemoteBrowser {
     /// `start_remote_browser`：借一條裝置連線、開行程內 SOCKS（含重試）→ kasm session → 記錄。
     /// 回 `{"session_id","ws_path"}`。
     pub async fn start(&self, state: &AppState, username: &str, reverse_port: i64, server_id: i64) -> Result<Value, StartError> {
-        self.start_observed(state, username, reverse_port, server_id, |_, _, _| {}).await
+        self.start_observed(state, username, reverse_port, server_id, None, |_, _, _| {}).await
     }
 
     /// [`start`]，每一步開始 / 結束時呼叫 `on(step, state, extra)`：`proxy`（經裝置 SSH 開 SOCKS；`attempt` / `attempts` /
     /// `secs`）→ `browser`（kasm 開 Chromium；`secs`），state = active / done / failed。網頁的開始畫面靠它一步步顯示。
     /// [`start`], calling `on(step, state, extra)` as each step starts and ends: `proxy` (the SOCKS proxy through the
     /// device's SSH; `attempt` / `attempts` / `secs`) → `browser` (Chromium in kasm; `secs`); state = active / done / failed.
-    pub async fn start_observed(&self, state: &AppState, username: &str, reverse_port: i64, server_id: i64, on: impl Fn(&'static str, &'static str, Value)) -> Result<Value, StartError> {
+    ///
+    /// `url`（已經過 [`crate::ai::browser::normalize_url`]）：Chromium 先開空白頁，再經 CDP 導向它——網址從不進
+    /// session-manager 的 shell 指令列（首頁參數會經 `sh -c`）。導向在背景做，不拖慢開始。
+    /// `url` (already through `normalize_url`): Chromium starts on a blank page and is then sent there over CDP — the URL
+    /// never enters the session-manager's shell command line (the homepage goes through `sh -c`). Navigating happens in
+    /// the background, so the start isn't slowed down.
+    pub async fn start_observed(&self, state: &AppState, username: &str, reverse_port: i64, server_id: i64, url: Option<String>, on: impl Fn(&'static str, &'static str, Value)) -> Result<Value, StartError> {
         let (config, db) = (&state.config, &state.db);
         let settings = db::settings::get_solo(db).await.map_err(|e| StartError::Other(e.to_string()))?;
         let max = settings.remote_browser_max_sessions;
@@ -126,6 +150,7 @@ impl RemoteBrowser {
             proxy_port,
             ws_port: None,
             kasm_session_id: None,
+            start_target: url.as_deref().and_then(url_target),
             proxy: Mutex::new(Some(proxy)),
             last_seen: std::sync::Mutex::new(Instant::now()),
         });
@@ -133,7 +158,7 @@ impl RemoteBrowser {
 
         let proxy_url = format!("socks5://{}:{proxy_port}", config.hostname);
         let geometry = if settings.remote_browser_geometry.is_empty() { "1280x720".to_string() } else { settings.remote_browser_geometry.clone() };
-        let homepage = (!settings.remote_browser_homepage.is_empty()).then_some(settings.remote_browser_homepage.as_str());
+        let homepage = if url.is_some() { Some("about:blank") } else { (!settings.remote_browser_homepage.is_empty()).then_some(settings.remote_browser_homepage.as_str()) };
         let lang = (!settings.remote_browser_language.is_empty()).then_some(settings.remote_browser_language.as_str());
         let kasm_timeout = Duration::from_secs(settings.remote_browser_kasm_create_timeout.max(1) as u64);
         on("browser", "active", json!({ "secs": kasm_timeout.as_secs() }));
@@ -155,6 +180,7 @@ impl RemoteBrowser {
             proxy_port,
             ws_port: Some(ws_port),
             kasm_session_id: Some(kasm_id.clone()),
+            start_target: session.start_target.clone(),
             proxy: Mutex::new(session.proxy.lock().await.take()),
             last_seen: std::sync::Mutex::new(Instant::now()),
         });
@@ -169,6 +195,15 @@ impl RemoteBrowser {
             .execute(&db.write)
             .await;
         tracing::info!(session_id, ws_port, "Remote browser session ready");
+        if let Some(u) = url {
+            let (rb, sid) = (state.remote_browser.clone(), session_id.clone());
+            tokio::spawn(async move {
+                if let Err(e) = rb.cdp(&sid, json!({ "action": "navigate", "url": u }), START_NAVIGATE_TIMEOUT).await {
+                    // Chromium 自己會顯示打不開的頁面；這裡只留紀錄。/ Chromium shows its own error page; just log it.
+                    tracing::info!(session_id = sid, error = e, "remote browser: start page did not load");
+                }
+            });
+        }
         Ok(json!({ "session_id": session_id, "ws_path": format!("/ws/remote-browser/{session_id}/") }))
     }
 
@@ -179,6 +214,11 @@ impl RemoteBrowser {
         let Some(kid) = session.kasm_session_id.as_deref() else { return Err("the browser session is not ready".into()) };
         *session.last_seen.lock().unwrap() = Instant::now();
         self.kasm.cdp(kid, action, timeout).await.map_err(|e| e.0)
+    }
+
+    /// 在開著的 session 裡開一個新分頁到 `url`（已經過 `normalize_url`）。/ Open `url` in a new tab of an open session.
+    pub async fn open_tab(&self, id: &str, url: &str) -> Result<Value, String> {
+        self.cdp(id, json!({ "action": "new_tab", "url": url }), OPEN_TAB_TIMEOUT).await
     }
 
     /// `ping_remote_browser`：先做健康檢查（SOCKS 死 → 就地回收、回 false），再續命。
@@ -242,5 +282,19 @@ impl RemoteBrowser {
             tokio::time::sleep(Duration::from_secs(10)).await;
             self.reap(&db).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_target;
+
+    #[test]
+    fn the_audit_keeps_only_host_and_port() {
+        assert_eq!(url_target("http://192.168.1.10:8080/admin?token=secret").as_deref(), Some("192.168.1.10:8080"));
+        assert_eq!(url_target("https://nas.local/").as_deref(), Some("nas.local:443"));
+        assert_eq!(url_target("http://router/").as_deref(), Some("router:80"));
+        assert_eq!(url_target("http://[fd00::1]:8006/").as_deref(), Some("[fd00::1]:8006"));
+        assert_eq!(url_target("not a url"), None);
     }
 }

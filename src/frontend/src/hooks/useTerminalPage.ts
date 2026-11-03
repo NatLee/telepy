@@ -122,7 +122,7 @@ export interface TerminalReconnect {
     grace: DetachGrace;
 }
 
-export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null) {
+export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null, startAccount: string | null = null) {
     const { t } = useI18n();
     const appearance = useTerminalAppearance(serverId);
     const { resolved, ready: appearanceReady } = appearance;
@@ -133,7 +133,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const lanUsername = lan?.username ?? null;
     const lanAuth = lan?.auth ?? TELEPY_AUTH;
     // 只在載入帳號清單時讀一次（之後使用者自己換帳號）。/ Read once when the account list loads.
-    const preferredAccount = useRef<string | null>(lan?.account ?? null);
+    const preferredAccount = useRef<string | null>(lan?.account ?? startAccount ?? null);
     const lanAuthKey = `${lanAuth.kind}:${lanAuth.kind === "credential" ? lanAuth.id : ""}`;
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */

@@ -1,4 +1,5 @@
 import type { TunnelEndpoint } from "@/types/tunnel";
+import type { WebLink } from "@/lib/lanWeb";
 
 /**
  * 區網探索 / 跳板機（#20）的型別，對應 `/api/reverse/lan/topology` 與 `/api/reverse/server/{id}/lan/*`。
@@ -17,6 +18,8 @@ export interface LanHost {
     /** 隨機 / 私有 MAC（查不到廠商）。/ Randomized (private) MAC; no vendor. */
     mac_private?: boolean;
     open_ports: number[];
+    /** 開著的網頁 port 與網址（後端算的；舊後端沒有）。/ Open web ports with their URLs (from the backend; absent on older ones). */
+    web?: WebLink[];
     ssh_banner: string | null;
     label: string | null;
     /** 連這台機器時預設的帳號。/ Default login on this machine. */

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { Button } from "@/components/ui/button";
 import { HostQuickActions } from "@/components/network/HostOpen";
+import { hasWeb } from "@/lib/lanWeb";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -104,6 +105,8 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
 export interface HostActions {
     onOpenHost: (h: LanHost, tab?: "terminal" | "commands") => void;
     onOpenHere: (h: LanHost) => void;
+    /** 在本頁的遠端瀏覽器打開一個網頁。/ Open a web page in this page's remote browser. */
+    onOpenWeb: (h: LanHost, url: string) => void;
     onNavigate: (h: LanHost) => void;
     /** dock 裡開著幾個終端機（> 0 時「終端機頁」開新分頁）。/ Open dock terminals (> 0: "Terminal page" opens a new tab). */
     openShells: number;
@@ -116,6 +119,7 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
     const shown = host.open_ports.slice(0, 4);
     const more = host.open_ports.length - shown.length;
     const ssh = hasSsh(host);
+    const web = hasWeb(host);
     return (
         // 外框是 div：裡面的「開主機」與兩個終端機圖示是並排的按鈕，不互相包。/ A div frame: the open button and the two terminal icons sit side by side, not nested.
         <div
@@ -156,7 +160,7 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
                 </span>
             </button>
             {/* 有 SSH 的主機：直接開終端機（這裡 / 終端機頁）。/ SSH hosts: open a terminal right away (here / terminal page). */}
-            {ssh && <HostQuickActions compact host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="pr-1 pt-1.5" />}
+            {(ssh || web) && <HostQuickActions compact terminal={ssh} host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenWeb={actions.onOpenWeb} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="pr-1 pt-1.5" />}
         </div>
     );
 }

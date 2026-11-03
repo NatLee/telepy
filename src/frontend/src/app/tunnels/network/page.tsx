@@ -27,11 +27,13 @@ import { HostTable } from "@/components/network/HostTable";
 import { defaultDeviceUser } from "@/components/network/HostOpen";
 import { useRecentLanHosts } from "@/hooks/useRecentLanHosts";
 import { flattenHosts, initialNetworkView, NETWORK_VIEWS, recentRows, type NetworkView } from "@/lib/lanHosts";
-import { DOCK_BAR, DOCK_GAP, DOCK_HEIGHT, TerminalDock } from "@/components/network/TerminalDock";
+import { DOCK_BAR, DOCK_GAP, dockBodyHeight, TerminalDock } from "@/components/network/TerminalDock";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { shortUrl } from "@/lib/lanWeb";
 import { ScanDialog } from "@/components/network/ScanDialog";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
-import { useLanTerminals } from "@/hooks/useLanTerminals";
+import { useLanTerminals, type WebRequest } from "@/hooks/useLanTerminals";
 import { useTopologyExpansion } from "@/hooks/useTopologyExpansion";
 import { useTunnelGroups } from "@/hooks/useTunnelGroups";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
@@ -105,6 +107,13 @@ function NetworkInner() {
         // 窄螢幕面板在樹上方：捲過去。/ On narrow screens the panel sits above the tree: bring it into view.
         requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     }, [remember]);
+    // dock 的瀏覽器屬於別台裝置時，先問要不要換。/ When the dock's browser belongs to another device, ask before switching.
+    const [replaceAsk, setReplaceAsk] = useState<WebRequest | null>(null);
+    const openWeb = (tn: TopologyTunnel, h: LanHost, url: string, deviceUser: string) => {
+        remember(tn.id, h.id);
+        const req: WebRequest = { tunnelId: tn.id, tunnelName: tn.name, reversePort: tn.reverse_port, deviceUser, url };
+        if (terms.openWeb(req) === "busy") setReplaceAsk(req);
+    };
     const onOpenTerminal = (req: OpenTerminalRequest) => {
         remember(req.tunnel.id, req.host.id);
         return terms.open({ tunnelId: req.tunnel.id, tunnelName: req.tunnel.name, reversePort: req.tunnel.reverse_port, hostId: req.host.id, hostName: hostName(req.host), login: req.login, deviceUser: req.deviceUser, auth: req.auth });
@@ -117,6 +126,12 @@ function NetworkInner() {
             const deviceUser = tn ? defaultDeviceUser(tn) : null;
             if (!tn || !deviceUser) return onOpenHost(h);
             if (!onOpenTerminal({ tunnel: tn, host: h, login: h.username ?? "", deviceUser, auth: TELEPY_AUTH })) onOpenHost(h);
+        },
+        onOpenWeb: (h, url) => {
+            const tn = allTunnels.find((x) => x.id === h.tunnel_id);
+            const deviceUser = tn ? defaultDeviceUser(tn) : null;
+            if (!tn || !deviceUser) return onOpenHost(h);
+            openWeb(tn, h, url, deviceUser);
         },
         onNavigate: (h) => remember(h.tunnel_id, h.id),
         openShells,
@@ -141,7 +156,7 @@ function NetworkInner() {
     const recentList = useMemo(() => recentRows(recent.recent, allRows).slice(0, 6), [recent.recent, allRows]);
     // 開著終端機時，頁面底部與右側面板都要留出 dock 的高度（dock 浮在內容上方；放大時是整個視窗的覆蓋層，不用留）。
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
-    const dockOffset = terms.sessions.length && terms.size !== "max" ? `calc(${DOCK_BAR} + ${DOCK_HEIGHT[terms.size]} + ${DOCK_GAP} + 0.5rem)` : "0px";
+    const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
     const onScan = (tn: TopologyTunnel) => setScanFor(tn.id);
     const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
 
@@ -204,6 +219,7 @@ function NetworkInner() {
                             onClose={() => setOpenHost(null)}
                             onNavigate={() => remember(hostTunnel.id, host.id)}
                             onOpenTerminal={onOpenTerminal}
+                            onOpenWeb={(req) => openWeb(req.tunnel, req.host, req.url, req.deviceUser)}
                             onShowSession={terms.select}
                             loadConnectTarget={actions.loadConnectTarget}
                             updateHost={actions.updateHost}
@@ -305,6 +321,7 @@ function NetworkInner() {
                             isOnline={actions.isOnline}
                             onOpenHost={onOpenHost}
                             onOpenHere={hostActions.onOpenHere}
+                            onOpenWeb={hostActions.onOpenWeb}
                             onNavigate={hostActions.onNavigate}
                             openShells={openShells}
                         />
@@ -344,6 +361,20 @@ function NetworkInner() {
                 onShell={terms.setShell}
                 setSize={terms.setSize}
                 anchorRef={pageRef}
+                browser={terms.browser}
+                onCloseBrowser={terms.closeWeb}
+                onBrowserPhase={terms.setWebPhase}
+            />
+            <ConfirmDialog
+                isOpen={!!replaceAsk}
+                onClose={() => setReplaceAsk(null)}
+                onConfirm={() => {
+                    if (replaceAsk) terms.replaceWeb(replaceAsk);
+                    setReplaceAsk(null);
+                }}
+                title={t("network.web.replaceTitle")}
+                message={replaceAsk && terms.browser ? t("network.web.replaceMessage", { current: `${terms.browser.deviceUser}@${terms.browser.tunnelName}`, next: `${replaceAsk.deviceUser}@${replaceAsk.tunnelName}`, url: shortUrl(replaceAsk.url) }) : ""}
+                confirmText={t("network.web.replaceConfirm")}
             />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />
             <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />

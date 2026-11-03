@@ -10,6 +10,8 @@ import React, { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { AnnotatedCommand, CommandBar, InlineCommand } from "@/components/cheatsheet/CommandView";
 import { CodeBlock } from "@/components/ui/CodeBlock";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { forwardCommand } from "@/lib/lanWeb";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Section } from "@/components/ui/section";
@@ -19,7 +21,7 @@ import { isValidPort, type ConnectMode, type ConnectTarget } from "@/lib/forward
 import { forwardUrl, lanAlias, lanCopySegments, lanForwardSegments, lanSshConfig, lanSshSegments, serviceName, suggestLocalPort } from "@/lib/lanConnect";
 import type { LanHost } from "@/types/lan";
 
-function ForwardRow({ target, host, port, mode }: { target: ConnectTarget; host: LanHost; port: number; mode: ConnectMode }) {
+function ForwardRow({ target, host, port, mode, tunnelName }: { target: ConnectTarget; host: LanHost; port: number; mode: ConnectMode; tunnelName: string }) {
     const { t } = useI18n();
     const local = suggestLocalPort(port);
     const url = forwardUrl(port, local);
@@ -32,11 +34,17 @@ function ForwardRow({ target, host, port, mode }: { target: ConnectTarget; host:
                 <span className="text-xs text-muted-foreground">→ {url ? t("network.cmd.forwardOpen", { url }) : t("network.cmd.forwardLocal", { port: local })}</span>
             </p>
             <InlineCommand segments={lanForwardSegments(target, host, port, local, mode)} />
+            {/* 同一件事的 telepy CLI 版：自己挑本機 port、--open 打開瀏覽器。/ The same with the telepy CLI: picks the local port, --open opens the browser. */}
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="shrink-0">{t("network.cmd.orCli")}</span>
+                <code className="min-w-0 flex-1 font-mono text-foreground/80 [overflow-wrap:anywhere]">{forwardCommand(tunnelName, target.username, host.address, port)}</code>
+                <CopyButton value={forwardCommand(tunnelName, target.username, host.address, port)} className="size-7" />
+            </div>
         </li>
     );
 }
 
-export function LanCommands({ host, target, login }: { host: LanHost; target: ConnectTarget | null; login: string }) {
+export function LanCommands({ host, target, login, tunnelName }: { host: LanHost; target: ConnectTarget | null; login: string; tunnelName: string }) {
     const { t, tn } = useI18n();
     const [mode, setMode] = useState<ConnectMode>("direct");
     const [upload, setUpload] = useState(true);
@@ -83,7 +91,7 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
             <Section wrapTitle title={t("network.cmd.forwardTitle")} description={t("network.cmd.forwardHint")}>
                 {ports.length > 0 && (
                     <ul className="space-y-3">
-                        {ports.map((p) => <ForwardRow key={p} target={target} host={host} port={p} mode={mode} />)}
+                        {ports.map((p) => <ForwardRow key={p} target={target} host={host} port={p} mode={mode} tunnelName={tunnelName} />)}
                     </ul>
                 )}
                 <div className="mt-3 space-y-2">
@@ -91,7 +99,7 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
                         {ports.length ? t("network.cmd.otherPort") : t("network.cmd.noPorts")}
                     </Label>
                     <Input id="lan-other-port" inputMode="numeric" value={otherPort} onChange={(e) => setOtherPort(e.target.value)} placeholder="8080" className="h-8 w-32 font-mono" />
-                    {extra && <ul><ForwardRow target={target} host={host} port={extra} mode={mode} /></ul>}
+                    {extra && <ul><ForwardRow target={target} host={host} port={extra} mode={mode} tunnelName={tunnelName} /></ul>}
                 </div>
             </Section>
 

@@ -247,6 +247,7 @@ export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
             return [
                 r("lanLs", `telepy lan ls ${T}`, ["tunnels:read"]),
                 r("lanAdd", `telepy lan add ${T} 192.168.1.20 --label nas --user admin`, ["tunnels:manage"]),
+                r("lanWeb", `telepy forward ${TA} 192.168.1.20:8080 --open`, ["tunnels:read", "ssh-key"]),
                 r("browse", `ID=$(telepy browse ${T} http://192.168.1.1/)\ntelepy browse text "$ID" --selector main\ntelepy browse shot "$ID" -o router.png\ntelepy browse close "$ID"`, ["browser:use"]),
                 r("browseLogin", `telepy login ${c.base || "<url>"} --scope "tunnels:read ssh:exec ssh:files browser:use"`, ["browser:use"], false),
             ];
@@ -300,6 +301,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "ssh <tunnel>[@account] [-L …] [-D …] [--via web|ssh] [-- cmd]", key: "ssh", needs: ["tunnels:read", "ssh-key"] },
     { usage: "scp [-r] <from>… <to>", key: "scp", needs: ["tunnels:read", "ssh-key"] },
     { usage: "sftp <tunnel>[@account]", key: "sftp", needs: ["tunnels:read", "ssh-key"] },
+    { usage: "forward <tunnel>[@account] <host>[:port] [--local N] [--open]", key: "forward", needs: ["tunnels:read", "ssh-key"] },
     { usage: "config install [<tunnel>…|--all] [--print] | tidy [--check] [--yes] | fallback [ask|always|never]", key: "config", needs: ["tunnels:read"] },
     { usage: "exec <tunnel>… [--label …] [--group …] -- <cmd>", key: "exec", needs: ["ssh:exec"] },
     { usage: "cp <from> <to>", key: "cp", needs: ["ssh:files"] },

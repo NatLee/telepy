@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Terminal, Trash2, Save, Loader2, X, ScreenShare } from "lucide-react";
+import { Trash2, Save, Loader2, X, ScreenShare } from "lucide-react";
 import { Section } from "@/components/ui/section";
 import { SplitOpen, defaultDeviceUser, lanTerminalUrl } from "@/components/network/HostOpen";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { LanCommands } from "@/components/network/LanCommands";
+import { HostWeb } from "@/components/network/HostWeb";
 import { sessionLabel } from "@/components/network/TerminalDock";
 import { LanAuthSelect } from "@/components/tunnels/LanAuthField";
 import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
@@ -29,7 +30,9 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { desktopPorts } from "@/lib/desktop";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
-import { hasSsh, hostName, isValidLogin } from "@/lib/lanConnect";
+import { hasSsh, hostKind, hostName, isValidLogin } from "@/lib/lanConnect";
+import { hasWeb } from "@/lib/lanWeb";
+import { KIND_ICON } from "@/components/network/TopologyTree";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
@@ -66,13 +69,15 @@ interface Props {
     /** 跳到終端機頁之前（記到「最近用過」）。/ Before leaving for the terminal page (remembered as recently used). */
     onNavigate?: () => void;
     onOpenTerminal: (req: OpenTerminalRequest) => boolean;
+    /** 在本頁 dock 的遠端瀏覽器打開這台主機的一個網頁（經 `deviceUser`）。/ Open one of its pages in the dock's remote browser. */
+    onOpenWeb: (req: { tunnel: TopologyTunnel; host: LanHost; url: string; deviceUser: string }) => void;
     onShowSession: (key: number) => void;
     loadConnectTarget: (tn: TopologyTunnel, deviceUser: string | null) => Promise<ConnectTarget>;
     updateHost: (h: LanHost, input: HostInput) => Promise<FormErrors | null>;
     deleteHost: (h: LanHost) => Promise<boolean>;
 }
 
-export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onShowSession, loadConnectTarget, updateHost, deleteHost }: Props) {
+export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost }: Props) {
     const { t, locale } = useI18n();
     const [tab, setTab] = useState<HostPanelTab>(initialTab);
     // 同一台主機上再從列表要求別的分頁。/ Another tab requested for the same host from a list row.
@@ -135,6 +140,21 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
         }
     };
 
+    // 有網頁、沒看到 SSH：網頁區塊排第一，終端機在下面。/ Web but no SSH seen: the web section comes first.
+    const webFirst = hasWeb(host) && !hasSsh(host);
+    const webSection = (
+        <HostWeb
+            host={host}
+            tunnel={tunnel}
+            online={online}
+            deviceUser={deviceUser}
+            first={webFirst}
+            onOpenWeb={(url) => deviceUser && onOpenWeb({ tunnel, host, url, deviceUser })}
+            onNavigate={onNavigate}
+            onShowCommands={() => setTab("commands")}
+        />
+    );
+
     const tabs = [
         { value: "terminal" as const, label: t("network.tab.terminal") },
         { value: "commands" as const, label: t("network.tab.commands") },
@@ -166,7 +186,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             {/* 標題與分頁在面板內捲動時固定在上面。/ Title and tabs stay put while the panel scrolls. */}
             <div className="z-10 rounded-t-xl bg-card xl:sticky xl:top-0">
             <header className="flex items-start gap-3 border-b border-border p-4">
-                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground" aria-hidden><Terminal size={17} /></span>
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-[17px]" aria-hidden>{KIND_ICON[hostKind(host)]}</span>
                 <div className="min-w-0 flex-1">
                     <h2 className="text-lg leading-tight text-foreground [overflow-wrap:anywhere]">{name}</h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
@@ -185,6 +205,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             <div className="p-4">
                 {tab === "terminal" && (
                     <div className="space-y-4">
+                        {/* 只有網頁、沒有 SSH 的主機（路由器、NAS 的管理頁）：網頁放最上面。/ Web-only hosts (router or NAS admin pages): the web pages first. */}
+                        {webFirst && webSection}
                         {/* 只有掃描過的主機才談得上「上次掃描沒看到」。/ Only scanned hosts have a "last scan". */}
                         {host.last_seen && !hasSsh(host) && <Callout tone="warning">{t("network.noSshSeen", { port: host.ssh_port })}</Callout>}
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
@@ -211,6 +233,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         </div>
                         {limitHit && <Callout tone="warning">{t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}</Callout>}
                         <p className="text-xs text-muted-foreground">{t("network.open.explain")}</p>
+                        {!webFirst && webSection}
                         {mine.length > 0 && (
                             <div className="space-y-1.5">
                                 <p className="text-sm text-foreground">{t("network.openSessions")}</p>
@@ -237,7 +260,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                     <div className="space-y-5">
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         {loginFields}
-                        <LanCommands host={host} target={target} login={loginOk ? cleanLogin : ""} />
+                        <LanCommands host={host} target={target} login={loginOk ? cleanLogin : ""} tunnelName={tunnel.name} />
                     </div>
                 )}
 

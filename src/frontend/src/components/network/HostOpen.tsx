@@ -11,13 +11,14 @@
  */
 import React from "react";
 import Link from "next/link";
-import { Code, ExternalLink, Terminal } from "lucide-react";
+import { Code, ExternalLink, Globe, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { lanAuthParam, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { isValidLogin } from "@/lib/lanConnect";
+import { shortUrl, webLinks } from "@/lib/lanWeb";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
 /** 裝置那一跳預設用哪個帳號（裝置的預設帳號，不能用就第一個）。/ The device account a hop uses by default. */
@@ -85,16 +86,20 @@ export function SplitOpen({ onOpenHere, href, disabled, reason, onNavigate, open
  * A host row's small icons: open here, terminal page, commands. Without a usable login (the host has no default)
  * the first two open the panel instead so you can fill one in.
  */
-export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel, onNavigate, openShells = 0, compact = false, className }: {
+export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenWeb, onOpenPanel, onNavigate, openShells = 0, compact = false, terminal = true, className }: {
     host: LanHost;
     tunnel: TopologyTunnel;
     online: boolean;
     onOpenHere: (h: LanHost) => void;
+    /** 在本頁的遠端瀏覽器打開它的第一個網頁（有網頁 port 才出現）。/ Open its first web page here (only with a web port). */
+    onOpenWeb?: (h: LanHost, url: string) => void;
     onOpenPanel: (h: LanHost, tab: "terminal" | "commands") => void;
     onNavigate?: (h: LanHost) => void;
     openShells?: number;
     /** 只有兩個終端機圖示（樹裡的主機卡；指令在面板裡）。/ Only the two terminal icons (tree entries; commands are in the panel). */
     compact?: boolean;
+    /** 沒有 SSH 的主機在樹裡只放網頁圖示。/ Without SSH the tree shows only the web icon. */
+    terminal?: boolean;
     className?: string;
 }) {
     const { t } = useI18n();
@@ -105,8 +110,23 @@ export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel
     const name = host.label || host.hostname || host.address;
     const icon = "size-8 text-muted-foreground hover:text-foreground";
     const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+    const web = onOpenWeb ? webLinks(host)[0] ?? null : null;
     return (
         <span className={cn("flex shrink-0 items-center", className)} onClick={stop} onKeyDown={stop}>
+            {web && onOpenWeb && (
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className={icon}
+                    disabled={offline || deviceUser === null}
+                    onClick={() => onOpenWeb(host, web.url)}
+                    aria-label={t("network.web.openFor", { name, url: shortUrl(web.url) })}
+                    title={offline ? t("network.deviceOffline") : t("network.web.openFor", { name, url: shortUrl(web.url) })}
+                >
+                    <Globe size={15} />
+                </Button>
+            )}
+            {terminal && <>
             <Button
                 variant="ghost"
                 size="icon"
@@ -144,6 +164,7 @@ export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel
                     <ExternalLink size={15} />
                 </Button>
             )}
+            </>}
             {!compact && <Button variant="ghost" size="icon" className={icon} onClick={() => onOpenPanel(host, "commands")} aria-label={t("network.open.commandsFor", { name })} title={t("network.open.commands")}>
                 <Code size={15} />
             </Button>}
