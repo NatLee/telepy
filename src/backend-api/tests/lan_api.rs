@@ -79,10 +79,11 @@ fn write_exec(path: &std::path::Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// 辨識：使用者自己列的、沒先說話的 port 收到一個 GET（帶 Telepy 的 User-Agent），標題 / Server 存成服務、認出產品；
-/// SSH port 只聽 banner、從不收到東西；`identify: false` 就什麼都不送。
-/// Identify: a listed, silent port gets one GET (Telepy's user agent); title and Server become a service and the
-/// product is recognised; the SSH port is only listened to; `identify: false` sends nothing.
+/// 辨識：使用者自己列的、沒先說話的 port 收到一個 GET（預設是一般瀏覽器的 User-Agent，站台設定換得掉），標題 / Server
+/// 存成服務、認出產品；SSH port 只聽 banner、從不收到東西；`identify: false` 就什麼都不送。
+/// Identify: a listed, silent port gets one GET (an ordinary browser's user agent unless the site setting says
+/// otherwise); title and Server become a service and the product is recognised; the SSH port is only listened to;
+/// `identify: false` sends nothing.
 #[tokio::test]
 async fn a_scan_recognises_web_pages_and_only_listens_elsewhere() {
     let Some(lab) = Lab::start().await else { return };
@@ -111,7 +112,8 @@ async fn a_scan_recognises_web_pages_and_only_listens_elsewhere() {
     assert_eq!(wait_scan(app, &alice.token, id).await["phase"], "done");
     let got = requests.lock().unwrap().clone();
     assert_eq!(got.len(), 1, "one GET for the web port: {got:?}");
-    assert!(got[0].starts_with("GET / HTTP/1.1\r\n") && got[0].contains("User-Agent: Telepy-LAN-scan"), "{}", got[0]);
+    let browser = format!("User-Agent: {}\r\n", telepy_server::lan::fingerprint::DEFAULT_USER_AGENT);
+    assert!(got[0].starts_with("GET / HTTP/1.1\r\n") && got[0].contains(&browser) && !got[0].contains("Telepy"), "an ordinary browser visit: {}", got[0]);
     let h = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token)).await.json["hosts"][0].clone();
     let page = h["services"].as_array().unwrap().iter().find(|s| s["port"] == web).cloned().unwrap_or_default();
     assert_eq!((page["proto"].as_str(), page["status"].as_i64(), page["title"].as_str(), page["server"].as_str()), (Some("http"), Some(200), Some("pve - Proxmox Virtual Environment"), Some("lab-web/1.0")), "{h}");
@@ -123,6 +125,16 @@ async fn a_scan_recognises_web_pages_and_only_listens_elsewhere() {
     let (err, v) = call(app, &token, "lan_hosts", json!({"tunnel_id": id})).await;
     assert!(!err, "{v}");
     assert_eq!(v["hosts"][0]["identity"]["product"], "Proxmox VE");
+
+    // 管理員填了自己的 User-Agent：下一次掃描就帶它。/ The admin's own User-Agent goes out with the next scan.
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"lan_scan_user_agent": "Acme-Inventory/2.0"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/scan"), Some(&alice.token), json!({"subnets": ["127.0.0.1/32"], "ports": [nas.port, web]})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    assert_eq!(wait_scan(app, &alice.token, id).await["phase"], "done");
+    let got = requests.lock().unwrap().clone();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(got[1].contains("\r\nUser-Agent: Acme-Inventory/2.0\r\n"), "{}", got[1]);
 }
 
 /// 裝置自己的服務、預設閘道、跟前一次掃描比變了什麼。裝置是真的 `/bin/sh`，`ss` / `ip` 用 `<home>/bin` 的假指令回固定內容

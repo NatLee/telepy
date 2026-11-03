@@ -31,6 +31,8 @@ const KEY_HOMES: Record<string, SiteTabId> = {
     user_key_max_days: "general",
     lan_scan_enabled: "devices",
     device_ip_lookup_url: "devices",
+    // 區網掃描辨識網頁時帶的 User-Agent。/ The LAN scan's identify User-Agent.
+    lan_scan_user_agent: "devices",
     carrier_auto_update: "devices",
     // GeoIP 與網卡廠商表的每月更新（面板在伺服器健康頁）。/ Monthly GeoIP and vendor data updates (the panel is on Server health).
     datasets_auto_update: "devices",

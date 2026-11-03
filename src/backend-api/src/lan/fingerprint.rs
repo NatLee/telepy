@@ -64,12 +64,45 @@ pub fn worth_a_get(port: u16, listed: bool, spoke: bool) -> bool {
     super::web::web_scheme(port).is_some() || listed
 }
 
-/// 送給網頁 port 的請求：最小的 GET，帶 Telepy 的 User-Agent（主機的紀錄裡看得出是誰）。
-/// The request for a web port: a minimal GET with Telepy's User-Agent (so the host's log says who asked).
-pub fn http_request(host: &str, port: u16, default_port: bool) -> Vec<u8> {
+/// 辨識網頁時預設的 User-Agent：一般的桌面 Chrome（Windows），主機的紀錄裡看起來就是一次普通的瀏覽。站台設定
+/// `lan_scan_user_agent` 可以換成別的；舊了也無妨，常見的版本一樣常見。
+/// The default User-Agent of the identify request: an ordinary desktop Chrome on Windows, so the host's log shows an
+/// ordinary visit. The site setting `lan_scan_user_agent` replaces it; an older version is still a common one.
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+
+/// User-Agent 最長幾個字元（站台設定的上限）。/ The longest User-Agent the site setting takes.
+pub const USER_AGENT_MAX: usize = 256;
+
+/// 站台設定的 User-Agent：去頭尾空白，留空 = 用預設；只能是看得見的 ASCII 與空白——它會原封不動放進 HTTP 請求，
+/// 換行就能多塞一個標頭。
+/// The site setting's User-Agent: trimmed, blank = the default; visible ASCII and spaces only — it goes into the HTTP
+/// request as is, and a line break would add a header of its own.
+pub fn check_user_agent(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    if s.chars().count() > USER_AGENT_MAX {
+        return Err(format!("Ensure this field has no more than {USER_AGENT_MAX} characters."));
+    }
+    if !s.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+        return Err("Use letters, digits, spaces and printable ASCII symbols only, on one line.".into());
+    }
+    Ok(s.to_string())
+}
+
+/// 實際送出的 User-Agent：設定留空或不合規（沒經過存檔檢查的值）= 預設。
+/// The User-Agent actually sent: the default when the setting is blank or invalid (a value that skipped the save check).
+pub fn user_agent(setting: &str) -> String {
+    match check_user_agent(setting) {
+        Ok(s) if !s.is_empty() => s,
+        _ => DEFAULT_USER_AGENT.to_string(),
+    }
+}
+
+/// 送給網頁 port 的請求：最小的 GET，帶瀏覽器一般會送的 Accept 與給定的 User-Agent（[`user_agent`] 決定）。
+/// The request for a web port: a minimal GET with a browser's usual Accept and the given User-Agent (see [`user_agent`]).
+pub fn http_request(host: &str, port: u16, default_port: bool, user_agent: &str) -> Vec<u8> {
     let h = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
     let host_header = if default_port { h } else { format!("{h}:{port}") };
-    format!("GET / HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: Telepy-LAN-scan (+https://github.com/NatLee/telepy)\r\nAccept: text/html,*/*;q=0.5\r\nConnection: close\r\n\r\n").into_bytes()
+    format!("GET / HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: {user_agent}\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nConnection: close\r\n\r\n").into_bytes()
 }
 
 /// 讀回來的 HTTP 回應 → 狀態、Server、Location、realm、`<title>`。不是 HTTP 回 None。
@@ -286,10 +319,26 @@ mod tests {
     }
 
     #[test]
-    fn the_request_names_telepy() {
-        let r = String::from_utf8(http_request("192.168.1.10", 8080, false)).unwrap();
-        assert!(r.starts_with("GET / HTTP/1.1\r\nHost: 192.168.1.10:8080\r\nUser-Agent: Telepy-LAN-scan"));
+    fn the_request_carries_the_chosen_user_agent() {
+        let r = String::from_utf8(http_request("192.168.1.10", 8080, false, DEFAULT_USER_AGENT)).unwrap();
+        assert!(r.starts_with(&format!("GET / HTTP/1.1\r\nHost: 192.168.1.10:8080\r\nUser-Agent: {DEFAULT_USER_AGENT}\r\n")));
+        assert!(!r.contains("Telepy"), "an ordinary browser visit by default");
         assert!(r.ends_with("\r\n\r\n"));
-        assert!(String::from_utf8(http_request("10.0.0.1", 80, true)).unwrap().contains("Host: 10.0.0.1\r\n"));
+        assert!(String::from_utf8(http_request("10.0.0.1", 80, true, "x")).unwrap().contains("Host: 10.0.0.1\r\nUser-Agent: x\r\n"));
+    }
+
+    #[test]
+    fn the_user_agent_setting_is_one_printable_line() {
+        assert_eq!(check_user_agent("  curl/8.7.1 ").unwrap(), "curl/8.7.1");
+        assert_eq!(check_user_agent("").unwrap(), "", "blank = the default");
+        assert!(check_user_agent("a\r\nX-Evil: 1").is_err(), "no line breaks: they would add a header");
+        assert!(check_user_agent("a\tb").is_err());
+        assert!(check_user_agent("瀏覽器").is_err(), "HTTP header values are ASCII");
+        assert!(check_user_agent(&"a".repeat(USER_AGENT_MAX)).is_ok());
+        assert!(check_user_agent(&"a".repeat(USER_AGENT_MAX + 1)).is_err());
+        assert_eq!(user_agent(""), DEFAULT_USER_AGENT);
+        assert_eq!(user_agent("Mozilla/5.0 Mine"), "Mozilla/5.0 Mine");
+        assert_eq!(user_agent("bad\nvalue"), DEFAULT_USER_AGENT, "a value that skipped the save check is not sent");
+        assert!(DEFAULT_USER_AGENT.len() <= USER_AGENT_MAX && check_user_agent(DEFAULT_USER_AGENT).is_ok());
     }
 }

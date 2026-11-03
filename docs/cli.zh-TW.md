@@ -357,7 +357,7 @@ telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # 標籤與備
 
 列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
 
-掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的請求，User-Agent 是 `Telepy-LAN-scan`。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
+掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的普通瀏覽器請求（桌面版 Chrome；管理員可以在網站設定 → 裝置與網路換成別的 User-Agent）。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
 
 掃描也會列出裝置本機在聽的服務（一列，位址是 `localhost`：只回應裝置自己 localhost 的服務也從那裡打得開，沒先說話的 port 一樣只送一個 `GET /`）、標出裝置的預設閘道，並跟前一次掃描比較。`lan scan` 最後一行會像 `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`，表格的 NOTE 欄寫 `this device`、`gateway`、`new`、`+443 -80` 或 `not seen`。只比這次掃過的網段裡的機器，port 也只比這次有探的，所以 `--ports` 給得比較少，不會算成「關了」。`lan ls` 開頭會寫上次掃描的時間、網段與閘道。
 

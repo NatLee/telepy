@@ -357,7 +357,7 @@ telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # labels and a
 
 Listing and `show` need `tunnels:read`; `scan` needs `network:scan` (add it with `telepy login --scope`). Adding and removing need `tunnels:manage`, which only API tokens can carry.
 
-By default a scan sends one `GET /` to every open web port (HTTPS ones also show their certificate) so it can tell a router from a NAS or a Proxmox host; those machines log it as a visit from the device with the user agent `Telepy-LAN-scan`. Every other port is only listened to. `--no-identify` turns the GET off.
+By default a scan sends one `GET /` to every open web port (HTTPS ones also show their certificate) so it can tell a router from a NAS or a Proxmox host; those machines log it as an ordinary browser visit from the device (desktop Chrome, unless an admin sets another user agent under Site settings → Devices & network). Every other port is only listened to. `--no-identify` turns the GET off.
 
 A scan also lists what the device itself listens on (one row, address `localhost`: services that only answer on the device's own loopback open from there too, and the silent ones get the same single `GET /`), marks the device's default gateway, and compares the result with the scan before. `lan scan` ends with a line such as `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`, and the table's NOTE column says `this device`, `gateway`, `new`, `+443 -80` or `not seen`. Only machines in the scanned networks are compared, and ports only where this scan probed them, so a shorter `--ports` list doesn't count as ports closing. `lan ls` starts with when the last scan ran, which networks and the gateway.
 

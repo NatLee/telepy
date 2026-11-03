@@ -736,6 +736,7 @@ mod tests {
             ai_max_sessions_per_user: 3,
             lan_scan_enabled: true,
             device_ip_lookup_url: String::new(),
+            lan_scan_user_agent: String::new(),
             carrier_auto_update: true,
             datasets_auto_update: true,
             notify_user_webhooks: true,

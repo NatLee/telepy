@@ -357,7 +357,7 @@ telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # ラベルと
 
 一覧と `show` に必要なのは `tunnels:read` だけで、`scan` には `network:scan` が必要です（`telepy login --scope` で追加）。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
 
-スキャンは既定で、開いている Web ポートごとに `GET /` を 1 回送ります（HTTPS なら証明書も見ます）。これでルーター、NAS、Proxmox などを見分けます。相手のマシンのログには、デバイスから User-Agent `Telepy-LAN-scan` のアクセスが 1 件残ります。ほかのポートは聞くだけです。`--no-identify` で GET を送らなくなります。
+スキャンは既定で、開いている Web ポートごとに `GET /` を 1 回送ります（HTTPS なら証明書も見ます）。これでルーター、NAS、Proxmox などを見分けます。相手のマシンのログには、デバイスからの普通のブラウザー（デスクトップ版 Chrome）のアクセスとして 1 件残ります。User-Agent は管理者がサイト設定 → デバイスとネットワークで変えられます。ほかのポートは聞くだけです。`--no-identify` で GET を送らなくなります。
 
 スキャンはデバイス自身が待ち受けているサービスも一覧にし（1 行、アドレスは `localhost`。デバイスの localhost でしか応答しないサービスもそこから開けます。最初に何も送ってこないポートには同じく `GET /` を 1 回だけ送ります）、デバイスのデフォルトゲートウェイに印を付け、その前のスキャンと比べます。`lan scan` の最後には `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).` のような行が出て、表の NOTE 列には `this device`、`gateway`、`new`、`+443 -80`、`not seen` が入ります。比べるのはスキャンしたネットワーク内のマシンだけで、ポートも今回調べたものだけなので、`--ports` を減らしても「閉じた」にはなりません。`lan ls` の先頭には前回のスキャンの日時、ネットワーク、ゲートウェイが出ます。
 

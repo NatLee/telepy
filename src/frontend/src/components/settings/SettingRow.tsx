@@ -184,6 +184,16 @@ export function SettingRow({ settingKey: key, value, meta: m, env, onToggle, onU
     // 鎖住時顯示 .env 的值（真正生效的那個）。/ Locked rows show the .env value (the one in effect).
     const shown = locked ? src.value : value;
     const current = locked ? String(shown ?? "") : edit ?? String(value ?? "");
+    // 留空代表某個內建值的字串設定（後端 meta 的 `default`，例如區網掃描的 User-Agent）：可以清空、提示文字就是那個值，
+    // 值長的話編輯器放到說明下面整列寬。
+    // String settings whose blank stands for a built-in value (meta `default`, e.g. the LAN scan's User-Agent): they
+    // may be cleared, the placeholder shows that value, and a long one gets the full-width editor.
+    const blankDefault = kind === "string" && typeof m?.default === "string" && m.default ? m.default : null;
+    const fullWidth = wide || (blankDefault?.length ?? 0) > 40;
+    // 開關一直放在說明旁邊；其他編輯器（文字、網址、秒數、下拉）在窄螢幕排到說明下面，不然說明會被擠成一行一個字。
+    // A switch always sits beside the text; other editors (text, URL, duration, select) go under it on narrow screens,
+    // where sharing the row squeezed the description to one character per line.
+    const beside = kind === "boolean" && !control;
 
     const commit = () => {
         if (locked) return;
@@ -195,7 +205,7 @@ export function SettingRow({ settingKey: key, value, meta: m, env, onToggle, onU
         } else {
             const s = raw.trim();
             // 網址欄位、可用 .env 設定的欄位可以清空（= 關閉 / 用預設）。/ URL and env-backed fields may be cleared.
-            if (!s && kind !== "url" && !env) return;
+            if (!s && kind !== "url" && !env && !blankDefault) return;
             onUpdate(key, s);
         }
     };
@@ -216,11 +226,12 @@ export function SettingRow({ settingKey: key, value, meta: m, env, onToggle, onU
     ) : kind === "integer" && SECONDS_KEY.test(key) ? (
         <DurationField key={`${String(shown)}-${locked}`} seconds={Number(shown) || 0} label={label} disabled={locked} onSave={(secs) => onUpdate(key, secs)} />
     ) : (
-        <div className="flex items-center gap-2">
+        <div className={cn("flex items-center gap-2", fullWidth && "flex-wrap")}>
             <Input
                 type={kind === "integer" ? "number" : kind === "url" ? "url" : "text"}
-                className={cn(kind === "integer" ? "w-24" : kind === "url" ? "w-56 sm:w-80" : "w-56", "h-8 max-w-full")}
+                className={cn(fullWidth ? "min-w-0 flex-1 basis-64" : kind === "integer" ? "w-24" : kind === "url" ? "w-56 sm:w-80" : "w-56", "h-8 max-w-full", fullWidth && "font-mono text-xs")}
                 value={current}
+                placeholder={blankDefault ?? undefined}
                 disabled={locked}
                 aria-label={label}
                 onChange={(e) => setEdit(e.target.value)}
@@ -232,19 +243,24 @@ export function SettingRow({ settingKey: key, value, meta: m, env, onToggle, onU
                     {t("common.save")}
                 </Button>
             )}
+            {!locked && blankDefault && String(value ?? "") !== "" && (
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setEdit(null); onUpdate(key, ""); }}>
+                    {t("settings.useDefault")}
+                </Button>
+            )}
         </div>
     );
 
     return (
         <li className="p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
-            <div className={cn("flex gap-4", wide ? "flex-col" : "items-start justify-between")}>
+            <div className={cn("flex gap-4", fullWidth ? "flex-col" : beside ? "items-start justify-between" : "flex-col sm:flex-row sm:items-start sm:justify-between")}>
                 <div className="min-w-0 flex-1">
                     <h4 className="text-[1rem] text-foreground">{label}</h4>
                     {description && <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>}
                     <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80">{key}</p>
                     {env && <EnvLine env={env} onExplain={onExplain ? () => onExplain(key) : undefined} />}
                 </div>
-                <div className={cn("min-w-0", wide ? "" : "shrink-0 pt-0.5")}>{editor}</div>
+                <div className={cn("min-w-0", fullWidth ? "" : beside ? "shrink-0 pt-0.5" : "sm:shrink-0 sm:pt-0.5")}>{editor}</div>
             </div>
         </li>
     );
