@@ -253,6 +253,12 @@ To upgrade, run `git pull && docker compose up -d --build`. The database catches
 - [How the backend reaches devices](./docs/device-connections.md)
 - Release notes: [GitHub Releases](https://github.com/NatLee/telepy/releases)
 
+## Sponsoring
+
+Telepy is written in spare time and given away under the AGPL. If it has saved you a trip to the server room, or a phone call to whoever has the key to it, you can chip in. Ko-fi takes one-off tips, Liberapay small recurring donations.
+
+<p><a href="https://ko-fi.com/natlee_"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support Telepy on Ko-fi" height="30"></a> <a href="https://liberapay.com/natlee/donate"><img src="https://liberapay.com/assets/widgets/donate.svg" alt="Donate to Telepy on Liberapay" height="30"></a></p>
+
 ## Contributors
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
