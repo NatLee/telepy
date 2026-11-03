@@ -91,8 +91,10 @@ export function ConnectionTab({ tunnel, active, manager, onChanged }: Props) {
                 {picture && <WayInLanes way={picture.way} blocked={picture.blocked} sshPort={v?.server_port} />}
 
                 {/* 換：擁有者 / Admin 直接在這裡選。/ Switching: owners / Admins pick right here. */}
+                {/* 卡片裡的下半段：細線拉到卡片兩邊，看得出「現在」和「改成」是兩件事。
+                    The card's lower part: the hairline runs edge to edge, so "right now" and "change it" read as two things. */}
                 {manager ? (
-                    <div className="space-y-3 border-t border-border pt-4">
+                    <div className="-mx-4 space-y-3 border-t border-border px-4 pt-4 sm:-mx-5 sm:px-5">
                         <div>
                             <p className="text-sm text-foreground">{t("wayIn.tab.change")}</p>
                             <p className="text-xs text-muted-foreground">{t("wayIn.tab.changeHint")}</p>

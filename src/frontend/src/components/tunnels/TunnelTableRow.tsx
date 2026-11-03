@@ -3,18 +3,19 @@
  * 名稱 + 釘選 / 標籤 + 說明；狀態 + 延遲 / 連線方式（離線時先寫最後上線）；埠 + 作業系統 / 外網與內網 IP，後面接要注意
  * 的事（host key 變了是紅框；裝置警告、要改的服務名、舊名稱是警示色的字）；我的關係與分享 / 誰在用；帶標籤的開啟按鈕
  * 與「更多」選單。以前每一樣都是一個小框往下堆（一列堆到十個）：灰框像雜訊、一列高到一頁放不下幾條；現在小框只留給
- * 罕見又一定要看到的（host key）。
+ * 罕見又一定要看到的（host key）。整列點了就進通道頁面（按鈕那一欄除外）。
  * Tunnel table row (list view, ≥1200px): every column is a primary line plus a quiet one, so a row is two lines tall.
  * Name + pin / labels + description; status + latency / the way in (last seen first when offline); port + OS / public and
  * LAN IP, then what needs attention (a changed host key stays a red chip; device warnings, a service name to change and
  * an older name are warning-coloured words); my relation + sharing / who is using it; labelled open buttons and the
  * "More" menu. Each item used to be its own chip stacked downwards (ten per row): grey boxes read as noise and a page
- * held only a few rows. Chips are kept only for the rare, must-see flag.
+ * held only a few rows. Chips are kept only for the rare, must-see flag. A click anywhere on the row (but the buttons
+ * column) opens the tunnel's page.
  */
 import React from "react";
 import Link from "next/link";
 import { tunnelPageUrl } from "@/lib/tunnelPage";
-import { Server } from "lucide-react";
+import { ChevronRight, Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
@@ -29,6 +30,7 @@ import { DeviceOsChip, TransportBadge } from "@/components/tunnels/DevicePlatfor
 import { SshNameChip } from "@/components/tunnels/TunnelNameHelp";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
+import { useRowLink } from "@/hooks/useRowLink";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
@@ -48,8 +50,10 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
     const { t } = useI18n();
     const health = liveHealth(tunnel, isActive);
     const openDevice = () => actions.onDetails(tunnel.id, "device");
+    const href = tunnelPageUrl(tunnel.id);
+    const open = useRowLink(href);
     return (
-        <tr data-refresh-item className="group transition-colors hover:bg-surface">
+        <tr data-refresh-item {...open} className="group cursor-pointer transition-colors hover:bg-surface">
             {/* 名稱 + 釘選 / 標籤 + 說明 / Name + pin / labels + description */}
             <td className="px-3 py-2 align-top">
                 <div className="flex min-w-0 items-start gap-2.5">
@@ -58,10 +62,11 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     </div>
                     <div className="min-w-0 max-w-[18rem]">
                         <div className={cn(LINE, "gap-1")}>
-                            <p className="min-w-0 truncate text-sm text-foreground" title={tunnel.host_friendly_name}>
-                                <Link href={tunnelPageUrl(tunnel.id)} prefetch={false} className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                            <p className="flex min-w-0 items-center text-sm text-foreground" title={tunnel.host_friendly_name}>
+                                <Link href={href} prefetch={false} className="min-w-0 truncate rounded-sm underline-offset-4 group-hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
                                     {tunnel.host_friendly_name}
                                 </Link>
+                                <ChevronRight size={14} className="shrink-0 text-muted-foreground/0 transition-colors group-hover:text-foreground" aria-hidden />
                             </p>
                             <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} className="size-5" />
                         </div>
@@ -112,7 +117,8 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     </div>
                 )}
             </td>
-            <td className="px-3 py-2 align-middle whitespace-nowrap text-right">
+            {/* 按鈕欄：點空白處也不換頁。/ The buttons column: a click on its gaps never navigates. */}
+            <td data-row-ignore className="cursor-auto px-3 py-2 align-middle whitespace-nowrap text-right">
                 <div className="flex items-center justify-end gap-1.5">
                     <TunnelOpenButtons tunnel={tunnel} online={isActive} degraded={health === "degraded"} variant="compact" />
                     <TunnelActions tunnel={tunnel} variant="icon" {...actions} />

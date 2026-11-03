@@ -42,6 +42,7 @@ import { useI18n } from "@/lib/i18n";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { snugFits } from "@/lib/snugBody";
 import { DialogOverlay, DialogPortal } from "./dialog";
+import { SectionFlat } from "./section";
 
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
 export type ModalTone = "default" | "danger";
@@ -221,6 +222,9 @@ export function Modal({
 
     return (
         <DialogPrimitive.Root open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+            {/* 對話框本身就是一張卡片：從卡片頁面打開的也照舊畫平的區塊（React context 會穿過 portal）。
+                A dialog is already a card: its sections stay flat even when opened from a page of cards (context crosses portals). */}
+            <SectionFlat>
             <DialogPortal>
                 <DialogOverlay />
                 <DialogPrimitive.Content
@@ -321,6 +325,7 @@ export function Modal({
                     )}
                 </DialogPrimitive.Content>
             </DialogPortal>
+            </SectionFlat>
         </DialogPrimitive.Root>
     );
 }
