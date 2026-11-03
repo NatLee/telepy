@@ -28,8 +28,9 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX, ZoomIn } from "lucide-react";
+import { ALargeSmall, AppWindow, ArrowRight, Bell, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX, ZoomIn } from "lucide-react";
 import { NotifyPrefsPanel } from "@/components/notify/NotifyPrefsPanel";
+import { InstallAppPanel } from "@/components/app/InstallAppPanel";
 import { Modal } from "@/components/ui/Modal";
 import { NavTabs } from "@/components/ui/nav-tabs";
 import { Segmented } from "@/components/ui/segmented";
@@ -69,7 +70,7 @@ import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
-export type PrefsTab = "general" | "notify" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps";
+export type PrefsTab = "general" | "notify" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps" | "install";
 
 /** 從別的頁打開偏好設定的某個分頁。/ Open Preferences at a tab from another page. */
 export const OPEN_PREFS_EVENT = "telepy:open-prefs";
@@ -119,6 +120,8 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
         // 存好的登入只給遠端桌面用；那個功能被關掉就不顯示。/ Saved logins only serve remote desktops; hidden when that is off.
         ...(hasFeature(user, "remote_desktop") ? [{ value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> }] : []),
         { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
+        // 裝成 app（PWA）：這台瀏覽器怎麼裝、裝了有什麼不同。/ Install as an app (PWA): how, and what changes.
+        { value: "install" as const, label: t("prefs.tabInstall"), hint: t("prefs.tabInstallHint"), icon: <AppWindow /> },
     ];
 
     // 選到的分頁被藏起來(功能剛被關掉)就回「一般」。/ Fall back to General when the chosen tab is hidden.
@@ -230,6 +233,8 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             )}
 
             {tab === "notify" && <NotifyPrefsPanel />}
+
+            {tab === "install" && <InstallAppPanel />}
 
             {tab === "appearance" && (
                 <div className="@container space-y-5 sm:space-y-6">

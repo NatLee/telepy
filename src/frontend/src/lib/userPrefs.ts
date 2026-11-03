@@ -85,7 +85,24 @@ export function applyTheme(theme: Theme) {
     const dark = theme === "dark"
         || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", dark);
+    setThemeColor(dark);
     window.dispatchEvent(new CustomEvent<Theme>(THEME_EVENT, { detail: theme }));
+}
+
+/** 頁面底色（`--background`，亮 / 暗；後端 `app_manifest.rs` 同一組）：裝成 app 時的視窗標題列、手機的狀態列。
+ *  The page background (light / dark; the same pair as the backend's `app_manifest.rs`): an installed app's title bar
+ *  and a phone's status bar. */
+export const THEME_COLORS = { light: "#fbf9f8", dark: "#110f0d" } as const;
+
+/** 跟著主題換 `<meta name="theme-color">`（繪製前 script 先放好一個）。/ Follow the theme in `<meta name="theme-color">`. */
+export function setThemeColor(dark: boolean) {
+    let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!meta) {
+        meta = document.createElement("meta");
+        meta.name = "theme-color";
+        document.head.appendChild(meta);
+    }
+    meta.content = dark ? THEME_COLORS.dark : THEME_COLORS.light;
 }
 
 /** 已登入時把單一偏好同步到後端;失敗不擋本機切換(下次登入會再同步)。

@@ -74,6 +74,10 @@ pub struct SiteSettings {
     pub server_public_url: String,
     /// 裝置與筆電的 SSH 連的名稱；空 = 跟網頁同一個。/ The SSH host; blank = the web host.
     pub server_ssh_host: String,
+    /// 裝成 app 時的名稱怎麼來：telepy / domain / custom（見 `app_manifest`）。/ Where the installed app's name comes from.
+    pub app_name_mode: String,
+    /// `app_name_mode = custom` 時的名稱。/ The name when `app_name_mode` is custom.
+    pub app_name: String,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -128,6 +132,8 @@ pub const FIELDS: &[&str] = &[
     "server_google_client_id",
     "server_public_url",
     "server_ssh_host",
+    "app_name_mode",
+    "app_name",
 ];
 
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
@@ -137,7 +143,8 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_file_transfer, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime, terminal_detach_max_secs, \
     signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
     client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \
-    server_gateway_proxy_protocol_from, server_log_level, server_openapi_enabled, server_google_client_id, server_public_url, server_ssh_host";
+    server_gateway_proxy_protocol_from, server_log_level, server_openapi_enabled, server_google_client_id, server_public_url, server_ssh_host, \
+    app_name_mode, app_name";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

@@ -220,3 +220,12 @@ export function detachLayers(userSecs: number, siteMax: number, policy: DetachPo
         { layer: "tunnel", value: policy, decides: by === "tunnel" },
     ];
 }
+
+/**
+ * 現在離開（關分頁 / 視窗、重新整理）會不會結束 shell：任何一個連著的 shell 沒有保留時間（還沒收到 shell frame、或保留 0 秒）。
+ * Whether leaving now (closing the tab / window, reloading) ends a shell: any connected shell without a grace (no shell
+ * frame yet, or 0 seconds).
+ */
+export function endsWhenLeaving(shells: readonly { connected: boolean; graceSecs: number | null }[]): boolean {
+    return shells.some((s) => s.connected && !(s.graceSecs && s.graceSecs > 0));
+}

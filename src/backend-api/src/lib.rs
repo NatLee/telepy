@@ -6,6 +6,7 @@ pub mod ai;
 pub mod api;
 pub mod api_calls;
 pub mod app;
+pub mod app_manifest;
 pub mod auth;
 pub mod carriers;
 pub mod client_ip;

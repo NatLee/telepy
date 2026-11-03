@@ -17,9 +17,14 @@ import { placeLabel, type IpGeo } from "@/lib/geo";
 import type { DeviceWarningKind } from "@/types/tunnel";
 import { useStoredChoice } from "./useStoredChoice";
 import { allowNotification, useNotifyPrefsLoader } from "./useNotifyPrefs";
+import { useAppName } from "./useAppName";
+import { showViaServiceWorker } from "@/lib/serviceWorker";
 
 const KEY = "telepy.desktopNotify";
 const CHOICES = ["on", "off"] as const;
+/** 這台裝置的通知要不要寫出指令內容（鎖定畫面別人看得到，預設不寫）。/ Whether this device's notifications show the command (off by default: others can see a lock screen). */
+const DETAILS_KEY = "telepy.notifyDetails";
+const DETAILS = ["hide", "show"] as const;
 
 export type DesktopNotifyResult = "granted" | "denied" | "default" | "unsupported";
 
@@ -44,12 +49,26 @@ export function useDesktopNotifyPref(): [boolean, (on: boolean) => Promise<Deskt
     return [on, set];
 }
 
+/**
+ * 這台裝置的系統通知要不要寫出指令內容（等你核准的指令）。每台裝置各自設：手機的鎖定畫面別人看得到，筆電不一定。
+ * 關（預設）= 只說誰、在哪條通道要執行指令，打開 Telepy 才看得到內容。
+ * Whether this device's system notifications show the command awaiting approval. Per device: a phone's lock screen is
+ * visible to others, a laptop's maybe not. Off (the default) = only who asks and on which tunnel; open Telepy to see it.
+ */
+export function useNotifyDetailsPref(): [boolean, (on: boolean) => void] {
+    const [choice, setChoice] = useStoredChoice(DETAILS_KEY, DETAILS, "hide");
+    return [choice === "show", (on: boolean) => setChoice(on ? "show" : "hide")];
+}
+
 /** 掛在 AppLayout：全站都收得到。/ Mounted in AppLayout so it works on every page. */
 export function useDesktopNotifications() {
     const { t, locale } = useI18n();
     const auth = useAuth();
     const me = auth.user?.id;
     const [enabled] = useDesktopNotifyPref();
+    const [details] = useNotifyDetailsPref();
+    // 標題 = 網站設定的 App 名稱，裝了兩台 Telepy 時分得出來。/ The title = the site's app name, so two Telepy servers differ.
+    const title = useAppName();
     // 通知偏好在這裡（AppLayout）載入一次。/ Notification preferences load here (AppLayout), once per sign-in.
     useNotifyPrefsLoader(me !== undefined);
 
@@ -58,13 +77,15 @@ export function useDesktopNotifications() {
         if (!enabled || document.visibilityState === "visible") return;
         if (msg && !allowNotification(msg, "desktop", tunnelId)) return;
         try {
-            const n = new Notification("Telepy", { body, tag, icon: "/icon.svg" });
+            const n = new Notification(title, { body, tag, icon: "/icon.svg" });
             n.onclick = () => {
                 window.focus();
                 n.close();
             };
         } catch {
-            // 某些環境（例如 Android Chrome）只允許 service worker 發通知：略過。/ Some platforms need a service worker.
+            // Android 的 Chrome 只准 service worker 發通知（建構子會丟錯）：改走 `public/sw.js`。
+            // Chrome on Android only lets a service worker show notifications (the constructor throws): use `public/sw.js`.
+            void showViaServiceWorker(title, { body, tag, icon: "/icons/icon-192.png" });
         }
     };
 
@@ -81,7 +102,8 @@ export function useDesktopNotifications() {
             const approvers = Array.isArray(msg.approver_ids) ? (msg.approver_ids as number[]) : [];
             if (!req || me === undefined || !approvers.includes(me) || (req.user.id === me && req.source === "terminal")) return;
             const command = req.command.length > 80 ? `${req.command.slice(0, 80)}…` : req.command;
-            show(`command-${req.id}`, t("notify.commandApproval", { user: req.user.username, command, name: req.tunnel_name ?? "" }), msg);
+            const vars = { user: req.user.username, command, name: req.tunnel_name ?? "" };
+            show(`command-${req.id}`, details ? t("notify.commandApproval", vars) : t("notify.commandApprovalHidden", vars), msg);
         },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_HEALTH]: (msg: NotificationPayload) => {
             if (msg.health === "degraded" && msg.tunnel_id !== undefined && typeof msg.name === "string") {
