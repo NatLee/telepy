@@ -33,6 +33,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(check_host))
         .routes(routes!(watch_host, unwatch_host))
         .routes(routes!(wake_host))
+        .routes(routes!(os_host))
         .routes(routes!(topology))
 }
 
@@ -122,8 +123,18 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui, meta: Option<&db::
         "checked_at": opt_db_to_iso(&h.checked_at, tz),
         "notes": h.notes,
         "labels": h.label_list(),
+        "os_check": os_check_json(h.os_check.as_deref(), tz),
         "created_at": db_to_iso(&h.created_at, tz),
     })
+}
+
+/// 存著的「這台跑什麼系統」（時間換成 ISO）。/ The stored OS check, its time as ISO.
+fn os_check_json(raw: Option<&str>, tz: i32) -> Value {
+    let Some(mut v) = raw.and_then(|r| serde_json::from_str::<Value>(r).ok()) else { return Value::Null };
+    if let Some(at) = v.get("at").and_then(Value::as_str).map(str::to_string) {
+        v["at"] = json!(db_to_iso(&at, tz));
+    }
+    v
 }
 
 /// 一串主機的 JSON，加上「我有沒有在注意它」。/ Hosts as JSON, plus whether I watch each one.
@@ -554,6 +565,59 @@ async fn unwatch_host(State(state): State<AppState>, AuthUser(user): AuthUser, P
     Ok(Json(json!({ "watched": false })))
 }
 
+/// 這台跑什麼系統（`lan::os`）：使用者對這一台按了才跑，跟掃描同一套權限（owner / ADMIN + 站台開關）。
+/// Which OS this host runs (`lan::os`): only on request for this one host, with the scan's rules (owner / ADMIN + the site switch).
+#[utoipa::path(post, path = "/api/reverse/server/{id}/lan/hosts/{host_id}/os", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), request_body = super::schemas::LanOsRequest, responses(
+    (status = 200, description = "The host with its `os_check` (family, name, confidence and every clue)", body = super::schemas::LanHost),
+    (status = 400, description = "lan_check_address (private IPv4 only) / device_offline / username / smb_port", body = super::schemas::LanError),
+    (status = 403, description = "lan_scan_disabled / lan_scan_forbidden / step_up_required", body = super::schemas::LanError),
+    (status = 404, body = super::schemas::ErrorBody),
+    (status = 409, description = "lan_os_running (already checking this host)", body = super::schemas::LanError),
+    (status = 502, description = "lan_os_failed (the device could not run the command)", body = super::schemas::LanError),
+))]
+async fn os_host(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path((id, host_id)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, eff) = visible(&state, user.id, id).await?;
+    super::step_up::check(&state, user.id, &t, &headers)?;
+    let h = own_host(&state, t.id, host_id).await?;
+    let smb_port = match body.get("smb_port") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0).ok_or_else(|| lan_error(StatusCode::BAD_REQUEST, "smb_port", "smb_port must be 1–65535."))?),
+    };
+    Ok(Json(identify_os(&state, &user, &t, eff, &h, json_str(&body, "username").as_deref(), smb_port).await?))
+}
+
+/// 檢查的共用部分（網頁、CLI、MCP）。/ The shared part (web, CLI, MCP).
+pub async fn identify_os(state: &AppState, user: &User, t: &Tunnel, eff: permissions::Effective, h: &LanHost, username: Option<&str>, smb_port: Option<u16>) -> ApiResult<Value> {
+    if let Some(e) = scan_denied(state, eff).await? {
+        return Err(e);
+    }
+    let ip: Ipv4Addr = h.address.parse().ok().filter(|ip| lan::is_scannable(*ip)).ok_or_else(|| lan_error(StatusCode::BAD_REQUEST, "lan_check_address", "Only hosts with a private IPv4 address can be checked."))?;
+    let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
+    let account = permissions::choose_username(&allowed, t.default_username_id, username, &t.host_friendly_name).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "username", e))?;
+    if let Some(listen) = state.status.listen_ports() {
+        if !u16::try_from(t.reverse_port).map(|p| listen.contains(&p)).unwrap_or(false) {
+            return Err(lan_error(StatusCode::BAD_REQUEST, "device_offline", format!("The device '{}' is offline.", t.host_friendly_name)));
+        }
+    }
+    let _running = lan::os_probe::begin(h.id).ok_or_else(|| lan_error(StatusCode::CONFLICT, "lan_os_running", "Telepy is already checking this host."))?;
+    let vendor = h.mac.as_deref().and_then(|m| state.oui.vendor(m));
+    let check = lan::os_probe::run(state, t, h, &account, smb_port, vendor.as_deref(), &user.username).await.map_err(|e| lan_error(StatusCode::BAD_GATEWAY, "lan_os_failed", format!("{e:#}")))?;
+    let raw = serde_json::to_string(&check).unwrap_or_default();
+    db::lan::save_os_check(&state.db, h.id, &raw).await?;
+    let sources: Vec<&str> = check.evidence.iter().filter(|e| e.weight > 0).map(|e| e.source.as_str()).collect();
+    let said = match &check.name {
+        Some(n) => format!("{n} ({} confidence)", check.confidence),
+        None => check.family.clone().map(|f| format!("a {f} system ({} confidence)", check.confidence)).unwrap_or_else(|| "nothing conclusive".into()),
+    };
+    let msg = format!("{} checked which OS {ip} runs: {said}; clues: {}", user.username, if sources.is_empty() { "none".to_string() } else { sources.join(", ") });
+    state.gateway.event("lan_os", None, u16::try_from(t.reverse_port).ok(), Some(t.id), msg).await;
+    let fresh = db::lan::host_by_id(&state.db, h.id).await?.ok_or_else(ApiError::drf_not_found)?;
+    let meta = db::lan::meta(&state.db, t.id).await?;
+    let watched = db::lan::watched_by(&state.db, user.id, t.id).await?;
+    notify_updated(state, t).await;
+    Ok(hosts_json(&[fresh], state.config.tz_offset_minutes, &state.oui, meta.as_ref(), &watched).remove(0))
+}
+
 /// 喚醒：在裝置上跑一段指令送出 Wake-on-LAN 封包（`lan::wake`）。誰能用：看得到這條隧道、而且在這裡有能用的帳號的人
 /// （跟開終端機一樣：能在那個帳號跑指令的人本來就能自己送）。
 /// Wake: run a command on the device that sends the Wake-on-LAN packet (`lan::wake`). Who: anyone who can see the tunnel
@@ -691,6 +755,7 @@ mod tests {
             checked_at: None,
             notes: None,
             labels: "[]".into(),
+            os_check: None,
             created_at: "2026-10-24 00:00:00.000000".into(),
             updated_at: "2026-10-24 00:00:00.000000".into(),
         };

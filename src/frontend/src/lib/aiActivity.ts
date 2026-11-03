@@ -35,6 +35,7 @@ const CATEGORIES: Record<string, ToolCategory> = {
     lan_hosts: "read",
     lan_scan: "read",
     lan_check: "read",
+    lan_os: "read",
     lan_wake: "exec",
 };
 

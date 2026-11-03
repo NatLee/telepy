@@ -674,3 +674,49 @@ async fn cp_reaches_a_lan_host_through_the_device() {
     let o = telepy(h, &["cp", "box/nope:x.txt", back.to_str().unwrap()]).await;
     assert!(o.stderr.contains("No LAN host 'nope' behind box"), "{}", o.stderr);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lan_os_names_the_system_from_its_clues() {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::AsyncWriteExt;
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service])], MachineOpts { allow_jump: true, shell: true, ..Default::default() }).await;
+    // 假的 ping / nmap / sudo：測試不對這台電腦的網路 ping、也不跑真的 nmap。/ Stubs: never ping this computer's network or run nmap.
+    let bin = m.account_home("pi").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for (name, body) in [("ping", "echo '64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.1 ms'"), ("nmap", "exit 1"), ("sudo", "exit 1")] {
+        let p = bin.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    let greeting = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ssh_port = greeting.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = greeting.accept().await {
+            let _ = s.write_all(b"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10\r\n").await;
+        }
+    });
+    let r = lab.app.post(&format!("/api/reverse/server/{}/lan/hosts", dev.tunnel_id), Some(&alice.token), json!({"address": "127.0.0.1", "label": "web1", "ssh_port": ssh_port})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "os", "scopes": ["tunnels:read", "network:scan"], "expires_at": expires})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    let o = telepy(h, &["lan", "os", "box", "web1"]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.starts_with("Ubuntu 22.04 LTS (high confidence)"), "{}", o.stdout);
+    assert!(o.stdout.contains("SSH greeting: OpenSSH_8.9p1 Ubuntu-3ubuntu0.10") && o.stdout.contains("ping TTL 64"), "{}", o.stdout);
+    assert!(o.stdout.contains("nmap is on the device but needs root"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "show", "box", "web1"]).await;
+    assert!(o.stdout.contains("os: Ubuntu 22.04 LTS (high confidence"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "os", "box", "web1", "--json"]).await;
+    let v: Value = serde_json::from_str(&o.stdout).unwrap_or_else(|_| panic!("{}", o.stdout));
+    assert_eq!(v["family"], "linux");
+}

@@ -351,6 +351,7 @@ telepy lan check box 192.168.1.20          # 現在只再探那一台（network:
 telepy lan schedule box --every 6h         # 裝置在線時用你的身分定時重掃（1h、6h、12h、1d、1w；off 停掉）
 telepy lan watch box 192.168.1.20          # 掃描發現它不見、回來或 port 變了就告訴你
 telepy lan wake box 192.168.1.20           # 從裝置送網路喚醒封包（ssh:exec；需要掃描讀到的 MAC）
+telepy lan os box 192.168.1.20             # 它跑什麼系統：ping 的 TTL、SSH 問候、SMB 名稱，裝置能的話再加 nmap -O（network:scan）
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # 標籤與備註（tunnels:manage）
 ```
 
@@ -433,6 +434,7 @@ telepy browse close "$ID"
 | `telepy lan schedule <tunnel>` | 看或設定定時重掃；`--every 1h\|6h\|12h\|1d\|1w\|off`、`--subnet`、`--ports`、`--no-identify`、`--account` | 看要 `tunnels:read`，設定要 `network:scan` |
 | `telepy lan watch <tunnel> <host>` | 掃描發現它不見、回來或 port 變了就告訴你；`--off` | `tunnels:manage` |
 | `telepy lan wake <tunnel> <host>` | 從裝置送網路喚醒封包（用它上面的 wakeonlan、etherwake 或 python3）；`--account` | `ssh:exec` |
+| `telepy lan os <tunnel> <host>` | 一台主機跑什麼系統，只在你要求時做：裝置 ping 它、讀它的 SSH 問候、問它 SMB 的 Windows 組建號（不登入），裝置上有 nmap 而且是 root 時也跑 `nmap -O`；印出猜測與每條線索；`--smb-port`、`--account`、`--json` | `network:scan` |
 | `telepy lan edit <tunnel> <host>` | 改名稱、登入帳號、SSH port、標籤（`--labels a,b`）或備註（`--note`）；給空值就清掉 | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | 用 id、位址或標籤移除主機 | `tunnels:manage` |
 | `telepy browse <target> [url]` | 開一個腳本化瀏覽器並印出它的 id（等同 `browse open`） | `browser:use` |

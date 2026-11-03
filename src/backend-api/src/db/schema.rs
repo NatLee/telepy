@@ -1151,6 +1151,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 使用者寫的備註與標籤（JSON 陣列，跟通道標籤同規則）。/ The person's notes and labels (JSON array, tunnel label rules).
     ("telepy_lan_host", "notes", "text NULL"),
     ("telepy_lan_host", "labels", "text NOT NULL DEFAULT '[]'"),
+    // 「這台跑什麼系統」的結果（JSON `lan::os::OsCheck`；使用者按了才有）。/ The OS check's result (JSON), only when someone asked.
+    ("telepy_lan_host", "os_check", "text NULL"),
     // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
     ("telepy_device_install", "join_facts", "text NULL"),
     ("telepy_device_install", "join_facts_at", "datetime NULL"),

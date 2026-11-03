@@ -351,6 +351,7 @@ telepy lan check box 192.168.1.20          # probe just that machine again now (
 telepy lan schedule box --every 6h         # rescan as you while the device is online (1h, 6h, 12h, 1d, 1w; off stops)
 telepy lan watch box 192.168.1.20          # be told when a scan finds it gone, back or with other ports
 telepy lan wake box 192.168.1.20           # send a Wake-on-LAN packet from the device (ssh:exec; needs the MAC from a scan)
+telepy lan os box 192.168.1.20             # which OS it runs: ping TTL, SSH greeting, SMB name, nmap -O when the device can (network:scan)
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # labels and a note (tunnels:manage)
 ```
 
@@ -433,6 +434,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy lan schedule <tunnel>` | Show or set the scheduled rescan; `--every 1h\|6h\|12h\|1d\|1w\|off`, `--subnet`, `--ports`, `--no-identify`, `--account` | `tunnels:read` to show, `network:scan` to set |
 | `telepy lan watch <tunnel> <host>` | Be told when scans find it gone, back or with other ports; `--off` | `tunnels:manage` |
 | `telepy lan wake <tunnel> <host>` | Send a Wake-on-LAN packet from the device (wakeonlan, etherwake or python3 on it); `--account` | `ssh:exec` |
+| `telepy lan os <tunnel> <host>` | Which OS one host runs, on request only: a ping from the device, its SSH greeting, its SMB's Windows build (no login), `nmap -O` when the device has nmap and root; prints the guess and every clue; `--smb-port`, `--account`, `--json` | `network:scan` |
 | `telepy lan edit <tunnel> <host>` | Change the name, login, SSH port, labels (`--labels a,b`) or note (`--note`); an empty value clears it | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | Remove a host by id, address or label | `tunnels:manage` |
 | `telepy browse <target> [url]` | Open a scripted browser and print its id (same as `browse open`) | `browser:use` |

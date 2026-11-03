@@ -94,7 +94,7 @@ MCP client ── POST /mcp ─────────────────�
 | `tunnels:read` | トンネルの閲覧 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
 | `ssh:exec` | デバイスでコマンドを実行 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
 | `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
-| `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`（自分が所有する、または ADMIN のトンネルのみ） |
+| `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`、`lan_os`（自分が所有する、または ADMIN のトンネルのみ） |
 | `browser:use` | デバイスとして Web を閲覧 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 承認ページでは、`ssh:exec`、`ssh:files`、`browser:use` に「変更可能」、残りの 2 つに「読み取りのみ」のタグが付きます。
@@ -160,6 +160,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | デバイスの sshd 経由で LAN をスキャンし、見つかったものをホスト一覧に保存する。`identify`（既定で有効）では開いている Web ポートごとに `GET /` を 1 回送り（HTTPS なら証明書も見て）、`lan_hosts` で各マシンが何かわかるようにする |
 | `lan_check(tunnel_id, host, ports?, username?)` | LAN ホスト 1 台を今すぐ再確認します（id、アドレス、ラベルで指定）。開いていたポートと既定のポートを、そのアドレスだけ数秒で調べます。ルールは `lan_scan` と同じ。今の状態（応答がなければ `missing`）と変化を返します |
+| `lan_os(tunnel_id, host, username?, smb_port?)` | LAN ホスト 1 台の OS を、そのホストを指定したときだけ調べます（スキャンでは行いません）。デバイスが一度 ping し（TTL）、Telepy が SSH のあいさつ（ディストリビューションはリリースを書きます）を読み、SMB が開いていればログイン前に SMB サーバーが送る Windows のビルドとコンピューター名を読みます（ログインは試みません）。デバイスに nmap があり root かパスワードなしの sudo で動かせれば `nmap -O` も実行します。推定（系統・名前・確度）と、すべての手がかりとその重みを返し、ホストに保存します。ルールは `lan_scan` と同じ |
 | `lan_wake(tunnel_id, host, username?)` | デバイスから LAN ホストへ Wake-on-LAN パケットを送ります（デバイス上で wakeonlan・etherwake・python3、Windows は PowerShell）。`ssh:exec`、デバイスで使えるアカウント、以前のスキャンで読み取った MAC が必要です。起動には通常 10〜60 秒かかるので、その後 `lan_check` で確認します |
 
 - 対象はプライベートレンジのみ、最大 1024 アドレスで、1 回およそ 1 分かかります。
@@ -257,7 +258,7 @@ Telepy は 30 秒ごとに確認します。grant やトークンを失効させ
 | --- | --- |
 | `ssh:exec` のツール | Web ターミナル |
 | `ssh:files` のツール | ファイルマネージャー |
-| `lan_hosts`、`lan_scan`、`lan_check`（`lan_files` はファイルマネージャーも必要） | LAN 探索 |
+| `lan_hosts`、`lan_scan`、`lan_check`、`lan_os`（`lan_files` はファイルマネージャーも必要） | LAN 探索 |
 | `browser:use` のツール | リモートブラウザ |
 
 アプリにスコープが与えられていないだけの場合は、再接続してそのスコープを承認してもらうよう、エラーがエージェントに伝えます。

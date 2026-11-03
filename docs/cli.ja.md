@@ -351,6 +351,7 @@ telepy lan check box 192.168.1.20          # そのマシンだけを今すぐ�
 telepy lan schedule box --every 6h         # デバイスがオンラインの間、あなたとして定期スキャン（1h、6h、12h、1d、1w。off で停止）
 telepy lan watch box 192.168.1.20          # スキャンで消えた・戻った・ポートが変わったときに知らせる
 telepy lan wake box 192.168.1.20           # デバイスから Wake-on-LAN パケットを送る（ssh:exec。スキャンで得た MAC が必要）
+telepy lan os box 192.168.1.20             # 何の OS か：ping の TTL、SSH のあいさつ、SMB の名前、デバイスにできれば nmap -O（network:scan）
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # ラベルとメモ（tunnels:manage）
 ```
 
@@ -433,6 +434,7 @@ telepy browse close "$ID"
 | `telepy lan schedule <tunnel>` | 定期スキャンの表示・設定。`--every 1h\|6h\|12h\|1d\|1w\|off`、`--subnet`、`--ports`、`--no-identify`、`--account` | 表示は `tunnels:read`、設定は `network:scan` |
 | `telepy lan watch <tunnel> <host>` | スキャンで消えた・戻った・ポートが変わったときに知らせる。`--off` | `tunnels:manage` |
 | `telepy lan wake <tunnel> <host>` | デバイスから Wake-on-LAN パケットを送る（デバイス上の wakeonlan・etherwake・python3）。`--account` | `ssh:exec` |
+| `telepy lan os <tunnel> <host>` | 1 台のホストの OS を、求めたときだけ調べる：デバイスからの ping、SSH のあいさつ、SMB の Windows ビルド（ログインなし）、デバイスに nmap と root があれば `nmap -O`。推定とすべての手がかりを表示。`--smb-port`、`--account`、`--json` | `network:scan` |
 | `telepy lan edit <tunnel> <host>` | 名前・ログイン・SSH ポート・ラベル（`--labels a,b`）・メモ（`--note`）を変更。空の値で消去 | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | ID、アドレス、ラベルでホストを削除 | `tunnels:manage` |
 | `telepy browse <target> [url]` | スクリプト用ブラウザーを開き、ID を表示（`browse open` と同じ） | `browser:use` |

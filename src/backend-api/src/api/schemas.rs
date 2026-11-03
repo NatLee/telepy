@@ -2913,6 +2913,9 @@ pub struct LanHost {
     pub notes: Option<String>,
     /// Labels, the tunnel label rules (at most 12)
     pub labels: Vec<String>,
+    /// The last "which OS" check (only after someone asked for this host): `{family (windows / linux / macos / bsd / network / unix), name, confidence (high / medium / low / none), evidence [{source (ttl / http / vendor / ssh / smb / nmap), text, family, name, weight}], conflict, nmap (ran / absent / unprivileged / windows), at, by}`
+    #[schema(value_type = Option<Object>)]
+    pub os_check: Option<serde_json::Value>,
     pub created_at: String,
 }
 
@@ -3031,6 +3034,14 @@ pub struct LanScanRequest {
     pub ports: Option<Vec<i64>>,
     /// Send one `GET /` to each open web port (and read HTTPS certificates) to recognise the machine; default true
     pub identify: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct LanOsRequest {
+    /// The device account to run the ping / nmap as (default: the tunnel's default)
+    pub username: Option<String>,
+    /// Ask this port's SMB server for its NTLM info (default 445 when the last scan saw it open)
+    pub smb_port: Option<i64>,
 }
 
 #[derive(ToSchema)]

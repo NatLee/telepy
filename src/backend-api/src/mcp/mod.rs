@@ -236,6 +236,18 @@ pub struct LanFilesArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct LanOsArgs {
+    /// Tunnel id from list_tunnels
+    pub tunnel_id: i64,
+    /// The host's id, address or label (from lan_hosts); private IPv4 only
+    pub host: String,
+    /// Device account the ping / nmap run as; omit for the tunnel's default
+    pub username: Option<String>,
+    /// Ask this port's SMB server for its NTLM info; omit for 445 when the last scan saw it open
+    pub smb_port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LanCheckArgs {
     /// Tunnel id from list_tunnels
     pub tunnel_id: i64,
@@ -1001,6 +1013,43 @@ impl TelepyMcp {
             Err(e) => {
                 let msg = format!("{e:#}");
                 self.audit(&p, "lan_files", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), error: Some(msg.clone()), ..Default::default() }).await;
+                Ok(fail(msg))
+            }
+        }
+    }
+
+    #[tool(description = "Find out which operating system one LAN host runs, on request for that host only (never part of a scan). The device pings it once (the TTL), Telepy reads its SSH greeting (distributions tag their release) and, when SMB is open, the name and Windows build its SMB server sends before any login (no login is tried); nmap -O runs too when the device has nmap and root or passwordless sudo. Returns the guess (family, name, confidence high / medium / low / none) with every clue and its weight, and stores it on the host. Same rules as lan_scan (owner or ADMIN, scope network:scan).", annotations(title = "Identify LAN host OS", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
+    async fn lan_os(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<LanOsArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if let Some(r) = refused(&p, "network:scan") {
+            return Ok(r);
+        }
+        let db = &self.state.db;
+        let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
+        if !p.tunnel_allowed(args.tunnel_id) {
+            return Ok(not_found());
+        }
+        let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
+        let Some(eff) = permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten() else { return Ok(not_found()) };
+        if tunnel.require_step_up {
+            return Ok(fail(STEP_UP_REFUSAL.to_string()));
+        }
+        let hosts = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default();
+        let raw = args.host.trim();
+        let Some(h) = hosts.iter().find(|h| h.id.to_string() == raw).or_else(|| hosts.iter().find(|h| h.address == raw)).or_else(|| hosts.iter().find(|h| h.label.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(raw)))).cloned() else {
+            return Ok(fail(format!("No host '{raw}' behind this tunnel. Call lan_hosts to see them.")));
+        };
+        match crate::api::lan::identify_os(&self.state, &p.user, &tunnel, eff, &h, args.username.as_deref(), args.smb_port).await {
+            Ok(host) => {
+                let os = host["os_check"].clone();
+                let detail = format!("{}: {}", h.address, os["name"].as_str().or(os["family"].as_str()).unwrap_or("nothing conclusive"));
+                self.audit(&p, "lan_os", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), ..Default::default() }).await;
+                Ok(CallToolResult::structured(json!({ "host": h.address, "os": os })))
+            }
+            Err(e) => {
+                let msg = e.body.get("error").or(e.body.get("detail")).and_then(Value::as_str).unwrap_or("The check could not run.").to_string();
+                self.audit(&p, "lan_os", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(h.address.clone()), error: Some(msg.clone()), ..Default::default() }).await;
                 Ok(fail(msg))
             }
         }

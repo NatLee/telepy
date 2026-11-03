@@ -654,6 +654,21 @@ pub enum LanAction {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Find out which OS one host runs (needs network:scan): a ping from the device, its SSH greeting, its SMB's NTLM info, nmap -O when the device has nmap and root
+    Os {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        /// Ask this port's SMB server too (default 445 when the last scan saw it open)
+        #[arg(long)]
+        smb_port: Option<u16>,
+        /// Device account to run the ping / nmap as (default: the tunnel's default)
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Change a host's name, login, SSH port, labels or note (needs tunnels:manage)
     Edit {
         #[arg(add = ArgValueCompleter::new(complete::tunnel))]
@@ -2645,6 +2660,40 @@ fn lan_scan_line(st: &Value) -> String {
 }
 
 /// `lan show` 的內容。/ The lines of `lan show`.
+/// `lan os` 的結果：猜的系統與信心、每條線索（重的在前）、矛盾、nmap 的狀況。/ The OS check, clue by clue.
+fn os_lines(os: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let conf = s(os, "confidence");
+    let head = match (s(os, "name"), s(os, "family")) {
+        ("", "") => "Nothing conclusive.".to_string(),
+        ("", f) => format!("Probably a {f} system ({conf} confidence)."),
+        (n, _) => format!("{n} ({conf} confidence)"),
+    };
+    let style = match conf {
+        "high" => color::GOOD,
+        "medium" => color::WARN,
+        _ => color::DIM,
+    };
+    out.push(color::out(style, &head));
+    let mut ev: Vec<&Value> = os["evidence"].as_array().into_iter().flatten().collect();
+    ev.sort_by_key(|e| std::cmp::Reverse(e["weight"].as_u64().unwrap_or(0)));
+    for e in ev {
+        let mark = if e["weight"].as_u64().unwrap_or(0) == 0 { "·" } else { "•" };
+        out.push(format!("  {mark} {}", s(e, "text")));
+    }
+    let conflict: Vec<&str> = os["conflict"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !conflict.is_empty() {
+        out.push(format!("  some clues point to {} instead", conflict.join(", ")));
+    }
+    out.push(match s(os, "nmap") {
+        "ran" => "  nmap -O ran on the device.".to_string(),
+        "unprivileged" => "  nmap is on the device but needs root (or passwordless sudo) for -O.".to_string(),
+        "windows" => "  a Windows device: only its ping was used.".to_string(),
+        _ => "  no nmap on the device (install it there for a stronger guess).".to_string(),
+    });
+    out
+}
+
 fn lan_show_lines(h: &Value) -> Vec<String> {
     let mut out = vec![format!("{}  {}", s(h, "address"), [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or(""))];
     if h["own"] == true {
@@ -2674,6 +2723,11 @@ fn lan_show_lines(h: &Value) -> Vec<String> {
         for (i, line) in s(h, "notes").lines().enumerate() {
             out.push(format!("  {}{line}", if i == 0 { "note: " } else { "      " }));
         }
+    }
+    if h["os_check"].is_object() {
+        let os = &h["os_check"];
+        let what = [s(os, "name"), s(os, "family")].into_iter().find(|x| !x.is_empty()).unwrap_or("unknown");
+        out.push(format!("  os: {what} ({} confidence, checked {} by {})", s(os, "confidence"), s(os, "at"), s(os, "by")));
     }
     let what = lan_what(h);
     if !what.is_empty() {
@@ -2965,6 +3019,27 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
             println!("Sent a wake-up packet for {} ({}){to} with {}.", s(h, "address"), s(&r, "mac"), s(&r, "tool"));
             eprintln!("It usually takes 10–60 s to start. Then: telepy lan check {} {}", name_of(&t), s(h, "address"));
         }
+        LanAction::Os { tunnel, host, smb_port, account, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            let mut body = json!({});
+            if let Some(a) = &account {
+                body["username"] = json!(a);
+            }
+            if let Some(p) = smb_port {
+                body["smb_port"] = json!(p);
+            }
+            eprintln!("{}", color::err(color::DIM, &format!("Asking {} through {}…", s(h, "address"), name_of(&t))));
+            let r = api.json_timeout(Method::POST, &format!("/api/reverse/server/{}/lan/hosts/{}/os", t["id"], h["id"]), Some(&body), Some(Duration::from_secs(150)))?;
+            if as_json {
+                return print_json(&r["os_check"]);
+            }
+            for line in os_lines(&r["os_check"]) {
+                println!("{line}");
+            }
+        }
         LanAction::Edit { tunnel, host, label, user, port, labels, note } => {
             let t = tunnel_of(&tunnel)?;
             let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
@@ -3177,6 +3252,26 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn os_lines_put_the_guess_first_and_the_heaviest_clues_next() {
+        let os = serde_json::json!({
+            "family": "windows", "name": "Windows 11 23H2 (build 22631)", "confidence": "high", "nmap": "absent",
+            "evidence": [
+                {"source": "ttl", "text": "ping TTL 128: starts at 128 (Windows), 0 hop(s) away", "weight": 1},
+                {"source": "smb", "text": "SMB on port 445: Windows 10.0 build 22631", "weight": 5},
+                {"source": "ssh", "text": "SSH greeting: OpenSSH_9.8 (no distribution tag)", "weight": 0}
+            ],
+            "conflict": ["linux"]
+        });
+        let lines: Vec<String> = os_lines(&os).iter().map(|l| l.replace(|c: char| c == '\x1b', "")).collect();
+        assert!(lines[0].contains("Windows 11 23H2 (build 22631) (high confidence)"), "{lines:?}");
+        assert!(lines[1].contains("• SMB on port 445") && lines[2].contains("• ping TTL") && lines[3].contains("· SSH greeting"), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("point to linux instead")));
+        assert!(lines.last().unwrap().contains("no nmap on the device"));
+        let none = os_lines(&serde_json::json!({"confidence": "none", "evidence": [], "nmap": "unprivileged"}));
+        assert!(none[0].contains("Nothing conclusive."));
+    }
 
     #[test]
     fn lan_map_draws_the_addresses() {
