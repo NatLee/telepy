@@ -51,7 +51,12 @@ const PROBLEM: Record<NonNullable<ReturnType<typeof keyProblem>>, TranslationKey
     rsaShort: "keys.problem.rsaShort",
 };
 
-export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, onUpdate: () => void, onClose: () => void) {
+/**
+ * 通道頁面的基本資料 / 裝置金鑰表單：讀 `GET …/keys/{id}`，只送改過的欄位，存好之後重讀（頁面不會關掉）。
+ * The tunnel page's basics / device-key form: reads `GET …/keys/{id}`, sends only changed fields, and reloads after a
+ * save (the page stays open).
+ */
+export function useTunnelDetails(tunnelId: number | null, onUpdate: () => void) {
     const { t } = useI18n();
     const nameError = useTunnelNameError();
     const [details, setDetails] = useState<TunnelDetails | null>(null);
@@ -63,9 +68,12 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     const [isSaving, setIsSaving] = useState(false);
     const { showSuccess, showError } = useToast();
     const { request: requestReauth, dialog: reauthDialog } = useReauth();
+    // 存好之後 +1：重讀一次，表單跟著新的值。/ Bumped after a save: reload so the form follows the new values.
+    const [version, setVersion] = useState(0);
+    const saved = () => setVersion((v) => v + 1);
 
     useEffect(() => {
-        if (!isOpen || !tunnelId) return;
+        if (!tunnelId) return;
         let cancelled = false;
         (async () => {
             setLoading(true);
@@ -91,15 +99,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, tunnelId]);
-
-    // 關閉後清掉上一條通道的資料,下次打開不會先閃一下舊內容。/ Drop the previous tunnel on close.
-    useEffect(() => {
-        if (!isOpen) {
-            setDetails(null);
-            setErrors({});
-        }
-    }, [isOpen]);
+    }, [tunnelId, version]);
 
     const canEdit = !!details && details.user_permission !== "view";
     // 裝置金鑰只給 owner / ADMIN 看、也只有他們能換。/ Only owner / ADMIN see and change the device key.
@@ -158,7 +158,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     else if (labelCheck.tooMany) liveErrors.labels = t("tunnelDetails.labelsTooMany");
     const valid = Object.keys(liveErrors).length === 0;
 
-    /** 存檔；後端擋下的欄位錯誤也回傳，讓對話框跳到那一頁。/ Save; returns the backend's field errors so the dialog can jump to their tab. */
+    /** 存檔；後端擋下的欄位錯誤也回傳，讓頁面跳到那一頁。/ Save; returns the backend's field errors so the page can jump to their tab. */
     const save = async (): Promise<TunnelFormErrors | null> => {
         if (!tunnelId || !dirty || !valid) return null;
         setIsSaving(true);
@@ -179,7 +179,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 if (Object.keys(patch).length === 0) {
                     showSuccess(t("tunnelDetails.updated"));
                     onUpdate();
-                    onClose();
+                    saved();
                     return null;
                 }
             }
@@ -197,7 +197,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
             if (res.ok) {
                 showSuccess(t("tunnelDetails.updated"));
                 onUpdate();
-                onClose();
+                saved();
                 return null;
             }
             // 欄位錯誤 {field: [msg]}:重複的別名 / 公鑰翻成好懂的句子,其餘照後端文字顯示。

@@ -1,7 +1,10 @@
 /**
- * 隧道「更多」動作選單：卡片與表格共用同一份，依用途分組，每一項都有一行說明，看得出是在哪一端做什麼。
- * The tunnel "More" menu — one menu for both card and table, grouped by purpose, every item with a one-line hint
- * so it is obvious which side (your computer / the device) it acts on.
+ * 通道的「更多」選單 = 快速入口：常用功能一鍵直達（埠轉發、SSH 設定、工具箱、裝置金鑰、區網主機、分享），再來是通道頁面的
+ * 幾個分頁（總覽、連線方式、存取、紀錄、設定），最後是離開 / 刪除。每項一行，說明放在滑鼠停留的提示裡——以前每項兩行、
+ * 十七項，比筆電螢幕還高。完整的資訊與設定在通道頁面（`/tunnels/<id>`）。
+ * The tunnel "More" menu is a quick-access menu: the frequent features one click away, then the tunnel page's main tabs,
+ * then leave / delete. One line per item with the hint as a tooltip — it used to be seventeen two-line items, taller
+ * than a laptop screen. Everything else lives on the tunnel's page (`/tunnels/<id>`).
  */
 import React from "react";
 import { Button } from "@/components/ui/button";
@@ -11,33 +14,23 @@ import {
     DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
-    DropdownMenuRadioGroup,
-    DropdownMenuRadioItem,
     DropdownMenuSeparator,
-    DropdownMenuSub,
-    DropdownMenuSubContent,
-    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
     ArrowLeftRight,
-    Bell,
-    BellOff,
     ChevronDown,
-    Clapperboard,
     FileCode2,
     FolderInput,
-    Info,
     KeyRound,
+    LayoutDashboard,
     LockKeyholeOpen,
     LogOut,
     MoreHorizontal,
-    Rocket,
     Route,
-    ScreenShare,
     ScrollText,
+    Settings,
     Share2,
-    ShieldCheck,
     Trash2,
     Users,
     Waypoints,
@@ -45,12 +38,10 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
+import type { Tunnel, TunnelActionHandlers, TunnelDetailsTab } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import type { TranslationKey } from "@/locales/en";
 import { useFeatures } from "@/hooks/useFeatures";
-import { useNotifyPrefs } from "@/hooks/useNotifyPrefs";
-import { useToast } from "@/components/ui/Toast";
-import type { MuteScope } from "@/lib/notifyPrefs";
 
 interface TunnelActionsProps extends TunnelActionHandlers {
     tunnel: Tunnel;
@@ -68,60 +59,16 @@ function ActionItem({
 }: {
     icon: LucideIcon;
     label: string;
+    /** 滑鼠停留的提示。/ The hover hint. */
     hint?: string;
     onSelect: () => void;
     destructive?: boolean;
 }) {
     return (
-        <DropdownMenuItem
-            onClick={onSelect}
-            variant={destructive ? "destructive" : "default"}
-            className="items-start gap-3 py-1.5 rounded-md"
-        >
-            <Icon className="mt-0.5" />
-            <span className="flex flex-col min-w-0 gap-0.5">
-                <span className="font-medium leading-tight">{label}</span>
-                {hint && <span className="text-[0.75rem] leading-snug text-muted-foreground whitespace-normal">{hint}</span>}
-            </span>
+        <DropdownMenuItem onClick={onSelect} variant={destructive ? "destructive" : "default"} className="gap-3 rounded-md py-1.5" title={hint}>
+            <Icon />
+            <span className="min-w-0 truncate">{label}</span>
         </DropdownMenuItem>
-    );
-}
-
-/**
- * 這條隧道的通知靜音（只影響自己；強制的通知還是會顯示）：全部顯示 / 靜音狀態變化 / 全部靜音。
- * Mute this tunnel's notifications (only for you; enforced ones still show): show all / mute status / mute all.
- */
-function MuteMenu({ tunnel }: { tunnel: Tunnel }) {
-    const { t } = useI18n();
-    const { showError } = useToast();
-    const { prefs, setMute } = useNotifyPrefs();
-    const scope: MuteScope | "none" = prefs?.mutes.find((m) => m.tunnel_id === tunnel.id)?.scope ?? "none";
-    const hint = scope === "all" ? t("notifyPrefs.menuHintAll") : scope === "status" ? t("notifyPrefs.menuHintStatus") : t("notifyPrefs.menuHintOn");
-    const Icon = scope === "none" ? Bell : BellOff;
-    const choose = (v: string) => {
-        const next = v === "all" || v === "status" ? v : null;
-        setMute(tunnel.id, tunnel.host_friendly_name, next).catch((e: unknown) =>
-            showError(t("notifyPrefs.saveFailed", { error: e instanceof Error ? e.message : "" })),
-        );
-    };
-    return (
-        <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="items-start gap-3 rounded-md py-1.5">
-                <Icon className="mt-0.5" />
-                <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="font-medium leading-tight">{t("notifyPrefs.menu")}</span>
-                    <span className="whitespace-normal text-[0.75rem] leading-snug text-muted-foreground">{hint}</span>
-                </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-[16rem] max-w-[calc(100vw-1.5rem)]">
-                <DropdownMenuRadioGroup value={scope} onValueChange={choose}>
-                    <DropdownMenuRadioItem value="none">{t("notifyPrefs.menuShowAll")}</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="status">{t("notifyPrefs.menuMuteStatus")}</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="all">{t("notifyPrefs.menuMuteAll")}</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-                <p className="px-2 pt-1.5 pb-1 text-xs leading-snug text-muted-foreground">{t("notifyPrefs.menuNote")}</p>
-            </DropdownMenuSubContent>
-        </DropdownMenuSub>
     );
 }
 
@@ -133,24 +80,27 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
     );
 }
 
+/** 選單裡通道頁面的那一排。/ The tunnel page row in the menu. */
+const PAGE_TILES: { tab: TunnelDetailsTab; icon: LucideIcon }[] = [
+    { tab: "overview", icon: LayoutDashboard },
+    { tab: "connection", icon: Route },
+    { tab: "access", icon: Users },
+    { tab: "history", icon: ScrollText },
+    { tab: "settings", icon: Settings },
+];
+
 export function TunnelActions({
     tunnel,
     className,
     onDetails,
     onConfig,
-    onScript,
-    onLogs,
     onCommands,
     onKeys,
     onNetwork,
-    onDesktop,
-    onUsers,
     onShare,
     onLeave,
     onDelete,
     onRequestAccess,
-    onRecordings,
-    onCommandRules,
     onToolbox,
     onMoveToGroup,
     variant = "button",
@@ -158,6 +108,7 @@ export function TunnelActions({
     const { t } = useI18n();
     // 管理員替這個人關掉的功能不放進選單（API 也會拒絕）。/ Features turned off for this person stay out of the menu.
     const { has } = useFeatures();
+    const page = (tab: TunnelDetailsTab) => () => onDetails(tunnel.id, tab);
 
     return (
         <DropdownMenu>
@@ -184,158 +135,52 @@ export function TunnelActions({
                     </Button>
                 )}
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" collisionPadding={12} className="w-[22rem] max-w-[calc(100vw-1.5rem)] p-1.5 rounded-xl">
-                <GroupLabel>{t("tunnelActions.groupConnect")}</GroupLabel>
+            <DropdownMenuContent align="end" collisionPadding={12} className="w-[18rem] max-w-[calc(100vw-1.5rem)] rounded-xl p-1.5">
+                {/* 快速前往：一鍵到功能。/ Quick access: straight into a feature. */}
+                <GroupLabel>{t("tunnelActions.groupQuick")}</GroupLabel>
                 <DropdownMenuGroup>
-                    <ActionItem
-                        icon={ArrowLeftRight}
-                        label={t("tunnelActions.portForwarding")}
-                        hint={t("tunnelActions.portForwardingHint")}
-                        onSelect={() => onCommands(tunnel.id)}
-                    />
-                    {onToolbox && has("toolbox") && has("terminal") && (
-                        <ActionItem
-                            icon={Wrench}
-                            label={t("toolbox.menu")}
-                            hint={t("toolbox.menuHint")}
-                            onSelect={() => onToolbox(tunnel.id)}
-                        />
-                    )}
-                    <ActionItem
-                        icon={FileCode2}
-                        label={t("tunnelActions.sshConfig")}
-                        hint={t("tunnelActions.sshConfigHint")}
-                        onSelect={() => onConfig(tunnel.id)}
-                    />
-                    <ActionItem
-                        icon={KeyRound}
-                        label={t("tunnelActions.deviceKeys")}
-                        hint={t("tunnelActions.deviceKeysHint")}
-                        onSelect={() => onKeys(tunnel.id)}
-                    />
-                    {has("network") && (
-                        <ActionItem
-                            icon={Waypoints}
-                            label={t("tunnelActions.network")}
-                            hint={t("tunnelActions.networkHint")}
-                            onSelect={() => onNetwork(tunnel.id)}
-                        />
-                    )}
-                    {has("remote_desktop") && (
-                        <ActionItem
-                            icon={ScreenShare}
-                            label={t("tunnelActions.desktop")}
-                            hint={t("tunnelActions.desktopHint")}
-                            onSelect={() => onDesktop(tunnel.id)}
-                        />
-                    )}
+                    <ActionItem icon={ArrowLeftRight} label={t("tunnelActions.portForwarding")} hint={t("tunnelActions.portForwardingHint")} onSelect={() => onCommands(tunnel.id)} />
+                    <ActionItem icon={FileCode2} label={t("tunnelActions.sshConfig")} hint={t("tunnelActions.sshConfigHint")} onSelect={() => onConfig(tunnel.id)} />
+                    {onToolbox && has("toolbox") && has("terminal") && <ActionItem icon={Wrench} label={t("toolbox.menu")} hint={t("toolbox.menuHint")} onSelect={() => onToolbox(tunnel.id)} />}
+                    <ActionItem icon={KeyRound} label={t("tunnelActions.deviceKeys")} hint={t("tunnelActions.deviceKeysHint")} onSelect={() => onKeys(tunnel.id)} />
+                    {has("network") && <ActionItem icon={Waypoints} label={t("tunnelActions.network")} hint={t("tunnelActions.networkHint")} onSelect={() => onNetwork(tunnel.id)} />}
+                    {tunnel.can_share && <ActionItem icon={Share2} label={tunnel.is_owner ? t("tunnelActions.shareTunnel") : t("tunnelActions.manageSharing")} hint={t("tunnelActions.shareHint")} onSelect={() => onShare(tunnel.id)} />}
+                    {!tunnel.is_owner && !tunnel.can_share && onRequestAccess && <ActionItem icon={LockKeyholeOpen} label={t("share.request.menu")} hint={t("share.request.menuHint")} onSelect={() => onRequestAccess(tunnel.id)} />}
                 </DropdownMenuGroup>
 
-                {/* 連線腳本 = 把通道裝上裝置：owner / ADMIN（can_share）。/ Install scripts: owner / ADMIN (can_share). */}
-                {tunnel.can_share && (
+                {/* 通道頁面：一排小方塊，直接到那一頁（五行縮成一行，選單才放得進筆電螢幕）。
+                    The tunnel page: one row of small tiles straight to a tab (five lines in one, so the menu fits a laptop screen). */}
+                <DropdownMenuSeparator />
+                <GroupLabel>{t("tunnelActions.groupPage")}</GroupLabel>
+                <DropdownMenuGroup className="grid grid-cols-5 gap-0.5 pb-0.5">
+                    {PAGE_TILES.map(({ tab, icon: Icon }) => (
+                        <DropdownMenuItem
+                            key={tab}
+                            onClick={page(tab)}
+                            title={`${t(`tunnelPage.tab.${tab}` as TranslationKey)} · ${t(`tunnelPage.tabHint.${tab}` as TranslationKey)}`}
+                            aria-label={t(`tunnelPage.tab.${tab}` as TranslationKey)}
+                            className="min-w-0 flex-col items-center gap-1 rounded-md px-0.5 py-2 text-center text-[0.7rem] leading-tight"
+                        >
+                            <Icon />
+                            <span className="w-full truncate">{t(`tunnelPage.short.${tab}` as TranslationKey)}</span>
+                        </DropdownMenuItem>
+                    ))}
+                </DropdownMenuGroup>
+
+                {/* 我自己的整理（不影響別人）；這條的通知在通道頁面的「設定」。/ My own organising; this tunnel's notifications are in the page's Settings. */}
+                {onMoveToGroup && (
                     <>
                         <DropdownMenuSeparator />
-                        <GroupLabel>{t("tunnelActions.groupDevice")}</GroupLabel>
-                        <ActionItem
-                            icon={Route}
-                            label={t("tunnelActions.connection")}
-                            hint={t("tunnelActions.connectionHint")}
-                            onSelect={() => onDetails(tunnel.id, "connection")}
-                        />
-                        <ActionItem
-                            icon={Rocket}
-                            label={t("tunnelActions.installScript")}
-                            hint={t("tunnelActions.installScriptHint")}
-                            onSelect={() => onScript(tunnel.id)}
-                        />
+                        <ActionItem icon={FolderInput} label={t("tunnelActions.moveToGroup")} hint={t("tunnelActions.moveToGroupHint")} onSelect={() => onMoveToGroup(tunnel.id)} />
                     </>
                 )}
 
-                <DropdownMenuSeparator />
-                <GroupLabel>{t("tunnelActions.groupManage")}</GroupLabel>
-                <DropdownMenuGroup>
-                    <ActionItem
-                        icon={Info}
-                        label={t("tunnelActions.details")}
-                        hint={t("tunnelActions.detailsHint")}
-                        onSelect={() => onDetails(tunnel.id)}
-                    />
-                    {/* 我自己的分組（不影響別人）。/ My own grouping (affects nobody else). */}
-                    {onMoveToGroup && (
-                        <ActionItem
-                            icon={FolderInput}
-                            label={t("tunnelActions.moveToGroup")}
-                            hint={t("tunnelActions.moveToGroupHint")}
-                            onSelect={() => onMoveToGroup(tunnel.id)}
-                        />
-                    )}
-                    {/* 只有擁有者 / ADMIN 能管理目標 OS 帳號（與分享同一級）；其他人只看得到自己被允許的 */}
-                    <ActionItem
-                        icon={Users}
-                        label={tunnel.can_share ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewTargetUsers")}
-                        hint={t("tunnelActions.targetServerUsersHint")}
-                        onSelect={() => onUsers(tunnel.id, !tunnel.can_share)}
-                    />
-                    {/* 被分享的人（ADMIN 以下）：申請帳號 / 更高權限一段時間。/ Sharees below ADMIN: ask for more for a while. */}
-                    {!tunnel.is_owner && !tunnel.can_share && onRequestAccess && (
-                        <ActionItem
-                            icon={LockKeyholeOpen}
-                            label={t("share.request.menu")}
-                            hint={t("share.request.menuHint")}
-                            onSelect={() => onRequestAccess(tunnel.id)}
-                        />
-                    )}
-                    {tunnel.can_share && (
-                        <ActionItem
-                            icon={Share2}
-                            label={tunnel.is_owner ? t("tunnelActions.shareTunnel") : t("tunnelActions.manageSharing")}
-                            hint={t("tunnelActions.shareHint")}
-                            onSelect={() => onShare(tunnel.id)}
-                        />
-                    )}
-                    <ActionItem
-                        icon={ScrollText}
-                        label={t("tunnelActions.logs")}
-                        hint={t("tunnelActions.logsHint")}
-                        onSelect={() => onLogs(tunnel.id)}
-                    />
-                    <MuteMenu tunnel={tunnel} />
-                    {tunnel.record_sessions && has("recordings.manage") && (
-                        <ActionItem
-                            icon={Clapperboard}
-                            label={t("recordings.menu")}
-                            hint={t("recordings.menuHint")}
-                            onSelect={() => onRecordings?.(tunnel.id)}
-                        />
-                    )}
-                    {onCommandRules && has("command_rules.manage") && (
-                        <ActionItem
-                            icon={ShieldCheck}
-                            label={t("commands.menu")}
-                            hint={t("commands.menuHint")}
-                            onSelect={() => onCommandRules(tunnel.id)}
-                        />
-                    )}
-                </DropdownMenuGroup>
-
                 {(tunnel.can_delete || !tunnel.is_owner) && <DropdownMenuSeparator />}
                 {!tunnel.is_owner && (
-                    <ActionItem
-                        icon={LogOut}
-                        label={t("tunnelActions.leaveTunnel")}
-                        hint={t("tunnelActions.leaveHint")}
-                        onSelect={() => onLeave(tunnel.id, tunnel.host_friendly_name)}
-                        destructive
-                    />
+                    <ActionItem icon={LogOut} label={t("tunnelActions.leaveTunnel")} hint={t("tunnelActions.leaveHint")} onSelect={() => onLeave(tunnel.id, tunnel.host_friendly_name)} destructive />
                 )}
                 {tunnel.can_delete && (
-                    <ActionItem
-                        icon={Trash2}
-                        label={t("tunnelActions.deleteTunnel")}
-                        hint={t("tunnelActions.deleteHint")}
-                        onSelect={() => onDelete(tunnel.id, tunnel.host_friendly_name)}
-                        destructive
-                    />
+                    <ActionItem icon={Trash2} label={t("tunnelActions.deleteTunnel")} hint={t("tunnelActions.deleteHint")} onSelect={() => onDelete(tunnel.id, tunnel.host_friendly_name)} destructive />
                 )}
             </DropdownMenuContent>
         </DropdownMenu>

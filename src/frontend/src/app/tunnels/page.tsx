@@ -40,6 +40,7 @@ import { useI18n } from "@/lib/i18n";
 import { useFeatures } from "@/hooks/useFeatures";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
+import { tunnelPageUrl } from "@/lib/tunnelPage";
 import { Pagination } from "@/components/ui/pagination";
 import { usePagination, useSectionPages } from "@/hooks/usePagination";
 import { CARD_PAGE_SIZES, pageSlice } from "@/lib/pagination";
@@ -60,17 +61,9 @@ export default function TunnelsPage() {
         fetchData,
         togglePin,
         handleLeaveTunnel,
-        modals: {
-            configModal, setConfigModal,
-            scriptModal, setScriptModal,
-            usersModal, setUsersModal,
-            detailsModal, setDetailsModal,
-            shareModal, setShareModal,
-            requestModal, setRequestModal,
-            deleteConfirm, setDeleteConfirm,
-            leaveConfirm, setLeaveConfirm
-        }
+        modals,
     } = useTunnelsPage();
+    const { setConfigModal, setScriptModal, setUsersModal, setShareModal, setRequestModal, setDeleteConfirm, setLeaveConfirm } = modals;
 
     // 卡片 / 清單跟著帳號（偏好設定也能改）；1200px 以下表格放不下，一律卡片（不改掉選擇）。
     // Card / list follows the account (also in Preferences); below 1200px the table doesn't fit, so cards (the choice stays).
@@ -166,7 +159,8 @@ export default function TunnelsPage() {
     });
 
     const actions: TunnelActionHandlers = {
-        onDetails: (tunnelId, tab) => setDetailsModal({ isOpen: true, tunnelId, tab }),
+        // 通道頁面（`?tab=` 是那一頁的分頁）。/ The tunnel's page (`?tab=` picks its tab).
+        onDetails: (tunnelId, tab) => router.push(tunnelPageUrl(tunnelId, tab)),
         onConfig: (tunnelId) => setConfigModal({ isOpen: true, tunnelId }),
         onScript: (tunnelId) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 }),
         onLogs: (tunnelId) => router.push(`/tunnels/logs?tunnel=${tunnelId}`),
@@ -426,16 +420,7 @@ export default function TunnelsPage() {
             )}
 
             <TunnelModals
-                modals={{
-                    configModal, setConfigModal,
-                    scriptModal, setScriptModal,
-                    usersModal, setUsersModal,
-                    detailsModal, setDetailsModal,
-                    shareModal, setShareModal,
-                    requestModal, setRequestModal,
-                    deleteConfirm, setDeleteConfirm,
-                    leaveConfirm, setLeaveConfirm
-                }}
+                modals={modals}
                 tunnels={tunnels}
                 fetchData={fetchData}
                 handleLeaveTunnel={handleLeaveTunnel}

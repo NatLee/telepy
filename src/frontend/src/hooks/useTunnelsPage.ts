@@ -5,7 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { allowNotification } from "@/hooks/useNotifyPrefs";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
-import { Tunnel, type DeviceWarningKind, type TunnelDetailsTab } from "@/types/tunnel";
+import { Tunnel, type DeviceWarningKind } from "@/types/tunnel";
+import { useLeaveTunnel, useTunnelModals } from "@/hooks/useTunnelModals";
 import { WARNING_KINDS } from "@/lib/deviceFacts";
 import { useI18n } from "@/lib/i18n";
 
@@ -20,14 +21,8 @@ export function useTunnelsPage() {
     const [latencyMap, setLatencyMap] = useState<Record<string, number>>({});
     const [loading, setLoading] = useState(true);
 
-    const [configModal, setConfigModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
-    const [scriptModal, setScriptModal] = useState<{ isOpen: boolean, tunnelId: number | null, sshPort: number | null }>({ isOpen: false, tunnelId: null, sshPort: null });
-    const [usersModal, setUsersModal] = useState<{ isOpen: boolean, tunnelId: number | null, readOnly: boolean }>({ isOpen: false, tunnelId: null, readOnly: false });
-    const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null, tab?: TunnelDetailsTab }>({ isOpen: false, tunnelId: null });
-    const [shareModal, setShareModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
-    const [requestModal, setRequestModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
-    const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
-    const [leaveConfirm, setLeaveConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
+    // 分享、登入帳號、腳本、SSH 設定、刪除、離開：跟通道頁面共用。/ The dialogs, shared with the tunnel page.
+    const modals = useTunnelModals();
 
     const { showSuccess, showError, showToast } = useToast();
     const { user } = useAuth();
@@ -207,20 +202,7 @@ export function useTunnelsPage() {
         },
     });
 
-    const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {
-        if (!user?.id) { showError(t("tunnels.getCurrentUserFailed")); return; }
-        try {
-            const res = await apiFetch(`/tunnels/unshare/${tunnelId}/${user.id}`, { method: "DELETE" });
-            if (res.ok) {
-                showSuccess(t("tunnels.left", { name: tunnelName }));
-                fetchData();
-            } else {
-                showError(t("tunnels.leaveFailed"));
-            }
-        } catch (e) {
-            showError((e instanceof Error && e.message) || t("tunnels.leaveFailed"));
-        }
-    };
+    const handleLeaveTunnel = useLeaveTunnel(fetchData);
 
     // 釘選：先改畫面再送出，失敗就改回來。/ Pin: update the list first, roll back on failure.
     const togglePin = async (tunnelId: number, pinned: boolean) => {
@@ -242,15 +224,6 @@ export function useTunnelsPage() {
         fetchData,
         togglePin,
         handleLeaveTunnel,
-        modals: {
-            configModal, setConfigModal,
-            scriptModal, setScriptModal,
-            usersModal, setUsersModal,
-            detailsModal, setDetailsModal,
-            shareModal, setShareModal,
-            requestModal, setRequestModal,
-            deleteConfirm, setDeleteConfirm,
-            leaveConfirm, setLeaveConfirm
-        }
+        modals,
     };
 }

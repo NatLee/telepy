@@ -294,7 +294,7 @@ Telepy opens the path to the desktop before any picture starts, so most problems
 | The device is offline | Its tunnel to Telepy isn't connected. Bring the device back. |
 | The device refused Telepy's key for the account | Add Telepy's service key to that account's `authorized_keys`. |
 | The device's SSH server does not allow port forwarding | Set `AllowTcpForwarding yes` in its `sshd_config` and restart sshd. |
-| The device presented a different SSH host key | Review it in the tunnel's details before trusting it. |
+| The device presented a different SSH host key | Review it on the tunnel's page (Keys & identity) before trusting it. |
 | The device could not reach the address | Check that the RDP / VNC server runs and listens on that port. |
 | All remote desktop slots are in use | The site's limit is reached. Try again in a moment. |
 | Remote desktop is turned off on this server | An administrator switched it off. |

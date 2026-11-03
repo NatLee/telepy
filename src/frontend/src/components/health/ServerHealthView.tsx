@@ -20,10 +20,11 @@
  * stays the same, red again once it changes); an acknowledged card turns neutral with its details folded away; a
  * card whose earlier acknowledgement no longer matches says so on top. Pure logic in lib/healthAck.
  */
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, CheckCheck, ChevronDown, CircleAlert, CircleCheck, CircleX, Database, Globe, HeartPulse, Info, KeyRound, LayoutGrid, LoaderCircle, Puzzle, SlidersHorizontal, Stamp } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useWiderThan } from "@/hooks/useWiderThan";
 import { AdminChip } from "@/components/layout/AdminViews";
 import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
 import { AuditResealDialog } from "@/components/health/AuditResealDialog";
@@ -106,24 +107,6 @@ const tKey = (id: HealthCheckId, part: "title" | "what" | "fix") => `health.chec
 
 /** 頁面至少這麼寬（rem）才把分頁放在左邊：15rem 的分頁欄 + 約 40rem 的內容。/ Page width (rem) for the left rail: 15rem of tabs + ~40rem of content. */
 const RAIL_MIN_REM = 56;
-
-/** 元素寬度 ≥ `rem` 個根字級（跟著顯示大小）；畫面出現前就量好，不會先閃一下。/ Element width ≥ `rem` root font sizes; measured before paint. */
-function useWiderThan(ref: React.RefObject<HTMLElement | null>, rem: number): boolean {
-    const [wider, setWider] = useState(false);
-    useLayoutEffect(() => {
-        const el = ref.current;
-        if (!el) return;
-        const measure = () => {
-            const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-            setWider(el.clientWidth >= rem * root);
-        };
-        measure();
-        const ro = new ResizeObserver(measure);
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, [ref, rem]);
-    return wider;
-}
 
 function StatusChip({ status }: { status: HealthStatus }) {
     const { t } = useI18n();
