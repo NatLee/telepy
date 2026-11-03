@@ -469,7 +469,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 52);
+    assert_eq!(keys.len(), 53);
+    assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");
     assert_eq!(r.json["values"]["carrier_auto_update"], true, "device carriers follow new releases by default");
     assert_eq!(r.json["values"]["datasets_auto_update"], true, "installed GeoIP / vendor data is kept current by default");

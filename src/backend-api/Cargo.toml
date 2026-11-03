@@ -39,6 +39,10 @@ rand = "0.8"
 rand10 = { package = "rand", version = "0.10" }
 # http client (Google JWKS, kasm session-manager)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# LAN scans read web ports' certificates (already in the tree through reqwest / tokio-tungstenite)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+x509-parser = "0.16"
 # upstream websocket (KasmVNC relay)
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 # native SSH client + SFTP (file manager, device connections)
@@ -54,6 +58,9 @@ schemars = "1"
 # two-factor login: passkeys (WebAuthn) and TOTP (secret encrypted at rest, QR code as SVG)
 webauthn-rs = { version = "0.5.5", features = ["conditional-ui"] }
 aes-gcm = "0.10"
+# Web Push：RFC 8291 的 ECDH / HKDF 與 VAPID 的 ES256（p256 跟 russh 用的同一版）。/ Web Push: RFC 8291 ECDH / HKDF and VAPID ES256 (the same p256 as russh).
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
+hkdf = "0.12"
 sha1 = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # misc

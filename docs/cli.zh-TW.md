@@ -343,9 +343,13 @@ telepy run "restart service" box --var svc=nginx   # -y 跳過「先確認」的
 telepy lan ls box                          # Telepy 知道的、在這台裝置背後的區網主機
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # 用 id、位址或標籤指定
+telepy lan scan box                        # 掃描它的網路（network:scan），等完成，列出並多一欄 WHAT
+telepy lan show box 192.168.1.20           # 每個 port 看到什麼：網頁標題、伺服器、憑證、banner
 ```
 
-列出只需要 `tunnels:read`。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
+列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
+
+掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的請求，User-Agent 是 `Telepy-LAN-scan`。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
 
 ### 用自己的瀏覽器開區網的網頁
 
@@ -409,6 +413,8 @@ telepy browse close "$ID"
 | `telepy run <snippet> <target>` | 執行工具箱片段；`--var name=value`、`-y`、`--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | Telepy 知道的、在裝置背後的區網主機 | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | 手動新增主機；`--label`、`--user`、`--port` | `tunnels:manage` |
+| `telepy lan scan <tunnel>` | 掃描裝置的網路並列出找到的，附上每台是什麼；`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
+| `telepy lan show <tunnel> <host>` | 一台主機是什麼、每個 port 看到什麼 | `tunnels:read` |
 | `telepy lan rm <tunnel> <host>` | 用 id、位址或標籤移除主機 | `tunnels:manage` |
 | `telepy browse <target> [url]` | 開一個腳本化瀏覽器並印出它的 id（等同 `browse open`） | `browser:use` |
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | 列出這個登入開著的瀏覽器，或用 id 操作其中一個 | `browser:use` |

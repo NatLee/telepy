@@ -1873,6 +1873,67 @@ pub struct SftpUploadCancel {
     pub removed: bool,
 }
 
+/// The local file an upload comes from: resuming needs the same name, size and modification time.
+#[derive(ToSchema)]
+pub struct SftpLocalFile {
+    pub name: String,
+    /// Milliseconds since the epoch (`File.lastModified`)
+    pub modified: i64,
+}
+
+/// Start (or resume) an upload of `total` bytes to `path`.
+#[derive(ToSchema)]
+pub struct SftpUploadStart {
+    pub path: String,
+    pub total: u64,
+    pub overwrite: Option<bool>,
+    pub local: Option<SftpLocalFile>,
+    /// false = never resume (the client can't verify the bytes)
+    pub resume: Option<bool>,
+    /// This window's lease from an earlier start of the same upload
+    pub lease: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUploadStarted {
+    pub upload: String,
+    /// Send it with every part; another window taking over makes it stale (409 upload_taken)
+    pub lease: String,
+    /// Where to continue (0 = from the start)
+    pub offset: u64,
+    /// When resumed: hash the local bytes [check_from, offset) and send them as `check` with the first part
+    pub check_from: Option<u64>,
+    pub resumed: bool,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUnfinishedUpload {
+    pub upload: String,
+    pub name: String,
+    pub target: String,
+    /// The hidden part file's name next to the target
+    pub part_name: String,
+    pub total: u64,
+    pub received: u64,
+    pub by: Option<String>,
+    pub mine: bool,
+    pub updated_at: String,
+    /// Written to within the last 30 s
+    pub active: bool,
+    /// Seconds until the cleanup removes it (counted from the last activity)
+    pub removed_in: u64,
+    pub local_name: Option<String>,
+    pub local_modified: Option<i64>,
+    pub can_discard: bool,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUnfinished {
+    pub dir: String,
+    pub uploads: Vec<SftpUnfinishedUpload>,
+    pub retention_secs: u64,
+}
+
 /// `{error, code}`；code = path_required | invalid_name | exists | not_found | permission_denied | dir_not_writable |
 /// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed |
 /// bad_upload | bad_offset | upload_offset (with `received`) | upload_gone | interrupted
@@ -2812,6 +2873,12 @@ pub struct LanHost {
     pub mac: Option<String>,
     /// Ports open at the last scan
     pub open_ports: Vec<i64>,
+    /// Web ports with their URLs: the scheme a scan saw, else the port's usual one
+    pub web: Vec<LanWebLink>,
+    /// What the last scan recognised per port: `{port, proto, status?, title?, server?, location?, realm?, banner?, cert? {subject, issuer, org, not_after, self_signed, names}}`
+    pub services: Vec<serde_json::Value>,
+    /// What the machine is, from those clues: `{product, kind (router, network, nas, hypervisor, server, computer, printer, camera, media, iot, phone), os?, by {source, text}}`; null when unknown
+    pub identity: Option<serde_json::Value>,
     #[schema(example = "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13")]
     pub ssh_banner: Option<String>,
     pub label: Option<String>,
@@ -2823,6 +2890,15 @@ pub struct LanHost {
     pub first_seen: Option<String>,
     pub last_seen: Option<String>,
     pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanWebLink {
+    pub port: i64,
+    /// `http` or `https`
+    pub scheme: String,
+    #[schema(example = "https://192.168.1.20:5001/")]
+    pub url: String,
 }
 
 #[derive(ToSchema)]
@@ -2879,8 +2955,10 @@ pub struct LanScanRequest {
     /// Private CIDRs (at most 1024 addresses in total); omitted = the device's own networks
     #[schema(example = json!(["192.168.1.0/24"]))]
     pub subnets: Option<Vec<String>>,
-    /// Ports to probe; omitted = 22, 80, 443, 445, 3389, 5900, 8080, 8443
+    /// Ports to probe; omitted = 22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118, 53, 554, 631, 5000, 5001, 8006, 8123, 9000, 9090, 9100
     pub ports: Option<Vec<i64>>,
+    /// Send one `GET /` to each open web port (and read HTTPS certificates) to recognise the machine; default true
+    pub identify: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -5157,4 +5235,38 @@ pub struct ServerStatsWebhooks {
     pub paused: i64,
     /// Webhooks with a failed (non-test) delivery in the last 24 hours
     pub failing_recent: i64,
+}
+
+/// 推播通知：`GET /api/push` 等。/ Push notifications.
+#[derive(ToSchema)]
+pub struct PushView {
+    /// 網站設定 `notify_push`。/ The `notify_push` site setting.
+    pub enabled: bool,
+    /// 開著而且有 VAPID 金鑰。/ On and a VAPID key is available.
+    pub available: bool,
+    /// VAPID 公鑰（base64url、未壓縮），給瀏覽器的 `applicationServerKey`。/ The VAPID public key for `applicationServerKey`.
+    #[schema(example = "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8")]
+    pub public_key: Option<String>,
+    pub key_error: Option<String>,
+    /// 每台裝置每分鐘最多幾則。/ Pushes per device per minute.
+    pub per_minute: i64,
+    pub subscriptions: Vec<PushSubscriptionJson>,
+}
+
+#[derive(ToSchema)]
+pub struct PushSubscriptionJson {
+    pub id: i64,
+    pub user_agent: String,
+    #[schema(example = "zh-TW")]
+    pub lang: String,
+    /// 這台裝置的通知寫出指令內容。/ This device's notifications show commands.
+    pub details: bool,
+    /// google | apple | mozilla | microsoft
+    pub service: Option<String>,
+    /// 這次請求的登入開的。/ Made by this request's sign-in.
+    pub current: bool,
+    pub created_at: String,
+    pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
 }

@@ -582,6 +582,34 @@ pub enum LanAction {
         #[arg(long)]
         json: bool,
     },
+    /// Scan the device's network (needs network:scan): waits, shows progress, then lists what it found
+    Scan {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Private CIDR to scan instead of the device's own networks (repeatable), e.g. 192.168.1.0/24
+        #[arg(long = "subnet")]
+        subnets: Vec<String>,
+        /// Ports to probe, comma-separated (default: the server's list)
+        #[arg(long, value_delimiter = ',')]
+        ports: Vec<u16>,
+        /// Don't send a GET / to web ports (by default each open web port gets one, so the scan can tell what the machine is)
+        #[arg(long)]
+        no_identify: bool,
+        /// Device account to scan as (default: the tunnel's default)
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// What Telepy saw on one host: what it is, and each port's page title, server, certificate or banner
+    Show {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add a host by hand
     Add {
         #[arg(add = ArgValueCompleter::new(complete::tunnel))]
@@ -2277,6 +2305,84 @@ fn find_host<'a>(hosts: &'a [Value], raw: &str) -> Option<&'a Value> {
         .or_else(|| hosts.iter().find(|h| s(h, "label").eq_ignore_ascii_case(raw)))
 }
 
+/// `lan ls` / `lan scan` 的表：多一欄 WHAT（認出來的產品或類型）。/ The host table, with WHAT (the recognised product or type).
+fn print_hosts(hosts: &[Value]) {
+    let rows: Vec<Vec<String>> = hosts
+        .iter()
+        .map(|h| {
+            let ports = h["open_ports"].as_array().map(|p| p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")).unwrap_or_default();
+            let name = [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or("").to_string();
+            vec![h["id"].to_string(), s(h, "address").to_string(), name, lan_what(h), s(h, "username").to_string(), ports, s(h, "source").to_string()]
+        })
+        .collect();
+    print_table(&["ID", "ADDRESS", "NAME", "WHAT", "LOGIN", "OPEN PORTS", "SOURCE"], &rows, |col, _| if col == 3 { color::DIM } else { color::PLAIN });
+}
+
+/// 「這台是什麼」一格：產品（· 系統）、只有類型時是類型。/ The WHAT cell: product (· OS), else the type.
+fn lan_what(h: &Value) -> String {
+    let id = &h["identity"];
+    let (product, kind, os) = (s(id, "product"), s(id, "kind"), s(id, "os"));
+    match (product.is_empty(), os.is_empty()) {
+        (false, false) if !product.to_ascii_lowercase().contains(&os.to_ascii_lowercase()) => format!("{product} · {os}"),
+        (false, _) => product.to_string(),
+        (true, false) => format!("{kind} · {os}"),
+        (true, true) => kind.to_string(),
+    }
+}
+
+/// 掃描進度的一行（只在變了才印）。/ One progress line (printed when it changes).
+fn lan_scan_line(st: &Value) -> String {
+    let phase = s(st, "phase");
+    let (n, total, found) = (st["probed"].as_u64().unwrap_or(0), st["total"].as_u64().unwrap_or(0), st["hosts_found"].as_u64().unwrap_or(0));
+    let nets = st["networks"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    match phase {
+        "connecting" => "Connecting to the device…".into(),
+        "networks" => "Finding the device's networks…".into(),
+        "discovery" => format!("Looking for machines on {nets} ({n}/{total})"),
+        "ports" => format!("Checking ports on {found} machine(s)"),
+        "identify" => format!("Recognising web pages ({n}/{total})"),
+        "names" => "Looking up names…".into(),
+        "done" => format!("Done: {found} machine(s)."),
+        other => other.to_string(),
+    }
+}
+
+/// `lan show` 的內容。/ The lines of `lan show`.
+fn lan_show_lines(h: &Value) -> Vec<String> {
+    let mut out = vec![format!("{}  {}", s(h, "address"), [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or(""))];
+    let what = lan_what(h);
+    if !what.is_empty() {
+        let by = &h["identity"]["by"];
+        out.push(format!("  is: {what}  (from {} {})", s(by, "source"), s(by, "text")).trim_end().to_string());
+    }
+    if !s(h, "vendor").is_empty() {
+        out.push(format!("  vendor: {}", s(h, "vendor")));
+    }
+    for w in h["web"].as_array().into_iter().flatten() {
+        out.push(format!("  web: {}", s(w, "url")));
+    }
+    for svc in h["services"].as_array().into_iter().flatten() {
+        let mut parts = vec![format!("{}/{}", svc["port"], s(svc, "proto"))];
+        if let Some(st) = svc["status"].as_u64() {
+            parts.push(st.to_string());
+        }
+        for k in ["title", "server", "realm", "banner"] {
+            if !s(svc, k).is_empty() {
+                parts.push(format!("{k}: {}", s(svc, k)));
+            }
+        }
+        if let Some(c) = svc.get("cert").filter(|c| c.is_object()) {
+            let mut cert = format!("cert: {}", s(c, "subject"));
+            if c["self_signed"].as_bool() == Some(true) {
+                cert.push_str(" (self-signed)");
+            }
+            parts.push(cert);
+        }
+        out.push(format!("  {}", parts.join("  ")));
+    }
+    out
+}
+
 fn lan(api: &Api, a: LanArgs) -> Result<()> {
     let d = dashboard(api)?;
     let tunnel_of = |raw: &str| find_tunnel(&d.tunnels, raw).cloned().ok_or_else(|| anyhow!("No tunnel called '{raw}'."));
@@ -2292,15 +2398,59 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                 eprintln!("No LAN hosts on {} yet. Scan in the web app (Network page) or add one: telepy lan add {} <address>", name_of(&t), name_of(&t));
                 return Ok(());
             }
-            let rows: Vec<Vec<String>> = hosts
-                .iter()
-                .map(|h| {
-                    let ports = h["open_ports"].as_array().map(|p| p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")).unwrap_or_default();
-                    let name = [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or("").to_string();
-                    vec![h["id"].to_string(), s(h, "address").to_string(), name, s(h, "username").to_string(), ports, s(h, "source").to_string()]
-                })
-                .collect();
-            print_table(&["ID", "ADDRESS", "NAME", "LOGIN", "OPEN PORTS", "SOURCE"], &rows, plain);
+            print_hosts(&hosts);
+        }
+        LanAction::Scan { tunnel, subnets, ports, no_identify, account, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let id = t["id"].as_i64().unwrap_or_default();
+            let mut body = json!({ "identify": !no_identify });
+            if !subnets.is_empty() {
+                body["subnets"] = json!(subnets);
+            }
+            if !ports.is_empty() {
+                body["ports"] = json!(ports);
+            }
+            if let Some(a) = &account {
+                body["username"] = json!(a);
+            }
+            api.json(Method::POST, &format!("/api/reverse/server/{id}/lan/scan"), Some(&body))?;
+            let (mut last, started) = (String::new(), std::time::Instant::now());
+            let st = loop {
+                let st = api.get(&format!("/api/reverse/server/{id}/lan/scan"))?;
+                let phase = s(&st, "phase").to_string();
+                let line = lan_scan_line(&st);
+                if line != last && !as_json {
+                    eprintln!("{line}");
+                    last = line;
+                }
+                if phase == "done" || phase == "failed" {
+                    break st;
+                }
+                if started.elapsed() > std::time::Duration::from_secs(600) {
+                    bail!("The scan is still running after 10 minutes; check the web app's Network page.");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(800));
+            };
+            if s(&st, "phase") == "failed" {
+                bail!("The scan failed: {}", s(&st, "error"));
+            }
+            let hosts = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?["hosts"].as_array().cloned().unwrap_or_default();
+            if as_json {
+                return print_json(&json!({ "scan": st, "hosts": hosts }));
+            }
+            print_hosts(&hosts);
+        }
+        LanAction::Show { tunnel, host, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            if as_json {
+                return print_json(h);
+            }
+            for line in lan_show_lines(h) {
+                println!("{line}");
+            }
         }
         LanAction::Add { tunnel, address, label, user, port } => {
             let t = tunnel_of(&tunnel)?;

@@ -1,5 +1,6 @@
 import type { TunnelEndpoint } from "@/types/tunnel";
 import type { WebLink } from "@/lib/lanWeb";
+import type { HostIdentity, HostService } from "@/lib/lanIdentity";
 
 /**
  * 區網探索 / 跳板機（#20）的型別，對應 `/api/reverse/lan/topology` 與 `/api/reverse/server/{id}/lan/*`。
@@ -20,6 +21,10 @@ export interface LanHost {
     open_ports: number[];
     /** 開著的網頁 port 與網址（後端算的；舊後端沒有）。/ Open web ports with their URLs (from the backend; absent on older ones). */
     web?: WebLink[];
+    /** 最後一次掃描在每個 port 認出來的（網頁標題、Server、憑證、banner）。/ What the last scan recognised per port. */
+    services?: HostService[];
+    /** 這台是什麼（產品、類型、系統、憑哪條線索）；認不出來是 null。/ What it is; null when unknown. */
+    identity?: HostIdentity | null;
     ssh_banner: string | null;
     label: string | null;
     /** 連這台機器時預設的帳號。/ Default login on this machine. */

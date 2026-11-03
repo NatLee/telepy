@@ -305,6 +305,28 @@ const TABLES: &[(&str, &str)] = &[
             "disconnected_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：檔案管理分段上傳在裝置上的暫存檔（Telepy 自己放的才記；完成 / 取消就刪，閒置太久由背景清掉）。
+    // Part files of uploads in progress on devices (only Telepy's own; removed when done / cancelled, or when idle).
+    (
+        "telepy_upload_part",
+        r#"CREATE TABLE "telepy_upload_part" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(64) NOT NULL,
+            "user_id" integer NOT NULL,
+            "upload" varchar(64) NOT NULL,
+            "target" text NOT NULL,
+            "part_path" text NOT NULL,
+            "total" integer NOT NULL,
+            "received" integer NOT NULL DEFAULT 0,
+            "local_name" text NULL,
+            "local_modified" integer NULL,
+            "lease" varchar(64) NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL,
+            UNIQUE ("tunnel_id", "username", "part_path")
+        )"#,
+    ),
     // Rust 自有：每個使用者自己的隧道釘選。/ Per-user tunnel pins.
     (
         "telepy_tunnel_pin",
@@ -734,6 +756,27 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("user_id", "tunnel_id")
         )"#,
     ),
+    // Rust 自有：推播訂閱（每台瀏覽器一筆，綁在開它的網頁登入上）；見 db/push.rs。
+    // Push subscriptions (one per browser, bound to the web sign-in that made it); see db/push.rs.
+    (
+        "telepy_push_subscription",
+        r#"CREATE TABLE "telepy_push_subscription" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "session_id" integer NOT NULL,
+            "endpoint" varchar(1024) NOT NULL UNIQUE,
+            "p256dh" varchar(128) NOT NULL,
+            "auth" varchar(64) NOT NULL,
+            "lang" varchar(8) NOT NULL,
+            "details" bool NOT NULL DEFAULT 0,
+            "user_agent" varchar(256) NOT NULL DEFAULT '',
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL,
+            "last_success_at" datetime NULL,
+            "last_error" varchar(300) NULL,
+            "last_error_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：網頁登入 session（refresh token 的 sid）；見 db/web_sessions.rs。
     // Web sign-in sessions (the refresh token's sid); see db/web_sessions.rs.
     (
@@ -1003,6 +1046,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_shell_history_pref_user_tunnel" ON "telepy_shell_history_pref" ("user_id", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_push_subscription_user" ON "telepy_push_subscription" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_push_subscription_session" ON "telepy_push_subscription" ("session_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
@@ -1028,6 +1073,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_upload_part_updated" ON "telepy_upload_part" ("updated_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
@@ -1059,6 +1105,8 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
+    ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
     ("telepy_device_install", "join_facts", "text NULL"),
     ("telepy_device_install", "join_facts_at", "datetime NULL"),
@@ -1252,6 +1300,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 裝成 app（PWA）時的名稱：telepy / domain / custom，custom 時用 app_name。/ The installed app's name: telepy / domain / custom (app_name).
     ("site_settings_sitesettings", "app_name_mode", "varchar(16) NOT NULL DEFAULT 'telepy'"),
     ("site_settings_sitesettings", "app_name", "varchar(64) NOT NULL DEFAULT ''"),
+    // 推播通知（Web Push）整站開關。/ Push notifications (Web Push), site-wide on / off.
+    ("site_settings_sitesettings", "notify_push", "bool NOT NULL DEFAULT 1"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

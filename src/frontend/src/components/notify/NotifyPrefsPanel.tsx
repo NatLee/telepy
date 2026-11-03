@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/Toast";
 import { useDesktopNotifyPref, useNotifyDetailsPref } from "@/hooks/useDesktopNotifications";
 import { Switch } from "@/components/ui/switch";
+import { usePush } from "@/hooks/usePush";
+import { PushSection } from "./PushSection";
 import { useNotifyPrefs } from "@/hooks/useNotifyPrefs";
 import { useI18n } from "@/lib/i18n";
 import type { NotifyChannel, NotifyEvent } from "@/lib/notifyPrefs";
@@ -27,6 +29,12 @@ export function NotifyPrefsPanel() {
     const { prefs, setMine, setMute } = useNotifyPrefs();
     const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
     const [showDetails, setShowDetails] = useNotifyDetailsPref();
+    const push = usePush();
+    // 指令內容的選擇也跟著這台裝置的推播訂閱走。/ The command-text choice also follows this device's push subscription.
+    const changeDetails = (on: boolean) => {
+        setShowDetails(on);
+        if (push.current) push.update(push.current.id, { details: on }).catch(fail);
+    };
     const [problem, setProblem] = useState<"denied" | "unsupported" | null>(null);
     const [flowOpen, setFlowOpen] = useState(false);
 
@@ -62,15 +70,18 @@ export function NotifyPrefsPanel() {
                 {problem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
                 {problem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
                 {/* 指令內容：每台裝置各自設，預設不寫（鎖定畫面別人看得到）。/ The command text: per device, off by default (lock screens are visible). */}
-                {desktopNotify && (
+                {(desktopNotify || push.on) && (
                     <div className="space-y-1">
-                        <Switch size="sm" checked={showDetails} onCheckedChange={setShowDetails}>
+                        <Switch size="sm" checked={showDetails} onCheckedChange={changeDetails}>
                             {t("prefs.notifyDetails")}
                         </Switch>
                         <p className="text-xs leading-relaxed text-muted-foreground">{t("prefs.notifyDetailsHint")}</p>
                     </div>
                 )}
             </Section>
+
+            {/* 推播（每台裝置）/ Push (per device) */}
+            <PushSection details={showDetails} />
 
             <Section
                 icon={<BellRing />}
@@ -82,7 +93,8 @@ export function NotifyPrefsPanel() {
                     </Button>
                 }
             >
-                {!desktopNotify && <Callout tone="info">{t("notifyPrefs.desktopOffNote")}</Callout>}
+                {/* 「桌面」那欄也決定推播什麼：推播開著時這句就不對了。/ The Desktop column also decides what is pushed. */}
+                {!desktopNotify && !push.on && <Callout tone="info">{t("notifyPrefs.desktopOffNote")}</Callout>}
                 {prefs ? (
                     <NotifyMatrix mode="mine" events={prefs.events} onChange={change} onReset={reset} />
                 ) : (

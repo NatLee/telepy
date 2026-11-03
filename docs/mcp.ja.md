@@ -121,7 +121,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `list_tunnels` | 見えるトンネル：id、名前、オンラインかどうか、レイテンシ、自分の権限、使えるターゲットの username、このアプリが開いているセッション |
 | `tunnel_status(tunnel_id)` | 健全性、レイテンシ、24 時間の稼働率、デバイスの `facts` と `warnings`、直近 10 件のゲートウェイイベント |
-| `lan_hosts(tunnel_id)` | デバイスの背後の LAN ホスト（スキャンで見つかったものと手動で追加したもの）：アドレス、名前、開いているポート、SSH バナー、ラベル、ログインアカウント、`web`（各 Web ポートとその URL。同じトンネルの `browser_open` にそのまま渡せる） |
+| `lan_hosts(tunnel_id)` | デバイスの背後の LAN ホスト（スキャンで見つかったものと手動で追加したもの）：アドレス、名前、開いているポート、SSH バナー、ラベル、ログインアカウント、`web`（各 Web ポートとその URL。同じトンネルの `browser_open` にそのまま渡せる）、`services` と `identity`（前回のスキャンで識別したもの） |
 
 - 健全性は online、degraded（トンネルは生きているが、デバイスの sshd が応答しない）、offline のいずれかです。
 - `facts` には、OS、カーネル、稼働秒数、CPU、メモリとルートディスク（KB）、負荷、ssh のバージョン、再起動が必要かどうかが入ります。デバイスにログインできる人にだけ返します。
@@ -157,11 +157,11 @@ MCP client ── POST /mcp ─────────────────�
 
 | ツール | 内容 |
 | --- | --- |
-| `lan_scan(tunnel_id, username?, subnets?, ports?)` | デバイスの sshd 経由で LAN をスキャンし、見つかったものをホスト一覧に保存する |
+| `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | デバイスの sshd 経由で LAN をスキャンし、見つかったものをホスト一覧に保存する。`identify`（既定で有効）では開いている Web ポートごとに `GET /` を 1 回送り（HTTPS なら証明書も見て）、`lan_hosts` で各マシンが何かわかるようにする |
 
 - 対象はプライベートレンジのみ、最大 1024 アドレスで、1 回およそ 1 分かかります。
 - 自分が所有する、または ADMIN のトンネルでのみ使えます。
-- 結果は `lan_hosts` で読みます。
+- 結果は `lan_hosts` で読みます：`identity`（製品、`router` / `nas` / `hypervisor` / `printer` などの種類、OS の手がかり、どの手がかりで判断したか）と `services`（各ポートのページタイトル、`Server`、証明書、バナー）。
 
 ### ブラウザを使う（`browser:use`）
 

@@ -548,3 +548,45 @@ async fn forward_brings_a_lan_port_to_this_computer() {
     assert!(body.ends_with("from-lan!"), "{body}");
     child.kill().await.unwrap();
 }
+
+/// `telepy lan scan` / `lan show`：掃描等到完成、表上多一欄 WHAT；show 列出每個 port 看到的。
+/// `telepy lan scan` waits for the scan and the table has WHAT; `lan show` lists what each port showed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lan_scan_recognises_and_shows() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service])], MachineOpts { allow_jump: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    let web = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let web_port = web.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = web.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                if s.read(&mut buf).await.unwrap_or(0) > 0 {
+                    let body = "<title>OpenWrt - LuCI</title>";
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                }
+            });
+        }
+    });
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "scan", "scopes": ["tunnels:read", "network:scan"], "expires_at": expires})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    let ports = web_port.to_string();
+    let o = telepy(h, &["lan", "scan", "box", "--subnet", "127.0.0.1/32", "--ports", &ports]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("Done: 1 machine(s)."), "{}", o.stderr);
+    assert!(o.stdout.contains("WHAT") && o.stdout.contains("OpenWrt"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "show", "box", "127.0.0.1"]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("is: OpenWrt") && o.stdout.contains(&format!("{web_port}/http  200  title: OpenWrt - LuCI")), "{}", o.stdout);
+    assert!(o.stdout.contains(&format!("web: http://127.0.0.1:{web_port}/")), "{}", o.stdout);
+}

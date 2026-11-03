@@ -29,6 +29,7 @@ pub mod logs;
 pub mod mfa;
 pub mod notify;
 pub mod notify_prefs;
+pub mod push;
 pub mod oauth;
 pub mod recordings;
 pub mod terminal_detach;

@@ -13,7 +13,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X } from "lucide-react";
+import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X, Info } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -31,6 +31,9 @@ import { DOCK_BAR, DOCK_GAP, dockBodyHeight, TerminalDock } from "@/components/n
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { shortUrl } from "@/lib/lanWeb";
 import { ScanDialog } from "@/components/network/ScanDialog";
+import { NetworkTypes } from "@/components/network/NetworkTypes";
+import { NetworkInfoDialog } from "@/components/network/NetworkInfoDialog";
+import { DEVICE_KINDS, type DeviceKind } from "@/lib/lanIdentity";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
 import { useLanTerminals, type WebRequest } from "@/hooks/useLanTerminals";
@@ -88,6 +91,8 @@ function NetworkInner() {
     const [openHost, setOpenHost] = useState<{ tunnelId: number; hostId: number; tab: HostPanelTab; n: number } | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
     const [scanFor, setScanFor] = useState<number | null>(null);
+    // 「怎麼運作」：一開就是面板裡那台主機。/ "How it works", opening on the panel's host.
+    const [infoOpen, setInfoOpen] = useState(false);
     const [addFor, setAddFor] = useState<number | null>(null);
     const panelRef = useRef<HTMLElement>(null);
     // 浮動 dock 對齊的頁面欄。/ The page column the floating dock aligns with.
@@ -154,6 +159,15 @@ function NetworkInner() {
     const allRows = useMemo(() => flattenHosts(allTunnels), [allTunnels]);
     const tableRows = useMemo(() => flattenHosts(tunnels), [tunnels]);
     const recentList = useMemo(() => recentRows(recent.recent, allRows).slice(0, 6), [recent.recent, allRows]);
+    // 搜尋裡的 `type:` 詞（圖表上亮起的那條）；點一條就換掉它。/ The search's `type:` term (the lit bar); a click replaces it.
+    const activeType = useMemo(() => {
+        const m = /(?:^|\s)type:(\S+)/.exec(query.toLowerCase());
+        return m && (DEVICE_KINDS as readonly string[]).includes(m[1]) ? (m[1] as DeviceKind) : null;
+    }, [query]);
+    const pickType = (kind: DeviceKind | null) => {
+        const rest = query.split(/\s+/).filter((w) => w && !/^type:/i.test(w));
+        actions.setQuery([...rest, ...(kind ? [`type:${kind}`] : [])].join(" "));
+    };
     // 開著終端機時，頁面底部與右側面板都要留出 dock 的高度（dock 浮在內容上方；放大時是整個視窗的覆蓋層，不用留）。
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
     const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
@@ -185,7 +199,12 @@ function NetworkInner() {
                 title={t("network.title")}
                 description={t("network.subtitle")}
                 actions={
-                    <RefreshButton onRefresh={actions.refresh} ripple={pageRef} label={t("common.refresh")} />
+                    <>
+                        <Button variant="outline" onClick={() => setInfoOpen(true)}>
+                            <Info size={16} /> {t("network.flow.button")}
+                        </Button>
+                        <RefreshButton onRefresh={actions.refresh} ripple={pageRef} label={t("common.refresh")} />
+                    </>
                 }
             />
 
@@ -238,6 +257,9 @@ function NetworkInner() {
                             <Input ref={searchRef} type="search" value={query} onChange={(e) => actions.setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && query) { e.preventDefault(); actions.setQuery(""); } }} placeholder={t("network.searchPlaceholder")} aria-label={t("network.searchPlaceholder")} title={t("network.searchHint")} className="h-full min-h-10 pl-9" />
                         </div>
                     </div>
+
+                    {/* 網路上有什麼：每種機器一條，點一條 = 搜尋 type:。/ What's on the network: one bar per type; a click searches type:. */}
+                    <NetworkTypes hosts={allRows.map((r) => r.host)} active={activeType} onPick={pickType} />
 
                     {stats.hosts === 0 && <Callout tone="tip">{t("network.firstScanTip")}</Callout>}
 
@@ -376,6 +398,7 @@ function NetworkInner() {
                 message={replaceAsk && terms.browser ? t("network.web.replaceMessage", { current: `${terms.browser.deviceUser}@${terms.browser.tunnelName}`, next: `${replaceAsk.deviceUser}@${replaceAsk.tunnelName}`, url: shortUrl(replaceAsk.url) }) : ""}
                 confirmText={t("network.web.replaceConfirm")}
             />
+            <NetworkInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} tunnels={allTunnels} startTunnel={hostTunnel ?? (focusTunnel !== null ? allTunnels.find((x) => String(x.id) === focusTunnel) ?? null : null)} startHost={host} isOnline={actions.isOnline} />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />
             <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />
         </div>

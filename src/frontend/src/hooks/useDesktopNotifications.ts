@@ -18,6 +18,7 @@ import type { DeviceWarningKind } from "@/types/tunnel";
 import { useStoredChoice } from "./useStoredChoice";
 import { allowNotification, useNotifyPrefsLoader } from "./useNotifyPrefs";
 import { useAppName } from "./useAppName";
+import { pushActiveHere, usePushSync } from "./usePush";
 import { showViaServiceWorker } from "@/lib/serviceWorker";
 
 const KEY = "telepy.desktopNotify";
@@ -69,6 +70,8 @@ export function useDesktopNotifications() {
     const [details] = useNotifyDetailsPref();
     // 標題 = 網站設定的 App 名稱，裝了兩台 Telepy 時分得出來。/ The title = the site's app name, so two Telepy servers differ.
     const title = useAppName();
+    // 推播：這台裝置開著推播時，伺服器推過來的那幾種事件網頁就不再自己跳一次。/ Push: with push on here, the pushed events aren't shown twice.
+    usePushSync(me !== undefined, locale);
     // 通知偏好在這裡（AppLayout）載入一次。/ Notification preferences load here (AppLayout), once per sign-in.
     useNotifyPrefsLoader(me !== undefined);
 
@@ -89,6 +92,12 @@ export function useDesktopNotifications() {
         }
     };
 
+    // 伺服器也會推播的事件（上線 / 離線 / 降級以外的）：這台開著推播就交給推播。/ Events the server pushes too: left to the push when it is on here.
+    const showPushed = (tag: string, body: string, msg?: NotificationPayload, tunnelId?: number) => {
+        if (pushActiveHere()) return;
+        show(tag, body, msg, tunnelId);
+    };
+
     useNotificationHandlers({
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg: NotificationPayload) => {
             const tunnels = Array.isArray(msg.tunnels) ? (msg.tunnels as { id: number; name: string }[]) : [];
@@ -103,7 +112,7 @@ export function useDesktopNotifications() {
             if (!req || me === undefined || !approvers.includes(me) || (req.user.id === me && req.source === "terminal")) return;
             const command = req.command.length > 80 ? `${req.command.slice(0, 80)}…` : req.command;
             const vars = { user: req.user.username, command, name: req.tunnel_name ?? "" };
-            show(`command-${req.id}`, details ? t("notify.commandApproval", vars) : t("notify.commandApprovalHidden", vars), msg);
+            showPushed(`command-${req.id}`, details ? t("notify.commandApproval", vars) : t("notify.commandApprovalHidden", vars), msg);
         },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_HEALTH]: (msg: NotificationPayload) => {
             if (msg.health === "degraded" && msg.tunnel_id !== undefined && typeof msg.name === "string") {
@@ -115,49 +124,49 @@ export function useDesktopNotifications() {
         // can be turned off in Preferences).
         [NOTIFICATION_ACTIONS.TUNNEL_IP_CHANGED]: (msg: NotificationPayload) => {
             if (typeof msg.ip !== "string") return;
-            show(`ip-${msg.tunnel_id}`, t("tunnels.ipChangedToast", { name: String(msg.tunnel_name ?? ""), ip: msg.ip, previous: String(msg.previous_ip ?? "") }), msg);
+            showPushed(`ip-${msg.tunnel_id}`, t("tunnels.ipChangedToast", { name: String(msg.tunnel_name ?? ""), ip: msg.ip, previous: String(msg.previous_ip ?? "") }), msg);
         },
         [NOTIFICATION_ACTIONS.HOST_KEY_CHANGED]: (msg: NotificationPayload) => {
             // 通知裡沒有隧道名稱，用後端的那句。/ No tunnel name in the payload: use the backend's sentence.
-            show(`hostkey-${msg.tunnel_id}`, typeof msg.details === "string" ? msg.details : t("hostKey.notify", { name: `#${msg.tunnel_id ?? "?"}` }), msg);
+            showPushed(`hostkey-${msg.tunnel_id}`, typeof msg.details === "string" ? msg.details : t("hostKey.notify", { name: `#${msg.tunnel_id ?? "?"}` }), msg);
         },
         [NOTIFICATION_ACTIONS.DEVICE_CLAIM_ATTEMPT]: (msg: NotificationPayload) => {
-            show(`claim-${msg.tunnel_id}`, t("hostKey.claimNotify", { name: String(msg.tunnel_name ?? `#${msg.tunnel_id ?? "?"}`), by: String(msg.by ?? "?") }), msg);
+            showPushed(`claim-${msg.tunnel_id}`, t("hostKey.claimNotify", { name: String(msg.tunnel_name ?? `#${msg.tunnel_id ?? "?"}`), by: String(msg.by ?? "?") }), msg);
         },
         [NOTIFICATION_ACTIONS.DEVICE_WARNING]: (msg: NotificationPayload) => {
             const kinds = Array.isArray(msg.warnings) ? (msg.warnings as string[]).filter((k) => (WARNING_KINDS as string[]).includes(k)) : [];
             if (kinds.length === 0) return;
             const what = kinds.map((k) => t(`deviceFacts.chip.${k as DeviceWarningKind}`)).join(", ");
-            show(`warning-${msg.tunnel_id}`, t("tunnels.deviceWarningToast", { name: String(msg.tunnel_name ?? ""), what }), msg);
+            showPushed(`warning-${msg.tunnel_id}`, t("tunnels.deviceWarningToast", { name: String(msg.tunnel_name ?? ""), what }), msg);
         },
         [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg: NotificationPayload) => {
-            if (msg.details) show(`share-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details) showPushed(`share-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.TUNNEL_UNSHARED]: (msg: NotificationPayload) => {
-            if (msg.details) show(`share-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details) showPushed(`share-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.ACCESS_REQUEST_CREATED]: (msg: NotificationPayload) => {
-            if (msg.details) show(`access-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details) showPushed(`access-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.ACCESS_REQUEST_DECIDED]: (msg: NotificationPayload) => {
-            if (msg.details) show(`access-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details) showPushed(`access-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.AI_SESSION_OPENED]: (msg: NotificationPayload) => {
-            if (msg.details && msg.by && msg.by !== auth.user?.username) show(`ai-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details && msg.by && msg.by !== auth.user?.username) showPushed(`ai-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.AI_SESSION_CLOSED]: (msg: NotificationPayload) => {
-            if (msg.details && msg.by && msg.by !== auth.user?.username) show(`ai-${msg.tunnel_id}`, String(msg.details), msg);
+            if (msg.details && msg.by && msg.by !== auth.user?.username) showPushed(`ai-${msg.tunnel_id}`, String(msg.details), msg);
         },
         [NOTIFICATION_ACTIONS.TERMINAL_WATCHED]: (msg: NotificationPayload) => {
             if (msg.watching !== true) return;
-            show(`watch-${msg.shell_id}`, t("watch.toast", { by: String(msg.by ?? ""), tunnel: String(msg.tunnel_name ?? "") }), msg);
+            showPushed(`watch-${msg.tunnel_id}`, t("watch.toast", { by: String(msg.by ?? ""), tunnel: String(msg.tunnel_name ?? "") }), msg);
         },
         [NOTIFICATION_ACTIONS.SIGN_IN_NEW_DEVICE]: (msg: NotificationPayload) => {
             const geo = (msg.geo ?? null) as IpGeo | null;
             const ip = typeof msg.ip === "string" ? msg.ip : "";
             const place = [ip, placeLabel(geo, locale)].filter(Boolean).join(", ") || "?";
             const device = typeof msg.device === "string" && msg.device ? msg.device : t("security.unknownDevice");
-            show("sign-in", t("security.newDeviceToast", { device, place }), msg);
+            showPushed("sign-in", t("security.newDeviceToast", { device, place }), msg);
         },
     });
 }

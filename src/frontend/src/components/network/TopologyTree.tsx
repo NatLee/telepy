@@ -25,6 +25,8 @@ import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEn
 import { Button } from "@/components/ui/button";
 import { HostQuickActions } from "@/components/network/HostOpen";
 import { hasWeb } from "@/lib/lanWeb";
+import { deviceKind, identityLine } from "@/lib/lanIdentity";
+import { DEVICE_ICON } from "@/components/network/deviceIcons";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -49,6 +51,14 @@ export const KIND_ICON: Record<HostKind, React.ReactNode> = {
     other: <CircleDot size={16} />,
 };
 
+/** 主機的圖示：認出機器類型就用類型（中性色），否則照 port 分類（帶顏色）。/ A host's icon: its machine type when known (neutral), else the port kind (coloured). */
+export function hostIcon(host: { identity?: LanHost["identity"] }, kind: HostKind): { icon: React.ReactNode; tone: string; label: TranslationKey } {
+    const type = deviceKind(host);
+    return type
+        ? { icon: DEVICE_ICON[type], tone: "bg-muted text-foreground ring-border", label: `network.type.${type}` as TranslationKey }
+        : { icon: KIND_ICON[kind], tone: KIND_TONE[kind], label: KIND_LABEL[kind] };
+}
+
 export const KIND_TONE: Record<HostKind, string> = {
     ssh: "bg-success/12 text-success ring-success/20",
     desktop: "bg-primary/10 text-primary ring-primary/15",
@@ -69,6 +79,7 @@ export const PHASE_LABEL: Record<string, TranslationKey> = {
     networks: "network.phase.networks",
     discovery: "network.phase.discovery",
     ports: "network.phase.ports",
+    identify: "network.phase.identify",
     names: "network.phase.names",
     done: "network.phase.done",
     failed: "network.phase.failed",
@@ -120,11 +131,15 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
     const more = host.open_ports.length - shown.length;
     const ssh = hasSsh(host);
     const web = hasWeb(host);
+    const look = hostIcon(host, kind);
+    const what = identityLine(host);
     return (
-        // 外框是 div：裡面的「開主機」與兩個終端機圖示是並排的按鈕，不互相包。/ A div frame: the open button and the two terminal icons sit side by side, not nested.
+        // 外框是 div：裡面的「開主機」與快速動作圖示是並排的按鈕，不互相包。窄的時候圖示換到下一行（名稱至少留 10rem），
+        // 不然手機放大字時名稱會被擠成一欄一個字。/ A div frame: the open button and the quick icons sit side by side, not
+        // nested. When narrow the icons wrap to the next line (the name keeps 10rem), or a phone at large text crushed it.
         <div
             className={cn(
-                "group flex w-full items-start rounded-xl border transition-[background-color,box-shadow] hover:bg-card hover:shadow-card @3xl:w-80",
+                "group flex w-full flex-wrap items-start rounded-xl border transition-[background-color,box-shadow] hover:bg-card hover:shadow-card @3xl:w-80",
                 selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
             )}
         >
@@ -133,16 +148,17 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
                 onClick={() => actions.onOpenHost(host)}
                 aria-current={selected ? "true" : undefined}
                 title={name}
-                className="flex min-w-0 flex-1 items-start gap-3 rounded-xl py-2 pl-3 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex min-w-[10rem] flex-[1_1_10rem] items-start gap-3 rounded-xl py-2 pl-3 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-                <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset", KIND_TONE[kind])} aria-hidden>
-                    {KIND_ICON[kind]}
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset [&_svg]:size-4", look.tone)} title={t(look.label)} aria-hidden>
+                    {look.icon}
                 </span>
                 <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-1.5">
                         <span className="line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
                         {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
                     </span>
+                    {what && <span className="block text-xs text-foreground/75 [overflow-wrap:anywhere]">{what}</span>}
                     {/* 位址、廠牌、port 放不下就換行，不截斷；port 整組一起換到下一行。/ Address, vendor and ports wrap rather than being cut; the ports move as one group. */}
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
                         {name !== host.address && <span className="font-mono [overflow-wrap:anywhere]">{host.address}</span>}
@@ -160,7 +176,7 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
                 </span>
             </button>
             {/* 有 SSH 的主機：直接開終端機（這裡 / 終端機頁）。/ SSH hosts: open a terminal right away (here / terminal page). */}
-            {(ssh || web) && <HostQuickActions compact terminal={ssh} host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenWeb={actions.onOpenWeb} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="pr-1 pt-1.5" />}
+            {(ssh || web) && <HostQuickActions compact terminal={ssh} host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenWeb={actions.onOpenWeb} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="ml-auto pr-1 pt-1.5" />}
         </div>
     );
 }

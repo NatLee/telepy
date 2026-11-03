@@ -57,7 +57,10 @@ export type PartOutcome =
     | { kind: "next"; offset: number }
     | { kind: "done"; path: string | null }
     | { kind: "restart" }
-    | { kind: "fail"; code: string | null; error: string | null };
+    /** 裝置上的暫存檔跟本機檔案對不上（被動過、或本機是另一個檔案）：從頭開新的上傳。/ Start a fresh upload. */
+    | { kind: "fresh" }
+    /** `kept` = 同名衝突，傳好的部分留在裝置上等使用者決定要不要取代。/ `kept` = a name clash; the upload waits. */
+    | { kind: "fail"; code: string | null; error: string | null; kept?: boolean };
 
 interface PartBody {
     received?: number;
@@ -65,6 +68,7 @@ interface PartBody {
     path?: string;
     code?: string;
     error?: string;
+    kept?: boolean;
 }
 
 /**
@@ -80,7 +84,61 @@ export function partOutcome(status: number, body: unknown): PartOutcome {
     }
     if (status === 409 && b.code === "upload_offset" && typeof b.received === "number") return { kind: "next", offset: b.received };
     if (status === 409 && b.code === "upload_gone") return { kind: "restart" };
-    return { kind: "fail", code: typeof b.code === "string" ? b.code : null, error: typeof b.error === "string" ? b.error : null };
+    if (status === 409 && b.code === "upload_mismatch") return { kind: "fresh" };
+    const fail = { kind: "fail" as const, code: typeof b.code === "string" ? b.code : null, error: typeof b.error === "string" ? b.error : null };
+    return b.kept ? { ...fail, kept: true } : fail;
+}
+
+// ---------------------------------------------------------------- resuming
+
+/** 比一段大的檔案先問伺服器能不能續傳（只有一段的檔案沒什麼好續）。/ Files above one part ask whether to resume. */
+export function resumable(size: number): boolean {
+    return size > PART_SIZE;
+}
+
+/** 續傳要的本機檔案身分：名字 + 大小 + 修改時間。/ The local file's identity for resuming. */
+export function localIdentity(file: { name: string; lastModified: number }): { name: string; modified: number } {
+    return { name: file.name, modified: Math.trunc(file.lastModified) };
+}
+
+export interface UnfinishedUpload {
+    upload: string;
+    name: string;
+    target: string;
+    part_name: string;
+    total: number;
+    received: number;
+    by: string | null;
+    mine: boolean;
+    updated_at: string;
+    active: boolean;
+    removed_in: number;
+    local_name: string | null;
+    local_modified: number | null;
+    can_discard: boolean;
+}
+
+/** 選回來的檔案是不是當初那一個（名字、大小、修改時間都一樣）。/ Whether a picked file is the one that was being uploaded. */
+export function sameLocalFile(file: { name: string; size: number; lastModified: number }, u: Pick<UnfinishedUpload, "local_name" | "local_modified" | "total">): boolean {
+    return u.local_name === file.name && u.total === file.size && u.local_modified === Math.trunc(file.lastModified);
+}
+
+/** Telepy 的上傳暫存檔名（`.<name>.telepy-upload-<id>.part`）。/ A Telepy upload part file's name. */
+export function isPartFileName(name: string): boolean {
+    return /^\..+\.telepy-upload-[A-Za-z0-9]{8,64}\.part$/.test(name);
+}
+
+/** 列表裡藏起帳上有的暫存檔（顯示成「未完成的上傳」）；不在帳上的照樣列出來。
+ * Hide part files the ledger knows (they show as unfinished uploads); unknown ones stay listed. */
+export function hideKnownParts<T extends { name: string }>(items: readonly T[], unfinished: readonly Pick<UnfinishedUpload, "part_name">[]): T[] {
+    if (!unfinished.length) return [...items];
+    const known = new Set(unfinished.map((u) => u.part_name));
+    return items.filter((i) => !known.has(i.name));
+}
+
+/** 還要多久會被清掉（小時，至少 1）。/ Hours until the cleanup removes it (at least 1). */
+export function hoursLeft(removedInSecs: number): number {
+    return Math.max(1, Math.ceil(removedInSecs / 3600));
 }
 
 /** 一段的範圍 [start, end)。空檔案也有一段（0, 0）。/ The byte range of the part starting at `offset`. */
