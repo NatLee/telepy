@@ -102,6 +102,8 @@ async fn spec_is_served_and_covers_the_rest_api() {
         "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/api/oauth/register", "/api/oauth/token", "/api/oauth/revoke", "/api/oauth/authorize/preview",
         "/api/auth/mfa/verify", "/api/auth/mfa/passkey/options", "/api/auth/passkey/options", "/api/auth/passkey/login",
         "/api/join/install.sh", "/api/join/telepy-ws.py", "/api/join/carrier/{target}", "/api/join/carrier/{target}/sha256", "/api/join/gateway", "/api/join/{token}", "/api/join/{token}/status", "/api/join/{token}/config", "/api/whoami",
+        // 一次性下載連結：權杖本身就是授權（瀏覽器自己下載，帶不了 Authorization）。/ The one-time token is the authorisation.
+        "/api/sftp/fetch/{token}",
         // 裝成 app 的 manifest：瀏覽器抓它不帶登入。/ The app manifest: browsers fetch it without credentials.
         "/api/app/manifest.webmanifest"];
     for (path, item) in paths {

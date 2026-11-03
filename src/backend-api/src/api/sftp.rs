@@ -1,14 +1,20 @@
 //! `/api/sftp/{shell,list,download,upload}/{id}/{username}`（web_sftp app），改走原生 SFTP：
-//! 下載串流、目錄打包、上傳串流；沒有 `shell=True`、沒有把使用者路徑拼進指令。
+//! 下載串流、目錄邊打包邊送（`sftp::zipstream`）、上傳串流；沒有 `shell=True`、沒有把使用者路徑拼進指令。
+//! 網頁的下載走一次性連結（`download-link` → `fetch`，瀏覽器自己下載），上傳分段（`upload-part`：每段一個請求，
+//! 前面的代理（Cloudflare 100 MB、逾時）不會卡住大檔，失敗的那段重送就好；完成才改名成目標）。
+//! The web downloads through one-time links (the browser downloads natively) and uploads in parts (one request per
+//! part, so proxies' body limits and timeouts never see a big file; a failed part is resent; the file is renamed
+//! onto the target only when complete).
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use axum::body::Body as RawBody;
@@ -19,8 +25,10 @@ use crate::auth::AuthUser;
 use crate::db::{self, tunnels::Tunnel};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
-use crate::sftp::{self, ops};
-use crate::ssh::pool::PooledSftp;
+use crate::sftp::links::{self, Link};
+use crate::sftp::ops::{self, PartStep};
+use crate::sftp;
+use crate::ssh::pool::{PooledSftp, TransferSftp};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -29,7 +37,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(shell))
         .routes(routes!(list))
         .routes(routes!(download))
+        .routes(routes!(download_link))
+        .routes(routes!(fetch))
         .routes(routes!(upload))
+        .routes(routes!(upload_part, upload_part_cancel))
         .routes(routes!(mkdir))
         .routes(routes!(touch))
         .routes(routes!(rename))
@@ -92,7 +103,72 @@ async fn list(
     })))
 }
 
-#[utoipa::path(get, path = "/api/sftp/download/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "File or directory (directories are zipped)")), responses((status = 200, description = "Streamed file (application/octet-stream) or zip (application/zip) with Content-Disposition", content_type = "application/octet-stream"), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+/// 下載回應共用的標頭：檔名（RFC 6266）、不讓中間的代理壓縮 / 改寫 / 先存成暫存檔。
+/// Headers every download carries: the name (RFC 6266), and no compressing, transforming or spooling on the way.
+fn download_response(body: Body, content_type: &'static str, name: &str, len: Option<u64>) -> Response {
+    let mut resp = Response::new(body);
+    let h = resp.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Ok(v) = HeaderValue::from_str(&sftp::attachment(name)) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    if let Some(l) = len {
+        h.insert(header::CONTENT_LENGTH, HeaderValue::from(l));
+    }
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store, no-transform"));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    // Nginx（Nginx Proxy Manager）別把大檔先寫進它自己的暫存檔。/ Nginx: don't spool a big download to disk.
+    h.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    resp
+}
+
+/// 一個檔案：照開檔時的大小送（`take`），下載途中長大的部分不送，Content-Length 才對得上。
+/// One file, sent at the size it had when opened (`take`), so Content-Length holds even if it grows meanwhile.
+async fn file_response<S>(sftp: S, path: &str, name: &str) -> Result<Response, SftpError>
+where
+    S: std::ops::Deref<Target = russh_sftp::client::SftpSession> + Send + Sync + 'static,
+{
+    let len = sftp.metadata(path).await?.size.unwrap_or(0);
+    let file = sftp.open(path).await?;
+    let stream = ReaderStream::with_capacity(file.take(len), sftp::zipstream::CHUNK);
+    // SFTP channel（與它的 lease）要活到串流結束。/ Keep the SFTP channel for the duration of the stream.
+    // fuse：壓縮層（br / gzip）在串流結束後還會再 poll 一次，沒 fuse 的 unfold 會 panic、連線被砍（瀏覽器下載卡住）。
+    // fuse: the compression layer polls once more after the end; an unfused unfold panics and the download hangs.
+    let guarded = futures::stream::unfold((stream, Some(sftp)), |(mut s, guard)| async move {
+        match s.next().await {
+            Some(item) => Some((item, (s, guard))),
+            None => {
+                drop(guard);
+                None
+            }
+        }
+    })
+    .fuse();
+    Ok(download_response(Body::from_stream(guarded), "application/octet-stream", name, Some(len)))
+}
+
+/// 資料夾 / 好幾個東西：邊打包邊送，沒有 Content-Length。/ A folder or several paths, zipped as it streams.
+fn zip_response<S>(state: &AppState, sftp: S, paths: Vec<String>, name: &str) -> Response
+where
+    S: std::ops::Deref<Target = russh_sftp::client::SftpSession> + Send + Sync + 'static,
+{
+    let stream = sftp::zipstream::zip_stream(sftp, paths, state.config.tz_offset_minutes);
+    download_response(Body::from_stream(stream), "application/zip", name, None)
+}
+
+/// zip 的檔名：一個 = 它的名字，好幾個 = 所在資料夾的名字。/ The zip's name: the item's, or the folder's for several.
+fn zip_name(paths: &[String]) -> String {
+    let name = if paths.len() == 1 { sftp::basename(&paths[0]) } else { sftp::basename(&ops::parent(&paths[0])) };
+    let name = if name.is_empty() || name == "/" || name.ends_with(':') { "files".to_string() } else { name };
+    format!("{name}.zip")
+}
+
+/// 大量傳輸用的 SFTP（自己的 channel，開不了就共用那條；見 `ssh::pool`）。/ SFTP for a bulk transfer (see `ssh::pool`).
+async fn transfer(state: &AppState, t: &Tunnel, username: &str) -> ApiResult<TransferSftp> {
+    state.pool.bulk_sftp(state, t.reverse_port, username).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
+}
+
+#[utoipa::path(get, path = "/api/sftp/download/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "File or directory (directories are zipped as they stream)")), responses((status = 200, description = "Streamed file (application/octet-stream, with Content-Length) or zip (application/zip, streamed while it is built) with Content-Disposition", content_type = "application/octet-stream"), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn download(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -105,52 +181,113 @@ async fn download(
     let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let path = sftp::resolve_path(&raw, &home);
-    let name = sftp::basename(&path);
     let meta = sftp.metadata(&path).await.map_err(|_| ApiError::bad_request("Failed to download file or directory"))?;
+    drop(sftp);
+    let bulk = transfer(&state, &t, &username).await?;
     if meta.is_dir() {
-        let tmp = sftp::zip_directory(&sftp, &path).await.map_err(|e| {
-            tracing::warn!(error = %e, "zip download failed");
-            ApiError::bad_request("Failed to download file or directory")
-        })?;
-        let file = tokio::fs::File::open(tmp.path()).await.map_err(|e| ApiError::internal(e.to_string()))?;
-        let len = file.metadata().await.ok().map(|m| m.len());
-        let body = Body::from_stream(ReaderStream::new(file));
-        let mut resp = Response::new(body);
-        *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut().insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
-        resp.headers_mut().insert(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}.zip\"").parse().unwrap());
-        if let Some(l) = len {
-            resp.headers_mut().insert(header::CONTENT_LENGTH, l.to_string().parse().unwrap());
-        }
-        // 暫存檔在串流結束後刪除。/ Keep the temp file alive until the stream finishes.
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            drop(tmp);
-        });
-        Ok(resp)
+        let name = zip_name(std::slice::from_ref(&path));
+        Ok(zip_response(&state, bulk, vec![path], &name))
     } else {
-        let file = sftp.open(&path).await.map_err(|_| ApiError::bad_request("Failed to download file or directory"))?;
-        // SFTP channel（與它的 lease）要活到串流結束。/ Keep the SFTP channel for the duration of the stream.
-        let stream = ReaderStream::new(file);
-        // fuse：壓縮層（br / gzip）在串流結束後還會再 poll 一次，沒 fuse 的 unfold 會 panic、連線被砍（瀏覽器下載卡住）。
-        // fuse: the compression layer polls once more after the end; an unfused unfold panics and the download hangs.
-        use futures::StreamExt;
-        let guarded = futures::stream::unfold((stream, Some(sftp)), |(mut s, guard)| async move {
-            match s.next().await {
-                Some(item) => Some((item, (s, guard))),
-                None => {
-                    drop(guard);
-                    None
-                }
+        let name = sftp::basename(&path);
+        file_response(bulk, &path, &name).await.map_err(|_| ApiError::bad_request("Failed to download file or directory"))
+    }
+}
+
+#[utoipa::path(post, path = "/api/sftp/download-link/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), request_body = super::schemas::SftpPathsRequest, responses((status = 200, description = "A one-time link (60 s) the browser opens itself: one file = the file, a folder or several paths = one zip", body = super::schemas::SftpDownloadLink), (status = 400, description = "code = path_required", body = super::schemas::SftpError), (status = 403, body = super::schemas::SftpError), (status = 404, description = "code = not_found", body = super::schemas::SftpError)))]
+async fn download_link(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let op = Op::open(&state, &user, id, &username, &headers).await?;
+    let paths = op.paths(&body)?;
+    let mut file_size = None;
+    for p in &paths {
+        let m = op.sftp.metadata(p.as_str()).await.map_err(|e| sftp_error(&e, p))?;
+        if paths.len() == 1 && !m.is_dir() {
+            file_size = Some(m.size.unwrap_or(0));
+        }
+    }
+    let zip = file_size.is_none();
+    let name = if zip { zip_name(&paths) } else { sftp::basename(&paths[0]) };
+    let token = state.downloads.issue(Link { user_id: user.id, tunnel_id: op.t.id, username: op.username.clone(), paths, zip, name: name.clone() });
+    Ok(Json(json!({
+        "url": format!("/api/sftp/fetch/{token}"),
+        "name": name,
+        "zip": zip,
+        "size": file_size,
+        "expires_in": links::TTL.as_secs(),
+    })))
+}
+
+/// 一次性連結打開時再檢查一次：帳號、功能、還看得到這條隧道、還能用這個帳號。失敗 = 純文字（瀏覽器的下載列顯示失敗）。
+/// Checked again when the link is opened; a failure is plain text (the browser shows the download as failed).
+async fn fetch_link(state: &AppState, token: &str) -> Result<Response, (StatusCode, String)> {
+    let gone = || (StatusCode::NOT_FOUND, "This download link has expired or was already used. Start the download again in Telepy.".to_string());
+    let link = state.downloads.take(token).ok_or_else(gone)?;
+    let user = db::users::by_id(&state.db, link.user_id).await.ok().flatten().filter(|u| u.is_active).ok_or_else(gone)?;
+    if !state.features.allowed(&user, crate::features::Feature::Files).await.unwrap_or(false) {
+        return Err((StatusCode::FORBIDDEN, crate::features::disabled_message(crate::features::Feature::Files)));
+    }
+    let t = db::tunnels::by_id(&state.db, link.tunnel_id).await.ok().flatten().ok_or_else(gone)?;
+    let can_view = permissions::check_access(&state.db, user.id, &t, Permission::View).await.unwrap_or(false);
+    let allowed = can_view && permissions::allowed_usernames(&state.db, user.id, &t).await.is_ok_and(|a| a.iter().any(|u| u.username == link.username));
+    if !allowed {
+        return Err(gone());
+    }
+    let sftp = state.pool.bulk_sftp(state, t.reverse_port, &link.username).await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let failed = |e: SftpError| {
+        let (status, _) = ops::classify(&e);
+        (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), e.to_string())
+    };
+    if link.zip {
+        for p in &link.paths {
+            sftp.metadata(p.as_str()).await.map_err(failed)?;
+        }
+        Ok(zip_response(state, sftp, link.paths, &link.name))
+    } else {
+        file_response(sftp, &link.paths[0], &link.name).await.map_err(failed)
+    }
+}
+
+#[utoipa::path(get, path = "/api/sftp/fetch/{token}", tag = "SFTP", params(("token" = String, Path, description = "One-time token from download-link (60 s, single use)")), responses((status = 200, description = "The file (with Content-Length) or the zip (streamed)", content_type = "application/octet-stream"), (status = 403, description = "Files are turned off for this account (text)"), (status = 404, description = "Expired, used, or access is gone (text)"), (status = 502, description = "The device could not be reached (text)")))]
+async fn fetch(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    match fetch_link(&state, &token).await {
+        Ok(r) => r,
+        Err((status, msg)) => (status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response(),
+    }
+}
+
+/// 暫存檔（`part`）完成後放到 `target`：已經有同名的就照 `overwrite`（覆蓋時沿用原本的權限；symlink 改的是它指到的
+/// 檔案，連結還在，跟編輯器存檔一樣）。
+/// Put a finished part file at `target`; an existing file is replaced only with `overwrite` (keeping its mode; through
+/// a symlink the file it points to is replaced and the link stays, like the editor's save).
+async fn finish_part(state: &AppState, op: &Op, part: &str, target: &str, overwrite: bool) -> ApiResult<()> {
+    let real = match op.sftp.symlink_metadata(target).await {
+        Ok(m) if m.is_symlink() && overwrite => op.sftp.canonicalize(target).await.unwrap_or_else(|_| target.to_string()),
+        _ => target.to_string(),
+    };
+    let target = real.as_str();
+    match op.sftp.metadata(target).await {
+        Ok(m) if m.is_dir() => {
+            let _ = op.sftp.remove_file(part).await;
+            Err(coded(StatusCode::CONFLICT, "is_directory", format!("{target} is a folder")))
+        }
+        Ok(m) => {
+            if !overwrite {
+                let _ = op.sftp.remove_file(part).await;
+                return Err(coded(StatusCode::CONFLICT, "exists", format!("{target} already exists")));
             }
-        })
-        .fuse();
-        let mut resp = Response::new(Body::from_stream(guarded));
-        *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut().insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
-        resp.headers_mut().insert(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"").parse().unwrap());
-        resp.headers_mut().insert(header::CONTENT_LENGTH, meta.len().to_string().parse().unwrap());
-        Ok(resp)
+            if let Some(mode) = m.permissions {
+                let _ = op.sftp.set_metadata(part, ops::mode_attrs(mode)).await;
+            }
+            replace_file(state, op, part, target).await.map_err(|e| sftp_error(&e, "save"))
+        }
+        Err(_) => op.sftp.rename(part, target).await.map_err(|e| sftp_error(&e, "rename")),
+    }
+}
+
+/// 建暫存檔的錯誤：資料夾不能寫 = `dir_not_writable`。/ Creating the part file: an unwritable folder is its own code.
+fn create_error(op: &Op, e: &SftpError, target: &str) -> ApiError {
+    match ops::classify(e) {
+        (403, _) => coded(StatusCode::FORBIDDEN, "dir_not_writable", format!("{} can't create files in {}", op.username, ops::parent(target))),
+        _ => sftp_error(e, "upload"),
     }
 }
 
@@ -170,21 +307,155 @@ async fn upload(
     let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let dest = sftp::resolve_path(&destination, &home);
+    let op = Op { t, username: username.clone(), by: user.username.clone(), sftp, home };
     // multipart 的 Field 借用 Multipart，所以在迴圈內直接串流寫入。/ Stream the field inside the loop.
+    // 先寫到旁邊的暫存檔、完成才改名：上傳失敗不會弄壞原本的檔案。/ Write next to it, rename when complete.
     while let Ok(Some(mut field)) = multipart.next_field().await {
         if field.name() != Some("file") {
             continue;
         }
         let filename = field.file_name().map(str::to_string).unwrap_or_else(|| "upload".to_string());
-        let target = sftp::upload_target(&sftp, &dest, &filename).await;
-        let mut file = sftp.create(&target).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
-        while let Some(chunk) = field.chunk().await.map_err(|e| ApiError::bad_request(e.to_string()))? {
-            file.write_all(&chunk).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let target = sftp::upload_target(&op.sftp, &dest, &filename).await;
+        let part = ops::part_path(&target, &crate::util::random_alnum(16));
+        let mut file = op.sftp.create(&part).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let written = async {
+            while let Some(chunk) = field.chunk().await.map_err(|e| ApiError::bad_request(e.to_string()))? {
+                file.write_all(&chunk).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
+            }
+            file.shutdown().await.map_err(|e| ApiError::bad_request(e.to_string()))
+        };
+        if let Err(e) = written.await {
+            let _ = op.sftp.remove_file(part.as_str()).await;
+            return Err(e);
         }
-        file.shutdown().await.map_err(|e| ApiError::bad_request(e.to_string()))?;
-        return Ok(Json(json!({ "success": "File uploaded successfully" })));
+        finish_part(&state, &op, &part, &target, true).await?;
+        return Ok(Json(json!({ "success": "File uploaded successfully", "path": target })));
     }
     Err(ApiError::bad_request("File and destination path required"))
+}
+
+fn number(q: &HashMap<String, String>, key: &str) -> ApiResult<Option<u64>> {
+    match q.get(key) {
+        None => Ok(None),
+        Some(v) => v.parse().map(Some).map_err(|_| coded(StatusCode::BAD_REQUEST, "bad_offset", format!("{key} must be a whole number"))),
+    }
+}
+
+fn flag(q: &HashMap<String, String>, key: &str) -> bool {
+    matches!(q.get(key).map(String::as_str), Some("1" | "true"))
+}
+
+/// 從多大的一段起寫在自己的 sftp channel 上。/ Parts from this size get their own SFTP channel.
+const BULK_PART: u64 = 1024 * 1024;
+
+fn part_done(target: &str, total: u64) -> Json<Value> {
+    Json(json!({ "received": total, "done": true, "path": target }))
+}
+
+#[utoipa::path(put, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id chosen by the client (8–64 letters or digits)"), ("offset" = u64, Query, description = "Where this part starts (0 = the first part; creates or restarts the upload)"), ("total" = u64, Query, description = "The file's size; the part that reaches it renames the upload onto the target"), ("overwrite" = Option<bool>, Query, description = "1 = replace an existing file (its mode is kept)"), ("parents" = Option<bool>, Query, description = "1 = create missing folders above the target (first part)"), ("retry" = Option<bool>, Query, description = "1 = this part is being sent again after a lost answer")), request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The part's bytes (≤ 32 MiB)"), responses((status = 200, body = super::schemas::SftpUploadPart), (status = 400, description = "code = bad_upload | bad_offset | invalid_name | path_required", body = super::schemas::SftpError), (status = 403, description = "code = dir_not_writable | permission_denied | step_up_required", body = super::schemas::SftpError), (status = 409, description = "code = exists | is_directory | upload_offset (carries `received`: resume from there) | upload_gone (start again)", body = super::schemas::SftpError), (status = 413, description = "code = too_large", body = super::schemas::SftpError)))]
+async fn upload_part(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+    Path((id, username)): Path<(i64, String)>,
+    Query(q): Query<HashMap<String, String>>,
+    body: Body,
+) -> ApiResult<Json<Value>> {
+    let op = Op::open(&state, &user, id, &username, &headers).await?;
+    let target = op.path(q.get("path").map(String::as_str))?;
+    check_name(&target)?;
+    let upload = q.get("upload").map(String::as_str).filter(|u| ops::valid_upload_id(u)).ok_or_else(|| coded(StatusCode::BAD_REQUEST, "bad_upload", "upload must be 8–64 letters or digits"))?;
+    let offset = number(&q, "offset")?.unwrap_or(0);
+    let total = number(&q, "total")?.ok_or_else(|| coded(StatusCode::BAD_REQUEST, "bad_offset", "total is required"))?;
+    if offset > total {
+        return Err(coded(StatusCode::BAD_REQUEST, "bad_offset", "offset is past the end of the file"));
+    }
+    let overwrite = flag(&q, "overwrite");
+    let part = ops::part_path(&target, upload);
+    let part_size = ops::size_of(&op.sftp, &part).await.map_err(|e| sftp_error(&e, "stat"))?;
+    // 目標現在的樣子（只有需要時才問）。/ The target as it is now (asked only when needed).
+    let target_now = || async { op.sftp.metadata(target.as_str()).await.ok() };
+    // 大的一段寫在自己的 sftp channel 上（列目錄不必排在後面、慢的裝置也不會逾時）；小的走共用那條，省掉開 channel。
+    // A big part is written on its own SFTP channel; small ones (most files of a folder) use the shared one.
+    let big = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n >= BULK_PART);
+    let mut bulk: Option<TransferSftp> = None;
+    let mut file = match ops::part_step(offset, part_size) {
+        PartStep::Start => {
+            if let Some(m) = target_now().await {
+                if m.is_dir() {
+                    return Err(coded(StatusCode::CONFLICT, "is_directory", format!("{target} is a folder")));
+                }
+                if !overwrite {
+                    // 只有一段的檔案：上一次其實傳完了，只是回覆沒收到。/ A one-part file whose answer was lost.
+                    if flag(&q, "retry") && part_size.is_none() && m.size == Some(total) {
+                        return Ok(part_done(&target, total));
+                    }
+                    return Err(coded(StatusCode::CONFLICT, "exists", format!("{target} already exists")));
+                }
+            }
+            if flag(&q, "parents") {
+                ops::mkdir_all(&op.sftp, &ops::parent(&target)).await.map_err(|e| sftp_error(&e, "mkdir"))?;
+            }
+            if big {
+                bulk = Some(transfer(&state, &op.t, &op.username).await?);
+            }
+            let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
+            writer.create(part.as_str()).await.map_err(|e| create_error(&op, &e, &target))?
+        }
+        PartStep::Append => {
+            if big {
+                bulk = Some(transfer(&state, &op.t, &op.username).await?);
+            }
+            let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
+            let mut f = writer.open_with_flags(part.as_str(), russh_sftp::protocol::OpenFlags::WRITE).await.map_err(|e| sftp_error(&e, "open"))?;
+            f.seek(std::io::SeekFrom::Start(offset)).await.map_err(|e| sftp_error(&SftpError::from(e), "seek"))?;
+            f
+        }
+        PartStep::Resume(received) => {
+            return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": format!("The device has {received} bytes of this upload; continue from there"), "code": "upload_offset", "received": received })));
+        }
+        PartStep::Gone => {
+            // 最後一段其實已經完成改名（回覆沒收到）。/ The last part already renamed it; its answer was lost.
+            if matches!(target_now().await, Some(m) if !m.is_dir() && m.size == Some(total)) {
+                return Ok(part_done(&target, total));
+            }
+            return Err(coded(StatusCode::CONFLICT, "upload_gone", "This upload was interrupted on the device; start it again"));
+        }
+    };
+    let mut written = 0u64;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| coded(StatusCode::BAD_REQUEST, "interrupted", format!("The upload was cut off: {e}")))?;
+        written += chunk.len() as u64;
+        if written > ops::MAX_PART {
+            return Err(coded(StatusCode::PAYLOAD_TOO_LARGE, "too_large", format!("A part may be at most {} MiB", ops::MAX_PART / 1024 / 1024)));
+        }
+        if offset + written > total {
+            return Err(coded(StatusCode::BAD_REQUEST, "bad_offset", "More data than the file's size"));
+        }
+        file.write_all(&chunk).await.map_err(|e| sftp_error(&SftpError::from(e), "write"))?;
+    }
+    file.shutdown().await.map_err(|e| sftp_error(&SftpError::from(e), "write"))?;
+    drop(bulk);
+    let received = offset + written;
+    if received < total {
+        return Ok(Json(json!({ "received": received, "done": false })));
+    }
+    let have = ops::size_of(&op.sftp, &part).await.map_err(|e| sftp_error(&e, "stat"))?.unwrap_or(0);
+    if have != total {
+        return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": format!("The device has {have} of {total} bytes; continue from there"), "code": "upload_offset", "received": have.min(total) })));
+    }
+    finish_part(&state, &op, &part, &target, overwrite).await?;
+    Ok(part_done(&target, total))
+}
+
+#[utoipa::path(delete, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id")), responses((status = 200, description = "{removed}: the unfinished part file is gone", body = super::schemas::SftpUploadCancel), (status = 400, body = super::schemas::SftpError)))]
+async fn upload_part_cancel(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let op = Op::open(&state, &user, id, &username, &headers).await?;
+    let target = op.path(q.get("path").map(String::as_str))?;
+    let upload = q.get("upload").map(String::as_str).filter(|u| ops::valid_upload_id(u)).ok_or_else(|| coded(StatusCode::BAD_REQUEST, "bad_upload", "upload must be 8–64 letters or digits"))?;
+    let removed = op.sftp.remove_file(ops::part_path(&target, upload)).await.is_ok();
+    Ok(Json(json!({ "removed": removed })))
 }
 
 #[allow(dead_code)]
@@ -464,33 +735,17 @@ async fn copy(State(state): State<AppState>, AuthUser(user): AuthUser, headers: 
     Ok(Json(json!({ "copied": copied, "method": method, "failed": failed, "destination": dest })))
 }
 
-#[utoipa::path(post, path = "/api/sftp/zip/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), request_body = super::schemas::SftpPathsRequest, responses((status = 200, description = "application/zip with every path at the top level (folders whole)", content_type = "application/zip"), (status = 400, body = super::schemas::SftpError), (status = 404, body = super::schemas::SftpError)))]
+#[utoipa::path(post, path = "/api/sftp/zip/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), request_body = super::schemas::SftpPathsRequest, responses((status = 200, description = "application/zip with every path at the top level (folders whole), streamed while it is built", content_type = "application/zip"), (status = 400, body = super::schemas::SftpError), (status = 404, body = super::schemas::SftpError)))]
 async fn zip(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, AppJson(body): AppJson<Value>) -> ApiResult<Response> {
     let op = Op::open(&state, &user, id, &username, &headers).await?;
     let paths = op.paths(&body)?;
-    let tmp = sftp::zip_paths(&op.sftp, &paths).await.map_err(|e| {
-        tracing::warn!(error = %e, "zip download failed");
-        coded(StatusCode::BAD_REQUEST, "failed", "Failed to download file or directory")
-    })?;
-    let name = if paths.len() == 1 { sftp::basename(&paths[0]) } else { sftp::basename(&ops::parent(&paths[0])) };
-    let name = if name.is_empty() || name == "/" { "files".to_string() } else { name };
-    let file = tokio::fs::File::open(tmp.path()).await.map_err(|e| ApiError::internal(e.to_string()))?;
-    let len = file.metadata().await.ok().map(|m| m.len());
-    let mut resp = Response::new(Body::from_stream(ReaderStream::new(file)));
-    resp.headers_mut().insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
-    let disposition = format!("attachment; filename=\"{}.zip\"", name.replace(['"', '\\', '\r', '\n'], "_"));
-    if let Ok(v) = disposition.parse() {
-        resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    // 開始串流之後就不能回錯誤碼了：先確認每個都在。/ Check every path before streaming starts.
+    for p in &paths {
+        op.sftp.metadata(p.as_str()).await.map_err(|e| sftp_error(&e, p))?;
     }
-    if let Some(l) = len {
-        resp.headers_mut().insert(header::CONTENT_LENGTH, l.to_string().parse().unwrap());
-    }
-    // 暫存檔在串流結束後刪除。/ Keep the temp file alive until the stream finishes.
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        drop(tmp);
-    });
-    Ok(resp)
+    let name = zip_name(&paths);
+    let bulk = transfer(&state, &op.t, &op.username).await?;
+    Ok(zip_response(&state, bulk, paths, &name))
 }
 
 fn epoch_iso(t: Option<u32>) -> Value {

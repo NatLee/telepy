@@ -72,8 +72,9 @@ once_cell = "1"
 # pty / process (terminal)
 nix = { version = "0.29", features = ["process", "signal", "term", "fs", "poll"] }
 libc = "0.2"
-# sftp download packaging
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# sftp download packaging（9 起有不需要 Seek 的串流寫入，資料夾下載邊打包邊送）
+# sftp download packaging (9 writes to a plain stream, so folder downloads are zipped as they go out)
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tempfile = "3"
 urlencoding = "2"
 url = "2"
