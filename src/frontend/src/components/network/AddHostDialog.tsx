@@ -20,16 +20,18 @@ interface Props {
     tunnel: TopologyTunnel | null;
     onClose: () => void;
     addHost: (tn: TopologyTunnel, input: HostInput) => Promise<FormErrors | null>;
+    /** 從 IP 地圖點空位：先填好這個位址。/ From a free cell on the IP map: start with this address. */
+    address?: string;
 }
 
 /** 每條隧道一份新表單（key 重設狀態）。/ A fresh form per tunnel (the key resets the state). */
 export function AddHostDialog({ tunnel, ...rest }: Props) {
-    return tunnel ? <AddHostForm key={tunnel.id} tunnel={tunnel} {...rest} /> : null;
+    return tunnel ? <AddHostForm key={`${tunnel.id}-${rest.address ?? ""}`} tunnel={tunnel} {...rest} /> : null;
 }
 
-function AddHostForm({ tunnel, onClose, addHost }: Props & { tunnel: TopologyTunnel }) {
+function AddHostForm({ tunnel, onClose, addHost, address }: Props & { tunnel: TopologyTunnel }) {
     const { t } = useI18n();
-    const [form, setForm] = useState(EMPTY);
+    const [form, setForm] = useState({ ...EMPTY, address: address ?? "" });
     const [errors, setErrors] = useState<FormErrors>({});
     const [busy, setBusy] = useState(false);
 

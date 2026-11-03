@@ -341,6 +341,7 @@ telepy run "restart service" box --var svc=nginx   # -y で「先に確認」の
 
 ```sh
 telepy lan ls box                          # Telepy が把握している、デバイスの背後の LAN ホスト
+telepy lan map box                         # デバイスのネットワークをアドレスのマップで表示（# ホスト、G ゲートウェイ、D デバイス、x 見えず、. 空き）
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # ID、アドレス、ラベルのどれかで指定
 telepy lan scan box                        # ネットワークをスキャン（network:scan）。完了を待ち、WHAT・NOTE 列付きで一覧
@@ -423,6 +424,7 @@ telepy browse close "$ID"
 | `telepy snippets ls` | 自分のスニペット、サイトのスニペット、`--tunnel` を付ければそのトンネルのもの | `ssh:exec` |
 | `telepy run <snippet> <target>` | ツールボックスのスニペットを実行。`--var name=value`、`-y`、`--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | Telepy が把握している、デバイスの背後の LAN ホスト | `tunnels:read` |
+| `telepy lan map <tunnel>` | スキャンしたネットワークを /24 ごとに 16 × 16 のマップで表示：ホスト、ゲートウェイ、デバイス自身、今回見えなかったマシン、空きアドレス（Web の IP マップと同じ） | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | ホストを手動で追加。`--label`、`--user`、`--port` | `tunnels:manage` |
 | `telepy lan scan <tunnel>` | デバイスのネットワークをスキャンし、見つかったものを各マシンの種類とその前のスキャンからの変化付きで一覧。`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | 1 台のホストが何か、各ポートで何が見えたか | `tunnels:read` |

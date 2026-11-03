@@ -197,8 +197,8 @@ export function stepIndex(current: number, length: number, delta: 1 | -1): numbe
 
 // ── 一開始用哪種看法 / Which view the page starts in ─────────────────────
 
-export type NetworkView = "tree" | "hosts";
-export const NETWORK_VIEWS: readonly NetworkView[] = ["tree", "hosts"];
+export type NetworkView = "tree" | "hosts" | "map";
+export const NETWORK_VIEWS: readonly NetworkView[] = ["tree", "hosts", "map"];
 /** 主機超過這麼多台、又沒選過時，先開「所有主機」。/ Above this many hosts and without a choice, start in "All hosts". */
 export const HOSTS_VIEW_ABOVE = 40;
 
@@ -209,6 +209,6 @@ export const HOSTS_VIEW_ABOVE = 40;
  */
 export function initialNetworkView(stored: string | null, hostCount: number, deepLink: boolean): NetworkView {
     if (deepLink) return "tree";
-    if (stored === "tree" || stored === "hosts") return stored;
+    if (stored === "tree" || stored === "hosts" || stored === "map") return stored;
     return hostCount > HOSTS_VIEW_ABOVE ? "hosts" : "tree";
 }

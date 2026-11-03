@@ -341,6 +341,7 @@ telepy run "restart service" box --var svc=nginx   # -y 跳過「先確認」的
 
 ```sh
 telepy lan ls box                          # Telepy 知道的、在這台裝置背後的區網主機
+telepy lan map box                         # 把裝置的網段畫成位址地圖（# 主機、G 閘道、D 裝置、x 沒看到、. 空著）
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # 用 id、位址或標籤指定
 telepy lan scan box                        # 掃描它的網路（network:scan），等完成，列出並多 WHAT、NOTE 兩欄
@@ -423,6 +424,7 @@ telepy browse close "$ID"
 | `telepy snippets ls` | 你的片段、全站的片段，加上 `--tunnel` 時再加該通道的 | `ssh:exec` |
 | `telepy run <snippet> <target>` | 執行工具箱片段；`--var name=value`、`-y`、`--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | Telepy 知道的、在裝置背後的區網主機 | `tunnels:read` |
+| `telepy lan map <tunnel>` | 把掃過的網段畫成每個 /24 一張 16 × 16 的地圖：主機、閘道、裝置自己、這次沒看到的、空著的位址（網頁的 IP 地圖） | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | 手動新增主機；`--label`、`--user`、`--port` | `tunnels:manage` |
 | `telepy lan scan <tunnel>` | 掃描裝置的網路並列出找到的，附上每台是什麼、跟前一次比變了什麼；`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | 一台主機是什麼、每個 port 看到什麼 | `tunnels:read` |

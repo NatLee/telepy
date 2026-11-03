@@ -13,7 +13,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X, Info } from "lucide-react";
+import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X, Info, Grid3x3 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -37,6 +37,7 @@ import { ScanChangesDialog } from "@/components/network/ScanChanges";
 import { isOwn } from "@/lib/lanChanges";
 import { DEVICE_KINDS, type DeviceKind } from "@/lib/lanIdentity";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
+import { IpMap } from "@/components/network/IpMap";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
 import { useLanTerminals, type WebRequest } from "@/hooks/useLanTerminals";
 import { useTopologyExpansion } from "@/hooks/useTopologyExpansion";
@@ -96,6 +97,8 @@ function NetworkInner() {
     // 「怎麼運作」：一開就是面板裡那台主機。/ "How it works", opening on the panel's host.
     const [infoOpen, setInfoOpen] = useState(false);
     const [addFor, setAddFor] = useState<number | null>(null);
+    // 從 IP 地圖點空位：預先填好的位址。/ The address pre-filled from a free cell on the IP map.
+    const [addAddress, setAddAddress] = useState<string | undefined>(undefined);
     // 「上次掃描變了什麼」開在哪台裝置。/ The device whose "what changed" dialog is open.
     const [changesFor, setChangesFor] = useState<number | null>(null);
     const panelRef = useRef<HTMLElement>(null);
@@ -177,11 +180,21 @@ function NetworkInner() {
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
     const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
     const [scanSchedule, setScanSchedule] = useState(false);
+    const viewOptions: { value: NetworkView; label: string; icon: React.ReactNode }[] = [
+        { value: "tree", label: t("network.view.tree"), icon: <Network size={14} /> },
+        { value: "hosts", label: `${t("network.view.hosts")} (${tableRows.length})`, icon: <List size={14} /> },
+        { value: "map", label: t("network.view.map"), icon: <Grid3x3 size={14} /> },
+    ];
     const onScan = (tn: TopologyTunnel, schedule = false) => {
         setScanSchedule(schedule);
         setScanFor(tn.id);
     };
-    const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
+    const onAdd = (tn: TopologyTunnel, address?: string) => {
+        setAddAddress(address);
+        setAddFor(tn.id);
+    };
+    // 搜尋時地圖上符合的主機（沒在搜尋 = null，全部照常）。/ Hosts the search matches, for the map (null = no search).
+    const mapMatches = useMemo(() => (query.trim() ? new Set(tunnels.flatMap((x) => x.hosts.map((h) => h.id))) : null), [query, tunnels]);
     const onChanges = (tn: TopologyTunnel) => setChangesFor(tn.id);
 
     // 機器多時：篩選（全部 / 有主機的 / 在線）、依我的通道群組分成資料夾（跟通道頁的「依群組 / 單一清單」同一個選擇）、
@@ -310,18 +323,19 @@ function NetworkInner() {
                         Narrow: the view switch takes the row (labels may wrap) and the device filter becomes one select,
                         so neither widens the page. */}
                     <div className="flex flex-wrap items-center gap-2">
+                        {/* 三種看法：寬的時候分段鈕，窄的時候一個下拉（分段鈕在手機上會把字從中間折斷）。
+                            Three views: segments when wide, one select when narrow (segments broke words mid-way on phones). */}
                         <Segmented
                             size="sm"
-                            fullWidth
-                            className="w-full @lg:w-auto"
+                            className="hidden @lg:inline-flex"
                             value={view}
                             onChange={setView}
                             aria-label={t("network.view.aria")}
-                            options={[
-                                { value: "tree", label: t("network.view.tree"), icon: <Network size={14} /> },
-                                { value: "hosts", label: `${t("network.view.hosts")} (${tableRows.length})`, icon: <List size={14} /> },
-                            ]}
+                            options={viewOptions}
                         />
+                        <NativeSelect value={view} onChange={(e) => setView(e.target.value as NetworkView)} aria-label={t("network.view.aria")} className="h-8 w-auto min-w-0 max-w-full text-sm @lg:hidden">
+                            {viewOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </NativeSelect>
                         {view === "tree" && (
                             <>
                                 <Segmented
@@ -349,7 +363,9 @@ function NetworkInner() {
                         )}
                     </div>
 
-                    {view === "hosts" ? (
+                    {view === "map" ? (
+                        <IpMap tunnels={allTunnels} matches={mapMatches} focusTunnel={focusTunnel} selectedHostId={host?.id ?? null} onOpenHost={onOpenHost} onAdd={onAdd} />
+                    ) : view === "hosts" ? (
                         <HostTable
                             rows={tableRows}
                             pageKey={query}
@@ -416,7 +432,7 @@ function NetworkInner() {
             <NetworkInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} tunnels={allTunnels} startTunnel={hostTunnel ?? (focusTunnel !== null ? allTunnels.find((x) => String(x.id) === focusTunnel) ?? null : null)} startHost={host} isOnline={actions.isOnline} />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} saveSchedule={actions.saveSchedule} focusSchedule={scanSchedule} />
             <ScanChangesDialog tn={changesTunnel} onClose={() => setChangesFor(null)} onPickHost={(h) => onOpenHost(h)} />
-            <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />
+            <AddHostDialog tunnel={addTunnel} address={addAddress} onClose={() => setAddFor(null)} addHost={actions.addHost} />
         </div>
     );
 }
