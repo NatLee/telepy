@@ -47,10 +47,18 @@ pub fn service_of(u: &url::Url) -> Option<&'static str> {
     SERVICES.iter().find(|(suffix, _)| host == *suffix || host.ends_with(&format!(".{suffix}"))).map(|(_, name)| *name)
 }
 
-/// 會推播的事件：有「桌面通知」這個管道、而且不是上線 / 離線這類狀態（狀態要有延遲與上限，下一步再接）。
-/// Pushed events: those with a desktop channel, except the status ones (they need a delay and limits; next step).
+/// 會推播的事件：有「桌面通知」這個管道的，加上「SSH 恢復回應」（降級的結尾；網頁上沒有它自己的通知，跟著降級的偏好）。
+/// 上線 / 離線 / 降級 / 恢復不走 `emit`，由監控迴圈照每個人的延遲送（`Push::status`）。
+/// Pushed events: those with a desktop channel, plus "recovered" (the end of degraded; it has no in-app notification of
+/// its own and follows degraded's preference). The four status events don't come through `emit`; the monitor sends
+/// them after each person's delay (`Push::status`).
 pub fn pushed(kind: Kind) -> bool {
-    channels(kind).contains(&Channel::Desktop) && !kind.is_status()
+    kind == Kind::TunnelRecovered || channels(kind).contains(&Channel::Desktop)
+}
+
+/// 決定要不要推的那一列偏好（恢復跟著降級）。/ The preference row that decides (recovered follows degraded).
+pub fn pref_kind(kind: Kind) -> Kind {
+    if kind == Kind::TunnelRecovered { Kind::TunnelDegraded } else { kind }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +106,8 @@ pub fn notice(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, data: &Value, 
         Kind::McpSessionOpened | Kind::McpSessionClosed => format!("ai-{tid}"),
         Kind::SessionWatched => format!("watch-{tid}"),
         Kind::AccountSignInNewDevice => "sign-in".to_string(),
+        // 上線 / 離線 / 降級 / 恢復共用一個 tag：後來的取代先前的（跟網頁的桌面通知一樣）。/ One tag for the four status events.
+        Kind::TunnelOffline | Kind::TunnelOnline | Kind::TunnelDegraded | Kind::TunnelRecovered => format!("tunnel-{tid}"),
         other => other.name().to_string(),
     };
     let body = if kind == Kind::CommandApprovalRequested && !details { hidden_command(lang, tunnel, data) } else { sentence(kind, lang, tunnel, data) };
@@ -111,6 +121,16 @@ pub fn notice(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, data: &Value, 
         // 等核准的指令過幾分鐘就失效，晚到沒有用。/ A pending command expires within minutes; a late one is useless.
         ttl: if kind == Kind::CommandApprovalRequested { 600 } else { 86_400 },
     })
+}
+
+/// 這一小時的上線 / 離線推播到上限了：送一則說還有更多，其餘只留在 Telepy。/ The hour's status pushes hit the cap.
+pub fn held(lang: Lang, app_name: &str, per_hour: i64) -> Notice {
+    let body = match lang {
+        Lang::En => format!("More tunnels changed state. To keep your phone quiet, the rest of this hour's online / offline changes ({per_hour} a hour at most) are only shown in Telepy."),
+        Lang::ZhTw => format!("還有其他通道狀態變了。為了不讓手機一直響，這一小時剩下的上線 / 離線變化（每小時最多 {per_hour} 則）只在 Telepy 裡看得到。"),
+        Lang::Ja => format!("ほかのトンネルの状態も変わりました。通知が鳴り続けないよう、この 1 時間の残りのオンライン / オフラインの変化（1 時間に最大 {per_hour} 件）は Telepy でのみ表示します。"),
+    };
+    Notice { title: app_name.to_string(), body, tag: "status-held".into(), path: "/tunnels".into(), urgent: false, ttl: 3600 }
 }
 
 /// 不寫指令內容的核准請求（鎖定畫面別人看得到）。/ An approval request without the command (lock screens are visible).
@@ -162,13 +182,28 @@ mod tests {
     }
 
     #[test]
-    fn status_events_wait_for_their_delay_and_limits() {
+    fn pushed_events_and_the_preference_that_decides() {
         assert!(pushed(Kind::CommandApprovalRequested));
         assert!(pushed(Kind::AccountSignInNewDevice));
         assert!(pushed(Kind::TunnelIpChanged));
-        assert!(!pushed(Kind::TunnelOffline), "status events come with their own delay");
-        assert!(!pushed(Kind::TunnelDegraded));
+        assert!(pushed(Kind::TunnelOffline) && pushed(Kind::TunnelOnline) && pushed(Kind::TunnelDegraded));
+        assert!(pushed(Kind::TunnelRecovered), "the end of a degraded push");
         assert!(!pushed(Kind::UserCreated), "no in-app notification, no push");
+        assert_eq!(pref_kind(Kind::TunnelRecovered), Kind::TunnelDegraded);
+        assert_eq!(pref_kind(Kind::TunnelOffline), Kind::TunnelOffline);
+    }
+
+    #[test]
+    fn status_pushes_share_the_tunnels_tag() {
+        for k in [Kind::TunnelOffline, Kind::TunnelOnline, Kind::TunnelDegraded, Kind::TunnelRecovered] {
+            let n = notice(k, Lang::En, Some(&t()), &json!({}), None, false, "Telepy").unwrap();
+            assert_eq!(n.tag, "tunnel-7", "{k:?}");
+        }
+        let off = notice(Kind::TunnelOffline, Lang::ZhTw, Some(&t()), &json!({}), None, false, "Telepy").unwrap();
+        assert!(off.body.contains("lab-pi") && off.body.contains("2201"), "{}", off.body);
+        let h = held(Lang::En, "Lab", 20);
+        assert_eq!((h.title.as_str(), h.tag.as_str()), ("Lab", "status-held"));
+        assert!(h.body.contains("20"));
     }
 
     #[test]
@@ -195,7 +230,7 @@ mod tests {
         assert_eq!(tag(Kind::McpSessionOpened), "ai-7");
         assert_eq!(tag(Kind::SessionWatched), "watch-7");
         assert_eq!(notice(Kind::AccountSignInNewDevice, Lang::En, None, &json!({}), None, true, "Telepy").unwrap().tag, "sign-in");
-        assert!(notice(Kind::TunnelOffline, Lang::En, Some(&t()), &json!({}), None, true, "Telepy").is_none());
+        assert!(notice(Kind::UserCreated, Lang::En, None, &json!({}), None, true, "Telepy").is_none());
     }
 
     #[test]

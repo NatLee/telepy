@@ -71,6 +71,15 @@ export interface PushDevice {
     last_error_at: string | null;
 }
 
+/** 上線 / 離線推播：自己選的等待、站台上限下實際的、可選的與每小時上限。/ Status pushes: the wait and its limits. */
+export interface PushStatus {
+    delay: number;
+    effective: number;
+    max_delay: number;
+    per_hour: number;
+    choices: number[];
+}
+
 export interface PushView {
     enabled: boolean;
     available: boolean;
@@ -78,6 +87,25 @@ export interface PushView {
     key_error: string | null;
     per_minute: number;
     subscriptions: PushDevice[];
+    /** 較舊的後端沒有。/ Missing from older backends. */
+    status?: PushStatus;
+}
+
+/** 「離線多久才推」的選項（= 後端 `push::STATUS_DELAYS`，測試會比對）。/ The offline waits (= the backend's `STATUS_DELAYS`). */
+export const STATUS_DELAYS = [0, 60, 120, 300, 600, 900, 1800, 3600] as const;
+
+/** 選得到的：不超過站台上限；自己目前的選擇就算超過也列出來（標成會被縮短）。/ Choices within the site's limit, plus the current one. */
+export function delayChoices(s: Pick<PushStatus, "choices" | "max_delay" | "delay">): { secs: number; capped: boolean }[] {
+    return s.choices.filter((c) => c <= s.max_delay || c === s.delay).map((secs) => ({ secs, capped: secs > s.max_delay }));
+}
+
+/**
+ * 說明圖的時間軸：斷線 ─ 等 N ─ 還沒回來就推「離線」─ 回來推「恢復上線」；比 N 短的閃斷什麼都不推。
+ * The diagram's timeline: down ─ wait N ─ still down → "offline" ─ back → "online again"; a blip shorter than N sends nothing.
+ */
+export function statusTimeline(blipSecs: number, delaySecs: number): { offline: boolean; online: boolean } {
+    const announced = blipSecs >= delaySecs;
+    return { offline: announced, online: announced };
 }
 
 /** 這台裝置最近一次送出：沒送過 / 成功 / 失敗（比較新的那個）。/ This device's last delivery: none / ok / failed (whichever is newer). */

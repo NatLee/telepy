@@ -80,6 +80,10 @@ pub struct SiteSettings {
     pub app_name: String,
     /// 推播通知（Web Push）整站開關。/ Push notifications (Web Push), site-wide.
     pub notify_push: bool,
+    /// 每個人「離線多久才推」最多能選多久（秒）。/ The longest offline wait anyone may pick (seconds).
+    pub notify_push_max_delay: i64,
+    /// 每人每小時最多幾則上線 / 離線推播。/ Status pushes per person per hour.
+    pub notify_push_per_hour: i64,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -137,6 +141,8 @@ pub const FIELDS: &[&str] = &[
     "app_name_mode",
     "app_name",
     "notify_push",
+    "notify_push_max_delay",
+    "notify_push_per_hour",
 ];
 
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
@@ -147,7 +153,7 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
     client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \
     server_gateway_proxy_protocol_from, server_log_level, server_openapi_enabled, server_google_client_id, server_public_url, server_ssh_host, \
-    app_name_mode, app_name, notify_push";
+    app_name_mode, app_name, notify_push, notify_push_max_delay, notify_push_per_hour";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

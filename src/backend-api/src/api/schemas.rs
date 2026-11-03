@@ -1434,6 +1434,10 @@ pub struct UserSettings {
     /// `/api/reverse/server/{id}/shell-history`)
     #[schema(example = "keep")]
     pub shell_history: String,
+    /// Seconds a tunnel must stay offline before a push tells you (0 / 60 / 120 / 300 / 600 / 900 / 1800 / 3600; default 60)
+    pub push_status_delay: i64,
+    /// The site's longest wait (`notify_push_max_delay`); a longer choice is shortened to it
+    pub push_status_delay_max: i64,
 }
 
 #[derive(ToSchema)]
@@ -1478,6 +1482,8 @@ pub struct UserSettingsPatch {
     /// keep | skip
     #[schema(example = "skip")]
     pub shell_history: Option<String>,
+    /// One of 0 / 60 / 120 / 300 / 600 / 900 / 1800 / 3600
+    pub push_status_delay: Option<i64>,
 }
 
 /// The caller's shell history choice for one tunnel
@@ -5187,6 +5193,9 @@ pub struct PushView {
     /// 每台裝置每分鐘最多幾則。/ Pushes per device per minute.
     pub per_minute: i64,
     pub subscriptions: Vec<PushSubscriptionJson>,
+    /// Online / offline pushes: `{delay (your choice), effective (after the site's limit), max_delay, per_hour, choices}`
+    #[schema(value_type = Object)]
+    pub status: serde_json::Value,
 }
 
 #[derive(ToSchema)]

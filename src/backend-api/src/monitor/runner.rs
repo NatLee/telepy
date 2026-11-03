@@ -12,7 +12,7 @@ use super::ports::{transitions, Debouncer, LatencyThrottle};
 use crate::db::{self, tunnels::Tunnel};
 use crate::presence;
 use crate::state::AppState;
-use crate::webhooks::{catalog, Event, Hook};
+use crate::webhooks::{catalog, Event, Hook, TunnelRef};
 
 /// presence 變動的推播頻率（只是讀一個 set，很便宜）。/ How often presence changes are pushed.
 const PRESENCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -25,6 +25,8 @@ pub struct Runner {
     degraded: HashSet<u16>,
     /// 每個 webhook 自己的告警計時（離線 / 降級要持續超過它設的延遲才發）。/ Alert timers, one set per webhook.
     alerts: HashMap<i64, Alerts>,
+    /// 每個開著推播的人自己的計時（用他自己選的延遲）。/ Alert timers per person with push on (their own delay).
+    push_alerts: HashMap<i64, Alerts>,
 }
 
 /// 把到期 / 結束的狀態告警送給一個 webhook（它有訂的才送）。/ Send status alerts to one webhook (subscribed ones only).
@@ -40,13 +42,22 @@ fn send_alerts(state: &AppState, hook: &Hook, tunnels: &[Tunnel], due: Vec<(i64,
 
 /// 一條隧道的狀況開始或結束：每個收得到它的 webhook 各自計時，結束時發過的就送恢復。
 /// A condition starts or ends on a tunnel: each webhook that hears about it times it; announced ones send the end.
-fn status_change(state: &AppState, runner: &mut Runner, hooks: &[Hook], viewers: &[i64], tunnels: &[Tunnel], t: &Tunnel, (c, starting): (Condition, bool)) {
+fn status_change(state: &AppState, runner: &mut Runner, hooks: &[Hook], pushers: &HashMap<i64, Duration>, viewers: &[i64], tunnels: &[Tunnel], t: &Tunnel, (c, starting): (Condition, bool)) {
     for h in hooks.iter().filter(|h| h.receives_status_of(t.id, viewers)) {
         let timers = runner.alerts.entry(h.row.id).or_default();
         if starting {
             timers.start(t.id, c, Instant::now());
         } else if let Some(a) = timers.end(t.id, c) {
             send_alerts(state, h, tunnels, vec![(t.id, a)]);
+        }
+    }
+    // 推播：看得到這條隧道、開著推播的每個人各自計時。/ Push: everyone who sees the tunnel and has push on times it.
+    for user in viewers.iter().filter(|u| pushers.contains_key(u)) {
+        let timers = runner.push_alerts.entry(*user).or_default();
+        if starting {
+            timers.start(t.id, c, Instant::now());
+        } else if let Some(a) = timers.end(t.id, c) {
+            state.push.status(*user, TunnelRef::of(t), a.kind());
         }
     }
 }
@@ -131,6 +142,24 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
         send_alerts(state, h, &tunnels, due);
     }
 
+    // 推播：開著推播的人各自用自己的延遲，到期的離線 / 降級現在送出；看不到的隧道連同計時忘掉。
+    // Push: each person with push on times conditions with their own delay; due ones go out now.
+    let pushers = state.push.status_listeners().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "push: cannot list who gets status pushes");
+        HashMap::new()
+    });
+    runner.push_alerts.retain(|user, _| pushers.contains_key(user));
+    for (user, delay) in &pushers {
+        let heard: HashSet<i64> = tunnels.iter().filter(|t| viewers(t.id).contains(user)).map(|t| t.id).collect();
+        let timers = runner.push_alerts.entry(*user).or_default();
+        timers.keep_only(&heard);
+        for (tunnel_id, alert) in timers.due(Instant::now(), *delay) {
+            if let Some(t) = tunnels.iter().find(|t| t.id == tunnel_id) {
+                state.push.status(*user, TunnelRef::of(t), alert.kind());
+            }
+        }
+    }
+
     // 延遲廣播刻意放在「狀態沒變就早退」之前。/ Latency runs before the no-change early return.
     if let Some(latency) = state.status.latency() {
         if runner.throttle.should_broadcast(&latency) {
@@ -167,7 +196,7 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
         for port in changed {
             let health = super::health(listen.contains(&port), state.status.probe_failures(port), true);
             for t in tunnels.iter().filter(|t| t.reverse_port == i64::from(port)) {
-                status_change(state, runner, &hooks, viewers(t.id), &tunnels, t, (Condition::Degraded, health == super::Health::Degraded));
+                status_change(state, runner, &hooks, &pushers, viewers(t.id), &tunnels, t, (Condition::Degraded, health == super::Health::Degraded));
                 let users = audience.get(&t.id).cloned().unwrap_or_default();
                 state.hub.notify_users(users, &json!({
                     "action": "UPDATE-TUNNEL-HEALTH",
@@ -213,7 +242,7 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
             users.dedup();
             let (verb, status) = if connected { ("connected", "connected") } else { ("disconnected", "disconnected") };
             for t in &affected {
-                status_change(state, runner, &hooks, viewers(t.id), &tunnels, t, (Condition::Down, !connected));
+                status_change(state, runner, &hooks, &pushers, viewers(t.id), &tunnels, t, (Condition::Down, !connected));
             }
             if !users.is_empty() {
                 // `tunnels`（id + 名稱）給桌面通知用。/ `tunnels` (id + name) for desktop notifications.

@@ -759,6 +759,8 @@ mod tests {
             app_name_mode: "telepy".into(),
             app_name: String::new(),
             notify_push: true,
+            notify_push_max_delay: 3600,
+            notify_push_per_hour: 20,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;
