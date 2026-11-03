@@ -251,6 +251,17 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // 每條隧道最近一次區網掃描的整體結果：網段、預設閘道、什麼時候、跟前一次比變了什麼。/ A tunnel's last LAN scan as a whole.
+    (
+        "telepy_lan_meta",
+        r#"CREATE TABLE "telepy_lan_meta" (
+            "tunnel_id" integer NOT NULL PRIMARY KEY,
+            "networks" text NOT NULL DEFAULT '[]',
+            "gateway" varchar(64) NULL,
+            "scanned_at" datetime NULL,
+            "changes" text NULL
+        )"#,
+    ),
     // Rust 自有：MCP（AI）tool call 的稽核紀錄。/ Audit trail of MCP tool calls.
     (
         "telepy_ai_audit_event",

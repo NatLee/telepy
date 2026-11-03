@@ -12,11 +12,15 @@ export type TopologyFilter = "all" | "hosts" | "online";
 /** 裝置不超過這麼多台時，有主機的全部先展開。/ Up to this many devices, every device with hosts starts expanded. */
 export const EXPAND_ALL_UP_TO = 6;
 
+/** 區網主機（不含裝置自己在聽的那一列）。/ LAN hosts, without the device's own row. */
+const lanHosts = (d: { hosts: unknown[] }) =>
+    d.hosts.filter((h) => !(typeof h === "object" && h !== null && ((h as { own?: boolean }).own === true || (h as { source?: string }).source === "self")));
+
 export function filterDevices<T extends { hosts: unknown[] }>(devices: T[], filter: TopologyFilter, isOnline: (d: T) => boolean): { shown: T[]; counts: Record<TopologyFilter, number> } {
-    const counts = { all: devices.length, hosts: devices.filter((d) => d.hosts.length > 0).length, online: devices.filter(isOnline).length };
+    const counts = { all: devices.length, hosts: devices.filter((d) => lanHosts(d).length > 0).length, online: devices.filter(isOnline).length };
     // 選的分類變空了就退回全部。/ Fall back to "all" when the chosen bucket is empty.
     const f: TopologyFilter = filter !== "all" && counts[filter] === 0 ? "all" : filter;
-    const shown = f === "hosts" ? devices.filter((d) => d.hosts.length > 0) : f === "online" ? devices.filter(isOnline) : devices;
+    const shown = f === "hosts" ? devices.filter((d) => lanHosts(d).length > 0) : f === "online" ? devices.filter(isOnline) : devices;
     return { shown, counts };
 }
 

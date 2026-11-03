@@ -44,3 +44,8 @@ test("desktop protocols and the page URL", () => {
     assert.equal(desktopProtocol(80), null);
     assert.equal(desktopUrl(3, 9, "rdp", 3389), "/tunnels/desktop?tunnel=3&lanHost=9&protocol=rdp&port=3389");
 });
+
+test("the desktop URL for the device itself has no LAN host", () => {
+    assert.equal(desktopUrl(3, null, "vnc", 5900), "/tunnels/desktop?tunnel=3&protocol=vnc&port=5900");
+    assert.equal(desktopUrl(3, 7, "rdp", 3389), "/tunnels/desktop?tunnel=3&lanHost=7&protocol=rdp&port=3389");
+});

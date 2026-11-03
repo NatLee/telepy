@@ -44,7 +44,12 @@ function ForwardRow({ target, host, port, mode, tunnelName }: { target: ConnectT
     );
 }
 
-export function LanCommands({ host, target, login, tunnelName }: { host: LanHost; target: ConnectTarget | null; login: string; tunnelName: string }) {
+/**
+ * `own` = 裝置自己在聽的服務：只有「轉到你電腦上」（登入、跳板複製、ProxyJump 對裝置自己沒意義）。
+ * `own` = the device's own services: forwarding only (logging in, copying through the jump and ProxyJump make no
+ * sense for the device itself).
+ */
+export function LanCommands({ host, target, login, tunnelName, own = false }: { host: LanHost; target: ConnectTarget | null; login: string; tunnelName: string; own?: boolean }) {
     const { t, tn } = useI18n();
     const [mode, setMode] = useState<ConnectMode>("direct");
     const [upload, setUpload] = useState(true);
@@ -54,7 +59,7 @@ export function LanCommands({ host, target, login, tunnelName }: { host: LanHost
 
     if (!target) return <Loader2 size={16} className="animate-spin text-muted-foreground" aria-label={t("common.loading")} />;
 
-    const ports = host.open_ports.filter((p) => p !== host.ssh_port);
+    const ports = own ? host.open_ports : host.open_ports.filter((p) => p !== host.ssh_port);
     const extra = isValidPort(otherPort.trim()) ? Number(otherPort.trim()) : null;
     const login1 = lanSshSegments(target, host, login, mode);
 
@@ -80,6 +85,7 @@ export function LanCommands({ host, target, login, tunnelName }: { host: LanHost
                 </p>
             </div>
 
+            {!own && (
             <Section wrapTitle title={t("network.cmd.loginTitle")}>
                 <CommandBar segments={login1} />
                 <details className="group min-w-0">
@@ -87,6 +93,7 @@ export function LanCommands({ host, target, login, tunnelName }: { host: LanHost
                     <div className="mt-2 min-w-0"><AnnotatedCommand segments={login1} /></div>
                 </details>
             </Section>
+            )}
 
             <Section wrapTitle title={t("network.cmd.forwardTitle")} description={t("network.cmd.forwardHint")}>
                 {ports.length > 0 && (
@@ -103,6 +110,7 @@ export function LanCommands({ host, target, login, tunnelName }: { host: LanHost
                 </div>
             </Section>
 
+            {!own && (
             <Section wrapTitle title={t("network.cmd.copyTitle")}>
                 <div className="grid grid-cols-[minmax(0,1fr)] gap-3 @lg:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] @lg:items-end">
                     <Segmented
@@ -126,8 +134,9 @@ export function LanCommands({ host, target, login, tunnelName }: { host: LanHost
                 </div>
                 <div className="mt-3"><CommandBar segments={lanCopySegments(target, host, login, mode, upload, localPath, remotePath)} /></div>
             </Section>
+            )}
 
-            {mode === "alias" && (
+            {mode === "alias" && !own && (
                 <Section wrapTitle title={t("network.configTitle")}>
                     <CodeBlock language="ssh" value={lanSshConfig(target.alias, host, login)} />
                     <p className="text-xs text-muted-foreground">

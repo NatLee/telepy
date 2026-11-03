@@ -585,6 +585,13 @@ async fn lan_scan_recognises_and_shows() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stderr.contains("Done: 1 machine(s)."), "{}", o.stderr);
     assert!(o.stdout.contains("WHAT") && o.stdout.contains("OpenWrt"), "{}", o.stdout);
+    assert!(o.stderr.contains("Since the previous scan: 1 new (127.0.0.1)."), "{}", o.stderr);
+    assert!(o.stdout.contains("NOTE") && o.stdout.contains("new"), "{}", o.stdout);
+    // 再掃一次：沒變。`lan ls` 上面寫上次掃描的時間與網段。/ Again: nothing changed; `lan ls` says when and what was scanned.
+    let o = telepy(h, &["lan", "scan", "box", "--subnet", "127.0.0.1/32", "--ports", &ports]).await;
+    assert!(o.stderr.contains("Nothing changed since the previous scan."), "{}", o.stderr);
+    let o = telepy(h, &["lan", "ls", "box"]).await;
+    assert!(o.stderr.contains("Last scan ") && o.stderr.contains(" of 127.0.0.1/32."), "{}", o.stderr);
     let o = telepy(h, &["lan", "show", "box", "127.0.0.1"]).await;
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stdout.contains("is: OpenWrt") && o.stdout.contains(&format!("{web_port}/http  200  title: OpenWrt - LuCI")), "{}", o.stdout);

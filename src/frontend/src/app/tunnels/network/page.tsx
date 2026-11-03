@@ -33,6 +33,8 @@ import { shortUrl } from "@/lib/lanWeb";
 import { ScanDialog } from "@/components/network/ScanDialog";
 import { NetworkTypes } from "@/components/network/NetworkTypes";
 import { NetworkInfoDialog } from "@/components/network/NetworkInfoDialog";
+import { ScanChangesDialog } from "@/components/network/ScanChanges";
+import { isOwn } from "@/lib/lanChanges";
 import { DEVICE_KINDS, type DeviceKind } from "@/lib/lanIdentity";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
@@ -94,6 +96,8 @@ function NetworkInner() {
     // 「怎麼運作」：一開就是面板裡那台主機。/ "How it works", opening on the panel's host.
     const [infoOpen, setInfoOpen] = useState(false);
     const [addFor, setAddFor] = useState<number | null>(null);
+    // 「上次掃描變了什麼」開在哪台裝置。/ The device whose "what changed" dialog is open.
+    const [changesFor, setChangesFor] = useState<number | null>(null);
     const panelRef = useRef<HTMLElement>(null);
     // 浮動 dock 對齊的頁面欄。/ The page column the floating dock aligns with.
     const pageRef = useRef<HTMLDivElement>(null);
@@ -103,6 +107,7 @@ function NetworkInner() {
     const host = useMemo(() => hostTunnel?.hosts.find((h) => h.id === openHost?.hostId) ?? null, [hostTunnel, openHost]);
     const scanTunnel = allTunnels.find((x) => x.id === scanFor) ?? null;
     const addTunnel = allTunnels.find((x) => x.id === addFor) ?? null;
+    const changesTunnel = allTunnels.find((x) => x.id === changesFor) ?? null;
 
     // 主機被刪掉（或沒權限了）時 `host` 是 null，面板自然不顯示。/ A vanished host simply renders no panel.
     const { remember } = recent;
@@ -173,6 +178,7 @@ function NetworkInner() {
     const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
     const onScan = (tn: TopologyTunnel) => setScanFor(tn.id);
     const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
+    const onChanges = (tn: TopologyTunnel) => setChangesFor(tn.id);
 
     // 機器多時：篩選（全部 / 有主機的 / 在線）、依我的通道群組分成資料夾（跟通道頁的「依群組 / 單一清單」同一個選擇）、
     // 裝置收成一行摘要（展開狀態記在 localStorage）。/ Many machines: a filter, folders by my tunnel groups (the tunnels
@@ -259,7 +265,7 @@ function NetworkInner() {
                     </div>
 
                     {/* 網路上有什麼：每種機器一條，點一條 = 搜尋 type:。/ What's on the network: one bar per type; a click searches type:. */}
-                    <NetworkTypes hosts={allRows.map((r) => r.host)} active={activeType} onPick={pickType} />
+                    <NetworkTypes hosts={allRows.map((r) => r.host).filter((h) => !isOwn(h))} active={activeType} onPick={pickType} />
 
                     {stats.hosts === 0 && <Callout tone="tip">{t("network.firstScanTip")}</Callout>}
 
@@ -282,7 +288,7 @@ function NetworkInner() {
                                     )}
                                 >
                                     <span className={cn("grid size-5 shrink-0 place-items-center rounded-sm ring-1 ring-inset [&_svg]:size-3", KIND_TONE[r.kind])} aria-hidden>{KIND_ICON[r.kind]}</span>
-                                    <span className="min-w-0 text-foreground [overflow-wrap:anywhere]">{r.name}</span>
+                                    <span className="min-w-0 text-foreground [overflow-wrap:anywhere]">{isOwn(r.host) ? t("network.own.chip") : r.name}</span>
                                     <span className="hidden shrink-0 text-muted-foreground @md:inline">{r.device.name}</span>
                                 </button>
                             ))}
@@ -362,6 +368,7 @@ function NetworkInner() {
                             hostActions={hostActions}
                             onScan={onScan}
                             onAdd={onAdd}
+                            onChanges={onChanges}
                         />
                     )}
 
@@ -400,6 +407,7 @@ function NetworkInner() {
             />
             <NetworkInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} tunnels={allTunnels} startTunnel={hostTunnel ?? (focusTunnel !== null ? allTunnels.find((x) => String(x.id) === focusTunnel) ?? null : null)} startHost={host} isOnline={actions.isOnline} />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />
+            <ScanChangesDialog tn={changesTunnel} onClose={() => setChangesFor(null)} onPickHost={(h) => onOpenHost(h)} />
             <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />
         </div>
     );

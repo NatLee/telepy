@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 
-use common::lab::{free_port, Lab};
+use common::lab::{free_port, Lab, MachineOpts};
 use common::TestApp;
 
 async fn wait_scan(app: &TestApp, token: &str, tunnel_id: i64) -> Value {
@@ -45,12 +45,18 @@ async fn quiet_listener() -> u16 {
 /// 一個小小的網頁伺服器：每條連線回同一頁（標題 + Server 標頭），並記下收到幾個請求、最後一個長什麼樣。
 /// A tiny web server: the same page for every connection (a title and a Server header); counts the requests it got.
 async fn tiny_web(title: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let (port, seen, _) = web_server(title).await;
+    (port, seen)
+}
+
+/// 同上，再加一個停掉它的把手（停了 port 就關了）。/ The same, plus a handle that stops it (closing the port).
+async fn web_server(title: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>, tokio::task::AbortHandle) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         while let Ok((mut s, _)) = l.accept().await {
             let log = log.clone();
             tokio::spawn(async move {
@@ -64,7 +70,13 @@ async fn tiny_web(title: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<
             });
         }
     });
-    (port, seen)
+    (port, seen, task.abort_handle())
+}
+
+fn write_exec(path: &std::path::Path, body: &str) {
+    std::fs::write(path, body).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// 辨識：使用者自己列的、沒先說話的 port 收到一個 GET（帶 Telepy 的 User-Agent），標題 / Server 存成服務、認出產品；
@@ -111,6 +123,102 @@ async fn a_scan_recognises_web_pages_and_only_listens_elsewhere() {
     let (err, v) = call(app, &token, "lan_hosts", json!({"tunnel_id": id})).await;
     assert!(!err, "{v}");
     assert_eq!(v["hosts"][0]["identity"]["product"], "Proxmox VE");
+}
+
+/// 裝置自己的服務、預設閘道、跟前一次掃描比變了什麼。裝置是真的 `/bin/sh`，`ss` / `ip` 用 `<home>/bin` 的假指令回固定內容
+/// （不會探到開發機自己的服務）：第一次 = 新主機 + 閘道 + 裝置自己的網頁；停掉一個 port 再掃 = port 關了；第一個 port
+/// 不通再掃 = 沒看到（主機標 `missing`），裝置自己的服務照樣在。
+/// The device's own services, its default gateway and what changed since the previous scan. The device runs a real
+/// `/bin/sh` with stub `ss` / `ip` in `<home>/bin` (never the developer's own services): first scan = a new host, the
+/// gateway and the device's own web page; a port stopped = "closed"; the first port dead = not seen (`missing`), while
+/// the device's own services stay.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_scan_lists_the_devices_own_services_its_gateway_and_what_changed() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine_with("box", &[("ubuntu", &[&lab.service])], MachineOpts { allow_jump: true, shell: true, ..Default::default() }).await;
+    let nas = lab.machine("nas", &[("admin", &[&lab.service])], false).await;
+    let (own_web, own_requests, _own) = web_server("Grafana").await;
+    let (extra, _, stop_extra) = web_server("Printer admin").await;
+    let dead = free_port();
+    let bin = boxm.account_home("ubuntu").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    write_exec(&bin.join("ss"), &format!("#!/bin/sh\necho 'LISTEN 0 128 127.0.0.1:{own_web} 0.0.0.0:*'\necho 'LISTEN 0 128 0.0.0.0:{dead} 0.0.0.0:*'\necho 'LISTEN 0 128 192.168.77.5:8080 0.0.0.0:*'\n"));
+    write_exec(
+        &bin.join("ip"),
+        "#!/bin/sh\ncase \"$*\" in\n  '-o -4 addr show scope global') echo '2: eth0    inet 10.250.0.5/24 brd 10.250.0.255 scope global eth0' ;;\n  '-4 route show default') echo 'default via 127.0.0.1 dev eth0 proto dhcp metric 100' ;;\nesac\nexit 0\n",
+    );
+    for quiet in ["route", "netstat", "getent"] {
+        write_exec(&bin.join(quiet), "#!/bin/sh\nexit 1\n");
+    }
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let id = dev.tunnel_id;
+    let scan = |ports: serde_json::Value| {
+        let token = alice.token.clone();
+        async move {
+            let r = app.post(&format!("/api/reverse/server/{id}/lan/scan"), Some(&token), json!({"subnets": ["127.0.0.1/32"], "ports": ports})).await;
+            assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+            let done = wait_scan(app, &token, id).await;
+            assert_eq!(done["phase"], "done", "{done}");
+            let v = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&token)).await.json;
+            (done, v)
+        }
+    };
+    let host = |v: &Value, address: &str| v["hosts"].as_array().unwrap().iter().find(|h| h["address"] == address).cloned().unwrap_or_else(|| panic!("no {address} in {v}"));
+
+    // 1) 第一次：新主機、閘道、裝置自己的網頁。/ First scan: a new host, the gateway, the device's own page.
+    let (done, v) = scan(json!([nas.port, extra])).await;
+    assert_eq!(done["gateway"], "127.0.0.1", "{done}");
+    assert_eq!(done["changes"]["new"], json!(["127.0.0.1"]), "{done}");
+    assert_eq!(v["lan"]["networks"], json!(["127.0.0.1/32"]), "{v}");
+    assert_eq!(v["lan"]["gateway"], "127.0.0.1");
+    assert!(v["lan"]["scanned_at"].is_string());
+    let lanh = host(&v, "127.0.0.1");
+    assert_eq!((lanh["gateway"].as_bool(), lanh["own"].as_bool(), lanh["missing"].as_bool()), (Some(true), Some(false), Some(false)), "{lanh}");
+    assert_eq!(lanh["since_last"], json!({"new": true, "opened": [], "closed": []}));
+    assert_eq!(lanh["open_ports"], json!([nas.port, extra]));
+    let own = host(&v, "localhost");
+    assert_eq!((own["own"].as_bool(), own["source"].as_str(), own["missing"].as_bool()), (Some(true), Some("self"), Some(false)), "{own}");
+    assert_eq!(own["open_ports"], json!([own_web]), "the dead port isn't open and a LAN-only bind isn't on localhost: {own}");
+    assert_eq!(own["web"], json!([{ "port": own_web, "scheme": "http", "url": format!("http://localhost:{own_web}/") }]), "{own}");
+    assert_eq!(own["services"][0]["title"], "Grafana", "{own}");
+    assert_eq!(own_requests.lock().unwrap().len(), 1, "one GET for the device's own silent port");
+    assert!(own["since_last"].is_null());
+
+    // 2) 停掉一個 port：「關了」，不是新的。/ A port stopped: "closed", not new.
+    stop_extra.abort();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (done, v) = scan(json!([nas.port, extra])).await;
+    assert_eq!(done["changes"], json!({"new": [], "gone": [], "changed": [{"address": "127.0.0.1", "opened": [], "closed": [extra]}]}), "{done}");
+    let lanh = host(&v, "127.0.0.1");
+    assert_eq!(lanh["since_last"], json!({"new": false, "opened": [], "closed": [extra]}));
+    assert_eq!(lanh["missing"], false);
+
+    // 3) 第一個 port（最小的那個，後端會排序）不通 → 這次沒看到它；裝置自己的服務還在。
+    // The first port (the lowest: the backend sorts them) dead: not seen; the device's own services stay.
+    let (done, v) = scan(json!([1, nas.port])).await;
+    assert_eq!(done["changes"]["gone"], json!(["127.0.0.1"]), "{done}");
+    let lanh = host(&v, "127.0.0.1");
+    assert_eq!(lanh["missing"], true, "{lanh}");
+    assert!(lanh["since_last"].is_null());
+    assert_eq!(host(&v, "localhost")["open_ports"], json!([own_web]));
+
+    // 拓撲與 MCP 也帶同樣的東西。/ The topology and MCP carry the same.
+    let topo = app.get("/api/reverse/lan/topology", Some(&alice.token)).await.json;
+    let tn = topo["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == id).cloned().unwrap();
+    assert_eq!(tn["lan"]["changes"]["gone"], json!(["127.0.0.1"]), "{tn}");
+    let token = mcp_token(app, &alice.token, "tunnels:read").await;
+    let (err, m) = call(app, &token, "lan_hosts", json!({"tunnel_id": id})).await;
+    assert!(!err, "{m}");
+    assert_eq!(m["lan"]["gateway"], "127.0.0.1");
+    assert!(m["hosts"].as_array().unwrap().iter().any(|h| h["own"] == true && h["address"] == "localhost"), "{m}");
+    // 掃描紀錄寫著幾台不見、幾台 port 變了。/ The scan's event says how many went missing.
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await.json;
+    let last = events.as_array().unwrap().iter().rev().find(|e| e["event"] == "lan_scan").cloned().unwrap();
+    assert!(last["message"].as_str().unwrap().contains("1 gone"), "{last}");
 }
 
 const VERIFIER: &str = "verifier-verifier-verifier-verifier-verifier-0123";

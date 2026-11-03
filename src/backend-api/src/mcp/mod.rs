@@ -739,7 +739,7 @@ impl TelepyMcp {
         })))
     }
 
-    #[tool(description = "Machines on the local network behind a tunnel's device, from earlier scans and manual entries: address, hostname, open ports, SSH banner, label, the login user to use and `web` (each web port with its URL). Reach them with ssh_exec on the device (e.g. `ssh -o BatchMode=yes user@address …`), open a `web` URL with browser_open on the same tunnel (the browser goes out through the device, so LAN addresses work), or let the user open a web terminal.", annotations(title = "LAN hosts", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "Machines on the local network behind a tunnel's device, from earlier scans and manual entries: address, hostname, open ports, SSH banner, label, the login user to use, `web` (each web port with its URL), `own` (the device's own services, address `localhost`), `gateway` (the device's default gateway), `missing` (not seen in the last scan of its network) and `lan` (the last scan: networks, gateway, what changed). Reach them with ssh_exec on the device (e.g. `ssh -o BatchMode=yes user@address …`), open a `web` URL with browser_open on the same tunnel (the browser goes out through the device, so LAN addresses work), or let the user open a web terminal.", annotations(title = "LAN hosts", read_only_hint = true, open_world_hint = false))]
     async fn lan_hosts(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -756,9 +756,10 @@ impl TelepyMcp {
             _ => return Ok(fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id))),
         };
         let tz = self.state.config.tz_offset_minutes;
-        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui)).collect();
+        let meta = db::lan::meta(db, tunnel.id).await.ok().flatten();
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui, meta.as_ref())).collect();
         self.audit(&p, "lan_hosts", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(format!("{} hosts", hosts.len())), ..Default::default() }).await;
-        Ok(CallToolResult::structured(json!({ "tunnel": { "id": tunnel.id, "name": tunnel.host_friendly_name }, "hosts": hosts, "last_scan": self.state.lan_scans.get(tunnel.id) })))
+        Ok(CallToolResult::structured(json!({ "tunnel": { "id": tunnel.id, "name": tunnel.host_friendly_name }, "hosts": hosts, "lan": crate::api::lan::meta_json(meta.as_ref(), tz), "last_scan": self.state.lan_scans.get(tunnel.id) })))
     }
 
     #[tool(description = "Scan the local network behind a tunnel's device for machines and open ports. The device's own sshd makes the connections (nothing is installed on it); only private networks, at most 1024 addresses; it can take about a minute. Requires owner or ADMIN on the tunnel. Results are saved to the tunnel's LAN host list.", annotations(title = "Scan LAN", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
@@ -788,7 +789,8 @@ impl TelepyMcp {
         };
         let summary = crate::lan::scan::execute(self.state.clone(), req).await;
         let tz = self.state.config.tz_offset_minutes;
-        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui)).collect();
+        let meta = db::lan::meta(db, tunnel.id).await.ok().flatten();
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui, meta.as_ref())).collect();
         let detail = format!("{} — {} host(s)", summary.status.networks.join(", "), summary.status.hosts_found);
         self.audit(&p, "lan_scan", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), error: summary.status.error.clone(), ..Default::default() }).await;
         if let Some(e) = &summary.status.error {

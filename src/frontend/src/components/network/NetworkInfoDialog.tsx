@@ -19,6 +19,7 @@ import { FlowLink, FlowNode, FlowNow, FlowPath, FlowSteps, StateLine } from "@/c
 import { useFeatures } from "@/hooks/useFeatures";
 import { useI18n } from "@/lib/i18n";
 import { hostName, scanRunning } from "@/lib/lanConnect";
+import { changeCounts, isOwn } from "@/lib/lanChanges";
 import { LANES, laneStates, pathStates, type Lane } from "@/lib/networkFlow";
 import type { TranslationKey } from "@/locales/en";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
@@ -31,7 +32,7 @@ const LANE_ICON: Record<Lane, React.ReactNode> = {
     scan: <Radar size={16} />,
 };
 
-const SCAN_STEPS = ["login", "networks", "discovery", "ports", "identify", "names"] as const;
+const SCAN_STEPS = ["login", "networks", "discovery", "ports", "identify", "names", "self", "compare"] as const;
 
 export function NetworkInfoDialog({ isOpen, onClose, tunnels, startTunnel, startHost, isOnline }: {
     isOpen: boolean;
@@ -92,7 +93,7 @@ function NetworkInfo({ onClose, tunnels, startTunnel, startHost, isOnline }: { o
                         <span>{t("network.flow.host")}</span>
                         <NativeSelect value={hostId ?? ""} onChange={(e) => setHostId(e.target.value ? Number(e.target.value) : null)} className="w-full" disabled={!tn || tn.hosts.length === 0}>
                             <option value="">{t("network.flow.noHost")}</option>
-                            {tn?.hosts.map((h) => <option key={h.id} value={h.id}>{hostName(h)} · {h.address}</option>)}
+                            {tn?.hosts.map((h) => <option key={h.id} value={h.id}>{isOwn(h) ? t("network.own.chip") : `${hostName(h)} · ${h.address}`}</option>)}
                         </NativeSelect>
                     </label>
                 </div>
@@ -130,7 +131,9 @@ function NetworkInfo({ onClose, tunnels, startTunnel, startHost, isOnline }: { o
                 <section className="space-y-2">
                     <h3 className="text-sm text-foreground">{t("network.flow.scanTitle")}</h3>
                     <p className="text-xs text-muted-foreground">
-                        {!scan
+                        {!scan && tn?.lan?.scanned_at
+                            ? t("network.flow.scanSaved", { when: fmt.format(new Date(tn.lan.scanned_at)), networks: tn.lan.networks.join(", ") || "—" })
+                            : !scan
                             ? t("network.flow.scanNever")
                             : scanRunning(scan)
                                 ? t("network.flow.scanRunning")
@@ -138,6 +141,11 @@ function NetworkInfo({ onClose, tunnels, startTunnel, startHost, isOnline }: { o
                                     ? t("network.flow.scanFailed", { error: scan.error ?? "" })
                                     : t("network.flow.scanLast", { when: scan.finished_at ? fmt.format(new Date(scan.finished_at.replace(" ", "T") + "Z")) : "—", networks: scan.networks.join(", ") || "—", hosts: scan.hosts_found })}
                     </p>
+                    {(() => {
+                        // 跟前一次比（存在資料庫，重開機後也在）。/ The comparison with the scan before (stored, survives restarts).
+                        const c = changeCounts(tn?.lan?.changes);
+                        return c ? <p className="text-xs text-muted-foreground">{t("network.flow.changes", { new: c.new, gone: c.gone, changed: c.changed })}{tn?.lan?.gateway ? ` ${t("network.flow.gateway", { gateway: tn.lan.gateway })}` : ""}</p> : null;
+                    })()}
                     <FlowSteps
                         steps={SCAN_STEPS.map((s) => t(`network.flow.step.${s}` as TranslationKey))}
                         current={scan && scanRunning(scan) ? Math.max(1, SCAN_STEPS.indexOf(scan.phase === "connecting" ? "login" : (scan.phase as (typeof SCAN_STEPS)[number])) + 1) : 0}

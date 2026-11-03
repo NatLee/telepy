@@ -343,13 +343,15 @@ telepy run "restart service" box --var svc=nginx   # -y 跳過「先確認」的
 telepy lan ls box                          # Telepy 知道的、在這台裝置背後的區網主機
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # 用 id、位址或標籤指定
-telepy lan scan box                        # 掃描它的網路（network:scan），等完成，列出並多一欄 WHAT
+telepy lan scan box                        # 掃描它的網路（network:scan），等完成，列出並多 WHAT、NOTE 兩欄
 telepy lan show box 192.168.1.20           # 每個 port 看到什麼：網頁標題、伺服器、憑證、banner
 ```
 
 列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
 
 掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的請求，User-Agent 是 `Telepy-LAN-scan`。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
+
+掃描也會列出裝置本機在聽的服務（一列，位址是 `localhost`：只回應裝置自己 localhost 的服務也從那裡打得開，沒先說話的 port 一樣只送一個 `GET /`）、標出裝置的預設閘道，並跟前一次掃描比較。`lan scan` 最後一行會像 `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`，表格的 NOTE 欄寫 `this device`、`gateway`、`new`、`+443 -80` 或 `not seen`。只比這次掃過的網段裡的機器，port 也只比這次有探的，所以 `--ports` 給得比較少，不會算成「關了」。`lan ls` 開頭會寫上次掃描的時間、網段與閘道。
 
 ### 用自己的瀏覽器開區網的網頁
 
@@ -413,7 +415,7 @@ telepy browse close "$ID"
 | `telepy run <snippet> <target>` | 執行工具箱片段；`--var name=value`、`-y`、`--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | Telepy 知道的、在裝置背後的區網主機 | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | 手動新增主機；`--label`、`--user`、`--port` | `tunnels:manage` |
-| `telepy lan scan <tunnel>` | 掃描裝置的網路並列出找到的，附上每台是什麼；`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
+| `telepy lan scan <tunnel>` | 掃描裝置的網路並列出找到的，附上每台是什麼、跟前一次比變了什麼；`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | 一台主機是什麼、每個 port 看到什麼 | `tunnels:read` |
 | `telepy lan rm <tunnel> <host>` | 用 id、位址或標籤移除主機 | `tunnels:manage` |
 | `telepy browse <target> [url]` | 開一個腳本化瀏覽器並印出它的 id（等同 `browse open`） | `browser:use` |

@@ -51,6 +51,45 @@ pub struct Found {
     pub open_ports: Vec<u16>,
     pub ssh_banner: Option<String>,
     pub services: Vec<crate::lan::fingerprint::Service>,
+    /// 裝置自己（位址 `localhost`，source = `self`）。/ The device itself (address `localhost`, source `self`).
+    pub own: bool,
+}
+
+/// 一條隧道最近一次掃描的整體結果。/ A tunnel's last scan as a whole.
+#[derive(Debug, Clone, Default, FromRow)]
+pub struct LanMeta {
+    pub tunnel_id: i64,
+    /// JSON 陣列（CIDR）。/ JSON array of CIDRs.
+    pub networks: String,
+    pub gateway: Option<String>,
+    pub scanned_at: Option<String>,
+    /// JSON（`lan::device_self::Changes`）。/ JSON of what changed.
+    pub changes: Option<String>,
+}
+
+impl LanMeta {
+    pub fn network_list(&self) -> Vec<String> {
+        serde_json::from_str(&self.networks).unwrap_or_default()
+    }
+}
+
+pub async fn meta(db: &Db, tunnel_id: i64) -> sqlx::Result<Option<LanMeta>> {
+    sqlx::query_as("SELECT tunnel_id, networks, gateway, scanned_at, changes FROM telepy_lan_meta WHERE tunnel_id = ?").bind(tunnel_id).fetch_optional(&db.read).await
+}
+
+pub async fn save_meta(db: &Db, m: &LanMeta) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO telepy_lan_meta (tunnel_id, networks, gateway, scanned_at, changes) VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT(tunnel_id) DO UPDATE SET networks = excluded.networks, gateway = excluded.gateway, scanned_at = excluded.scanned_at, changes = excluded.changes",
+    )
+    .bind(m.tunnel_id)
+    .bind(&m.networks)
+    .bind(&m.gateway)
+    .bind(&m.scanned_at)
+    .bind(&m.changes)
+    .execute(&db.write)
+    .await?;
+    Ok(())
 }
 
 const T: &str = "telepy_lan_host";
@@ -114,8 +153,10 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
 /// 合併一次掃描的結果：新的插入（source = scan），已知的更新「看到的」欄位（名稱 / MAC / port / banner / 服務 / last_seen），
 /// 不動標籤、帳號、SSH port 與 source。回傳 (新增, 更新) 筆數。
 /// Merge a scan: insert new hosts, refresh what was observed on known ones; returns (inserted, updated).
-pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::Result<(usize, usize)> {
-    let now = now_db();
+/// `now` = 這次掃描的時間，同一個值也寫進 `telepy_lan_meta.scanned_at`，所以「上次掃描沒看到」= `last_seen < scanned_at`。
+/// `now` = this scan's time; the same value goes into `telepy_lan_meta.scanned_at`, so "not seen in the last scan" is
+/// exactly `last_seen < scanned_at`.
+pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found], now: &str) -> sqlx::Result<(usize, usize)> {
     let mut tx = db.write.begin().await?;
     let (mut inserted, mut updated) = (0, 0);
     for h in hosts {
@@ -137,9 +178,9 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
                 .bind(&ports)
                 .bind(&h.ssh_banner)
                 .bind(&services)
-                .bind(&now)
-                .bind(&now)
-                .bind(&now)
+                .bind(now)
+                .bind(now)
+                .bind(now)
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
@@ -148,7 +189,7 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
             None => {
                 sqlx::query(&format!(
                     "INSERT INTO {T} (tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, ssh_port, source, first_seen, last_seen, created_at, updated_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 22, 'scan', ?, ?, ?, ?)"
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 22, ?, ?, ?, ?, ?)"
                 ))
                 .bind(tunnel_id)
                 .bind(&h.address)
@@ -157,13 +198,17 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
                 .bind(&ports)
                 .bind(&h.ssh_banner)
                 .bind(&services)
-                .bind(&now)
-                .bind(&now)
-                .bind(&now)
-                .bind(&now)
+                .bind(if h.own { "self" } else { "scan" })
+                .bind(now)
+                .bind(now)
+                .bind(now)
+                .bind(now)
                 .execute(&mut *tx)
                 .await?;
-                inserted += 1;
+                // 裝置自己不算「新主機」。/ The device itself isn't a "new host".
+                if !h.own {
+                    inserted += 1;
+                }
             }
         }
     }
