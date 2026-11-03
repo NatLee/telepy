@@ -1,8 +1,8 @@
 /**
- * 「開啟」四顆按鈕：終端機 / 檔案 / 瀏覽器 / 遠端桌面，一律帶文字標籤（卡片是圖示在上的方塊，標籤可換行不截斷；
+ * 「開啟」四顆按鈕：終端機 / 檔案 / 瀏覽器 / 遠端桌面，一律帶文字標籤（卡片是圖示在上的方塊，標籤一行放得下才四顆一排，不然 2×2；
  * 表格是精簡橫排）。線上時終端機是實色主色、其餘外框；離線一律淡色。沒有光暈、位移或放大。
- * The four "open" actions — Terminal / Files / Browser / Desktop — always labelled (tiles on cards, where labels
- * wrap instead of truncating; a compact row in the table). Online: Terminal is solid primary, the others outlined;
+ * The four "open" actions — Terminal / Files / Browser / Desktop — always labelled (tiles on cards, four across only
+ * when every label fits on one line, else 2×2; a compact row in the table). Online: Terminal is solid primary, the others outlined;
  * offline: all muted. No glow, lift or scale.
  *
  * prefetch={false}：terminal 是「點了才進」的重頁（xterm/VNC），每條隧道三條連結，N 條隧道 = 3N 次 route
@@ -10,7 +10,7 @@
  * Don't prefetch the heavy terminal route for every tunnel — the prefetch storm starves the requests that
  * actually gate the list spinner.
  */
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FolderOpen, MonitorPlay, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
@@ -22,6 +22,7 @@ import { Tunnel } from "@/types/tunnel";
 import { requestStepUp, stepUpToken } from "@/lib/stepUp";
 import { useFeatures } from "@/hooks/useFeatures";
 import type { FeatureId } from "@/lib/features";
+import { tilesFitAcross } from "@/lib/openTiles";
 
 type OpenAction = { view: TerminalMainView | "desktop"; icon: LucideIcon; label: TranslationKey; hint: TranslationKey; feature: FeatureId };
 const OPEN_ACTIONS: OpenAction[] = [
@@ -31,8 +32,41 @@ const OPEN_ACTIONS: OpenAction[] = [
     // 遠端桌面頁（RDP / VNC / RustDesk）：裝置預選好。/ The remote desktop page with this device preselected.
     { view: "desktop", icon: ScreenShare, label: "common.desktop", hint: "tunnelActions.desktopHint", feature: "remote_desktop" },
 ];
-/** 按鈕數 → 方塊排法（四顆的照舊；少了就平均分）。/ Tile columns per button count. */
-const TILE_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3", 4: "grid-cols-2 @[19rem]:grid-cols-4" };
+/** 按鈕數 → 方塊排法（四顆放不下一排時 2×2，見 useTilesAcross）。/ Tile columns per button count (four go 2×2 when they don't fit). */
+const TILE_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3", 4: "grid-cols-4" };
+
+/**
+ * 四顆一排放不放得下：量最長的標籤（一行時的寬度）跟一顆方塊的內寬比。以前是固定 19rem 的門檻，日文的「デスクトップ」
+ * 在那個寬度的卡片裡會被拆成一字一行；換語言、字型（晚到的網頁字型）或顯示大小都會變，所以每次量。
+ * Whether four tiles fit across: the longest label's one-line width against one tile's inner width. The old fixed
+ * 19rem threshold broke Japanese 「デスクトップ」 into one character per line; language, a late web font or the display
+ * size all move it, so it is measured.
+ */
+function useTilesAcross(gridRef: React.RefObject<HTMLDivElement | null>, labelsKey: string, count: number): boolean {
+    const [across, setAcross] = useState(true);
+    useLayoutEffect(() => {
+        const grid = gridRef.current;
+        if (!grid || count < 4) return;
+        const measure = () => {
+            const tiles = Array.from(grid.children) as HTMLElement[];
+            const labels = tiles.map((tile) => tile.querySelector<HTMLElement>("[data-tile-label]")).filter((l): l is HTMLElement => !!l);
+            if (labels.length === 0) return;
+            const tile = getComputedStyle(tiles[0]);
+            const chrome = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((sum, k) => sum + (parseFloat(tile[k as keyof CSSStyleDeclaration] as string) || 0), 0);
+            // 標籤一律不換行，scrollWidth 就是一行時的寬度。/ Labels never wrap, so scrollWidth is the one-line width.
+            setAcross(tilesFitAcross({ labelWidths: labels.map((l) => l.scrollWidth), rowWidth: grid.clientWidth, gap: parseFloat(getComputedStyle(grid).columnGap) || 0, chrome }));
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(grid);
+        document.fonts?.addEventListener?.("loadingdone", measure);
+        return () => {
+            ro.disconnect();
+            document.fonts?.removeEventListener?.("loadingdone", measure);
+        };
+    }, [gridRef, labelsKey, count]);
+    return across;
+}
 
 /** 每顆按鈕去哪：三個主畫面進終端機頁，桌面進遠端桌面頁。/ Where each action goes. */
 function actionHref(tunnel: Tunnel, view: OpenAction["view"]): string {
@@ -64,6 +98,8 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
     // Still clickable while offline (the terminal page reports it), but muted with a hint explaining why.
     const offlineHint = degraded ? ` — ${t("tunnels.degradedHint")}` : online ? "" : ` — ${t("tunnelActions.offlineHint")}`;
     online = online && !degraded;
+    const gridRef = useRef<HTMLDivElement>(null);
+    const across = useTilesAcross(gridRef, actions.map((a) => t(a.label)).join("|"), variant === "tiles" ? actions.length : 0);
 
     if (actions.length === 0) return null;
 
@@ -99,11 +135,9 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
     }
 
     return (
-        // 四顆一排要 19rem 才放得下（日文的「ターミナル」/「デスクトップ」），更窄（或放大顯示）就排成 2×2，
-        // 標籤不會被拆成一字一行。/ Four across needs 19rem (Japanese labels); narrower cards (or a larger display
-        // size) fall back to 2×2 so a label never breaks into one character per line.
-        <div className="@container">
-        <div className={cn("grid gap-2", TILE_COLS[actions.length])}>
+        // 四顆放得下（量過）才一排，不然 2×2：標籤永遠一行，不會被拆成一字一行。
+        // Four across only when they measurably fit, else 2×2: a label stays on one line, never one character per line.
+        <div ref={gridRef} className={cn("grid gap-2", actions.length === 4 && !across ? "grid-cols-2" : TILE_COLS[actions.length])}>
             {actions.map(({ view, icon: Icon, label, hint }) => {
                 const primary = view === "terminal";
                 return (
@@ -122,12 +156,13 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                         )}
                     >
                         <Icon size={18} />
-                        {/* 四顆並排時標籤可以換行（日文的「ターミナル」），不截成「…」。/ Labels wrap in four columns instead of truncating. */}
-                        <span className="max-w-full text-center leading-tight [overflow-wrap:anywhere]">{t(label)}</span>
+                        {/* 一行：放不下時整排改 2×2（上面量的就是這個寬度）。/ One line: the row goes 2×2 when it doesn't fit. */}
+                        <span data-tile-label className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-center leading-tight">
+                            {t(label)}
+                        </span>
                     </Link>
                 );
             })}
-        </div>
         </div>
     );
 }
