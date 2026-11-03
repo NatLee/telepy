@@ -611,6 +611,8 @@ async fn lan_scan_recognises_and_shows() {
     assert!(o.stdout.contains("  labels: prod, rack-2") && o.stdout.contains("  note: top shelf"), "{}", o.stdout);
     let o = telepy(h, &["lan", "ls", "box"]).await;
     assert!(o.stdout.contains("#prod, #rack-2"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "map", "box"]).await;
+    assert!(o.stdout.contains("127.0.0.1/32  1 used, 0 free") && o.stdout.contains("   .0   #"), "{}", o.stdout);
     let o = telepy(h, &["lan", "wake", "box", "127.0.0.1"]).await;
     assert_ne!(o.code, 0);
     assert!(o.stderr.contains("MAC address"), "{}", o.stderr);

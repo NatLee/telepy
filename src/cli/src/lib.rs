@@ -675,6 +675,11 @@ pub enum LanAction {
         #[arg(long)]
         note: Option<String>,
     },
+    /// Draw the device's networks as a map of addresses: hosts, the gateway, the device itself, free ones
+    Map {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+    },
     /// What Telepy saw on one host: what it is, and each port's page title, server, certificate or banner
     Show {
         #[arg(add = ArgValueCompleter::new(complete::tunnel))]
@@ -2637,6 +2642,112 @@ fn lan_show_lines(h: &Value) -> Vec<String> {
     out
 }
 
+fn ipv4(s: &str) -> Option<u32> {
+    s.trim().parse::<std::net::Ipv4Addr>().ok().map(u32::from)
+}
+
+/// 一塊 /24：起點、屬於網段的那一段、網路 / 廣播位址、標題、是不是從主機推出來的。/ One /24 block of the map.
+struct MapBlock {
+    base: u32,
+    from: u32,
+    to: u32,
+    edges: Vec<u32>,
+    label: String,
+}
+
+/// 跟網頁 `lib/ipMap.ts` 一樣切：掃描的網段（大的切成 /24、小的只畫它那段），沒有就用主機位址的 /24；最多 8 塊。
+/// Cut like the web's `lib/ipMap.ts`: the scanned networks, else the hosts' /24s; at most 8 blocks.
+fn map_blocks(networks: &[String], host_ips: &[u32]) -> Vec<MapBlock> {
+    let mut out: Vec<MapBlock> = Vec::new();
+    for c in networks {
+        let Some((ip, prefix)) = c.split_once('/').and_then(|(ip, p)| Some((ipv4(ip)?, p.parse::<u32>().ok().filter(|p| *p <= 32)?))) else { continue };
+        let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+        let net = ip & mask;
+        let last = net | !mask;
+        let edges: Vec<u32> = if prefix <= 30 { vec![net, last] } else { vec![] };
+        let mut start = net;
+        while start <= last && out.len() < 8 {
+            let base = start & 0xffff_ff00;
+            let end = last.min(base + 255);
+            let label = if prefix >= 24 { c.clone() } else { format!("{}/24", std::net::Ipv4Addr::from(base)) };
+            match out.iter_mut().find(|b| b.base == base) {
+                Some(b) => {
+                    b.from = b.from.min(start - base);
+                    b.to = b.to.max(end - base);
+                    b.edges.extend(edges.iter().filter(|e| **e >= base && **e <= base + 255));
+                }
+                None => out.push(MapBlock { base, from: start - base, to: end - base, edges: edges.iter().copied().filter(|e| *e >= base && *e <= base + 255).collect(), label }),
+            }
+            match base.checked_add(256) {
+                Some(n) => start = n,
+                None => break,
+            }
+        }
+    }
+    if out.is_empty() {
+        for ip in host_ips {
+            let base = ip & 0xffff_ff00;
+            if out.len() < 8 && !out.iter().any(|b| b.base == base) {
+                out.push(MapBlock { base, from: 0, to: 255, edges: vec![], label: format!("{}/24", std::net::Ipv4Addr::from(base)) });
+            }
+        }
+    }
+    out.sort_by_key(|b| b.base);
+    out
+}
+
+/// `lan map` 的文字地圖：每塊 /24 一個標題加 16 列，每列 16 格（`#` 主機、`G` 閘道、`D` 裝置自己、`x` 這次沒看到、
+/// `-` 網路 / 廣播位址、`.` 空著），最後一行圖例。`paint` 給顏色（測試裡不上色）。
+/// The text map of `lan map`: per /24 a heading and 16 rows of 16 cells, then a legend. `paint` colours the marks.
+fn lan_map_lines(networks: &[String], hosts: &[Value], device_ips: &[String], paint: &dyn Fn(char) -> String) -> Vec<String> {
+    let host_at: Vec<(u32, &Value)> = hosts.iter().filter(|h| h["own"] != true && s(h, "source") != "self").filter_map(|h| Some((ipv4(s(h, "address"))?, h))).collect();
+    let device: Vec<u32> = device_ips.iter().filter_map(|ip| ipv4(ip)).collect();
+    let blocks = map_blocks(networks, &host_at.iter().map(|(ip, _)| *ip).collect::<Vec<_>>());
+    let mut out = Vec::new();
+    if blocks.is_empty() {
+        out.push("No scanned network or LAN hosts yet.".to_string());
+        return out;
+    }
+    for b in &blocks {
+        let mut rows = Vec::new();
+        let (mut used, mut free) = (0, 0);
+        for row in 0..16u32 {
+            let mut line = format!("{:>5} ", format!(".{}", row * 16));
+            for col in 0..16u32 {
+                let i = row * 16 + col;
+                let ip = b.base + i;
+                let mark = if i < b.from || i > b.to {
+                    ' '
+                } else if device.contains(&ip) {
+                    'D'
+                } else if let Some((_, h)) = host_at.iter().find(|(a, _)| *a == ip) {
+                    used += 1;
+                    if h["gateway"] == true {
+                        'G'
+                    } else if h["missing"] == true {
+                        'x'
+                    } else {
+                        '#'
+                    }
+                } else if b.edges.contains(&ip) {
+                    '-'
+                } else {
+                    free += 1;
+                    '.'
+                };
+                line.push_str(&paint(mark));
+                line.push(' ');
+            }
+            rows.push(line.trim_end().to_string());
+        }
+        out.push(format!("{}  {used} used, {free} free", b.label));
+        out.extend(rows);
+        out.push(String::new());
+    }
+    out.push("# host  G gateway  D this device  x not seen this time  - network / broadcast  . free".into());
+    out
+}
+
 fn lan(api: &Api, a: LanArgs) -> Result<()> {
     let d = dashboard(api)?;
     let tunnel_of = |raw: &str| find_tunnel(&d.tunnels, raw).cloned().ok_or_else(|| anyhow!("No tunnel called '{raw}'."));
@@ -2752,6 +2863,26 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                 Some(line) => println!("{line}"),
                 None if every.is_none() => println!("No scheduled rescan for {}. Set one with: telepy lan schedule {} --every 6h", name_of(&t), name_of(&t)),
                 None => {}
+            }
+        }
+        LanAction::Map { tunnel } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let networks: Vec<String> = v["lan"]["networks"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            let device: Vec<String> = t["endpoint"]["lan"].as_array().into_iter().flatten().filter_map(|a| a["ip"].as_str()).map(str::to_string).collect();
+            let paint = |c: char| {
+                let style = match c {
+                    'G' => color::BOLD,
+                    'D' => color::GOOD,
+                    'x' => color::WARN,
+                    '.' | '-' => color::DIM,
+                    _ => color::PLAIN,
+                };
+                color::out(style, &c.to_string())
+            };
+            for line in lan_map_lines(&networks, &hosts, &device, &paint) {
+                println!("{line}");
             }
         }
         LanAction::Wake { tunnel, host, account } => {
@@ -2980,6 +3111,32 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_map_draws_the_addresses() {
+        let hosts = vec![
+            json!({"address": "192.168.1.1", "gateway": true}),
+            json!({"address": "192.168.1.20"}),
+            json!({"address": "192.168.1.30", "missing": true}),
+            json!({"address": "localhost", "own": true, "source": "self"}),
+        ];
+        let plain = |c: char| c.to_string();
+        let lines = lan_map_lines(&["192.168.1.0/24".to_string()], &hosts, &["192.168.1.10".to_string()], &plain);
+        assert_eq!(lines[0], "192.168.1.0/24  3 used, 250 free");
+        assert_eq!(lines[1], "   .0 - G . . . . . . . . D . . . . .");
+        assert_eq!(lines[2], "  .16 . . . . # . . . . . . . . . x .", "20 is a host, 30 was not seen this time");
+        assert_eq!(lines[16], " .240 . . . . . . . . . . . . . . . -");
+        assert!(lines.last().unwrap().starts_with("# host  G gateway"));
+        // 比 /24 小的網段只畫它那一段。/ A network smaller than a /24 draws only its part.
+        let part = lan_map_lines(&["192.168.1.64/27".to_string()], &[], &[], &plain);
+        assert_eq!(part[0], "192.168.1.64/27  0 used, 30 free");
+        assert_eq!(part[1], "   .0");
+        assert_eq!(part[5], "  .64 - . . . . . . . . . . . . . . .");
+        // 沒有掃描紀錄：主機所在的 /24。/ No scan record: the hosts' /24.
+        let derived = lan_map_lines(&[], &hosts, &[], &plain);
+        assert!(derived[0].starts_with("192.168.1.0/24  3 used"), "{derived:?}");
+        assert_eq!(lan_map_lines(&[], &[], &[], &plain), vec!["No scanned network or LAN hosts yet.".to_string()]);
+    }
 
     #[test]
     fn lan_labels_and_notes() {

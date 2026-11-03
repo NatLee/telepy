@@ -341,6 +341,7 @@ Ending a session is not a revoke: the person can reconnect.
 
 ```sh
 telepy lan ls box                          # the LAN hosts Telepy knows behind a device
+telepy lan map box                         # the device's networks as a map of addresses (# host, G gateway, D the device, x not seen, . free)
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # by id, address or label
 telepy lan scan box                        # scan its network (network:scan), wait, list with WHAT and NOTE columns
@@ -423,6 +424,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy snippets ls` | Your snippets, the site's, and a tunnel's with `--tunnel` | `ssh:exec` |
 | `telepy run <snippet> <target>` | Run a toolbox snippet; `--var name=value`, `-y`, `--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | The LAN hosts Telepy knows behind a device | `tunnels:read` |
+| `telepy lan map <tunnel>` | The scanned networks as a 16 × 16 map per /24: hosts, the gateway, the device itself, machines not seen this time, free addresses (the web app's IP map) | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | Add a host by hand; `--label`, `--user`, `--port` | `tunnels:manage` |
 | `telepy lan scan <tunnel>` | Scan the device's network and list what was found, with what each machine is and what changed since the scan before; `--subnet`, `--ports`, `--no-identify`, `--account`, `--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | What one host is and what each port showed | `tunnels:read` |
