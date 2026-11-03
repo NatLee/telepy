@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 偏好設定 → 一般 最下面的「關於 Telepy」：授權、原始碼、字型、使用聲明（Disclaimer）。兩個彩蛋：點字型名稱「粉圓」會灑出一把像素珍珠
+ * 偏好設定 → 一般 最下面的「關於 Telepy」：授權、原始碼、字型、使用聲明（Disclaimer）、贊助。兩個彩蛋：點字型名稱「粉圓」會灑出一把像素珍珠
  * （致敬終界珍珠；減少動態時不灑），「片尾名單」用錄影播放器播一段 asciicast（lib/credits），Tapi 在下面揮手。
  * "About Telepy" at the bottom of Preferences → General: licence, source, typeface, the disclaimer. Two easter eggs: clicking the
  * typeface name 粉圓 ("tapioca pearls") throws a handful of pixel pearls (a nod to ender pearls; not with reduced
@@ -17,6 +17,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/Toast";
 import { DisclaimerButton } from "@/components/brand/Disclaimer";
+import { SponsorButton } from "@/components/brand/Sponsor";
 import { Tapi } from "@/components/brand/Tapi";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { SOURCE_URL } from "@/components/brand/ConsoleHello";
@@ -289,6 +290,7 @@ export function AboutTelepy() {
                         {t("about.credits")}
                     </Button>
                     <DisclaimerButton />
+                    <SponsorButton />
                 </div>
             </div>
         </div>
