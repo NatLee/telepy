@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Trash2, Save, Loader2, X, ScreenShare } from "lucide-react";
+import { Trash2, Save, Loader2, X, ScreenShare, ChevronRight } from "lucide-react";
 import { Section } from "@/components/ui/section";
 import { SplitOpen, defaultDeviceUser, lanTerminalUrl } from "@/components/network/HostOpen";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { LanCommands } from "@/components/network/LanCommands";
-import { HostWeb } from "@/components/network/HostWeb";
+import { HostPorts } from "@/components/network/HostPorts";
 import { sessionLabel } from "@/components/network/TerminalDock";
 import { LanAuthSelect } from "@/components/tunnels/LanAuthField";
 import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
@@ -31,7 +31,6 @@ import { cn } from "@/lib/utils";
 import { desktopPorts } from "@/lib/desktop";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
 import { hasSsh, hostKind, hostName, isValidLogin } from "@/lib/lanConnect";
-import { hasWeb } from "@/lib/lanWeb";
 import { hostIcon } from "@/components/network/TopologyTree";
 import { HostServices } from "@/components/network/HostServices";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
@@ -141,21 +140,6 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
         }
     };
 
-    // 有網頁、沒看到 SSH：網頁區塊排第一，終端機在下面。/ Web but no SSH seen: the web section comes first.
-    const webFirst = hasWeb(host) && !hasSsh(host);
-    const webSection = (
-        <HostWeb
-            host={host}
-            tunnel={tunnel}
-            online={online}
-            deviceUser={deviceUser}
-            first={webFirst}
-            onOpenWeb={(url) => deviceUser && onOpenWeb({ tunnel, host, url, deviceUser })}
-            onNavigate={onNavigate}
-            onShowCommands={() => setTab("commands")}
-        />
-    );
-
     const tabs = [
         { value: "terminal" as const, label: t("network.tab.terminal") },
         { value: "commands" as const, label: t("network.tab.commands") },
@@ -206,11 +190,37 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             <div className="p-4">
                 {tab === "terminal" && (
                     <div className="space-y-4">
-                        {/* 只有網頁、沒有 SSH 的主機（路由器、NAS 的管理頁）：網頁放最上面。/ Web-only hosts (router or NAS admin pages): the web pages first. */}
-                        {webFirst && webSection}
+                        {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
+                        {/* 這台機器上的服務：每個 port 一個最直接的用法。/ The services on this machine: each port's most direct use. */}
+                        <HostPorts
+                            host={host}
+                            tunnel={tunnel}
+                            online={online}
+                            deviceUser={deviceUser}
+                            terminal={{
+                                onOpenHere: openTerminal,
+                                href: deviceUser ? lanTerminalUrl(tunnel, host, cleanLogin, deviceUser, auth) : "#",
+                                reason: blocked,
+                                newTab: sessions.some((x) => x.status !== "closed"),
+                                onNavigate,
+                            }}
+                            onOpenWeb={(url) => deviceUser && onOpenWeb({ tunnel, host, url, deviceUser })}
+                            onNavigate={onNavigate}
+                            onShowCommands={() => setTab("commands")}
+                        />
+                        {/* 終端機的登入設定（SSH 那一列與下面的按鈕都用它）。沒看到 SSH 的機器收成一行，要用再打開。
+                            The terminal's login settings (used by the SSH row and the buttons below); folded to one line on machines without SSH. */}
+                        <details open={hasSsh(host) || undefined} className="group space-y-4 border-t border-border pt-4 [&[open]>summary]:mb-4">
+                        <summary className="cursor-pointer list-none text-sm text-foreground marker:hidden [&::-webkit-details-marker]:hidden">
+                            <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+                                <ChevronRight size={15} className="text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
+                                {t("network.ports.terminalTitle")}
+                                {!hasSsh(host) && <span className="basis-full pl-6 text-xs text-muted-foreground">{t("network.ports.noSshFolded")}</span>}
+                            </span>
+                        </summary>
+                        <div className="space-y-4">
                         {/* 只有掃描過的主機才談得上「上次掃描沒看到」。/ Only scanned hosts have a "last scan". */}
                         {host.last_seen && !hasSsh(host) && <Callout tone="warning">{t("network.noSshSeen", { port: host.ssh_port })}</Callout>}
-                        {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         {loginFields}
                         <div className="space-y-1.5">
                             <Label htmlFor="lan-auth">{t("lanAuth.label")}</Label>
@@ -234,7 +244,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         </div>
                         {limitHit && <Callout tone="warning">{t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}</Callout>}
                         <p className="text-xs text-muted-foreground">{t("network.open.explain")}</p>
-                        {!webFirst && webSection}
+                        </div>
+                        </details>
                         {mine.length > 0 && (
                             <div className="space-y-1.5">
                                 <p className="text-sm text-foreground">{t("network.openSessions")}</p>

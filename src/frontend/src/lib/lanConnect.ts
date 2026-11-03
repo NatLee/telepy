@@ -59,10 +59,11 @@ export function lanForwardSegments(target: ConnectTarget, h: LanHost, port: numb
 
 /** 常見服務的名稱（產品 / 協定名，不翻譯）。/ Well-known service names (protocol names, untranslated). */
 const SERVICES: Record<number, string> = {
-    21: "FTP", 22: "SSH", 23: "Telnet", 53: "DNS", 80: "HTTP", 139: "SMB", 443: "HTTPS", 445: "SMB", 548: "AFP",
-    631: "IPP", 1883: "MQTT", 2049: "NFS", 3000: "HTTP", 3306: "MySQL", 3389: "RDP", 5000: "HTTP", 5432: "PostgreSQL",
-    5900: "VNC", 6379: "Redis", 8000: "HTTP", 8006: "Proxmox", 8080: "HTTP", 8443: "HTTPS", 8888: "HTTP", 9000: "HTTP",
-    9090: "HTTP", 9100: "Printer", 21118: "RustDesk", 27017: "MongoDB", 32400: "Plex",
+    21: "FTP", 22: "SSH", 23: "Telnet", 53: "DNS", 80: "HTTP", 135: "MS RPC", 139: "SMB", 443: "HTTPS", 445: "SMB", 548: "AFP",
+    554: "RTSP", 631: "IPP", 1433: "SQL Server", 1883: "MQTT", 2049: "NFS", 3000: "HTTP", 3306: "MySQL", 3389: "RDP", 5000: "HTTP",
+    5001: "HTTPS", 5432: "PostgreSQL", 5900: "VNC", 6379: "Redis", 8000: "HTTP", 8006: "Proxmox", 8008: "HTTP", 8080: "HTTP",
+    8081: "HTTP", 8123: "Home Assistant", 8443: "HTTPS", 8888: "HTTP", 9000: "HTTP", 9090: "HTTP", 9100: "Printer", 9443: "HTTPS",
+    10443: "HTTPS", 21118: "RustDesk", 27017: "MongoDB", 32400: "Plex",
 };
 
 export function serviceName(port: number): string | null {

@@ -13,7 +13,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X } from "lucide-react";
+import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X, Info } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -32,6 +32,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { shortUrl } from "@/lib/lanWeb";
 import { ScanDialog } from "@/components/network/ScanDialog";
 import { NetworkTypes } from "@/components/network/NetworkTypes";
+import { NetworkInfoDialog } from "@/components/network/NetworkInfoDialog";
 import { DEVICE_KINDS, type DeviceKind } from "@/lib/lanIdentity";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
@@ -90,6 +91,8 @@ function NetworkInner() {
     const [openHost, setOpenHost] = useState<{ tunnelId: number; hostId: number; tab: HostPanelTab; n: number } | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
     const [scanFor, setScanFor] = useState<number | null>(null);
+    // 「怎麼運作」：一開就是面板裡那台主機。/ "How it works", opening on the panel's host.
+    const [infoOpen, setInfoOpen] = useState(false);
     const [addFor, setAddFor] = useState<number | null>(null);
     const panelRef = useRef<HTMLElement>(null);
     // 浮動 dock 對齊的頁面欄。/ The page column the floating dock aligns with.
@@ -196,7 +199,12 @@ function NetworkInner() {
                 title={t("network.title")}
                 description={t("network.subtitle")}
                 actions={
-                    <RefreshButton onRefresh={actions.refresh} ripple={pageRef} label={t("common.refresh")} />
+                    <>
+                        <Button variant="outline" onClick={() => setInfoOpen(true)}>
+                            <Info size={16} /> {t("network.flow.button")}
+                        </Button>
+                        <RefreshButton onRefresh={actions.refresh} ripple={pageRef} label={t("common.refresh")} />
+                    </>
                 }
             />
 
@@ -390,6 +398,7 @@ function NetworkInner() {
                 message={replaceAsk && terms.browser ? t("network.web.replaceMessage", { current: `${terms.browser.deviceUser}@${terms.browser.tunnelName}`, next: `${replaceAsk.deviceUser}@${replaceAsk.tunnelName}`, url: shortUrl(replaceAsk.url) }) : ""}
                 confirmText={t("network.web.replaceConfirm")}
             />
+            <NetworkInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} tunnels={allTunnels} startTunnel={hostTunnel ?? (focusTunnel !== null ? allTunnels.find((x) => String(x.id) === focusTunnel) ?? null : null)} startHost={host} isOnline={actions.isOnline} />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />
             <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />
         </div>
