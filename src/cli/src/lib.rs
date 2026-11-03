@@ -1465,7 +1465,8 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
             let (_, user) = account(api, &t, acc.as_deref())?;
             let id = t["id"].as_i64().unwrap_or_default();
             let url = format!("/api/sftp/download/{id}/{}?path={}", urlencoding::encode(&user), urlencoding::encode(&path));
-            let res = api.send(Method::GET, &url, None, Some(Duration::from_secs(3600)))?;
+            // 沒有整體時限：大檔 / 大資料夾要多久就多久（資料一直在流）。/ No overall limit: big downloads take as long as they take.
+            let mut res = api.request(Method::GET, &url)?.timeout(Duration::from_secs(24 * 3600)).send().with_context(|| format!("download {}", a.from))?;
             if res.status().as_u16() >= 400 {
                 return Err(api::read(res).unwrap_err());
             }
@@ -1475,9 +1476,17 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
             if dest.is_dir() {
                 dest = dest.join(if zip { format!("{base}.zip") } else { base });
             }
-            let bytes = res.bytes()?;
-            std::fs::write(&dest, &bytes).with_context(|| format!("write {}", dest.display()))?;
-            eprintln!("{} → {} ({} bytes{})", a.from, dest.display(), bytes.len(), if zip { ", zipped directory" } else { "" });
+            // 直接寫到磁碟，不先放進記憶體；失敗就不留半個檔案。/ Straight to disk; a failure leaves no half file.
+            let mut file = std::fs::File::create(&dest).with_context(|| format!("write {}", dest.display()))?;
+            let written = match res.copy_to(&mut file) {
+                Ok(n) => n,
+                Err(e) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&dest);
+                    return Err(anyhow!(e).context(format!("download {}", a.from)));
+                }
+            };
+            eprintln!("{} → {} ({} bytes{})", a.from, dest.display(), written, if zip { ", zipped directory" } else { "" });
         }
         (None, Some((tgt, path))) => {
             let (t, acc) = resolve(&d.tunnels, &tgt)?;
@@ -1488,6 +1497,11 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
                 bail!("{} is a directory; telepy cp copies files (use `telepy scp -r` for directories).", src.display());
             }
             let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "upload".into());
+            if let Some(landed) = upload_in_parts(api, id, &user, src, &path, &name)? {
+                eprintln!("{} → {} {}", a.from, tgt, landed);
+                return Ok(());
+            }
+            // 舊的伺服器沒有分段上傳：整個檔案一個請求。/ An older server without parts: one request.
             let part = reqwest::blocking::multipart::Part::file(src).with_context(|| format!("read {}", src.display()))?.file_name(name);
             let form = reqwest::blocking::multipart::Form::new().part("file", part);
             let url = format!("/api/sftp/upload/{id}/{}?destination_path={}", urlencoding::encode(&user), urlencoding::encode(if path.is_empty() { "." } else { &path }));
@@ -1499,6 +1513,81 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
         (None, None) => bail!("Write the device side as <tunnel>[@account]:<path>."),
     }
     Ok(())
+}
+
+/// 分段上傳的一段多大（後端最多收 32 MiB；前面的代理常常一個請求只放 100 MB）。/ Bytes per upload part.
+const UPLOAD_PART: u64 = 8 * 1024 * 1024;
+
+/// 這個狀態值得等一下重送嗎（連線斷了、前面的代理放棄了、太忙）。/ Worth resending after a wait?
+fn transient(status: u16) -> bool {
+    matches!(status, 408 | 429 | 502 | 503 | 504 | 520..=524)
+}
+
+/// 分段上傳（`PUT /api/sftp/upload-part/…`，每段一個請求，斷了重送那一段，完成才改名成目標）。
+/// 目標：裝置上的資料夾 → 放進去（保留檔名），否則就是完整路徑；同名就取代（跟以前的 `cp` 一樣）。
+/// `Ok(None)` = 伺服器還沒有這個端點（舊版），呼叫端改用一個請求的上傳。
+/// Upload in parts (one request per part, failed parts resent, renamed onto the target when complete). A folder on
+/// the device keeps the file's name; otherwise the path is the target; an existing file is replaced, as `cp` always
+/// did. `Ok(None)` = an older server without the endpoint.
+fn upload_in_parts(api: &Api, id: i64, user: &str, src: &Path, path: &str, name: &str) -> Result<Option<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let remote = if path.is_empty() { "~" } else { path };
+    let stat = api.send(Method::GET, &format!("/api/sftp/stat/{id}/{}?path={}", urlencoding::encode(user), urlencoding::encode(remote)), None, None)?;
+    let target = match stat.status().as_u16() {
+        200 => {
+            let v = api::read(stat)?;
+            if v["type"] == "directory" {
+                format!("{}/{name}", v["path"].as_str().unwrap_or(remote).trim_end_matches('/'))
+            } else {
+                remote.to_string()
+            }
+        }
+        404 => remote.to_string(),
+        _ => return Err(api::read(stat).unwrap_err()),
+    };
+    let mut file = std::fs::File::open(src).with_context(|| format!("read {}", src.display()))?;
+    let size = file.metadata()?.len();
+    let upload: String = {
+        use rand::Rng;
+        let abc = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let mut rng = rand::thread_rng();
+        (0..16).map(|_| abc[rng.gen_range(0..abc.len())] as char).collect()
+    };
+    let base = format!("/api/sftp/upload-part/{id}/{}", urlencoding::encode(user));
+    let mut offset = 0u64;
+    let mut attempt = 0u32;
+    loop {
+        let len = UPLOAD_PART.min(size - offset);
+        let mut buf = vec![0u8; len as usize];
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(&mut buf).with_context(|| format!("read {}", src.display()))?;
+        let q = format!("path={}&upload={upload}&offset={offset}&total={size}&overwrite=1{}", urlencoding::encode(&target), if attempt > 0 { "&retry=1" } else { "" });
+        let sent = api
+            .request(Method::PUT, &format!("{base}?{q}"))?
+            .timeout(Duration::from_secs(600))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(buf)
+            .send();
+        let status = sent.as_ref().map(|r| r.status().as_u16()).unwrap_or(0);
+        if (status == 0 || transient(status)) && attempt < 5 {
+            attempt += 1;
+            std::thread::sleep(Duration::from_secs(1 << attempt.min(4)));
+            continue;
+        }
+        let res = sent.with_context(|| format!("upload {}", src.display()))?;
+        if offset == 0 && attempt == 0 && matches!(status, 404 | 405) {
+            return Ok(None);
+        }
+        let body: Value = res.json().unwrap_or(Value::Null);
+        match (status, body["code"].as_str()) {
+            (200, _) if body["done"] == true => return Ok(Some(body["path"].as_str().unwrap_or(&target).to_string())),
+            (200, _) | (409, Some("upload_offset")) if body["received"].is_u64() => {
+                offset = body["received"].as_u64().unwrap_or(offset);
+                attempt = 0;
+            }
+            _ => return Err(api::HttpError { status, body }.into()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- sessions / recordings / snippets

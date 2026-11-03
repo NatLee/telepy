@@ -220,7 +220,7 @@ pub async fn remove_tree(sftp: &SftpSession, path: &str) -> Result<u64, (SftpErr
     Ok(removed)
 }
 
-fn mode_attrs(mode: u32) -> FileAttributes {
+pub fn mode_attrs(mode: u32) -> FileAttributes {
     FileAttributes { permissions: Some(mode & 0o7777), ..FileAttributes::empty() }
 }
 
@@ -343,6 +343,106 @@ pub async fn stream_copy(sftp: &SftpSession, from: &str, to: &str) -> Result<u64
     Ok(copied)
 }
 
+// ---------------------------------------------------------------- 分段上傳 / uploads in parts
+
+/// 一段最多多大（前端 / CLI 送 8 MiB；Cloudflare 的上限是 100 MB）。/ Largest part accepted (clients send 8 MiB).
+pub const MAX_PART: u64 = 32 * 1024 * 1024;
+
+/// 上傳 id：瀏覽器 / CLI 自己產生的 8–64 個英數字。/ An upload id: 8–64 letters or digits made by the client.
+pub fn valid_upload_id(id: &str) -> bool {
+    (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// 上傳中的暫存檔，在目標旁邊（隱藏檔；完成才改名成目標，失敗不會動到原本的檔案）。檔名太長就截短。
+/// The part file next to the target (hidden; renamed onto the target only when complete, so a failed upload never
+/// touches an existing file). A long name is shortened.
+pub fn part_path(target: &str, upload: &str) -> String {
+    let name = super::basename(target);
+    let mut short: String = String::new();
+    for c in name.chars() {
+        if short.len() + c.len_utf8() > 180 {
+            break;
+        }
+        short.push(c);
+    }
+    join(&parent(target), &format!(".{short}.telepy-upload-{upload}.part"))
+}
+
+/// 這一段要怎麼做。/ What to do with a part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartStep {
+    /// 第一段：建立（或重來）暫存檔。/ The first part: create (or restart) the part file.
+    Start,
+    /// 接在後面寫（重送同一段也可以，同一個位置再寫一次）。/ Write at the offset (a resent part rewrites the same range).
+    Append,
+    /// 暫存檔比 offset 短：從這裡接著傳。/ The part file is shorter than the offset: resume from here.
+    Resume(u64),
+    /// 暫存檔不見了（已經完成改名、或被清掉）。/ The part file is gone (already renamed, or removed).
+    Gone,
+}
+
+/// `offset` + 裝置上暫存檔現在的大小（沒有 = None）→ 這一段的做法（純函式）。
+/// Decide a part from its offset and the part file's current size (None = missing).
+pub fn part_step(offset: u64, part_size: Option<u64>) -> PartStep {
+    match (offset, part_size) {
+        (0, _) => PartStep::Start,
+        (_, None) => PartStep::Gone,
+        (o, Some(s)) if s < o => PartStep::Resume(s),
+        _ => PartStep::Append,
+    }
+}
+
+fn not_a_folder(path: &str) -> SftpError {
+    SftpError::Status(russh_sftp::protocol::Status {
+        id: 0,
+        status_code: StatusCode::Failure,
+        error_message: format!("{path} is not a folder"),
+        language_tag: "en".into(),
+    })
+}
+
+/// `mkdir -p`：從存在的那層往下建。/ Create a folder and the missing ones above it.
+pub async fn mkdir_all(sftp: &SftpSession, dir: &str) -> Result<(), SftpError> {
+    let mut missing = Vec::new();
+    let mut cur = dir.trim_end_matches('/').to_string();
+    loop {
+        if cur.is_empty() {
+            break;
+        }
+        match sftp.metadata(cur.as_str()).await {
+            Ok(m) if m.is_dir() => break,
+            Ok(_) => return Err(not_a_folder(&cur)),
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {
+                missing.push(cur.clone());
+                let up = parent(&cur);
+                if up == cur || up == "/" {
+                    break;
+                }
+                cur = up;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    for d in missing.iter().rev() {
+        if let Err(e) = sftp.create_dir(d.as_str()).await {
+            // 同時有別的上傳建好了也沒關係。/ Another upload may have created it meanwhile.
+            if !matches!(sftp.metadata(d.as_str()).await, Ok(m) if m.is_dir()) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 大小（lstat；不存在 = None）。/ Size by lstat; None when missing.
+pub async fn size_of(sftp: &SftpSession, path: &str) -> Result<Option<u64>, SftpError> {
+    match sftp.symlink_metadata(path).await {
+        Ok(m) => Ok(Some(m.size.unwrap_or(0))),
+        Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// `cp` 的指令列（裝置上跑；路徑一律加引號，`--` 之後才是路徑）。/ The `cp` command line run on the device.
 pub fn cp_command(from: &str, to: &str) -> String {
     use crate::tunnel_service::sh_quote;
@@ -396,6 +496,25 @@ mod tests {
         assert_eq!(temp_path("/etc/app.conf", "ab12"), "/etc/.app.conf.telepy-ab12.tmp");
         assert_eq!(backup_path("/x", "z"), "/.x.telepy-z.bak");
         assert_eq!(cp_command("/a/it's", "/b/c d"), "cp -R -p -- '/a/it'\\''s' '/b/c d'");
+    }
+
+    #[test]
+    fn upload_parts() {
+        assert!(valid_upload_id("abcd1234") && valid_upload_id(&"Z".repeat(64)));
+        for bad in ["", "short", "has-dash1", "with space", &"x".repeat(65)] {
+            assert!(!valid_upload_id(bad), "{bad:?}");
+        }
+        assert_eq!(part_path("/home/u/a b.iso", "k1k1k1k1"), "/home/u/.a b.iso.telepy-upload-k1k1k1k1.part");
+        assert_eq!(part_path("/x", "abcdefgh"), "/.x.telepy-upload-abcdefgh.part");
+        let long = format!("/d/{}", "照".repeat(80));
+        let p = part_path(&long, "abcdefgh");
+        assert!(super::super::basename(&p).len() <= 255, "{p}");
+        assert_eq!(part_step(0, None), PartStep::Start);
+        assert_eq!(part_step(0, Some(99)), PartStep::Start, "the first part restarts");
+        assert_eq!(part_step(8, None), PartStep::Gone);
+        assert_eq!(part_step(16, Some(8)), PartStep::Resume(8));
+        assert_eq!(part_step(8, Some(8)), PartStep::Append);
+        assert_eq!(part_step(8, Some(16)), PartStep::Append, "a resent part rewrites its range");
     }
 
     #[test]

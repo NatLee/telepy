@@ -4319,7 +4319,7 @@ dependencies = [
  "uuid",
  "vt100",
  "webauthn-rs",
- "zip 2.6.1",
+ "zip 9.0.5",
 ]
 
 [[package]]

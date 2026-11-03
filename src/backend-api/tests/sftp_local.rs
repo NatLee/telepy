@@ -55,17 +55,31 @@ async fn list_zip_and_upload_against_local_sftp_server() {
     assert_eq!(rest["type"], "directory");
     assert!(rest["permissions"]["string"].as_str().unwrap().starts_with('d'));
 
-    // zip a directory
-    let tmp = sftp::zip_directory(&session, &format!("{home}/docs")).await.unwrap();
-    let f = std::fs::File::open(tmp.path()).unwrap();
-    let mut archive = zip::ZipArchive::new(f).unwrap();
-    let mut names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    // zip a directory as a stream
+    let session = std::sync::Arc::new(session);
+    let mut stream = Box::pin(sftp::zipstream::zip_stream(session.clone(), vec![format!("{home}/docs")], 0));
+    let mut bytes = Vec::new();
+    while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+        bytes.extend_from_slice(&chunk.unwrap());
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().unwrap().to_string()).collect();
     names.sort();
     assert_eq!(names, vec!["docs/", "docs/a.txt", "docs/nested/", "docs/nested/b.bin"]);
     let mut a = archive.by_name("docs/a.txt").unwrap();
     let mut s = String::new();
     std::io::Read::read_to_string(&mut a, &mut s).unwrap();
     assert_eq!(s, "hello world");
+    drop(a);
+    let mut b = Vec::new();
+    std::io::Read::read_to_end(&mut archive.by_name("docs/nested/b.bin").unwrap(), &mut b).unwrap();
+    assert_eq!(b, vec![7u8; 5000]);
+
+    // mkdir -p
+    sftp::ops::mkdir_all(&session, &format!("{home}/deep/er/still")).await.unwrap();
+    assert!(dir.path().join("deep/er/still").is_dir());
+    sftp::ops::mkdir_all(&session, &format!("{home}/deep/er")).await.unwrap();
+    assert!(sftp::ops::mkdir_all(&session, &format!("{home}/top.txt/x")).await.is_err(), "a file in the way");
 
     // upload into a directory and as an explicit file path
     let target = sftp::upload_target(&session, &format!("{home}/docs"), "up.txt").await;

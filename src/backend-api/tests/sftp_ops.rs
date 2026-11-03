@@ -93,8 +93,9 @@ async fn file_operations_over_the_shared_sftp_channel() {
     assert_eq!(r.status, 200, "{}", r.text);
     assert_eq!(r.headers.get("content-type").unwrap(), "application/zip");
 
-    // 壓縮過的單檔下載要完整結束（以前串流結束後再被 poll 會 panic，瀏覽器下載卡住）。
-    // A compressed single-file download must finish (an unfused stream used to panic when polled after its end).
+    // 單檔下載要完整結束、不壓縮（以前壓縮層在串流結束後再 poll，沒 fuse 的串流會 panic，瀏覽器下載卡住；
+    // 現在下載不壓縮，Content-Length 才留得住）。
+    // A single-file download finishes and is not compressed (Content-Length survives; the stream stays fused).
     std::fs::write(home.join("big.txt"), "telepy ".repeat(4000)).unwrap();
     let http = lab.ws_base().await.replace("ws://", "http://");
     let resp = reqwest::Client::new()
@@ -104,8 +105,9 @@ async fn file_operations_over_the_shared_sftp_channel() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").map(|v| v.to_str().unwrap().to_string()), Some("gzip".into()));
-    assert!(!resp.bytes().await.expect("the compressed body ends cleanly").is_empty());
+    assert_eq!(resp.headers().get("content-encoding"), None);
+    assert_eq!(resp.headers().get("content-length").map(|v| v.to_str().unwrap().to_string()), Some("28000".into()));
+    assert_eq!(resp.bytes().await.expect("the body ends cleanly").len(), 28000);
 
     // 權限：單檔、遞迴（八進位要合法）。/ chmod: one file, recursive, octal checked.
     let r = lab.app.post(&url("chmod"), tok, json!({"paths": ["~/a.txt"], "mode": "600"})).await;

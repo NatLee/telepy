@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
     baseName, bitsToMode, EMPTY_SELECTION, extensionOf, fileErrorKey, fileKeyAction, fileSpotStates, flowNow, formatBytes, imageMime,
     joinPath, languageFor, linkFromClose, modeBits, modeFromString, modeOctal, moveCursor, nextUploads, parentPath, parseMode,
-    previewKind, pruneSelection, selectAll, selectOnly, selectRange, toggleSelection, uploadSummary, validName, type UploadJob,
+    previewKind, pruneSelection, selectAll, selectOnly, selectRange, toggleSelection, uploadSummary, validName, isActiveUpload, uploadListRows, type UploadJob,
 } from "./fileManager.ts";
 
 test("paths join and climb on unix, SFTP-style Windows and backslash Windows paths", () => {
@@ -104,16 +104,24 @@ test("permission bits round-trip and keep the special bits", () => {
     assert.equal(modeFromString(undefined), null);
 });
 
-test("uploads run two at a time and report progress by bytes", () => {
-    const job = (id: number, state: UploadJob["state"], size = 100, loaded = 0): UploadJob => ({ id, name: `f${id}`, size, loaded, state, dir: "~/" });
-    assert.deepEqual(nextUploads([job(1, "queued"), job(2, "queued"), job(3, "queued")]), [1, 2]);
-    assert.deepEqual(nextUploads([job(1, "uploading"), job(2, "queued"), job(3, "queued")]), [2]);
-    assert.deepEqual(nextUploads([job(1, "uploading"), job(2, "uploading"), job(3, "queued")]), []);
-    assert.deepEqual(nextUploads([job(1, "done"), job(2, "failed"), job(3, "queued")]), [3]);
-    const s = uploadSummary([job(1, "done", 100), job(2, "uploading", 300, 150), job(3, "failed", 100, 20)]);
-    assert.deepEqual(s, { total: 3, done: 1, failed: 1, active: 1, percent: Math.round((100 + 150 + 20) / 500 * 100) });
+test("uploads run three at a time and report progress by bytes", () => {
+    const job = (id: number, state: UploadJob["state"], size = 100, loaded = 0): UploadJob => ({
+        id, name: `f${id}`, size, loaded, state, dir: "~/", target: `~/f${id}`, overwrite: false, parents: false, upload: "abcd1234", retry: 0,
+    });
+    assert.deepEqual(nextUploads([job(1, "queued"), job(2, "queued"), job(3, "queued"), job(4, "queued")]), [1, 2, 3]);
+    assert.deepEqual(nextUploads([job(1, "uploading"), job(2, "queued"), job(3, "queued")]), [2, 3]);
+    assert.deepEqual(nextUploads([job(1, "uploading"), job(2, "uploading"), job(3, "uploading"), job(4, "queued")]), []);
+    assert.deepEqual(nextUploads([job(1, "done"), job(2, "failed"), job(3, "cancelled"), job(4, "queued")]), [4]);
+    const s = uploadSummary([job(1, "done", 100), job(2, "uploading", 300, 150), job(3, "failed", 100, 20), job(4, "cancelled", 1000, 10)]);
+    assert.deepEqual(s, { total: 3, done: 1, failed: 1, active: 1, percent: Math.round((100 + 150 + 20) / 500 * 100) }, "cancelled ones leave the totals");
     assert.equal(uploadSummary([job(1, "done", 0)]).percent, 100, "empty files count as complete");
     assert.equal(uploadSummary([]).percent, 0);
+    assert.ok(isActiveUpload(job(1, "queued")) && !isActiveUpload(job(1, "cancelled")));
+    // 幾千個檔案的資料夾：清單只列傳送中、失敗的和接下來幾個。/ A folder of thousands: the list stays short.
+    const many = [job(1, "done"), job(2, "uploading"), job(3, "failed"), ...Array.from({ length: 50 }, (_, i) => job(10 + i, "queued"))];
+    const rows = uploadListRows(many);
+    assert.deepEqual(rows.shown.map((j) => j.id), [2, 3, 10, 11, 12]);
+    assert.equal(rows.waiting, 47);
 });
 
 test("the diagram shows where it stopped and what is in flight", () => {

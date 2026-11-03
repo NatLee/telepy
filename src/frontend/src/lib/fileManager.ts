@@ -11,8 +11,8 @@ import type { TranslationKey } from "@/locales/en";
 export const TEXT_LIMIT = 1024 * 1024;
 /** 圖片預覽的上限。/ Largest image previewed. */
 export const IMAGE_LIMIT = 10 * 1024 * 1024;
-/** 同時上傳幾個。/ Uploads running at once. */
-export const UPLOAD_CONCURRENCY = 2;
+/** 同時上傳幾個（每個再分段，一段一個請求）。/ Uploads running at once (each goes in parts). */
+export const UPLOAD_CONCURRENCY = 3;
 
 // ---------------------------------------------------------------- paths
 
@@ -274,17 +274,33 @@ export function modeFromString(s: string | undefined | null): number | null {
 
 // ---------------------------------------------------------------- uploads
 
-export type UploadState = "queued" | "uploading" | "done" | "failed";
+export type UploadState = "queued" | "uploading" | "done" | "failed" | "cancelled";
 
 export interface UploadJob {
     id: number;
+    /** 顯示用：相對路徑（資料夾上傳時含資料夾）。/ For display: the relative path (folders included). */
     name: string;
     size: number;
     loaded: number;
     state: UploadState;
     /** 上傳到哪個資料夾（排隊時的目前目錄）。/ The folder it goes into (the current one when queued). */
     dir: string;
+    /** 完整的目標路徑。/ The full target path. */
+    target: string;
+    /** 同名就取代（使用者確認過）。/ Replace a same-name file (the person confirmed). */
+    overwrite: boolean;
+    /** 上層資料夾要建（資料夾上傳）。/ Create missing folders above it (folder uploads). */
+    parents: boolean;
+    /** 分段上傳的 id（取消時刪裝置上的暫存檔）。/ The upload id (cancelling removes the part file). */
+    upload: string;
+    /** 正在重送第幾次（0 = 沒有）。/ Which resend is under way (0 = none). */
+    retry: number;
     error?: string;
+}
+
+/** 還沒結束的。/ Still queued or running. */
+export function isActiveUpload(j: Pick<UploadJob, "state">): boolean {
+    return j.state === "queued" || j.state === "uploading";
 }
 
 /** 接下來要開始哪幾個（同時最多 `limit` 個，照排隊順序）。/ Which queued jobs to start next. */
@@ -303,16 +319,27 @@ export interface UploadSummary {
     percent: number;
 }
 
-export function uploadSummary(jobs: readonly UploadJob[]): UploadSummary {
-    const bytes = jobs.reduce((s, j) => s + j.size, 0);
-    const loaded = jobs.reduce((s, j) => s + (j.state === "done" ? j.size : Math.min(j.loaded, j.size)), 0);
+export function uploadSummary(jobs: readonly Pick<UploadJob, "state" | "size" | "loaded">[]): UploadSummary {
+    // 取消的不算進總量。/ Cancelled ones leave the totals.
+    const counted = jobs.filter((j) => j.state !== "cancelled");
+    const bytes = counted.reduce((s, j) => s + j.size, 0);
+    const loaded = counted.reduce((s, j) => s + (j.state === "done" ? j.size : Math.min(j.loaded, j.size)), 0);
     return {
-        total: jobs.length,
-        done: jobs.filter((j) => j.state === "done").length,
-        failed: jobs.filter((j) => j.state === "failed").length,
-        active: jobs.filter((j) => j.state === "queued" || j.state === "uploading").length,
-        percent: bytes > 0 ? Math.round((loaded / bytes) * 100) : jobs.length && jobs.every((j) => j.state === "done") ? 100 : 0,
+        total: counted.length,
+        done: counted.filter((j) => j.state === "done").length,
+        failed: counted.filter((j) => j.state === "failed").length,
+        active: counted.filter(isActiveUpload).length,
+        percent: bytes > 0 ? Math.round((loaded / bytes) * 100) : counted.length && counted.every((j) => j.state === "done") ? 100 : 0,
     };
+}
+
+/** 上傳清單顯示哪幾列：傳送中與失敗的全部，排隊中的前幾個，其餘只說還有幾個（資料夾可能有幾千個檔案）。
+ * Rows the upload list shows: running and failed ones, the first few queued; the rest is a count. */
+export function uploadListRows<T extends Pick<UploadJob, "state">>(jobs: readonly T[], queuedShown = 3): { shown: T[]; waiting: number } {
+    let queued = 0;
+    const shown = jobs.filter((j) => j.state === "uploading" || j.state === "failed" || (j.state === "queued" && queued++ < queuedShown));
+    const waiting = jobs.reduce((n, j) => n + (j.state === "queued" ? 1 : 0), 0);
+    return { shown, waiting: Math.max(0, waiting - queuedShown) };
 }
 
 // ---------------------------------------------------------------- errors
@@ -336,6 +363,8 @@ const ERROR_KEYS: Record<string, TranslationKey> = {
     device: "files.err.device",
     failed: "files.err.failed",
     step_up_required: "files.err.step_up_required",
+    upload_gone: "files.err.upload_gone",
+    interrupted: "files.err.interrupted",
 };
 
 /** 後端的 `code` → 翻譯 key；認不得回 null（顯示後端原文）。/ Backend code → key; null = show the backend text. */

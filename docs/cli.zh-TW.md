@@ -293,6 +293,8 @@ telepy cp ./config.yml box@pi:/etc/app/
 
 `cp` 透過 Telepy 的 API 走 SFTP 複製，需要 `ssh:files` scope。`scp` 則是 OpenSSH 的做法，需要你的個人 SSH 金鑰。
 
+下載直接寫進磁碟（裝置上的資料夾會變成一個 zip）。上傳每 8 MiB 送一段，所以就算 Telepy 前面的代理限制了請求大小（Cloudflare 是 100 MB），大檔案也傳得過去，哪一段斷了就重送那一段。
+
 ### 連線、錄影與片段
 
 ```sh

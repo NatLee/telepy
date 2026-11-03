@@ -74,6 +74,8 @@ Find it: the file manager's **How files work here** button.
 
 Everything you do in the file manager goes through one shared SFTP channel, on the same login as your terminal. The dialog also shows where things stop when the device is offline or Telepy is waiting for you to confirm it's you.
 
+Downloads land in your browser's own download list. A folder (or several picked items) comes as one zip that Telepy packs while it sends, so nothing waits for the whole folder first; a file Telepy can't read is listed in `TELEPY-SKIPPED.txt` inside the zip. Uploads go in 8 MiB parts, so a big file or a dropped folder gets past a proxy's size limit, and a part that drops is simply sent again. The file only appears on the device once every part is there. Downloads and big uploads open an SFTP channel of their own next to the shared one, so browsing stays quick while they run, and a slow device link doesn't make them time out.
+
 ![How files reach the device: one shared SFTP channel through the tunnel](images/en/file-flow.png)
 
 ### Toolbox

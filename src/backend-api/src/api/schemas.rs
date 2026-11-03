@@ -1842,10 +1842,40 @@ pub struct UploadForm {
 #[derive(ToSchema)]
 pub struct UploadResult {
     pub success: String,
+    /// Where the file went
+    pub path: Option<String>,
+}
+
+/// A one-time download link: open `url` in the browser within `expires_in` seconds (single use).
+#[derive(ToSchema)]
+pub struct SftpDownloadLink {
+    #[schema(example = "/api/sftp/fetch/tpd_…")]
+    pub url: String,
+    /// The name it saves as (`.zip` for a folder or several paths)
+    pub name: String,
+    pub zip: bool,
+    /// Bytes, for a single file; null for a zip (it is built while it streams)
+    pub size: Option<u64>,
+    pub expires_in: u64,
+}
+
+/// One part of an upload went in. `done` = the file is complete and was renamed onto `path`.
+#[derive(ToSchema)]
+pub struct SftpUploadPart {
+    /// Bytes the device has so far
+    pub received: u64,
+    pub done: bool,
+    pub path: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUploadCancel {
+    pub removed: bool,
 }
 
 /// `{error, code}`；code = path_required | invalid_name | exists | not_found | permission_denied | dir_not_writable |
-/// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed
+/// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed |
+/// bad_upload | bad_offset | upload_offset (with `received`) | upload_gone | interrupted
 #[derive(ToSchema)]
 pub struct SftpError {
     pub error: String,

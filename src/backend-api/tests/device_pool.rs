@@ -63,12 +63,14 @@ async fn sftp_requests_share_one_connection_and_one_channel_per_account() {
     assert_eq!(boxm.login_count("deploy", &lab.service), 1);
     assert_eq!(boxm.sftp_starts(), 2);
 
-    // 下載也走同一條
+    // 下載用同一條連線（不再登入），但開自己的 sftp channel（列目錄不必排在下載後面），下載完就關。
+    // A download reuses the connection (no new login) but opens its own SFTP channel, closed when it ends.
     let (logins, starts) = (boxm.logins().len(), boxm.sftp_starts());
     let r = lab.app.get(&format!("/api/sftp/download/{}/ubuntu?path=marker.txt", dev.tunnel_id), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(r.text, "hi");
-    assert_eq!((boxm.logins().len(), boxm.sftp_starts()), (logins, starts));
+    assert_eq!((boxm.logins().len(), boxm.sftp_starts()), (logins, starts + 1));
+    eventually("the download's own channel to close", || pool.sessions(port, "ubuntu") == 1).await;
 }
 
 /// 裝置的 MaxSessions 比池子預設的小：開不了 channel 時改開第二條連線，之後那條不再超量借出。

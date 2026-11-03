@@ -227,7 +227,7 @@ pub fn extract_binary(archive: &[u8], archive_name: &str) -> Result<Vec<u8>> {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).context("read the zip archive")?;
         for i in 0..zip.len() {
             let entry = zip.by_index(i)?;
-            if entry.is_file() && wanted(entry.name()) {
+            if entry.is_file() && entry.name().is_ok_and(|n| wanted(&n)) {
                 let mut out = Vec::new();
                 entry.take(MAX_BINARY as u64 + 1).read_to_end(&mut out)?;
                 return Ok(out);

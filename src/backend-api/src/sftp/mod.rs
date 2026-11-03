@@ -1,8 +1,8 @@
 //! SFTP 操作層（檔案管理 WS 與 /api/sftp REST 共用）：路徑解析、列目錄、shell 偵測、下載（檔案串流 /
-//! 目錄打包 zip）、上傳。不再 spawn `ssh`/`scp`、不再解析 `ls` 文字。
+//! 目錄邊打包邊送的 zip，見 [`zipstream`]；瀏覽器用一次性下載連結，見 [`links`]）、上傳。
+//! 不再 spawn `ssh`/`scp`、不再解析 `ls` 文字。
 //! SFTP helpers shared by the file-manager socket and the REST endpoints.
 
-use std::io::Write;
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, FixedOffset, Utc};
@@ -11,9 +11,10 @@ use regex::Regex;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileType;
 use serde_json::{json, Value};
-use tokio::io::AsyncReadExt;
 
+pub mod links;
 pub mod ops;
+pub mod zipstream;
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -48,11 +49,17 @@ pub async fn detect_shell(sftp: &SftpSession) -> &'static str {
     }
 }
 
-/// 把前端送來的路徑轉成 SFTP 路徑：`~` / `~/x` → 家目錄；`C:\x`、`C:/x` → `/C:/x`；反斜線 → `/`。
+/// 把前端送來的路徑轉成 SFTP 路徑：`~` / `~/x` → 家目錄；`C:\x`、`C:/x` → `/C:/x`；反斜線 → `/`；
+/// 相對路徑（`x`、`./x`）接在家目錄後面（SFTP 本來就把相對路徑當成相對於家目錄，寫明了上一層才算得出來）。
+/// Resolve a client path to an SFTP path; a relative one is anchored at the home folder (SFTP treats it that way
+/// anyway, and an absolute path has a parent we can compute).
 pub fn resolve_path(raw: &str, home: &str) -> String {
     let raw = raw.trim();
-    if raw.is_empty() || raw == "~" || raw == "~/" {
+    if raw.is_empty() || raw == "~" || raw == "~/" || raw == "." || raw == "./" {
         return home.to_string();
+    }
+    if let Some(rest) = raw.strip_prefix("./") {
+        return resolve_path(&format!("~/{rest}"), home);
     }
     if let Some(rest) = raw.strip_prefix("~/") {
         let rest = rest.trim_matches('/');
@@ -64,6 +71,9 @@ pub fn resolve_path(raw: &str, home: &str) -> String {
     }
     if p.len() > 1 {
         p = p.trim_end_matches('/').to_string();
+    }
+    if !p.starts_with('/') {
+        return format!("{}/{p}", home.trim_end_matches('/'));
     }
     p
 }
@@ -193,57 +203,13 @@ pub fn basename(path: &str) -> String {
     p.rsplit('/').next().unwrap_or(p).to_string()
 }
 
-/// 遞迴把目錄打進 zip（暫存檔）。回 (暫存檔, zip 內根目錄名)。
-pub async fn zip_directory(sftp: &SftpSession, path: &str) -> anyhow::Result<tempfile::NamedTempFile> {
-    zip_paths(sftp, &[path.to_string()]).await
-}
-
-/// 好幾個檔案 / 資料夾打成一個 zip（多選下載）：每個都放在 zip 的最上層，資料夾整棵。
-/// Zip several files and folders (multi-select download): each sits at the top of the archive, folders whole.
-pub async fn zip_paths(sftp: &SftpSession, paths: &[String]) -> anyhow::Result<tempfile::NamedTempFile> {
-    let tmp = tempfile::NamedTempFile::new()?;
-    let file = tmp.reopen()?;
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut stack: Vec<(String, String)> = Vec::new();
-    for path in paths {
-        let root = path.trim_end_matches('/').to_string();
-        let name = basename(&root);
-        if sftp.metadata(root.as_str()).await?.is_dir() {
-            zip.add_directory(format!("{name}/"), opts)?;
-            stack.push((root, name));
-        } else {
-            zip.start_file(name, opts)?;
-            copy_into(sftp, &root, &mut zip, &mut buf).await?;
-        }
-    }
-    while let Some((dir, rel)) = stack.pop() {
-        for e in list_dir(sftp, &dir).await? {
-            let child = format!("{dir}/{}", e.name);
-            let child_rel = format!("{rel}/{}", e.name);
-            if e.is_dir {
-                zip.add_directory(format!("{child_rel}/"), opts)?;
-                stack.push((child, child_rel));
-            } else {
-                zip.start_file(child_rel, opts)?;
-                copy_into(sftp, &child, &mut zip, &mut buf).await?;
-            }
-        }
-    }
-    zip.finish()?;
-    Ok(tmp)
-}
-
-async fn copy_into(sftp: &SftpSession, path: &str, zip: &mut zip::ZipWriter<std::fs::File>, buf: &mut [u8]) -> anyhow::Result<()> {
-    let mut f = sftp.open(path).await?;
-    loop {
-        let n = f.read(buf).await?;
-        if n == 0 {
-            return Ok(());
-        }
-        zip.write_all(&buf[..n])?;
-    }
+/// 下載的 `Content-Disposition`（RFC 6266）：`filename` 給舊瀏覽器（非 ASCII、引號、控制字元換成 `_`），
+/// `filename*` 是 UTF-8 的真名（中文檔名不會變亂碼）。
+/// The download's `Content-Disposition`: an ASCII `filename` fallback plus the UTF-8 `filename*`, so names in any
+/// script survive.
+pub fn attachment(name: &str) -> String {
+    let fallback: String = name.chars().map(|c| if c == ' ' || (c.is_ascii_graphic() && c != '"' && c != '\\') { c } else { '_' }).collect();
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{}", urlencoding::encode(name))
 }
 
 /// 上傳：目的地是目錄 → 放進去；否則視為完整檔名。
@@ -268,6 +234,10 @@ mod tests {
         assert_eq!(resolve_path("C:\\Users\\x", "/C:/Users/x"), "/C:/Users/x");
         assert_eq!(resolve_path("/C:/Users", "/C:/Users/x"), "/C:/Users");
         assert_eq!(resolve_path("/", "/home/u"), "/");
+        assert_eq!(resolve_path("up.txt", "/home/u"), "/home/u/up.txt");
+        assert_eq!(resolve_path("./a/b", "/home/u/"), "/home/u/a/b");
+        assert_eq!(resolve_path(".", "/home/u"), "/home/u");
+        assert_eq!(resolve_path("docs\\x", "/C:/Users/x"), "/C:/Users/x/docs/x");
         assert!(is_windows_home("/C:/Users/x"));
         assert!(!is_windows_home("/home/u"));
     }
@@ -285,5 +255,14 @@ mod tests {
         assert_eq!(basename("/a/b/c.txt"), "c.txt");
         assert_eq!(basename("/a/b/"), "b");
         assert_eq!(basename("C:\\x\\y"), "y");
+    }
+
+    #[test]
+    fn attachment_names() {
+        assert_eq!(attachment("a b.txt"), "attachment; filename=\"a b.txt\"; filename*=UTF-8''a%20b.txt");
+        assert_eq!(attachment("照片.zip"), "attachment; filename=\"__.zip\"; filename*=UTF-8''%E7%85%A7%E7%89%87.zip");
+        assert_eq!(attachment("x\"y\nz"), "attachment; filename=\"x_y_z\"; filename*=UTF-8''x%22y%0Az");
+        // 每個位元組都是合法的標頭值。/ Always a valid header value.
+        assert!(axum::http::HeaderValue::from_str(&attachment("a\r\nb\u{7f}")).is_ok());
     }
 }

@@ -71,6 +71,8 @@ pub struct Inner {
     pub device_keys: DeviceKeys,
     /// 一行指令加入裝置的票（記憶體）。/ One-command device join tickets (in memory).
     pub join: JoinTickets,
+    /// 檔案管理的一次性下載連結（瀏覽器自己下載）。/ One-time download links for the file manager.
+    pub downloads: crate::sftp::links::DownloadLinks,
     /// 敏感隧道的 step-up（跟 gateway 共用）。/ Step-up confirmations (shared with the gateway).
     pub step_up: Arc<crate::step_up::StepUps>,
     /// 指令規則快取與等待中的核准。/ Command rule cache and pending approvals.
@@ -154,6 +156,7 @@ impl AppState {
             lan_scans: LanScans::default(),
             device_keys: DeviceKeys::default(),
             join: JoinTickets::default(),
+            downloads: Default::default(),
             step_up,
             commands: Default::default(),
             webhooks,
