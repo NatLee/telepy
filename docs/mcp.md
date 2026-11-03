@@ -92,7 +92,7 @@ MCP client ── POST /mcp ─────────────────�
 | `tunnels:read` | See your tunnels | `list_tunnels`, `tunnel_status`, `lan_hosts` |
 | `ssh:exec` | Run commands on your devices | `ssh_session_open`, `ssh_exec`, `shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
 | `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write` |
-| `network:scan` | Discover machines on your devices' networks | `lan_scan` (only on tunnels you own or are ADMIN on) |
+| `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check` (only on tunnels you own or are ADMIN on) |
 | `browser:use` | Browse the web as your devices | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 `ssh:exec`, `ssh:files` and `browser:use` carry a **Can make changes** tag on the approval page. The other two are marked **Read only**.
@@ -119,7 +119,7 @@ The tools below are grouped by the scope that unlocks them. On the MCP page, the
 | --- | --- |
 | `list_tunnels` | The tunnels you can see: id, name, online or not, latency, your permission, the target usernames you may use, and the sessions this app has open |
 | `tunnel_status(tunnel_id)` | Health, latency, 24-hour uptime, the device's `facts` and `warnings`, and the last 10 gateway events |
-| `lan_hosts(tunnel_id)` | The LAN hosts behind a device (found by a scan or added by hand): address, name, open ports, SSH banner, labels, login account, `web` (each web port with its URL, ready for `browser_open` on the same tunnel), `services` and `identity` (what the last scan recognised), `own` (the row of what the device itself listens on, address `localhost`), `gateway`, `missing` (not seen in the last scan of its network) and `since_last` (new, ports opened / closed); plus `lan` = the last scan's networks, gateway and what changed since the scan before |
+| `lan_hosts(tunnel_id)` | The LAN hosts behind a device (found by a scan or added by hand): address, name, open ports, SSH banner, labels, login account, `web` (each web port with its URL, ready for `browser_open` on the same tunnel), `services` and `identity` (what the last scan recognised), `own` (the row of what the device itself listens on, address `localhost`), `gateway`, `missing` (not seen in the last scan of its network) and `since_last` (new, ports opened / closed) and `watched` (you watch it); plus `lan` = the last scan's networks, gateway and what changed since the scan before, and `schedule` = the scheduled rescan (or null) |
 
 - Health is online, degraded (the tunnel is up but the device's sshd doesn't answer) or offline.
 - `facts` covers the OS, kernel, uptime in seconds, CPU, memory and root disk in KB, load, ssh version, and whether a reboot is needed. Only people who can log in to the device get it.
@@ -156,6 +156,7 @@ These also work inside a session, opened with `ssh_session_open`.
 | Tool | What it does |
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | Scans the LAN through the device's sshd and saves what it finds to the host list. With `identify` (the default) each open web port gets one `GET /` (HTTPS ones also show their certificate), so `lan_hosts` can say what each machine is |
+| `lan_check(tunnel_id, host, ports?, username?)` | Checks one LAN host again now (by id, address or label): the ports it had open plus the defaults, on that address only, in a few seconds. Same rules as `lan_scan`. Returns the host as it is now (`missing` when it didn't answer) and what changed |
 
 - Private ranges only, up to 1024 addresses. A scan takes about a minute.
 - Only on tunnels you own or are ADMIN on.
@@ -252,7 +253,7 @@ An agent gets exactly what you would get in the web app:
 | --- | --- |
 | `ssh:exec` tools | Web terminal |
 | `ssh:files` tools | File manager |
-| `lan_hosts`, `lan_scan` | LAN discovery |
+| `lan_hosts`, `lan_scan`, `lan_check` | LAN discovery |
 | `browser:use` tools | Remote browser |
 
 If the app simply wasn't given a scope, the error tells the agent to ask you to reconnect and approve it.

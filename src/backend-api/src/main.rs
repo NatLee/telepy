@@ -192,6 +192,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(telepy_server::device_keys::run(state.clone()));
     // 沒傳完的上傳留在裝置上的暫存檔（閒置 24 小時就清）。/ Part files of uploads left unfinished on devices.
     tokio::spawn(telepy_server::uploads::run(state.clone()));
+    // 區網定時重掃。/ Scheduled LAN rescans.
+    tokio::spawn(telepy_server::lan::schedule::run(state.clone()));
     // 裝置載體每天檢查一次新版（網站設定可以關）。/ Device carriers: a daily check for a newer release (a site setting).
     tokio::spawn(telepy_server::carriers::run(state.clone()));
     // GeoIP 與廠商表：檔案換了就重讀，每月自動更新（網站設定可以關）。/ GeoIP and vendor data: reload changed files, refresh monthly.

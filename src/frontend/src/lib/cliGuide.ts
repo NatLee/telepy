@@ -249,6 +249,7 @@ export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
             return [
                 r("lanLs", `telepy lan ls ${T}`, ["tunnels:read"]),
                 r("lanScan", `telepy lan scan ${T}\ntelepy lan show ${T} 192.168.1.20`, ["network:scan"]),
+                r("lanWatch", `telepy lan schedule ${T} --every 6h\ntelepy lan watch ${T} 192.168.1.20\ntelepy lan check ${T} 192.168.1.20`, ["network:scan"]),
                 r("lanAdd", `telepy lan add ${T} 192.168.1.20 --label nas --user admin`, ["tunnels:manage"]),
                 r("lanWeb", `telepy forward ${TA} 192.168.1.20:8080 --open`, ["tunnels:read", "ssh-key"]),
                 r("browse", `ID=$(telepy browse ${T} http://192.168.1.1/)\ntelepy browse text "$ID" --selector main\ntelepy browse shot "$ID" -o router.png\ntelepy browse close "$ID"`, ["browser:use"]),
@@ -313,7 +314,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "snippets ls [--tunnel <t>]", key: "snippets", needs: ["ssh:exec"] },
     { usage: "run <snippet> <tunnel> [--var k=v]", key: "run", needs: ["ssh:exec"] },
     { usage: "browse <tunnel> [url] | ls | go | text | shot | click | type | close", key: "browse", needs: ["browser:use"] },
-    { usage: "lan ls | scan | show | add | rm <tunnel> …", key: "lan", needs: ["tunnels:read"] },
+    { usage: "lan ls | scan | check | schedule | watch | show | add | rm <tunnel> …", key: "lan", needs: ["tunnels:read"] },
     { usage: "api tokens | activity [--follow]", key: "api", needs: [] },
     { usage: "keys [ls] | add [<file>] [--device <tunnel>] | check <tunnel>[@account] [--yes]", key: "keys", needs: [] },
     { usage: "doctor", key: "doctor", needs: [] },

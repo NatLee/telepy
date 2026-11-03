@@ -18,7 +18,7 @@ use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, lan::LanHost, tunnels::Tunnel, users::User};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
-use crate::lan::{self, scan::ScanRequest, Network};
+use crate::lan::{self, scan::ScanRequest, scan::Trigger, Network};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_to_iso, json_i64, json_str, opt_db_to_iso};
@@ -29,6 +29,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_hosts, add_host))
         .routes(routes!(update_host, delete_host))
         .routes(routes!(start_scan, scan_status))
+        .routes(routes!(get_schedule, put_schedule, delete_schedule))
+        .routes(routes!(check_host))
+        .routes(routes!(watch_host, unwatch_host))
         .routes(routes!(topology))
 }
 
@@ -54,10 +57,15 @@ pub fn meta_json(m: Option<&db::lan::LanMeta>, tz: i32) -> Value {
 /// 上次掃描有掃到它的網段、卻沒看到它（掃到過的主機才算，裝置自己不算）。/ Its network was scanned last time but it wasn't
 /// seen (only hosts a scan has seen before; never the device itself).
 fn missing(h: &LanHost, m: Option<&db::lan::LanMeta>) -> bool {
-    let (Some(m), Ok(ip), Some(seen)) = (m, h.address.parse::<std::net::Ipv4Addr>(), h.last_seen.as_deref()) else { return false };
-    if h.source == "self" {
+    if h.source == "self" || h.last_seen.is_none() {
         return false;
     }
+    // 掃描（整網段或檢查這台）有記下探過它的時間：比它早看到的 = 這次沒看到。/ A covering scan was recorded: compare with it.
+    if let (Some(seen), Some(checked)) = (h.last_seen.as_deref(), h.checked_at.as_deref()) {
+        return seen < checked;
+    }
+    // 較早的資料只有最近一次整網段掃描的時間。/ Older data only has the last full scan's time.
+    let (Some(m), Ok(ip), Some(seen)) = (m, h.address.parse::<std::net::Ipv4Addr>(), h.last_seen.as_deref()) else { return false };
     let scanned = m.network_list().iter().filter_map(|c| lan::parse_cidr(c).ok()).any(|n| n.contains(ip));
     scanned && m.scanned_at.as_deref().is_some_and(|at| seen < at)
 }
@@ -110,8 +118,40 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui, meta: Option<&db::
         "source": h.source,
         "first_seen": opt_db_to_iso(&h.first_seen, tz),
         "last_seen": opt_db_to_iso(&h.last_seen, tz),
+        "checked_at": opt_db_to_iso(&h.checked_at, tz),
         "created_at": db_to_iso(&h.created_at, tz),
     })
+}
+
+/// 一串主機的 JSON，加上「我有沒有在注意它」。/ Hosts as JSON, plus whether I watch each one.
+pub fn hosts_json(hosts: &[LanHost], tz: i32, oui: &crate::oui::Oui, meta: Option<&db::lan::LanMeta>, watched: &std::collections::HashSet<i64>) -> Vec<Value> {
+    hosts
+        .iter()
+        .map(|h| {
+            let mut v = host_json(h, tz, oui, meta);
+            v["watched"] = json!(watched.contains(&h.id));
+            v
+        })
+        .collect()
+}
+
+/// 定時重掃的設定給網頁 / CLI / MCP 看的樣子（沒有 = null）。/ The schedule as clients see it (null when none).
+pub async fn schedule_json(state: &AppState, tunnel_id: i64) -> ApiResult<Value> {
+    let tz = state.config.tz_offset_minutes;
+    let Some(s) = db::lan::schedule(&state.db, tunnel_id).await? else { return Ok(Value::Null) };
+    let by = db::users::by_id(&state.db, s.user_id).await?.map(|u| u.username);
+    Ok(json!({
+        "every_secs": s.every_secs,
+        "username": s.username,
+        "subnets": s.subnet_list(),
+        "ports": s.port_list(),
+        "identify": s.identify,
+        "next_at": db_to_iso(&s.next_at, tz),
+        "last_at": opt_db_to_iso(&s.last_at, tz),
+        "last_error": s.last_error,
+        "by": by,
+        "updated_at": db_to_iso(&s.updated_at, tz),
+    }))
 }
 
 /// 看得到的隧道（否則 404，與其他隧道端點一致）。/ A tunnel the user can see, else 404.
@@ -135,7 +175,8 @@ pub async fn scan_denied(state: &AppState, eff: permissions::Effective) -> ApiRe
 
 /// 驗證掃描參數並 `begin`；回傳可交給 `lan::scan::execute` 的請求。網頁與 MCP 共用。
 /// Validate scan parameters and reserve the tunnel's scan slot; shared by the web API and MCP.
-pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: permissions::Effective, username: Option<&str>, subnets: Option<Vec<String>>, ports: Option<Vec<i64>>, identify: bool) -> ApiResult<ScanRequest> {
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: permissions::Effective, username: Option<&str>, subnets: Option<Vec<String>>, ports: Option<Vec<i64>>, identify: bool, trigger: Trigger) -> ApiResult<ScanRequest> {
     if let Some(e) = scan_denied(state, eff).await? {
         return Err(e);
     }
@@ -164,9 +205,9 @@ pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: p
     }
     state
         .lan_scans
-        .begin(tunnel.id, user, &ports)
+        .begin(tunnel.id, user, &ports, trigger)
         .map_err(|running| ApiError::new(StatusCode::CONFLICT, json!({ "error": "A scan of this network is already running.", "code": "lan_scan_running", "scan": running })))?;
-    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone(), identify, listed })
+    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone(), identify, listed, trigger })
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/{id}/lan/hosts", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::LanHostList), (status = 404, body = super::schemas::ErrorBody)))]
@@ -175,9 +216,11 @@ async fn list_hosts(State(state): State<AppState>, AuthUser(user): AuthUser, Pat
     let tz = state.config.tz_offset_minutes;
     let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
     let meta = db::lan::meta(&state.db, t.id).await?;
+    let watched = db::lan::watched_by(&state.db, user.id, t.id).await?;
     Ok(Json(json!({
-        "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui, meta.as_ref())).collect::<Vec<_>>(),
+        "hosts": hosts_json(&hosts, tz, &state.oui, meta.as_ref(), &watched),
         "lan": meta_json(meta.as_ref(), tz),
+        "schedule": schedule_json(&state, t.id).await?,
         "scan": state.lan_scans.get(t.id),
         "can_scan": scan_denied(&state, eff).await?.is_none(),
         "can_edit": eff.satisfies(Permission::Edit),
@@ -280,7 +323,9 @@ async fn update_host(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     .await?;
     notify_updated(&state, &t).await;
     let meta = db::lan::meta(&state.db, t.id).await?;
-    Ok(Json(host_json(&own_host(&state, t.id, host_id).await?, state.config.tz_offset_minutes, &state.oui, meta.as_ref())))
+    let watched = db::lan::watched_by(&state.db, user.id, t.id).await?;
+    let h = own_host(&state, t.id, host_id).await?;
+    Ok(Json(hosts_json(std::slice::from_ref(&h), state.config.tz_offset_minutes, &state.oui, meta.as_ref(), &watched).remove(0)))
 }
 
 #[utoipa::path(delete, path = "/api/reverse/server/{id}/lan/hosts/{host_id}", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), responses((status = 204, description = "Removed (a later scan finds it again if it is still there)"), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
@@ -310,7 +355,7 @@ async fn start_scan(State(state): State<AppState>, AuthUser(user): AuthUser, hea
     let subnets = body.get("subnets").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
     let ports = body.get("ports").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect());
     let identify = body.get("identify").and_then(Value::as_bool).unwrap_or(true);
-    let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), subnets, ports, identify).await?;
+    let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), subnets, ports, identify, Trigger::Manual).await?;
     let status = state.lan_scans.get(t.id);
     tokio::spawn(crate::lan::scan::execute(state.clone(), req));
     Ok((StatusCode::ACCEPTED, Json(json!(status))))
@@ -320,6 +365,160 @@ async fn start_scan(State(state): State<AppState>, AuthUser(user): AuthUser, hea
 async fn scan_status(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let (t, _) = visible(&state, user.id, id).await?;
     Ok(Json(json!(state.lan_scans.get(t.id))))
+}
+
+/// 定時重掃的設定：間隔、帳號、網段、port、辨識。共用的驗證（PUT 與 CLI / MCP 的說明同一套）。
+/// The schedule's settings: interval, account, subnets, ports, identify. One validation for PUT.
+struct ScheduleBody {
+    every: i64,
+    username: Option<String>,
+    subnets: Option<Vec<String>>,
+    ports: Option<Vec<i64>>,
+    identify: bool,
+}
+
+fn schedule_body(body: &Value) -> ApiResult<ScheduleBody> {
+    let every = body.get("every_secs").and_then(Value::as_i64).unwrap_or(0);
+    if !lan::watch::valid_every(every) {
+        return Err(lan_error(StatusCode::BAD_REQUEST, "every", format!("every_secs must be one of {:?}", lan::watch::EVERY)));
+    }
+    let subnets: Option<Vec<String>> = body.get("subnets").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>()).filter(|v| !v.is_empty());
+    if let Some(list) = &subnets {
+        let parsed: Vec<Network> = list.iter().map(|c| lan::parse_cidr(c)).collect::<Result<_, _>>().map_err(|e| lan_error(StatusCode::BAD_REQUEST, "subnet", e))?;
+        if parsed.iter().map(Network::size).sum::<u64>() > lan::MAX_ADDRESSES as u64 {
+            return Err(lan_error(StatusCode::BAD_REQUEST, "subnet", format!("scan at most {} addresses at once", lan::MAX_ADDRESSES)));
+        }
+    }
+    let ports: Option<Vec<i64>> = body.get("ports").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect::<Vec<_>>()).filter(|v| !v.is_empty());
+    if let Some(p) = &ports {
+        lan::parse_ports(p).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "ports", e))?;
+    }
+    let identify = body.get("identify").and_then(Value::as_bool).unwrap_or(true);
+    Ok(ScheduleBody { every, username: json_str(body, "username"), subnets, ports, identify })
+}
+
+fn every_words(secs: i64) -> String {
+    match secs {
+        s if s % 86_400 == 0 && s / 86_400 == 7 => "every week".into(),
+        s if s % 86_400 == 0 => format!("every {} day(s)", s / 86_400),
+        s => format!("every {} h", s / 3600),
+    }
+}
+
+#[utoipa::path(get, path = "/api/reverse/server/{id}/lan/schedule", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The tunnel's scheduled rescan; null when none", body = super::schemas::LanSchedule), (status = 404, body = super::schemas::ErrorBody)))]
+async fn get_schedule(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let (t, _) = visible(&state, user.id, id).await?;
+    Ok(Json(schedule_json(&state, t.id).await?))
+}
+
+#[utoipa::path(put, path = "/api/reverse/server/{id}/lan/schedule", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::LanScheduleInput, responses(
+    (status = 200, description = "Saved; scans run as you, with these settings, while the device is online", body = super::schemas::LanSchedule),
+    (status = 400, description = "every / subnet / ports / username", body = super::schemas::LanError),
+    (status = 403, description = "lan_scan_disabled / lan_scan_forbidden", body = super::schemas::LanError),
+    (status = 404, body = super::schemas::ErrorBody),
+))]
+async fn put_schedule(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, eff) = visible(&state, user.id, id).await?;
+    super::step_up::check(&state, user.id, &t, &headers)?;
+    if let Some(e) = scan_denied(&state, eff).await? {
+        return Err(e);
+    }
+    let ScheduleBody { every, username, subnets, ports, identify } = schedule_body(&body)?;
+    // 帳號要是自己在這條隧道能用的（之後每次跑還會再檢查）。/ The account must be one you may use here (checked again on every run).
+    let allowed = permissions::allowed_usernames(&state.db, user.id, &t).await?;
+    let username = permissions::choose_username(&allowed, t.default_username_id, username.as_deref(), &t.host_friendly_name).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "username", e))?;
+    let now = crate::util::now_db();
+    let next = crate::util::db_time(chrono::Utc::now() + chrono::Duration::seconds(every));
+    let created = db::lan::schedule(&state.db, t.id).await?.map(|s| s.created_at).unwrap_or_else(|| now.clone());
+    db::lan::save_schedule(
+        &state.db,
+        &db::lan::LanSchedule {
+            tunnel_id: t.id,
+            user_id: user.id,
+            every_secs: every,
+            username: Some(username),
+            subnets: subnets.as_ref().map(|v| json!(v).to_string()),
+            ports: ports.as_ref().map(|v| json!(v).to_string()),
+            identify,
+            next_at: next,
+            last_at: None,
+            last_error: None,
+            created_at: created,
+            updated_at: now,
+        },
+    )
+    .await?;
+    state.gateway.event("lan_schedule", None, None, Some(t.id), format!("{} set a LAN rescan of {} {}", user.username, t.host_friendly_name, every_words(every))).await;
+    notify_updated(&state, &t).await;
+    Ok(Json(schedule_json(&state, t.id).await?))
+}
+
+#[utoipa::path(delete, path = "/api/reverse/server/{id}/lan/schedule", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 204, description = "Stopped (also when there was none)"), (status = 403, body = super::schemas::LanError), (status = 404, body = super::schemas::ErrorBody)))]
+async fn delete_schedule(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+    let (t, eff) = visible(&state, user.id, id).await?;
+    // 站台關掉掃描時也能停（只看權限）。/ Stopping works even with scanning turned off (permission only).
+    if !eff.satisfies(Permission::Admin) {
+        return Err(lan_error(StatusCode::FORBIDDEN, "lan_scan_forbidden", "Only the tunnel owner and ADMIN sharees can change its scans."));
+    }
+    if db::lan::delete_schedule(&state.db, t.id).await? {
+        state.gateway.event("lan_schedule", None, None, Some(t.id), format!("{} stopped the LAN rescans of {}", user.username, t.host_friendly_name)).await;
+        notify_updated(&state, &t).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// 「檢查這台」用的 port：它上次開著的在前，再補預設的，最多 `MAX_PORTS` 個。/ Ports for a check: its last open ones, then defaults.
+pub fn check_ports(h: &LanHost, asked: Option<Vec<i64>>) -> Vec<i64> {
+    if let Some(p) = asked.filter(|p| !p.is_empty()) {
+        return p;
+    }
+    let mut out: Vec<i64> = h.open_port_list().into_iter().map(i64::from).collect();
+    for p in lan::DEFAULT_PORTS {
+        if out.len() >= lan::MAX_PORTS {
+            break;
+        }
+        if !out.contains(&i64::from(*p)) {
+            out.push(i64::from(*p));
+        }
+    }
+    out.truncate(lan::MAX_PORTS);
+    out
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/lan/hosts/{host_id}/check", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), request_body = Object, responses(
+    (status = 202, description = "Checking that one host (every port on it, no network sweep); progress like a scan", body = super::schemas::LanScanStatus),
+    (status = 400, description = "lan_check_address (hostnames can't be checked) / ports / device_offline", body = super::schemas::LanError),
+    (status = 403, description = "lan_scan_disabled / lan_scan_forbidden", body = super::schemas::LanError),
+    (status = 404, body = super::schemas::ErrorBody),
+    (status = 409, description = "lan_scan_running", body = super::schemas::LanError),
+))]
+async fn check_host(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path((id, host_id)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let (t, eff) = visible(&state, user.id, id).await?;
+    super::step_up::check(&state, user.id, &t, &headers)?;
+    let h = own_host(&state, t.id, host_id).await?;
+    let ip: Ipv4Addr = h.address.parse().ok().filter(|ip| lan::is_scannable(*ip)).ok_or_else(|| lan_error(StatusCode::BAD_REQUEST, "lan_check_address", "Only hosts with a private IPv4 address can be checked."))?;
+    let asked = body.get("ports").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect());
+    let identify = body.get("identify").and_then(Value::as_bool).unwrap_or(true);
+    let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), Some(vec![format!("{ip}/32")]), Some(check_ports(&h, asked)), identify, Trigger::Check(h.id)).await?;
+    let status = state.lan_scans.get(t.id);
+    tokio::spawn(crate::lan::scan::execute(state.clone(), req));
+    Ok((StatusCode::ACCEPTED, Json(json!(status))))
+}
+
+#[utoipa::path(put, path = "/api/reverse/server/{id}/lan/hosts/{host_id}/watch", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), responses((status = 200, description = "You'll be told when a scan finds it gone, back or with other ports", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+async fn watch_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id, host_id)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
+    let (t, _) = visible(&state, user.id, id).await?;
+    let h = own_host(&state, t.id, host_id).await?;
+    db::lan::set_watch(&state.db, user.id, h.id, true).await?;
+    Ok(Json(json!({ "watched": true })))
+}
+
+#[utoipa::path(delete, path = "/api/reverse/server/{id}/lan/hosts/{host_id}/watch", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), responses((status = 200, description = "No longer watched", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+async fn unwatch_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id, host_id)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
+    let (t, _) = visible(&state, user.id, id).await?;
+    let h = own_host(&state, t.id, host_id).await?;
+    db::lan::set_watch(&state.db, user.id, h.id, false).await?;
+    Ok(Json(json!({ "watched": false })))
 }
 
 #[utoipa::path(get, path = "/api/reverse/lan/topology", tag = "LAN", security(("bearer" = [])), responses((status = 200, description = "Every tunnel the user can see with its status and LAN hosts, for the topology view", body = super::schemas::LanTopology)))]
@@ -341,6 +540,7 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: cr
         let default_username = t.default_username_id.and_then(|d| allowed.iter().find(|u| u.id == d)).map(|u| u.username.clone()).or_else(|| (allowed.len() == 1).then(|| allowed[0].username.clone()));
         let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
         let meta = db::lan::meta(&state.db, t.id).await?;
+        let watched = db::lan::watched_by(&state.db, user.id, t.id).await?;
         // 裝置自己的位址（內網網卡、公網 IP），跟隧道列表同一個 `endpoint`、同一道門檻。
         // The device's own addresses (LAN interfaces, public IP): the tunnel list's `endpoint`, same gate.
         let endpoint = if permissions::can_see_endpoint(Some(eff), !allowed.is_empty(), user.is_superuser) {
@@ -362,7 +562,8 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: cr
             "endpoint": endpoint,
             "scan": state.lan_scans.get(t.id),
             "lan": meta_json(meta.as_ref(), tz),
-            "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui, meta.as_ref())).collect::<Vec<_>>(),
+            "schedule": schedule_json(&state, t.id).await?,
+            "hosts": hosts_json(&hosts, tz, &state.oui, meta.as_ref(), &watched),
         }));
     }
     Ok(Json(json!({ "tunnels": out })))
@@ -390,6 +591,7 @@ mod tests {
             source: "scan".into(),
             first_seen: None,
             last_seen: None,
+            checked_at: None,
             created_at: "2026-10-24 00:00:00.000000".into(),
             updated_at: "2026-10-24 00:00:00.000000".into(),
         };

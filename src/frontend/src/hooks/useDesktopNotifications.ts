@@ -19,6 +19,7 @@ import { useStoredChoice } from "./useStoredChoice";
 import { allowNotification, useNotifyPrefsLoader } from "./useNotifyPrefs";
 import { useAppName } from "./useAppName";
 import { pushActiveHere, usePushSync } from "./usePush";
+import { lanNewHostsText, lanWatchText } from "@/lib/lanAlerts";
 import { showViaServiceWorker } from "@/lib/serviceWorker";
 
 const KEY = "telepy.desktopNotify";
@@ -138,6 +139,14 @@ export function useDesktopNotifications() {
             if (kinds.length === 0) return;
             const what = kinds.map((k) => t(`deviceFacts.chip.${k as DeviceWarningKind}`)).join(", ");
             showPushed(`warning-${msg.tunnel_id}`, t("tunnels.deviceWarningToast", { name: String(msg.tunnel_name ?? ""), what }), msg);
+        },
+        // 區網：網段上有新機器（owner / Admin）、注意的主機不見了 / 回來了 / port 變了。標籤跟推播一樣。
+        // LAN: new machines on the network (owner / Admins), a watched host down / back / ports changed. Tags match the pushes.
+        [NOTIFICATION_ACTIONS.LAN_NEW_HOSTS]: (msg: NotificationPayload) => {
+            showPushed(`lan-${msg.tunnel_id}`, lanNewHostsText(t, msg), msg);
+        },
+        [NOTIFICATION_ACTIONS.LAN_HOST_WATCH]: (msg: NotificationPayload) => {
+            showPushed(`lanhost-${msg.host_id}`, lanWatchText(t, msg), msg);
         },
         [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg: NotificationPayload) => {
             if (msg.details) showPushed(`share-${msg.tunnel_id}`, String(msg.details), msg);

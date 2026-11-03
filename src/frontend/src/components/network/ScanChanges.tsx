@@ -10,7 +10,8 @@
  * not seen this time, ports changed, each host clickable.
  */
 import React, { useState } from "react";
-import { CalendarClock, EyeOff, ListPlus, Radar, Router, ArrowLeftRight } from "lucide-react";
+import { CalendarClock, EyeOff, ListPlus, Radar, Router, ArrowLeftRight, Bell, Repeat } from "lucide-react";
+import { everyKey } from "@/lib/lanSchedule";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -43,9 +44,10 @@ export function PortDelta({ opened, closed, className }: { opened: number[]; clo
 export function ChangeText({ host, className }: { host: LanHost; className?: string }) {
     const { t } = useI18n();
     const change = hostChange(host);
-    if (!host.gateway && !change) return null;
+    if (!host.gateway && !change && !host.watched) return null;
     return (
         <span className={cn("flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.6875rem]", className)}>
+            {host.watched && <span className="inline-flex items-center gap-1 text-primary" title={t("network.watch.on")}><Bell size={11} aria-hidden />{t("network.watch.short")}</span>}
             {host.gateway && <span className="inline-flex items-center gap-1 text-foreground/75"><Router size={11} aria-hidden />{t("network.change.gateway")}</span>}
             {change === "new" && <span className="text-success">{t("network.change.new")}</span>}
             {change === "missing" && <span className="inline-flex items-center gap-1 text-warning"><EyeOff size={11} aria-hidden />{t("network.change.missing")}</span>}
@@ -113,6 +115,35 @@ export function ScanLine({ tn, onOpenChanges }: { tn: TopologyTunnel; onOpenChan
                 </button>
             )}
         </div>
+    );
+}
+
+/**
+ * 裝置卡上「定時重掃」一行：每隔多久、下次什麼時候（上次失敗就變警告色）；能掃的人點了打開掃描視窗改它。
+ * The device card's rescan line: how often and when next (warning colour after a failed run); managers click it to
+ * open the scan dialog and change it.
+ */
+export function ScheduleLine({ tn, onOpen }: { tn: TopologyTunnel; onOpen?: () => void }) {
+    const { t, locale } = useI18n();
+    const now = useNow(30_000);
+    const s = tn.schedule;
+    if (!s) return null;
+    const key = everyKey(s.every_secs);
+    const every = key ? t(`network.schedule.every.${key}` as TranslationKey) : `${s.every_secs}s`;
+    const text = (
+        <>
+            <Repeat size={12} className="shrink-0" aria-hidden />
+            <span>{t("network.schedule.line", { every, next: formatRelativeTime(s.next_at, locale, now) })}</span>
+            {s.last_error && <span>· {t("network.schedule.failedShort")}</span>}
+        </>
+    );
+    const cls = cn("mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs", s.last_error ? "text-warning" : "text-muted-foreground");
+    return onOpen ? (
+        <button type="button" onClick={onOpen} className={cn(cls, "rounded-sm text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")} title={s.last_error ?? t("network.schedule.edit")}>
+            {text}
+        </button>
+    ) : (
+        <p className={cls} title={s.last_error ?? undefined}>{text}</p>
     );
 }
 

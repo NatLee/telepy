@@ -101,6 +101,10 @@ export function notificationKind(msg: Msg): string | null {
             return "device.claim_attempt";
         case "DEVICE-WARNING":
             return "tunnel.device_warning";
+        case "LAN-NEW-HOSTS":
+            return "lan.new_hosts";
+        case "LAN-HOST-WATCH":
+            return "lan.watched_host";
         case "TUNNEL-SHARED":
             return "share.received";
         case "TUNNEL-UNSHARED":

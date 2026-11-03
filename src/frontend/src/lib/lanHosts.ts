@@ -30,7 +30,7 @@ export function hostKind(h: Pick<LanHost, "open_ports" | "ssh_port" | "ssh_banne
 }
 
 type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen" | "identity" | "services"> &
-    Partial<Pick<LanHost, "own" | "source" | "gateway" | "missing" | "since_last">>;
+    Partial<Pick<LanHost, "own" | "source" | "gateway" | "missing" | "since_last" | "watched">>;
 
 /**
  * `is:` 的值 → 這台主機符不符合：裝置自己（self / device / own）、閘道（gateway / router）、上次掃描新出現的（new）、
@@ -49,6 +49,7 @@ export const IS_KEYS: Record<string, (h: HostLike) => boolean> = {
     unseen: (h) => h.missing === true,
     changed: (h) => !!h.since_last && (h.since_last.opened.length > 0 || h.since_last.closed.length > 0),
     ports: (h) => !!h.since_last && (h.since_last.opened.length > 0 || h.since_last.closed.length > 0),
+    watched: (h) => h.watched === true,
 };
 type DeviceLike<H> = { id: number; name: string; hosts: H[] };
 

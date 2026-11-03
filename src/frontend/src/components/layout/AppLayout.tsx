@@ -10,6 +10,7 @@ import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { SessionEndedNotice } from "@/components/layout/SessionEndedNotice";
 import { NewSignInNotice } from "@/components/layout/NewSignInNotice";
+import { LanAlertNotice } from "@/components/network/LanAlertNotice";
 import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
 import { TapiVisits } from "@/components/brand/TapiVisits";
 import { CarrierNotice } from "@/components/health/CarrierNotice";
@@ -102,6 +103,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <SessionEndedNotice />
                 {/* 新裝置登入你的帳號時提醒。/ A heads-up when your account signs in from a new device. */}
                 <NewSignInNotice />
+                <LanAlertNotice />
                 <WebhookPausedNotice />
                 {/* 裝置載體更新了或更新失敗（只有管理員收得到）。/ Device carriers updated or failed (admins only). */}
                 <CarrierNotice />

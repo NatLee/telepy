@@ -30,8 +30,8 @@ export interface ManagedTunnel {
 }
 export type WebhookFormat = "auto" | "json" | "slack" | "discord" | "google_chat" | "teams" | "telegram" | "ntfy";
 export type WebhookLanguage = "en" | "zh-TW" | "ja";
-export type EventGroup = "status" | "device" | "sharing" | "commands" | "sessions" | "account" | "keys" | "admin";
-export type EventAudience = "tunnel" | "managers" | "managers_others" | "share_parties" | "you" | "agent_and_owner" | "site";
+export type EventGroup = "status" | "device" | "network" | "sharing" | "commands" | "sessions" | "account" | "keys" | "admin";
+export type EventAudience = "tunnel" | "managers" | "managers_others" | "share_parties" | "you" | "agent_and_owner" | "site" | "watchers";
 
 export interface CatalogEvent {
     event: string;

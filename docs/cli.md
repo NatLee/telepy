@@ -345,6 +345,9 @@ telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # by id, address or label
 telepy lan scan box                        # scan its network (network:scan), wait, list with WHAT and NOTE columns
 telepy lan show box 192.168.1.20           # what each port showed: page title, server, certificate, banner
+telepy lan check box 192.168.1.20          # probe just that machine again now (network:scan)
+telepy lan schedule box --every 6h         # rescan as you while the device is online (1h, 6h, 12h, 1d, 1w; off stops)
+telepy lan watch box 192.168.1.20          # be told when a scan finds it gone, back or with other ports
 ```
 
 Listing and `show` need `tunnels:read`; `scan` needs `network:scan` (add it with `telepy login --scope`). Adding and removing need `tunnels:manage`, which only API tokens can carry.
@@ -352,6 +355,8 @@ Listing and `show` need `tunnels:read`; `scan` needs `network:scan` (add it with
 By default a scan sends one `GET /` to every open web port (HTTPS ones also show their certificate) so it can tell a router from a NAS or a Proxmox host; those machines log it as a visit from the device with the user agent `Telepy-LAN-scan`. Every other port is only listened to. `--no-identify` turns the GET off.
 
 A scan also lists what the device itself listens on (one row, address `localhost`: services that only answer on the device's own loopback open from there too, and the silent ones get the same single `GET /`), marks the device's default gateway, and compares the result with the scan before. `lan scan` ends with a line such as `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`, and the table's NOTE column says `this device`, `gateway`, `new`, `+443 -80` or `not seen`. Only machines in the scanned networks are compared, and ports only where this scan probed them, so a shorter `--ports` list doesn't count as ports closing. `lan ls` starts with when the last scan ran, which networks and the gateway.
+
+A **scheduled rescan** (`lan schedule`, or Repeat in the web app's scan dialog) runs the same scan as whoever set it, while the device is online; it stops by itself when that person loses owner / ADMIN. After a scan of the whole network, addresses the list didn't have are told to the owner and ADMIN sharees (not on a network's first scan). A **watched** host (`lan watch`, the bell in the web app) tells you when a scan or `lan check` finds it gone, back, or with ports opened or closed. Both are in-app notifications, desktop notifications, pushes and the webhook events `lan.new_hosts` / `lan.watched_host`, following your notification preferences. A scan of a single address, like `lan check`, tries every port on it instead of only the lowest one.
 
 ### A LAN web page in your own browser
 
@@ -417,6 +422,9 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy lan add <tunnel> <address>` | Add a host by hand; `--label`, `--user`, `--port` | `tunnels:manage` |
 | `telepy lan scan <tunnel>` | Scan the device's network and list what was found, with what each machine is and what changed since the scan before; `--subnet`, `--ports`, `--no-identify`, `--account`, `--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | What one host is and what each port showed | `tunnels:read` |
+| `telepy lan check <tunnel> <host>` | Probe one host again now: the ports it had open plus the defaults, that address only; `--ports`, `--json` | `network:scan` |
+| `telepy lan schedule <tunnel>` | Show or set the scheduled rescan; `--every 1h\|6h\|12h\|1d\|1w\|off`, `--subnet`, `--ports`, `--no-identify`, `--account` | `tunnels:read` to show, `network:scan` to set |
+| `telepy lan watch <tunnel> <host>` | Be told when scans find it gone, back or with other ports; `--off` | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | Remove a host by id, address or label | `tunnels:manage` |
 | `telepy browse <target> [url]` | Open a scripted browser and print its id (same as `browse open`) | `browser:use` |
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | List the browsers this sign-in has open, or act on one by its id | `browser:use` |

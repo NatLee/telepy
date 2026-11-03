@@ -48,7 +48,7 @@ test("is: search keys", () => {
         { ...base, id: 2, address: "10.0.0.1", gateway: true },
         { ...base, id: 3, address: "10.0.0.9", since_last: { new: true, opened: [], closed: [] } },
         { ...base, id: 4, address: "10.0.0.3", missing: true },
-        { ...base, id: 5, address: "10.0.0.2", since_last: { new: false, opened: [443], closed: [] } },
+        { ...base, id: 5, address: "10.0.0.2", since_last: { new: false, opened: [443], closed: [] }, watched: true },
     ] }];
     const rows = flattenHosts(devices);
     const find = (q: string) => rows.filter((r) => hostMatches(r, [q])).map((r) => r.host.address);
@@ -57,5 +57,6 @@ test("is: search keys", () => {
     assert.deepEqual(find("is:new"), ["10.0.0.9"]);
     assert.deepEqual(find("is:missing"), ["10.0.0.3"]);
     assert.deepEqual(find("is:changed"), ["10.0.0.2"]);
+    assert.deepEqual(find("is:watched"), ["10.0.0.2"]);
     assert.deepEqual(find("is:nonsense"), []);
 });

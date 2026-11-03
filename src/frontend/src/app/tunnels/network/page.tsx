@@ -176,7 +176,11 @@ function NetworkInner() {
     // 開著終端機時，頁面底部與右側面板都要留出 dock 的高度（dock 浮在內容上方；放大時是整個視窗的覆蓋層，不用留）。
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
     const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
-    const onScan = (tn: TopologyTunnel) => setScanFor(tn.id);
+    const [scanSchedule, setScanSchedule] = useState(false);
+    const onScan = (tn: TopologyTunnel, schedule = false) => {
+        setScanSchedule(schedule);
+        setScanFor(tn.id);
+    };
     const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
     const onChanges = (tn: TopologyTunnel) => setChangesFor(tn.id);
 
@@ -248,6 +252,8 @@ function NetworkInner() {
                             onShowSession={terms.select}
                             loadConnectTarget={actions.loadConnectTarget}
                             updateHost={actions.updateHost}
+                            onCheck={actions.checkHost}
+                            onWatch={actions.setWatch}
                             deleteHost={actions.deleteHost}
                         />
                     </aside>
@@ -406,7 +412,7 @@ function NetworkInner() {
                 confirmText={t("network.web.replaceConfirm")}
             />
             <NetworkInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} tunnels={allTunnels} startTunnel={hostTunnel ?? (focusTunnel !== null ? allTunnels.find((x) => String(x.id) === focusTunnel) ?? null : null)} startHost={host} isOnline={actions.isOnline} />
-            <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />
+            <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} saveSchedule={actions.saveSchedule} focusSchedule={scanSchedule} />
             <ScanChangesDialog tn={changesTunnel} onClose={() => setChangesFor(null)} onPickHost={(h) => onOpenHost(h)} />
             <AddHostDialog tunnel={addTunnel} onClose={() => setAddFor(null)} addHost={actions.addHost} />
         </div>

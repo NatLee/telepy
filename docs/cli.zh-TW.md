@@ -345,6 +345,9 @@ telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # 用 id、位址或標籤指定
 telepy lan scan box                        # 掃描它的網路（network:scan），等完成，列出並多 WHAT、NOTE 兩欄
 telepy lan show box 192.168.1.20           # 每個 port 看到什麼：網頁標題、伺服器、憑證、banner
+telepy lan check box 192.168.1.20          # 現在只再探那一台（network:scan）
+telepy lan schedule box --every 6h         # 裝置在線時用你的身分定時重掃（1h、6h、12h、1d、1w；off 停掉）
+telepy lan watch box 192.168.1.20          # 掃描發現它不見、回來或 port 變了就告訴你
 ```
 
 列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
@@ -352,6 +355,8 @@ telepy lan show box 192.168.1.20           # 每個 port 看到什麼：網頁�
 掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的請求，User-Agent 是 `Telepy-LAN-scan`。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
 
 掃描也會列出裝置本機在聽的服務（一列，位址是 `localhost`：只回應裝置自己 localhost 的服務也從那裡打得開，沒先說話的 port 一樣只送一個 `GET /`）、標出裝置的預設閘道，並跟前一次掃描比較。`lan scan` 最後一行會像 `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`，表格的 NOTE 欄寫 `this device`、`gateway`、`new`、`+443 -80` 或 `not seen`。只比這次掃過的網段裡的機器，port 也只比這次有探的，所以 `--ports` 給得比較少，不會算成「關了」。`lan ls` 開頭會寫上次掃描的時間、網段與閘道。
+
+**定時重掃**（`lan schedule`，或網頁掃描視窗裡的「定時重掃」）用設定的人的身分、在裝置在線時跑同一個掃描；那個人失去 owner / ADMIN 時會自己停掉。整個網段的掃描之後，清單裡沒有的位址會告訴 owner 與 ADMIN 被分享者（一個網路的第一次掃描不算）。**注意**一台主機（`lan watch`，網頁上的鈴鐺）後，掃描或 `lan check` 發現它不見、回來，或 port 開了、關了就會告訴你。兩種都有站內通知、桌面通知、推播與 webhook 事件 `lan.new_hosts` / `lan.watched_host`，照你的通知偏好。只掃一個位址時（像 `lan check`）每個 port 都會試，不只最小的那個。
 
 ### 用自己的瀏覽器開區網的網頁
 
@@ -417,6 +422,9 @@ telepy browse close "$ID"
 | `telepy lan add <tunnel> <address>` | 手動新增主機；`--label`、`--user`、`--port` | `tunnels:manage` |
 | `telepy lan scan <tunnel>` | 掃描裝置的網路並列出找到的，附上每台是什麼、跟前一次比變了什麼；`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | 一台主機是什麼、每個 port 看到什麼 | `tunnels:read` |
+| `telepy lan check <tunnel> <host>` | 現在再探一台：它開過的 port 加上預設的，只探這個位址；`--ports`、`--json` | `network:scan` |
+| `telepy lan schedule <tunnel>` | 看或設定定時重掃；`--every 1h\|6h\|12h\|1d\|1w\|off`、`--subnet`、`--ports`、`--no-identify`、`--account` | 看要 `tunnels:read`，設定要 `network:scan` |
+| `telepy lan watch <tunnel> <host>` | 掃描發現它不見、回來或 port 變了就告訴你；`--off` | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | 用 id、位址或標籤移除主機 | `tunnels:manage` |
 | `telepy browse <target> [url]` | 開一個腳本化瀏覽器並印出它的 id（等同 `browse open`） | `browser:use` |
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | 列出這個登入開著的瀏覽器，或用 id 操作其中一個 | `browser:use` |
