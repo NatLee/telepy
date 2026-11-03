@@ -42,6 +42,77 @@ async fn quiet_listener() -> u16 {
     port
 }
 
+/// 一個小小的網頁伺服器：每條連線回同一頁（標題 + Server 標頭），並記下收到幾個請求、最後一個長什麼樣。
+/// A tiny web server: the same page for every connection (a title and a Server header); counts the requests it got.
+async fn tiny_web(title: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                if n > 0 {
+                    log.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).to_string());
+                    let body = format!("<html><head><title>{title}</title></head></html>");
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nServer: lab-web/1.0\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// 辨識：使用者自己列的、沒先說話的 port 收到一個 GET（帶 Telepy 的 User-Agent），標題 / Server 存成服務、認出產品；
+/// SSH port 只聽 banner、從不收到東西；`identify: false` 就什麼都不送。
+/// Identify: a listed, silent port gets one GET (Telepy's user agent); title and Server become a service and the
+/// product is recognised; the SSH port is only listened to; `identify: false` sends nothing.
+#[tokio::test]
+async fn a_scan_recognises_web_pages_and_only_listens_elsewhere() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], true).await;
+    let nas = lab.machine("nas", &[("admin", &[&lab.service])], false).await;
+    let (web, requests) = tiny_web("pve - Proxmox Virtual Environment").await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let id = dev.tunnel_id;
+
+    // 先不辨識：網頁 port 什麼都沒收到。/ Without identify the web port gets nothing.
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/scan"), Some(&alice.token), json!({"subnets": ["127.0.0.1/32"], "ports": [nas.port, web], "identify": false})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    assert_eq!(wait_scan(app, &alice.token, id).await["phase"], "done");
+    assert!(requests.lock().unwrap().is_empty(), "identify off sends nothing: {:?}", requests.lock().unwrap());
+    let h = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token)).await.json["hosts"][0].clone();
+    assert_eq!(h["identity"], Value::Null);
+    let ssh = h["services"].as_array().unwrap().iter().find(|s| s["port"] == nas.port).cloned().unwrap();
+    assert_eq!(ssh["proto"], "ssh", "{h}");
+
+    // 預設辨識。/ Identify on (the default).
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/scan"), Some(&alice.token), json!({"subnets": ["127.0.0.1/32"], "ports": [nas.port, web]})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    assert_eq!(wait_scan(app, &alice.token, id).await["phase"], "done");
+    let got = requests.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "one GET for the web port: {got:?}");
+    assert!(got[0].starts_with("GET / HTTP/1.1\r\n") && got[0].contains("User-Agent: Telepy-LAN-scan"), "{}", got[0]);
+    let h = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token)).await.json["hosts"][0].clone();
+    let page = h["services"].as_array().unwrap().iter().find(|s| s["port"] == web).cloned().unwrap_or_default();
+    assert_eq!((page["proto"].as_str(), page["status"].as_i64(), page["title"].as_str(), page["server"].as_str()), (Some("http"), Some(200), Some("pve - Proxmox Virtual Environment"), Some("lab-web/1.0")), "{h}");
+    assert_eq!((h["identity"]["product"].as_str(), h["identity"]["kind"].as_str(), h["identity"]["by"]["source"].as_str()), (Some("Proxmox VE"), Some("hypervisor"), Some("title")), "{h}");
+    // 掃描看到它是 http，所以它算網頁，網址也照看到的寫。/ Seen as http, so it is a web link with that scheme.
+    assert_eq!(h["web"], json!([{ "port": web, "scheme": "http", "url": format!("http://127.0.0.1:{web}/") }]));
+    // MCP lan_hosts 一樣帶 identity。/ MCP lan_hosts carries the identity too.
+    let token = mcp_token(app, &alice.token, "tunnels:read").await;
+    let (err, v) = call(app, &token, "lan_hosts", json!({"tunnel_id": id})).await;
+    assert!(!err, "{v}");
+    assert_eq!(v["hosts"][0]["identity"]["product"], "Proxmox VE");
+}
+
 const VERIFIER: &str = "verifier-verifier-verifier-verifier-verifier-0123";
 
 async fn mcp_token(app: &TestApp, web: &str, scope: &str) -> String {

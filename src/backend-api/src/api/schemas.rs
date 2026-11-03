@@ -2812,6 +2812,12 @@ pub struct LanHost {
     pub mac: Option<String>,
     /// Ports open at the last scan
     pub open_ports: Vec<i64>,
+    /// Web ports with their URLs: the scheme a scan saw, else the port's usual one
+    pub web: Vec<LanWebLink>,
+    /// What the last scan recognised per port: `{port, proto, status?, title?, server?, location?, realm?, banner?, cert? {subject, issuer, org, not_after, self_signed, names}}`
+    pub services: Vec<serde_json::Value>,
+    /// What the machine is, from those clues: `{product, kind (router, network, nas, hypervisor, server, computer, printer, camera, media, iot, phone), os?, by {source, text}}`; null when unknown
+    pub identity: Option<serde_json::Value>,
     #[schema(example = "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13")]
     pub ssh_banner: Option<String>,
     pub label: Option<String>,
@@ -2823,6 +2829,15 @@ pub struct LanHost {
     pub first_seen: Option<String>,
     pub last_seen: Option<String>,
     pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanWebLink {
+    pub port: i64,
+    /// `http` or `https`
+    pub scheme: String,
+    #[schema(example = "https://192.168.1.20:5001/")]
+    pub url: String,
 }
 
 #[derive(ToSchema)]
@@ -2879,8 +2894,10 @@ pub struct LanScanRequest {
     /// Private CIDRs (at most 1024 addresses in total); omitted = the device's own networks
     #[schema(example = json!(["192.168.1.0/24"]))]
     pub subnets: Option<Vec<String>>,
-    /// Ports to probe; omitted = 22, 80, 443, 445, 3389, 5900, 8080, 8443
+    /// Ports to probe; omitted = 22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118, 53, 554, 631, 5000, 5001, 8006, 8123, 9000, 9090, 9100
     pub ports: Option<Vec<i64>>,
+    /// Send one `GET /` to each open web port (and read HTTPS certificates) to recognise the machine; default true
+    pub identify: Option<bool>,
 }
 
 #[derive(ToSchema)]

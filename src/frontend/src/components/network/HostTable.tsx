@@ -17,7 +17,8 @@ import { Segmented } from "@/components/ui/segmented";
 import { usePagination } from "@/hooks/usePagination";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { HostQuickActions } from "@/components/network/HostOpen";
-import { KIND_ICON, KIND_LABEL, KIND_TONE } from "@/components/network/TopologyTree";
+import { hostIcon, KIND_LABEL } from "@/components/network/TopologyTree";
+import { identityLine } from "@/lib/lanIdentity";
 import { pageSlice } from "@/lib/pagination";
 import { countKinds, HOST_KINDS, HOST_SORTS, sortHosts, stepIndex, type HostKind, type HostRow, type HostSort } from "@/lib/lanHosts";
 import { hasSsh, serviceName, shortVendor } from "@/lib/lanConnect";
@@ -171,11 +172,12 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
                                     aria-current={selected ? "true" : undefined}
                                     className="flex min-w-0 items-center gap-2.5 rounded-md py-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 >
-                                    <span className={cn("grid size-7 shrink-0 place-items-center rounded-md ring-1 ring-inset [&_svg]:size-3.5", KIND_TONE[r.kind])} title={t(KIND_LABEL[r.kind])} aria-hidden>
-                                        {KIND_ICON[r.kind]}
+                                    <span className={cn("grid size-7 shrink-0 place-items-center rounded-md ring-1 ring-inset [&_svg]:size-3.5", hostIcon(host, r.kind).tone)} title={t(hostIcon(host, r.kind).label)} aria-hidden>
+                                        {hostIcon(host, r.kind).icon}
                                     </span>
                                     <span className="min-w-0">
                                         <span className="block text-sm text-foreground [overflow-wrap:anywhere]">{r.name}</span>
+                                        {identityLine(host) && <span className="block text-xs text-foreground/75 [overflow-wrap:anywhere]">{identityLine(host)}</span>}
                                         <span className="block text-xs text-muted-foreground @3xl:hidden [overflow-wrap:anywhere]">
                                             <span className="font-mono">{host.address}</span>
                                             {" · "}

@@ -32,9 +32,17 @@ pub fn web_url(address: &str, port: u16, scheme: &str) -> String {
     }
 }
 
-/// 一台主機開著的網頁 port 與網址（照 port 排序）。/ A host's open web ports with their URLs, by port.
-pub fn web_links(address: &str, ports: &[u16]) -> Vec<(u16, &'static str, String)> {
-    let mut v: Vec<(u16, &'static str, String)> = ports.iter().filter_map(|&p| web_scheme(p).map(|s| (p, s, web_url(address, p, s)))).collect();
+/// 一台主機開著的網頁 port 與網址（照 port 排序）。`seen` = 掃描實際看到的 (port, `http` | `https`)：它的 scheme 優先，
+/// 不在表裡的 port（自己架在奇怪 port 的網頁）也算。
+/// A host's open web ports with their URLs, by port. `seen` = what a scan actually saw, (port, `http` | `https`): its
+/// scheme wins, and ports outside the table (self-hosted pages on odd ports) count too.
+pub fn web_links(address: &str, ports: &[u16], seen: &[(u16, &str)]) -> Vec<(u16, &'static str, String)> {
+    let scheme = |p: u16| match seen.iter().find(|(sp, _)| *sp == p).map(|x| x.1) {
+        Some("https") => Some("https"),
+        Some("http") => Some("http"),
+        _ => web_scheme(p),
+    };
+    let mut v: Vec<(u16, &'static str, String)> = ports.iter().filter_map(|&p| scheme(p).map(|s| (p, s, web_url(address, p, s)))).collect();
     v.sort_by_key(|x| x.0);
     v.dedup_by_key(|x| x.0);
     v
@@ -44,10 +52,13 @@ pub fn web_links(address: &str, ports: &[u16]) -> Vec<(u16, &'static str, String
 mod tests {
     #[test]
     fn web_links_pick_the_scheme_by_port() {
-        let v = super::web_links("192.168.1.10", &[22, 8080, 443, 80, 8006, 445]);
+        let v = super::web_links("192.168.1.10", &[22, 8080, 443, 80, 8006, 445], &[]);
         let urls: Vec<&str> = v.iter().map(|x| x.2.as_str()).collect();
         assert_eq!(urls, ["http://192.168.1.10/", "https://192.168.1.10/", "https://192.168.1.10:8006/", "http://192.168.1.10:8080/"]);
-        assert!(super::web_links("10.0.0.2", &[22, 3389]).is_empty());
+        assert!(super::web_links("10.0.0.2", &[22, 3389], &[]).is_empty());
+        // 掃描看到的優先：8443 其實是 http、8088 是自己架的網頁。/ What the scan saw wins.
+        let v = super::web_links("10.0.0.3", &[8443, 8088], &[(8443, "http"), (8088, "http")]);
+        assert_eq!(v.iter().map(|x| x.2.as_str()).collect::<Vec<_>>(), ["http://10.0.0.3:8088/", "http://10.0.0.3:8443/"]);
         assert_eq!(super::web_url("fd00::1", 8080, "http"), "http://[fd00::1]:8080/");
     }
 }

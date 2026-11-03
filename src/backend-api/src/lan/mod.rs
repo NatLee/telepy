@@ -10,7 +10,10 @@
 //! 這個檔案是純邏輯（解析與範圍計算）；執行在 `scan.rs`，HTTP 在 `api/lan.rs`，SQL 在 `db/lan.rs`。
 //! LAN discovery behind a tunnel's device, done entirely by the device's own sshd (no agent).
 
+pub mod fingerprint;
+pub mod identify;
 pub mod scan;
+pub mod tls;
 pub mod web;
 
 pub use web::{web_links, web_scheme, web_url, WEB_HTTPS_PORTS, WEB_HTTP_PORTS};
@@ -22,7 +25,11 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// 預設探測的 port：SSH、HTTP(S)、SMB、RDP、VNC、常見的 web 管理介面、RustDesk 的 Direct IP（21118）。/ Default probe ports.
-pub const DEFAULT_PORTS: &[u16] = &[22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118];
+/// 後面幾個是常見的管理介面（Synology 5000/5001、Proxmox 8006、Home Assistant 8123、9000/9090）、印表機（631 IPP、9100 只探
+/// 不送）、攝影機（554 RTSP）與路由器（53 DNS）：只對活主機探，認機器用。前端 `ScanDialog` 有同一份（測試比對）。
+/// The later ones are common admin UIs, printers (631 IPP; 9100 is probed, never sent to), cameras (554 RTSP) and
+/// routers (53 DNS): probed on live hosts only, to tell machines apart. The frontend's `ScanDialog` mirrors this list.
+pub const DEFAULT_PORTS: &[u16] = &[22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118, 53, 554, 631, 5000, 5001, 8006, 8123, 9000, 9090, 9100];
 pub const MAX_PORTS: usize = 32;
 
 /// 一次掃描最多幾個位址（= 一個 /22）。/ Address cap per scan (a /22).
@@ -265,13 +272,6 @@ pub fn parse_nmblookup(output: &str) -> Vec<(Ipv4Addr, String)> {
     out
 }
 
-/// SSH banner 的第一行（`SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13`）。/ First line of an SSH banner.
-pub fn parse_ssh_banner(bytes: &[u8]) -> Option<String> {
-    let line = String::from_utf8_lossy(bytes);
-    let first = line.lines().next()?.trim();
-    first.starts_with("SSH-").then(|| first.chars().take(200).collect())
-}
-
 /// 依偵測到的網段算出要掃的位址（每個網段先縮到最多 /22 的大小、整體上限 MAX_ADDRESSES，不含裝置自己）。
 /// The addresses to probe for the detected (or given) networks, without the device's own addresses.
 pub fn targets(networks: &[Network], own: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
@@ -359,7 +359,5 @@ mod tests {
     #[test]
     fn names_and_banners() {
         assert_eq!(parse_getent("192.168.1.20    nas.lan nas\n192.168.1.1 router.\n"), vec![(Ipv4Addr::new(192, 168, 1, 20), "nas.lan".into()), (Ipv4Addr::new(192, 168, 1, 1), "router".into())]);
-        assert_eq!(parse_ssh_banner(b"SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13\r\n").as_deref(), Some("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13"));
-        assert_eq!(parse_ssh_banner(b"HTTP/1.1 400 Bad Request\r\n"), None);
     }
 }

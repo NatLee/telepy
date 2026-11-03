@@ -32,7 +32,8 @@ import { desktopPorts } from "@/lib/desktop";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
 import { hasSsh, hostKind, hostName, isValidLogin } from "@/lib/lanConnect";
 import { hasWeb } from "@/lib/lanWeb";
-import { KIND_ICON } from "@/components/network/TopologyTree";
+import { hostIcon } from "@/components/network/TopologyTree";
+import { HostServices } from "@/components/network/HostServices";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
@@ -186,7 +187,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             {/* 標題與分頁在面板內捲動時固定在上面。/ Title and tabs stay put while the panel scrolls. */}
             <div className="z-10 rounded-t-xl bg-card xl:sticky xl:top-0">
             <header className="flex items-start gap-3 border-b border-border p-4">
-                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-[17px]" aria-hidden>{KIND_ICON[hostKind(host)]}</span>
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-[17px]" aria-hidden>{hostIcon(host, hostKind(host)).icon}</span>
                 <div className="min-w-0 flex-1">
                     <h2 className="text-lg leading-tight text-foreground [overflow-wrap:anywhere]">{name}</h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
@@ -288,6 +289,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         {host.last_seen && <Row label={t("network.field.lastSeen")}>{fmt.format(new Date(host.last_seen))}</Row>}
                         {host.first_seen && <Row label={t("network.field.firstSeen")}>{fmt.format(new Date(host.first_seen))}</Row>}
                     </dl>
+
+                    <HostServices identity={host.identity} services={host.services} scanned={!!host.last_seen} />
 
                     {/* 可以編輯的人：同一頁下面編輯（原本的第四個分頁在窄面板裡被擠到看不到字）。
                         Editors edit below on the same tab (a fourth tab got squeezed past legibility in the narrow panel). */}

@@ -42,9 +42,15 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
     let vendor = h.mac.as_deref().and_then(|m| oui.vendor(m));
     let mac_private = h.mac.as_deref().is_some_and(crate::oui::is_private);
     let ports = h.open_port_list();
-    let web: Vec<Value> = crate::lan::web_links(&h.address, &ports).into_iter().map(|(port, scheme, url)| json!({ "port": port, "scheme": scheme, "url": url })).collect();
+    let services = h.service_list();
+    let seen: Vec<(u16, &str)> = services.iter().filter(|s| s.proto == "http" || s.proto == "https").map(|s| (s.port, s.proto.as_str())).collect();
+    let web: Vec<Value> = crate::lan::web_links(&h.address, &ports, &seen).into_iter().map(|(port, scheme, url)| json!({ "port": port, "scheme": scheme, "url": url })).collect();
+    // 每次讀的時候才認（表改了不用重掃）。/ Identified when read, so a better table needs no rescan.
+    let identity = crate::lan::identify::identify(&services, vendor.as_deref(), &ports, false);
     json!({
         "web": web,
+        "services": services,
+        "identity": identity,
         "vendor": vendor,
         "mac_private": mac_private,
         "id": h.id,
@@ -85,7 +91,7 @@ pub async fn scan_denied(state: &AppState, eff: permissions::Effective) -> ApiRe
 
 /// 驗證掃描參數並 `begin`；回傳可交給 `lan::scan::execute` 的請求。網頁與 MCP 共用。
 /// Validate scan parameters and reserve the tunnel's scan slot; shared by the web API and MCP.
-pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: permissions::Effective, username: Option<&str>, subnets: Option<Vec<String>>, ports: Option<Vec<i64>>) -> ApiResult<ScanRequest> {
+pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: permissions::Effective, username: Option<&str>, subnets: Option<Vec<String>>, ports: Option<Vec<i64>>, identify: bool) -> ApiResult<ScanRequest> {
     if let Some(e) = scan_denied(state, eff).await? {
         return Err(e);
     }
@@ -106,6 +112,7 @@ pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: p
         None => lan::DEFAULT_PORTS.to_vec(),
         Some(p) => lan::parse_ports(&p).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "ports", e))?,
     };
+    let listed: Vec<u16> = ports.iter().copied().filter(|p| !lan::DEFAULT_PORTS.contains(p)).collect();
     if let Some(listen) = state.status.listen_ports() {
         if !u16::try_from(tunnel.reverse_port).map(|p| listen.contains(&p)).unwrap_or(false) {
             return Err(lan_error(StatusCode::BAD_REQUEST, "device_offline", format!("The device '{}' is offline.", tunnel.host_friendly_name)));
@@ -115,7 +122,7 @@ pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: p
         .lan_scans
         .begin(tunnel.id, user, &ports)
         .map_err(|running| ApiError::new(StatusCode::CONFLICT, json!({ "error": "A scan of this network is already running.", "code": "lan_scan_running", "scan": running })))?;
-    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone() })
+    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone(), identify, listed })
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/{id}/lan/hosts", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::LanHostList), (status = 404, body = super::schemas::ErrorBody)))]
@@ -254,7 +261,8 @@ async fn start_scan(State(state): State<AppState>, AuthUser(user): AuthUser, hea
     super::step_up::check(&state, user.id, &t, &headers)?;
     let subnets = body.get("subnets").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
     let ports = body.get("ports").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect());
-    let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), subnets, ports).await?;
+    let identify = body.get("identify").and_then(Value::as_bool).unwrap_or(true);
+    let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), subnets, ports, identify).await?;
     let status = state.lan_scans.get(t.id);
     tokio::spawn(crate::lan::scan::execute(state.clone(), req));
     Ok((StatusCode::ACCEPTED, Json(json!(status))))
@@ -325,6 +333,7 @@ mod tests {
             mac: Some("b8:27:eb:01:02:03".into()),
             open_ports: "[22]".into(),
             ssh_banner: None,
+            services: "[]".into(),
             label: None,
             username: None,
             ssh_port: 22,

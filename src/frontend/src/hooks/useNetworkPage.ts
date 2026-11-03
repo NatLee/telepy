@@ -32,6 +32,8 @@ export interface ScanOptions {
     username?: string | null;
     subnets?: string[];
     ports?: number[];
+    /** 網頁 port 送一個 GET / 認出機器（預設開）。/ One GET / per web port to recognise the machine (default on). */
+    identify?: boolean;
 }
 
 export interface HostInput {
@@ -193,6 +195,7 @@ export function useNetworkPage() {
                         ...(opts.username ? { username: opts.username } : {}),
                         ...(opts.subnets && opts.subnets.length ? { subnets: opts.subnets } : {}),
                         ...(opts.ports && opts.ports.length ? { ports: opts.ports } : {}),
+                        identify: opts.identify ?? true,
                     }),
                 });
                 // 202 的內容是剛開始的掃描狀態；錯誤是 {error, code}（409 另附正在跑的 scan）。

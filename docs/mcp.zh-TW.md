@@ -119,7 +119,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `list_tunnels` | 你看得到的通道：id、名稱、是否在線、延遲、你的權限、可用的目標 username，以及這個 app 開著的 session |
 | `tunnel_status(tunnel_id)` | 健康狀態、延遲、24 小時在線率、裝置的 `facts` 與 `warnings`，以及最近 10 筆 gateway 事件 |
-| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號，以及 `web`（每個網頁 port 和它的網址，可以直接交給同一條通道的 `browser_open`） |
+| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號、`web`（每個網頁 port 和它的網址，可以直接交給同一條通道的 `browser_open`），以及 `services` 與 `identity`（上次掃描認出來的） |
 
 - 健康狀態分成 online、degraded（通道在，但裝置的 sshd 沒回應）和 offline。
 - `facts` 包含 OS、kernel、開機秒數、CPU、記憶體與根磁碟（KB）、負載、ssh 版本，以及要不要重開機。只有能登入裝置的人拿得到。
@@ -155,11 +155,11 @@ shell 的行為細節請看 [互動 shell](#互動-shell)。
 
 | 工具 | 做什麼 |
 | --- | --- |
-| `lan_scan(tunnel_id, username?, subnets?, ports?)` | 經裝置的 sshd 掃描區網，把找到的主機存進主機清單 |
+| `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | 經裝置的 sshd 掃描區網，把找到的主機存進主機清單。`identify`（預設開）會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看憑證），讓 `lan_hosts` 說得出每台是什麼 |
 
 - 只掃私有網段，最多 1024 個位址，一次大約一分鐘。
 - 只限你擁有或身為 ADMIN 的通道。
-- 結果用 `lan_hosts` 讀。
+- 結果用 `lan_hosts` 讀：`identity`（產品、類型如 `router` / `nas` / `hypervisor` / `printer`、作業系統提示，以及憑哪條線索）與 `services`（每個 port 的網頁標題、`Server`、憑證或 banner）。
 
 ### 使用瀏覽器（`browser:use`）
 

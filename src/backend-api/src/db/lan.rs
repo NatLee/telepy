@@ -19,6 +19,8 @@ pub struct LanHost {
     /// JSON 陣列（最後一次掃描開著的 port）。/ JSON array of the ports open at the last scan.
     pub open_ports: String,
     pub ssh_banner: Option<String>,
+    /// JSON 陣列（`lan::fingerprint::Service`，最後一次掃描認出來的）。/ JSON array of what the last scan recognised.
+    pub services: String,
     pub label: Option<String>,
     /// 連這台機器時預設的帳號。/ Default login user on this machine.
     pub username: Option<String>,
@@ -35,6 +37,9 @@ impl LanHost {
     pub fn open_port_list(&self) -> Vec<u16> {
         serde_json::from_str(&self.open_ports).unwrap_or_default()
     }
+    pub fn service_list(&self) -> Vec<crate::lan::fingerprint::Service> {
+        serde_json::from_str(&self.services).unwrap_or_default()
+    }
 }
 
 /// 掃描找到的一台主機。/ One host found by a scan.
@@ -45,10 +50,11 @@ pub struct Found {
     pub mac: Option<String>,
     pub open_ports: Vec<u16>,
     pub ssh_banner: Option<String>,
+    pub services: Vec<crate::lan::fingerprint::Service>,
 }
 
 const T: &str = "telepy_lan_host";
-const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, label, username, ssh_port, source, first_seen, last_seen, created_at, updated_at";
+const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, created_at, updated_at";
 
 pub async fn hosts_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<LanHost>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM {T} WHERE tunnel_id = ? ORDER BY id")).bind(tunnel_id).fetch_all(&db.read).await
@@ -105,7 +111,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     tx.commit().await
 }
 
-/// 合併一次掃描的結果：新的插入（source = scan），已知的更新「看到的」欄位（名稱 / MAC / port / banner / last_seen），
+/// 合併一次掃描的結果：新的插入（source = scan），已知的更新「看到的」欄位（名稱 / MAC / port / banner / 服務 / last_seen），
 /// 不動標籤、帳號、SSH port 與 source。回傳 (新增, 更新) 筆數。
 /// Merge a scan: insert new hosts, refresh what was observed on known ones; returns (inserted, updated).
 pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::Result<(usize, usize)> {
@@ -114,6 +120,7 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
     let (mut inserted, mut updated) = (0, 0);
     for h in hosts {
         let ports = serde_json::to_string(&h.open_ports).unwrap_or_else(|_| "[]".into());
+        let services = serde_json::to_string(&h.services).unwrap_or_else(|_| "[]".into());
         let existing: Option<i64> = sqlx::query_scalar(&format!("SELECT id FROM {T} WHERE tunnel_id = ? AND address = ?"))
             .bind(tunnel_id)
             .bind(&h.address)
@@ -122,13 +129,14 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
         match existing {
             Some(id) => {
                 sqlx::query(&format!(
-                    "UPDATE {T} SET hostname = COALESCE(?, hostname), mac = COALESCE(?, mac), open_ports = ?, ssh_banner = COALESCE(?, ssh_banner), \
+                    "UPDATE {T} SET hostname = COALESCE(?, hostname), mac = COALESCE(?, mac), open_ports = ?, ssh_banner = COALESCE(?, ssh_banner), services = ?, \
                      first_seen = COALESCE(first_seen, ?), last_seen = ?, updated_at = ? WHERE id = ?"
                 ))
                 .bind(&h.hostname)
                 .bind(&h.mac)
                 .bind(&ports)
                 .bind(&h.ssh_banner)
+                .bind(&services)
                 .bind(&now)
                 .bind(&now)
                 .bind(&now)
@@ -139,8 +147,8 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
             }
             None => {
                 sqlx::query(&format!(
-                    "INSERT INTO {T} (tunnel_id, address, hostname, mac, open_ports, ssh_banner, ssh_port, source, first_seen, last_seen, created_at, updated_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, 22, 'scan', ?, ?, ?, ?)"
+                    "INSERT INTO {T} (tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, ssh_port, source, first_seen, last_seen, created_at, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 22, 'scan', ?, ?, ?, ?)"
                 ))
                 .bind(tunnel_id)
                 .bind(&h.address)
@@ -148,6 +156,7 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found]) -> sqlx::R
                 .bind(&h.mac)
                 .bind(&ports)
                 .bind(&h.ssh_banner)
+                .bind(&services)
                 .bind(&now)
                 .bind(&now)
                 .bind(&now)

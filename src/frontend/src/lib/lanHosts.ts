@@ -6,11 +6,15 @@
  * (kept in localStorage). The host kind (`hostKind`) lives here too.
  */
 import type { LanHost } from "../types/lan.ts";
+import { deviceKind, identityText } from "./lanIdentity.ts";
 
 /** 這台主機的 SSH port 有沒有在最後一次掃描時開著（或看到 SSH banner）。/ SSH seen on this host. */
 export function hasSsh(h: Pick<LanHost, "open_ports" | "ssh_port" | "ssh_banner">): boolean {
     return h.open_ports.includes(h.ssh_port) || !!h.ssh_banner;
 }
+
+/** 掃描預設探測的 port，跟後端 `lan::DEFAULT_PORTS` 一樣（測試比對）。/ The default scan ports, as the backend's (a test compares). */
+export const DEFAULT_SCAN_PORTS: readonly number[] = [22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118, 53, 554, 631, 5000, 5001, 8006, 8123, 9000, 9090, 9100];
 
 export type HostKind = "ssh" | "desktop" | "files" | "web" | "other";
 export const HOST_KINDS: readonly HostKind[] = ["ssh", "desktop", "files", "web", "other"];
@@ -25,7 +29,7 @@ export function hostKind(h: Pick<LanHost, "open_ports" | "ssh_port" | "ssh_banne
     return "other";
 }
 
-type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen">;
+type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen" | "identity" | "services">;
 type DeviceLike<H> = { id: number; name: string; hosts: H[] };
 
 export interface HostRow<H extends HostLike, D extends { id: number; name: string }> {
@@ -48,7 +52,8 @@ export function queryTerms(query: string): string[] {
 
 /**
  * 一台主機符不符合一個詞：純數字 = 開著的 port（完全相同）或位址的一部分；`port:N` 只比 port；`kind:x` 只比種類；
- * 其他比名稱、位址、主機名稱、MAC、廠商、SSH banner、所在裝置與種類（含翻譯後的種類名稱）。
+ * `type:x` 只比認出來的機器類型（router、nas…）；其他比名稱、位址、主機名稱、MAC、廠商、SSH banner、所在裝置、種類
+ * （含翻譯後的種類名稱）與認出來的產品、網頁標題。
  * One word against one host: digits = an open port (exact) or part of the address; `port:N` ports only; `kind:x`
  * the kind only; anything else name, address, hostname, MAC, vendor, SSH banner, device and kind (incl. its
  * translated label).
@@ -59,8 +64,10 @@ export function hostMatchesTerm(row: { host: HostLike; device: { name: string };
     if (port) return host.open_ports.includes(Number(port[1]));
     const kind = /^kind:(.+)$/.exec(term);
     if (kind) return row.kind === kind[1] || kindLabel(row.kind).toLowerCase().includes(kind[1]);
+    const type = /^type:(.+)$/.exec(term);
+    if (type) return deviceKind(host) === type[1];
     if (/^\d{1,5}$/.test(term) && host.open_ports.includes(Number(term))) return true;
-    const fields = [host.label, host.hostname, host.address, host.mac, host.vendor, host.ssh_banner, row.device.name, row.kind, kindLabel(row.kind)];
+    const fields = [host.label, host.hostname, host.address, host.mac, host.vendor, host.ssh_banner, row.device.name, row.kind, kindLabel(row.kind), identityText(host)];
     return fields.some((v) => !!v && v.toLowerCase().includes(term));
 }
 
