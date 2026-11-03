@@ -316,6 +316,16 @@ telepy lan rm box nas                      # by id, address or label
 
 Listing needs `tunnels:read`. Adding and removing need `tunnels:manage`, which only API tokens can carry.
 
+### A LAN web page in your own browser
+
+```sh
+telepy forward box 192.168.1.20:8080 --open   # forwards the port to localhost, then opens your browser
+telepy forward box@pi nas --open              # a host from `telepy lan ls`, by label; its first web port
+telepy forward box localhost:3000 -l 13000    # the device's own port 3000 on localhost:13000
+```
+
+`forward` writes the same ssh config as `telepy ssh`, runs `ssh -N -L 127.0.0.1:<local>:<host>:<port>` through the device, waits until the local port answers, prints the address and keeps forwarding until Ctrl+C. The local port is the same number (plus 10000 below 1024) or the next free one; `--local` picks it. Only this computer can use it: it listens on 127.0.0.1. It needs `tunnels:read` and your personal SSH key, like `telepy ssh`. In the web app, the Network page opens the same pages in Telepy's remote browser instead.
+
 ### A browser on the device's network
 
 ```sh
@@ -354,6 +364,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy ssh <target>` | SSH into the device; `-L`, `-D`, `-i`, `--ssh-opt`, `--via`, `--fallback`, a command after `--` | `tunnels:read` + your SSH key |
 | `telepy scp [-r] <from>… <to>` | Copy with scp; the remote side is `<tunnel>[@account]:<path>` | `tunnels:read` + your SSH key |
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
+| `telepy forward <target> <host>[:port]` | Bring a port behind the device to this computer (`ssh -L`); `--open`, `--local`, `--https` | `tunnels:read` + your SSH key |
 | `telepy config install` | Put Telepy's blocks into `~/.ssh/config`; tunnels or `--all`, `--print`, `--file` | `tunnels:read` |
 | `telepy config fallback` | Show or set what to do when the web port can't be reached: `ask`, `always`, `never` | — |
 | `telepy config tidy` | Simplify an ssh config; `--check`, `--wildcards`, `--yes`, `--file`; no sign-in needed | — |

@@ -93,8 +93,17 @@ impl ConsoleSession {
 
     /// 開始事件的說明 + 隧道名稱（呼叫端只有 id 時）。/ Convenience: look up the tunnel name and describe.
     pub async fn open_for(state: &AppState, kind: ConsoleKind, tunnel_id: i64, user: &str, account: Option<&str>) -> Self {
+        Self::open_for_with(state, kind, tunnel_id, user, account, None).await
+    }
+
+    /// 同 [`open_for`]，說明後面加一句（遠端瀏覽器：「opened at 192.168.1.10:8080」）。/ Same, with a note appended.
+    pub async fn open_for_with(state: &AppState, kind: ConsoleKind, tunnel_id: i64, user: &str, account: Option<&str>, note: Option<&str>) -> Self {
         let name = db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten().map(|t| t.host_friendly_name).unwrap_or_else(|| format!("#{tunnel_id}"));
-        Self::open(state, kind, tunnel_id, describe(kind, user, account, &name)).await
+        let mut what = describe(kind, user, account, &name);
+        if let Some(n) = note {
+            what = format!("{what}, {n}");
+        }
+        Self::open(state, kind, tunnel_id, what).await
     }
 
     /// 記結束（含持續時間）。/ Record the end with the duration.

@@ -12,17 +12,25 @@
  * shell on the same machine, switching never disconnects. Minimise to a bar, normal height, or maximise into a
  * full-window overlay (Esc restores). "Open in the terminal page" takes the active machine to the full page.
  * Every session stays mounted.
+ *
+ * 也放網頁：一個遠端瀏覽器分頁（地球圖示 + 網址），同一台裝置再開的網頁是它裡面的新分頁。分頁的 × 就是停止，
+ * IME 開關在標題列；縮小時畫面保持原本的大小只是被藏起來（KasmVNC 不會被要求縮成 0）。
+ * Web pages too: one remote-browser tab (globe + URL); more pages on the same device open as tabs inside it. The
+ * tab's × stops it and the IME switch sits in the bar; when minimised it keeps its size, just hidden (KasmVNC is
+ * never asked to shrink to nothing).
  */
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronUp, Maximize2, Minimize2, Plus, RotateCw, SquareArrowOutUpRight, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Globe, Languages, Maximize2, Minimize2, Plus, RotateCw, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { lanAuthParam } from "@/lib/lanAuth";
 import { LanTerminal } from "@/components/network/LanTerminal";
-import { MAX_LAN_TERMINALS, type DockSize, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
+import { RemoteBrowserPanel, type RemoteBrowserPhase } from "@/components/tunnels/RemoteBrowserPanel";
+import { shortUrl } from "@/lib/lanWeb";
+import { MAX_LAN_TERMINALS, type DockSize, type LanBrowserSession, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
 
 /** dock 本體高度（頁面底部要留這麼多空間，免得被蓋住）。放大是覆蓋層，不佔版面。/ Body height; the page keeps that much room below. */
 export const DOCK_HEIGHT: Record<DockSize, string> = {
@@ -30,6 +38,18 @@ export const DOCK_HEIGHT: Record<DockSize, string> = {
     normal: "min(24rem, 45vh)",
     max: "0px",
 };
+/** dock 本體現在的高度（瀏覽器跟終端機一樣高：更高的話頁面上面只剩標題；要大就放大）。
+ *  The dock body's height (the browser as tall as terminals: any taller leaves the page above with only its title; maximise for more). */
+export function dockBodyHeight(size: DockSize): string {
+    return DOCK_HEIGHT[size];
+}
+
+const BROWSER_DOT: Record<RemoteBrowserPhase, string> = {
+    connecting: "bg-warning animate-pulse",
+    connected: "bg-success",
+    idle: "bg-muted-foreground/45",
+};
+
 /** 標題列高度。/ Header bar height. */
 export const DOCK_BAR = "2.75rem";
 /** 浮動面板離視窗底的距離。/ The floating panel's gap from the bottom edge. */
@@ -56,6 +76,10 @@ interface Props {
     setSize: (size: DockSize) => void;
     /** 頁面那一欄：浮動面板的左右邊跟著它。/ The page column the floating panel aligns with. */
     anchorRef: React.RefObject<HTMLElement | null>;
+    /** dock 裡的遠端瀏覽器（沒有 = null）。/ The dock's remote browser (null = none). */
+    browser?: LanBrowserSession | null;
+    onCloseBrowser?: () => void;
+    onBrowserPhase?: (phase: RemoteBrowserPhase) => void;
 }
 
 /** 量 anchor 的左緣與寬度（側欄收合、視窗縮放時會變）。/ The anchor's left edge and width (sidebar collapse, resizes). */
@@ -86,25 +110,36 @@ export function sessionLabel(s: LanTerminalSession): string {
     return s.login ? `${s.login}@${s.hostName}` : s.hostName;
 }
 
-export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, onShell, setSize, anchorRef }: Props) {
+export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, onShell, setSize, anchorRef, browser = null, onCloseBrowser, onBrowserPhase }: Props) {
     const { t } = useI18n();
     const maximized = size === "max";
-    const box = useAnchorBox(anchorRef, sessions.length > 0 && !maximized);
+    const open = sessions.length > 0 || !!browser;
+    const box = useAnchorBox(anchorRef, open && !maximized);
+    // 瀏覽器的中日文輸入（預設開）。/ The browser's IME input (on by default).
+    const [ime, setIme] = useState(true);
 
-    // 放大時 Esc 還原（沒有對話框開著時）。/ Esc restores from the overlay.
+    // 放大時 Esc 還原（沒有對話框開著時）。Esc 打在終端機或網頁裡是給它們的（vim、網頁的對話框），不還原。
+    // Esc restores from the overlay — except when typed into a terminal or the web page, where it belongs to them (vim, a page's dialog).
     useEffect(() => {
         if (!maximized) return;
         const onKey = (e: KeyboardEvent) => {
+            const el = e.target as HTMLElement | null;
+            if (el?.closest?.(".xterm, [data-dock-keys]")) return;
             if (e.key === "Escape" && !document.querySelector("[role=dialog]")) setSize("normal");
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
     }, [maximized, setSize]);
 
-    if (sessions.length === 0) return null;
+    if (!open) return null;
     const active = sessions.find((s) => s.key === activeKey) ?? null;
+    const browserActive = !!browser && browser.key === activeKey;
     const canAdd = sessions.length < MAX_LAN_TERMINALS && !!active;
-    const pageHref = active ? getTerminalPageUrl({ id: active.tunnelId, reverse_port: active.reversePort }, { lanHost: active.hostId, lanUser: active.login || undefined, lanAuth: lanAuthParam(active.auth) }) : null;
+    const pageHref = active
+        ? getTerminalPageUrl({ id: active.tunnelId, reverse_port: active.reversePort }, { lanHost: active.hostId, lanUser: active.login || undefined, lanAuth: lanAuthParam(active.auth) })
+        : browserActive && browser
+            ? getTerminalPageUrl({ id: browser.tunnelId, reverse_port: browser.reversePort }, { mainView: "browser", browserUrl: browser.url, account: browser.deviceUser })
+            : null;
 
     return (
         <section
@@ -120,6 +155,31 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
         >
             <div className="flex shrink-0 items-center gap-1 border-b border-border px-1.5" style={{ height: DOCK_BAR }}>
                 <div role="tablist" aria-label={t("network.dock.title")} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {browser && (
+                        <div className={cn("group flex shrink-0 items-center rounded-md border text-sm", browserActive ? "border-border bg-surface text-foreground" : "border-transparent text-muted-foreground hover:bg-muted")}>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={browserActive}
+                                onClick={() => onSelect(browser.key)}
+                                title={t("network.dock.browserVia", { url: browser.url, device: browser.tunnelName, user: browser.deviceUser })}
+                                className="flex items-center gap-2 py-1 pl-2.5 pr-1"
+                            >
+                                <span className={cn("size-1.5 shrink-0 rounded-full", BROWSER_DOT[browser.phase])} aria-hidden />
+                                <Globe size={13} className="hidden shrink-0 sm:block" aria-hidden />
+                                <span className="max-w-[14rem] truncate font-mono text-[0.8125rem]">{shortUrl(browser.url)}</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onCloseBrowser?.()}
+                                aria-label={t("network.dock.closeBrowser")}
+                                title={t("network.dock.closeBrowser")}
+                                className="mr-1 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            >
+                                <X size={13} />
+                            </button>
+                        </div>
+                    )}
                     {sessions.map((s) => {
                         const selected = s.key === activeKey;
                         const label = sessionLabel(s);
@@ -153,7 +213,7 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
                             </div>
                         );
                     })}
-                    <Button
+                    {!browserActive && <Button
                         variant="ghost"
                         size="icon"
                         className="size-8 shrink-0"
@@ -163,11 +223,24 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
                         title={canAdd ? t("network.dock.newShell") : t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}
                     >
                         <Plus size={16} />
-                    </Button>
+                    </Button>}
                 </div>
                 <div className="flex shrink-0 items-center">
+                    {browserActive && browser?.phase === "connected" && (
+                        <Button
+                            variant={ime ? "secondary" : "ghost"}
+                            size="sm"
+                            className="h-8 gap-1 px-2"
+                            onClick={() => setIme((v) => !v)}
+                            aria-pressed={ime}
+                            aria-label="IME"
+                            title={t("browser.imeTitle")}
+                        >
+                            <Languages size={14} /> <span className="hidden sm:inline">IME</span>
+                        </Button>
+                    )}
                     {pageHref && (
-                        <Button variant="ghost" size="icon" className="size-8" asChild title={t("network.dock.openPage")} aria-label={t("network.dock.openPage")}>
+                        <Button variant="ghost" size="icon" className="size-8" asChild title={browserActive ? t("network.dock.openBrowserPage") : t("network.dock.openPage")} aria-label={browserActive ? t("network.dock.openBrowserPage") : t("network.dock.openPage")}>
                             <Link href={pageHref} prefetch={false}>
                                 <SquareArrowOutUpRight size={15} />
                             </Link>
@@ -200,7 +273,27 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
                     </Button>
                 </div>
             </div>
-            <div className={cn("relative bg-black", maximized ? "min-h-0 flex-1" : "transition-[height] duration-200")} style={maximized ? undefined : { height: DOCK_HEIGHT[size] }}>
+            <div className={cn("relative overflow-hidden bg-black", maximized ? "min-h-0 flex-1" : "transition-[height] duration-200")} style={maximized ? undefined : { height: dockBodyHeight(size) }}>
+                {browser && (
+                    // 不顯示時只藏起來、大小不變：KasmVNC 會照容器大小改遠端畫面。/ Hidden, never resized: KasmVNC resizes the remote screen to its box.
+                    <div
+                        data-dock-keys
+                        className={cn("absolute inset-x-0 top-0 flex flex-col", browserActive && size !== "min" ? "z-10" : "invisible pointer-events-none")}
+                        style={{ height: maximized ? "100%" : DOCK_HEIGHT.normal }}
+                    >
+                        <RemoteBrowserPanel
+                            key={browser.key}
+                            serverId={String(browser.tunnelId)}
+                            username={browser.deviceUser}
+                            startUrl={browser.startUrl}
+                            autoStart
+                            openRequest={{ url: browser.url, n: browser.openN }}
+                            onPhase={onBrowserPhase}
+                            bare
+                            ime={ime}
+                        />
+                    </div>
+                )}
                 {sessions.map((s) => (
                     <LanTerminal key={`${s.key}`} session={s} visible={size !== "min" && s.key === activeKey} onStatus={onStatus} onShell={onShell} />
                 ))}

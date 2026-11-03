@@ -61,6 +61,10 @@ function TerminalSession({ serverId }: { serverId: string }) {
     const lanUser = searchParams.get("lanUser");
     // 經過的裝置帳號（網路頁選的跳板帳號；沒帶 = 裝置的預設帳號）。/ The device account to hop through (the network page's choice; none = the default).
     const lanAccount = searchParams.get("lanAccount");
+    // 沒有區網主機時一開始用哪個裝置帳號（網路頁的「瀏覽器頁」帶來的）。/ The device account to start with when no LAN host is given.
+    const startAccount = searchParams.get("account");
+    // 遠端瀏覽器一開就到這個網頁（網路頁的「瀏覽器頁 ↗」：區網主機的網頁）。/ The remote browser starts on this page.
+    const browserUrl = searchParams.get("mainView") === "browser" ? searchParams.get("browserUrl") : null;
     // 區網那一跳怎麼登入（網址帶的；物件只建一次，免得 hook 以為目標變了）。/ How the hop logs in (from the URL; one stable object).
     const lanAuthRaw = searchParams.get("lanAuth");
     const lanAuth = useMemo(() => lanAuthFromValue(lanAuthRaw), [lanAuthRaw]);
@@ -68,7 +72,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
     const { accessToken } = useAuth();
 
     const lanTarget = useMemo(() => (lanHostId ? { hostId: lanHostId, username: lanUser, auth: lanAuth, account: lanAccount } : null), [lanHostId, lanUser, lanAuth, lanAccount]);
-    const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanTarget);
+    const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanTarget, startAccount);
     // 存的登入的名稱（info 路徑圖要說「用哪一組」）。/ The saved login's name for the info diagram.
     const savedLogins = useSavedLogins(lanHostId && lanAuth.kind === "credential" ? { tunnelId: Number(serverId), hostId: Number(lanHostId), protocol: "ssh" } : null, lanAuth.kind === "credential");
     const savedLabel = lanAuth.kind === "credential" ? savedLogins.list.find((c) => c.id === lanAuth.id)?.label ?? null : null;
@@ -265,6 +269,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
 
                 <TerminalContent
                     tunnelName={tunnelName}
+                    browserStartUrl={browserUrl}
                     mainView={mainView}
                     setMainView={setMainView}
                     connected={connected}

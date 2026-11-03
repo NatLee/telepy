@@ -316,6 +316,16 @@ telepy lan rm box nas                      # 用 id、位址或標籤指定
 
 列出只需要 `tunnels:read`。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
 
+### 用自己的瀏覽器開區網的網頁
+
+```sh
+telepy forward box 192.168.1.20:8080 --open   # 把 port 轉到 localhost，再打開你的瀏覽器
+telepy forward box@pi nas --open              # 用 `telepy lan ls` 裡的標籤指定主機；用它第一個網頁 port
+telepy forward box localhost:3000 -l 13000    # 裝置自己的 3000 port，開在 localhost:13000
+```
+
+`forward` 寫好跟 `telepy ssh` 一樣的 ssh config，經裝置跑 `ssh -N -L 127.0.0.1:<本機>:<主機>:<port>`，等本機 port 接得通就印出網址，然後一直轉到按 Ctrl+C。本機 port 用同一個號碼（1024 以下加 10000），被佔用就往後找空的；`--local` 可以自己指定。它只聽 127.0.0.1，只有這台電腦能用。需要 `tunnels:read` 與你的個人 SSH 金鑰，跟 `telepy ssh` 一樣。在網頁上，網路拓撲頁則是用 Telepy 的遠端瀏覽器開同樣的網頁。
+
 ### 裝置網路上的瀏覽器
 
 ```sh
@@ -354,6 +364,7 @@ telepy browse close "$ID"
 | `telepy ssh <target>` | SSH 進裝置；`-L`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`，`--` 後面接指令 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy scp [-r] <from>… <to>` | 用 scp 複製；遠端寫成 `<tunnel>[@account]:<path>` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |

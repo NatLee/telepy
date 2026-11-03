@@ -119,7 +119,7 @@ The tools below are grouped by the scope that unlocks them. On the MCP page, the
 | --- | --- |
 | `list_tunnels` | The tunnels you can see: id, name, online or not, latency, your permission, the target usernames you may use, and the sessions this app has open |
 | `tunnel_status(tunnel_id)` | Health, latency, 24-hour uptime, the device's `facts` and `warnings`, and the last 10 gateway events |
-| `lan_hosts(tunnel_id)` | The LAN hosts behind a device (found by a scan or added by hand): address, name, open ports, SSH banner, labels, login account |
+| `lan_hosts(tunnel_id)` | The LAN hosts behind a device (found by a scan or added by hand): address, name, open ports, SSH banner, labels, login account, and `web` (each web port with its URL, ready for `browser_open` on the same tunnel) |
 
 - Health is online, degraded (the tunnel is up but the device's sshd doesn't answer) or offline.
 - `facts` covers the OS, kernel, uptime in seconds, CPU, memory and root disk in KB, load, ssh version, and whether a reboot is needed. Only people who can log in to the device get it.

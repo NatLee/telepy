@@ -13,6 +13,7 @@ loopback;session-manager 跟 chromium 在同一個容器),所以 CDP 從來不�
   read {selector?, max_chars}       → {title, url, text, truncated, links}
   click {selector? | text?}         → {clicked, url, title}(真的滑鼠點擊:Input.dispatchMouseEvent)
   type {selector, text, press_enter} → {url, title}(Input.insertText + Enter 鍵)
+  new_tab {url}                     → {url, id}(開一個新分頁並切過去:網路頁在同一台裝置上再開一個網頁)
 
 Agent actions on the remote browser's Chromium over the DevTools Protocol. The debugging port listens on the
 container's loopback only; the backend reaches it solely through the session-manager. Stdlib only, so this
@@ -30,6 +31,10 @@ import urllib.parse
 ACTION_TIMEOUT = float(os.getenv("CDP_ACTION_TIMEOUT", "30"))
 # 頁面載入最多等多久(在動作的時限內)。/ How long a page load is awaited (within the action's limit).
 LOAD_WAIT = 15.0
+# 剛啟動的 chromium:DevTools 還沒開、或第一個分頁還沒出現時等多久。/ A Chromium that just started: how long to wait
+# for DevTools to answer and for its first tab to appear.
+FIRST_TAB_WAIT = 3.0
+RETRY_EVERY = 0.25
 
 
 class CdpError(Exception):
@@ -141,6 +146,56 @@ def _http_json(port, method, path, timeout):
         conn.close()
 
 
+def _http_raw(port, method, path, timeout):
+    """DevTools 的 HTTP 端點,不管回什麼內容(`/json/activate` 回的是純文字)。/ A DevTools HTTP call whose body is ignored."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request(method, path)
+        resp = conn.getresponse()
+        resp.read()
+        if resp.status >= 400:
+            raise CdpError(f"DevTools {path}: HTTP {resp.status}")
+    finally:
+        conn.close()
+
+
+def wait_devtools(port, deadline, call=None):
+    """等 DevTools 回應(session 剛開時 chromium 還在啟動):連不上就每 0.25 秒再試,直到截止。
+    Wait for DevTools to answer (Chromium may still be starting right after a session opens): retry a refused
+    connection every 0.25 s until the deadline."""
+    call = call or _http_json
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise CdpError("the browser's DevTools did not answer in time (is the browser running?)")
+        try:
+            return call(port, "GET", "/json/version", min(left, 2.0))
+        except OSError:
+            time.sleep(min(RETRY_EVERY, max(0.0, deadline - time.monotonic())))
+
+
+def tab_path(url):
+    """`PUT /json/new?<網址>` 的路徑:整個網址百分比編碼(`#`、`&` 不會被當成請求自己的部分)。
+    The `PUT /json/new?<url>` path: the whole URL percent-encoded (so `#` and `&` stay part of it)."""
+    return "/json/new?" + urllib.parse.quote(url, safe="")
+
+
+def new_tab(port, url, deadline, call=None, raw=None):
+    """開一個新分頁到 `url` 並切到它。/ Open `url` in a new tab and bring it to the front."""
+    call, raw = call or _http_json, raw or _http_raw
+    if not url.startswith(("http://", "https://")):
+        raise CdpError("only http and https URLs can be opened")
+    left = max(0.5, deadline - time.monotonic())
+    target = call(port, "PUT", tab_path(url), left) or {}
+    tid = target.get("id")
+    if tid:
+        try:
+            raw(port, "GET", f"/json/activate/{tid}", max(0.5, deadline - time.monotonic()))
+        except (CdpError, OSError):
+            pass
+    return {"url": url, "id": tid}
+
+
 def pick_page(targets):
     """要操作的分頁:清單裡第一個一般網頁(Chromium 依最近使用排序)。/ The tab to drive: the first normal page."""
     for t in targets or []:
@@ -156,6 +211,12 @@ class Cdp:
         self.deadline = deadline
         targets = _http_json(port, "GET", "/json/list", self._left())
         target = pick_page(targets)
+        # 剛啟動的 chromium 第一個分頁可能還沒出現:等一下,免得另外再開一個。/ A just-started Chromium may not
+        # have listed its first tab yet: wait briefly instead of opening a second one.
+        until = min(time.monotonic() + FIRST_TAB_WAIT, deadline - 1.0)
+        while target is None and time.monotonic() < until:
+            time.sleep(RETRY_EVERY)
+            target = pick_page(_http_json(port, "GET", "/json/list", self._left()))
         if target is None:
             # 沒有分頁(使用者把它關了):開一個空白的。/ No tab left: open a blank one.
             target = _http_json(port, "PUT", "/json/new?about:blank", self._left())
@@ -329,6 +390,12 @@ def run_action(cdp, action):
 def perform(port, action, timeout=ACTION_TIMEOUT):
     """連上那個 session 的 DevTools、跑一個動作、斷線。/ Connect to the session's DevTools, run one action, disconnect."""
     deadline = time.monotonic() + min(float(timeout), ACTION_TIMEOUT)
+    wait_devtools(port, deadline)
+    if action.get("action") == "new_tab":
+        try:
+            return new_tab(port, action.get("url") or "", deadline)
+        except (OSError, ValueError) as e:
+            raise CdpError(str(e))
     try:
         cdp = Cdp(port, deadline)
     except (OSError, ValueError, KeyError) as e:

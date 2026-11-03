@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Languages } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Languages, X } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { ProgressSteps } from "@/components/flow/ProgressSteps";
 import { afterStart, browserLine, browserSteps, BROWSER_STEPS, type BrowserStepEvent } from "@/lib/browserStart";
@@ -12,10 +12,26 @@ import KasmUI from "@/vendor/kasm-novnc/app/ui.js";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
+export type RemoteBrowserPhase = "idle" | "connecting" | "connected";
+
 export interface RemoteBrowserPanelProps {
     serverId: string;
     username: string;
     onActiveChange?: (isActive: boolean) => void;
+    /** 一開始要打開的網頁（區網主機的網頁，http / https）；沒給 = 站台設定的首頁。/ The page to open first; none = the site's homepage. */
+    startUrl?: string | null;
+    /** 掛上就開始（使用者已經按了「打開」）。/ Start as soon as it mounts (someone already asked to open a page). */
+    autoStart?: boolean;
+    /** `n` 每變一次就在同一個瀏覽器開新分頁到 `url`（還在開就排隊，停了就用它重新開始）。
+     *  Each new `n` opens `url` in a new tab of this browser (queued while starting; a stopped browser starts on it). */
+    openRequest?: { url: string; n: number } | null;
+    /** 狀態變了（dock 分頁的點）。/ Phase changes (the dock tab's dot). */
+    onPhase?: (phase: RemoteBrowserPhase) => void;
+    /** 不要自己的標題列（網路頁的 dock：分頁的 × 就是停止，IME 開關在 dock 的標題列）。
+     *  No header of its own (the network page's dock: the tab's × stops it, the IME switch sits in the dock's bar). */
+    bare?: boolean;
+    /** 由外面控制的 IME 開關（`bare` 時用）。/ The IME switch, controlled from outside (with `bare`). */
+    ime?: boolean;
 }
 
 const CLOSE_MESSAGES: Record<number, TranslationKey> = {
@@ -78,10 +94,24 @@ export function RemoteBrowserPanel({
     serverId,
     username,
     onActiveChange,
+    startUrl = null,
+    autoStart = false,
+    openRequest = null,
+    onPhase,
+    bare = false,
+    ime,
 }: RemoteBrowserPanelProps) {
     const { t } = useI18n();
-    const [phase, setPhase] = useState<"idle" | "connecting" | "connected">("idle");
+    const [phase, setPhase] = useState<RemoteBrowserPhase>("idle");
     const [error, setError] = useState<string | null>(null);
+    // 開新分頁失敗之類、不會讓畫面停掉的訊息。/ Messages that don't stop the browser (e.g. a new tab failed).
+    const [notice, setNotice] = useState<string | null>(null);
+    // 下次開始時要打開的網頁（一開始的那個，或停掉後又要求的）。/ The page the next start opens.
+    const nextUrlRef = useRef<string | null>(startUrl);
+    const phaseRef = useRef<RemoteBrowserPhase>("idle");
+    // 開著時要求的分頁：連上以後才開。/ Tabs asked for while starting, opened once connected.
+    const queuedTabsRef = useRef<string[]>([]);
+    const seenOpenRef = useRef<number>(openRequest?.n ?? 0);
     const [imeEnabled, setImeEnabled] = useState(true);   // 中文輸入預設開啟
     // 開起來的三步（後端報前兩步，第三步這裡自己知道）與這次開始的 id。/ The three start steps and this start's id.
     const [events, setEvents] = useState<BrowserStepEvent[]>([]);
@@ -209,14 +239,18 @@ export function RemoteBrowserPanel({
         try {
             const res = await apiFetch(
                 `/api/reverse/server/${serverId}/remote-browser/start`,
-                { method: "POST", body: JSON.stringify({ username, progress_id: progressId }) },
+                { method: "POST", body: JSON.stringify({ username, progress_id: progressId, url: nextUrlRef.current ?? undefined }) },
             );
             if (!res.ok) {
                 const data = await readJson(res);
                 // 後端帶機器可讀 code 時用在地化訊息(如 device_offline),否則顯示原始錯誤。
                 // Prefer the localized message when the backend sends a machine-readable code.
-                if ((data as { code?: string } | null)?.code === "device_offline") {
+                const code = (data as { code?: string } | null)?.code;
+                if (code === "device_offline") {
                     throw new Error(t("browser.deviceOffline"));
+                }
+                if (code === "bad_url") {
+                    throw new Error(t("browser.badUrl"));
                 }
                 throw new Error(responseError(res, data, t("browser.startFailed")));
             }
@@ -278,8 +312,76 @@ export function RemoteBrowserPanel({
 
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
+        queuedTabsRef.current = [];
         cleanup(true);
     }, [cleanup]);
+
+    // 狀態給外面（dock 分頁的點）也給下面的 effect 讀。/ Phase for the parent (the dock's dot) and the effects below.
+    useEffect(() => {
+        phaseRef.current = phase;
+        onPhase?.(phase);
+    }, [phase, onPhase]);
+
+    // 在同一個瀏覽器開新分頁（後端經 DevTools 開）。失敗不會停掉瀏覽器，只說一聲。
+    // A new tab in this browser (the backend opens it over DevTools). A failure only says so; the browser stays.
+    const openTab = useCallback(async (url: string) => {
+        const sid = sessionIdRef.current;
+        if (!sid) return;
+        setNotice(null);
+        try {
+            const res = await apiFetch(`/api/reverse/server/remote-browser/${sid}/open`, { method: "POST", body: JSON.stringify({ url }) });
+            if (!res.ok) {
+                const data = await readJson(res);
+                setNotice(t("browser.openTabFailed", { error: responseError(res, data, t("browser.unknownError")) }));
+            }
+        } catch {
+            setNotice(t("browser.openTabFailed", { error: t("browser.unknownError") }));
+        }
+    }, [t]);
+
+    // 要求打開另一個網頁：連著就開新分頁、正在開就排隊、停著就用它開始。
+    // Another page asked for: a new tab when connected, queued while starting, a fresh start when stopped.
+    useEffect(() => {
+        if (!openRequest || openRequest.n === seenOpenRef.current) return;
+        seenOpenRef.current = openRequest.n;
+        if (phaseRef.current === "connected") void openTab(openRequest.url);
+        else if (phaseRef.current === "connecting") queuedTabsRef.current.push(openRequest.url);
+        else {
+            nextUrlRef.current = openRequest.url;
+            void startSession();
+        }
+    }, [openRequest, openTab, startSession]);
+
+    // 連上以後把排隊的分頁開起來。/ Open the queued tabs once connected.
+    useEffect(() => {
+        if (phase !== "connected") return;
+        const queued = queuedTabsRef.current.splice(0);
+        for (const url of queued) void openTab(url);
+    }, [phase, openTab]);
+
+    // 外面控制 IME 時跟著它。/ Follow an IME switch controlled from outside.
+    useEffect(() => {
+        if (ime === undefined) return;
+        imeEnabledRef.current = ime;
+        setImeEnabled(ime);
+        const rfb = rfbRef.current;
+        if (rfb) {
+            rfb.keyboard.enableIME = ime;
+            try { rfb.focus(); } catch { /* noop */ }
+        }
+    }, [ime]);
+
+    // 一掛上就開始（下一個 tick：React 開發模式先掛上又卸下時，第一次的會被取消，不會開兩個）。
+    // Start right after mounting (next tick, so React's dev-mode mount-unmount-mount cancels the first and opens one).
+    useEffect(() => {
+        if (!autoStart) return;
+        const id = setTimeout(() => {
+            if (phaseRef.current === "idle") void startSession();
+        }, 0);
+        return () => clearTimeout(id);
+        // 只在掛上時看一次。/ Only on mount.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // IME(中文/日文輸入法)模式:composition 事件經隱形 textarea 差分送往遠端。預設開啟。
     // 切換時把焦點交回 RFB(IME 開 → focus 到 textarea;關 → focus 到 canvas)。
@@ -342,7 +444,7 @@ export function RemoteBrowserPanel({
     return (
         <div className="flex flex-col h-full w-full bg-card overflow-hidden relative shadow-xl">
             {/* Header */}
-            <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
+            {!bare && <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
                 <MonitorPlay size={18} className="text-muted-foreground shrink-0" />
                 <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">
                     {t("browser.title")}
@@ -367,12 +469,21 @@ export function RemoteBrowserPanel({
                         <MonitorPlay size={14} /> {t("browser.startBrowser")}
                     </Button>
                 )}
-            </div>
+            </div>}
 
             {error && (
                 <div className="p-3 m-3 bg-destructive/10 border border-destructive/20 text-destructive text-sm rounded-md flex items-start gap-2">
                     <AlertCircle size={16} className="mt-0.5 shrink-0" />
                     <span>{error}</span>
+                </div>
+            )}
+            {notice && (
+                <div role="status" className="mx-3 mt-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning" />
+                    <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
+                    <button type="button" onClick={() => setNotice(null)} aria-label={t("common.close")} className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground">
+                        <X size={14} />
+                    </button>
                 </div>
             )}
 

@@ -352,3 +352,82 @@ async fn reqwest_get(url: &str) -> String {
     s.read_to_string(&mut out).await.unwrap();
     out
 }
+
+/// `telepy forward`：區網主機（lab 裡用本機的一個 TCP 服務代替，用標籤找）的 port 經裝置的 sshd 轉到這台電腦；
+/// 沒給 port、又不知道它的網頁 port 就說要寫；不是網頁 port 時印 `localhost:<port>`，`--https` 印 https 網址。
+/// `telepy forward`: a LAN host's port (a local TCP service here, found by its label) reaches this computer through
+/// the device's sshd; without a port and no known web port it says to give one; a non-web port prints
+/// `localhost:<port>`, `--https` an https URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forward_brings_a_lan_port_to_this_computer() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service, &alice.key])], MachineOpts { allow_jump: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    // 「區網上的網頁伺服器」：每條連線回同一段 HTTP。/ The "LAN web server": every connection gets the same answer.
+    let web = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let web_port = web.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = web.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                let _ = s.write_all(b"HTTP/1.0 200 OK\r\ncontent-length: 9\r\n\r\nfrom-lan!").await;
+            });
+        }
+    });
+    let r = lab.app.post(&format!("/api/reverse/server/{}/lan/hosts", dev.tunnel_id), Some(&alice.token), json!({"address": "127.0.0.1", "label": "nas"})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "fwd", "scopes": ["tunnels:read", "ssh:exec"], "expires_at": expires})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    // 沒 port、也不知道網頁 port。/ No port and no known web port.
+    let o = telepy(h, &["forward", "box@pi", "nas"]).await;
+    assert!(o.code != 0 && o.stderr.contains("No port given"), "{}", o.stderr);
+
+    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let key = alice.key.path.to_str().unwrap().to_string();
+    let to = format!("nas:{web_port}");
+    let local = free.to_string();
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_telepy"))
+        .args(["forward", "box@pi", &to, "--local", &local, "-i", &key, "--ssh-opt", "-o BatchMode=yes"])
+        .env("HOME", h)
+        .env("TELEPY_CONFIG_DIR", h.join("config"))
+        .env("TELEPY_SSH_DIR", h.join("ssh"))
+        .env("TELEPY_NO_KEYRING", "1")
+        .env("TELEPY_NO_BROWSER", "1")
+        .env_remove("TELEPY_SSH_VIA")
+        .env_remove("TELEPY_URL")
+        .env_remove("TELEPY_TOKEN")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(40), lines.next_line()).await;
+    let first = match first {
+        Ok(Ok(Some(l))) => l,
+        other => {
+            let mut err = String::new();
+            let _ = child.stderr.take().unwrap().read_to_string(&mut err).await;
+            panic!("forward never came up: {other:?} {err}");
+        }
+    };
+    assert_eq!(first, format!("localhost:{free}"), "not a web port: no URL");
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", free)).await.unwrap();
+    s.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+    let mut body = String::new();
+    s.read_to_string(&mut body).await.unwrap();
+    assert!(body.ends_with("from-lan!"), "{body}");
+    child.kill().await.unwrap();
+}
