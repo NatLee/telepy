@@ -573,7 +573,7 @@ async fn lan_scan_recognises_and_shows() {
         }
     });
     let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
-    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "scan", "scopes": ["tunnels:read", "network:scan"], "expires_at": expires})).await;
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "scan", "scopes": ["tunnels:read", "network:scan", "tunnels:manage", "ssh:exec"], "expires_at": expires})).await;
     let secret = r.json["secret"].as_str().unwrap().to_string();
     let base = lab.ws_base().await.replace("ws://", "http://");
     let home = tempfile::tempdir().unwrap();
@@ -605,6 +605,15 @@ async fn lan_scan_recognises_and_shows() {
     assert!(o.code == 0 && o.stderr.contains("Stopped the rescans of box."), "{}", o.stderr);
     let o = telepy(h, &["lan", "schedule", "box"]).await;
     assert!(o.stdout.contains("No scheduled rescan for box."), "{}", o.stdout);
+    // 標籤與備註；沒有 MAC 就不能喚醒（說清楚為什麼）。/ Labels and a note; no MAC, no wake (and it says why).
+    let o = telepy(h, &["lan", "edit", "box", "127.0.0.1", "--labels", "Rack-2,prod", "--note", "top shelf"]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("  labels: prod, rack-2") && o.stdout.contains("  note: top shelf"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "ls", "box"]).await;
+    assert!(o.stdout.contains("#prod, #rack-2"), "{}", o.stdout);
+    let o = telepy(h, &["lan", "wake", "box", "127.0.0.1"]).await;
+    assert_ne!(o.code, 0);
+    assert!(o.stderr.contains("MAC address"), "{}", o.stderr);
     let o = telepy(h, &["lan", "show", "box", "127.0.0.1"]).await;
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stdout.contains("is: OpenWrt") && o.stdout.contains(&format!("{web_port}/http  200  title: OpenWrt - LuCI")), "{}", o.stdout);

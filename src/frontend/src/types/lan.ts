@@ -44,6 +44,10 @@ export interface LanHost {
     checked_at?: string | null;
     /** 我有在注意它（掃描發現它不見、回來或 port 變了就通知我）。/ I watch it (told when it goes, comes back or changes ports). */
     watched?: boolean;
+    /** 使用者寫的備註（掃描不會動）。/ The person's notes (scans never touch them). */
+    notes?: string | null;
+    /** 標籤（跟通道標籤同規則）。/ Labels (the tunnel label rules). */
+    labels?: string[];
     first_seen: string | null;
     last_seen: string | null;
     created_at: string;

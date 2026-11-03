@@ -644,6 +644,37 @@ pub enum LanAction {
         #[arg(long)]
         off: bool,
     },
+    /// Send a Wake-on-LAN packet from the device to a host (needs ssh:exec and a MAC from an earlier scan)
+    Wake {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        /// Device account to run it as (default: the tunnel's default)
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Change a host's name, login, SSH port, labels or note (needs tunnels:manage)
+    Edit {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        /// Display name (empty clears it)
+        #[arg(long)]
+        label: Option<String>,
+        /// Default login on that machine (empty clears it)
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// Labels, comma-separated; replaces them (empty clears them)
+        #[arg(long)]
+        labels: Option<String>,
+        /// A note (empty clears it)
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// What Telepy saw on one host: what it is, and each port's page title, server, certificate or banner
     Show {
         #[arg(add = ArgValueCompleter::new(complete::tunnel))]
@@ -2396,6 +2427,9 @@ fn lan_note(h: &Value) -> String {
     if h["watched"] == true {
         out.push("watched".into());
     }
+    for l in h["labels"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        out.push(format!("#{l}"));
+    }
     out.join(", ")
 }
 
@@ -2561,6 +2595,15 @@ fn lan_show_lines(h: &Value) -> Vec<String> {
     if h["watched"] == true {
         out.push("  you watch it (told when a scan finds it gone, back or with other ports)".into());
     }
+    let labels: Vec<&str> = h["labels"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !labels.is_empty() {
+        out.push(format!("  labels: {}", labels.join(", ")));
+    }
+    if !s(h, "notes").is_empty() {
+        for (i, line) in s(h, "notes").lines().enumerate() {
+            out.push(format!("  {}{line}", if i == 0 { "note: " } else { "      " }));
+        }
+    }
     let what = lan_what(h);
     if !what.is_empty() {
         let by = &h["identity"]["by"];
@@ -2709,6 +2752,49 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                 Some(line) => println!("{line}"),
                 None if every.is_none() => println!("No scheduled rescan for {}. Set one with: telepy lan schedule {} --every 6h", name_of(&t), name_of(&t)),
                 None => {}
+            }
+        }
+        LanAction::Wake { tunnel, host, account } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            let mut body = json!({});
+            if let Some(a) = &account {
+                body["username"] = json!(a);
+            }
+            let r = api.json(Method::POST, &format!("/api/reverse/server/{}/lan/hosts/{}/wake", t["id"], h["id"]), Some(&body))?;
+            let to = if s(&r, "broadcast").is_empty() { String::new() } else { format!(" to {}", s(&r, "broadcast")) };
+            println!("Sent a wake-up packet for {} ({}){to} with {}.", s(h, "address"), s(&r, "mac"), s(&r, "tool"));
+            eprintln!("It usually takes 10–60 s to start. Then: telepy lan check {} {}", name_of(&t), s(h, "address"));
+        }
+        LanAction::Edit { tunnel, host, label, user, port, labels, note } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            let mut body = json!({});
+            if let Some(x) = label {
+                body["label"] = json!(x);
+            }
+            if let Some(x) = user {
+                body["username"] = json!(x);
+            }
+            if let Some(x) = port {
+                body["ssh_port"] = json!(x);
+            }
+            if let Some(x) = labels {
+                body["labels"] = json!(x.split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>());
+            }
+            if let Some(x) = note {
+                body["notes"] = json!(x);
+            }
+            if body.as_object().is_some_and(|o| o.is_empty()) {
+                bail!("Nothing to change: give --label, --user, --port, --labels or --note.");
+            }
+            let r = api.json(Method::PATCH, &format!("/api/reverse/server/{}/lan/hosts/{}", t["id"], h["id"]), Some(&body))?;
+            for line in lan_show_lines(&r) {
+                println!("{line}");
             }
         }
         LanAction::Watch { tunnel, host, off } => {
@@ -2894,6 +2980,14 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_labels_and_notes() {
+        assert_eq!(lan_note(&json!({"labels": ["prod", "rack-2"], "since_last": null})), "#prod, #rack-2");
+        let lines = lan_show_lines(&json!({"address": "10.0.0.5", "labels": ["prod"], "notes": "rack 2\nUPS left", "services": [], "web": []}));
+        assert!(lines.contains(&"  labels: prod".to_string()), "{lines:?}");
+        assert!(lines.contains(&"  note: rack 2".to_string()) && lines.contains(&"        UPS left".to_string()), "{lines:?}");
+    }
 
     #[test]
     fn lan_schedule_words() {

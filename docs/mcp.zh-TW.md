@@ -90,7 +90,7 @@ MCP client ── POST /mcp ─────────────────�
 | scope | 核准頁上的名稱 | 開放的工具 |
 | --- | --- | --- |
 | `tunnels:read` | 查看你的通道 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
-| `ssh:exec` | 在你的裝置上執行指令 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
+| `ssh:exec` | 在你的裝置上執行指令 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
 | `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
 | `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`（只限你擁有或身為 ADMIN 的通道） |
 | `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
@@ -119,7 +119,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `list_tunnels` | 你看得到的通道：id、名稱、是否在線、延遲、你的權限、可用的目標 username，以及這個 app 開著的 session |
 | `tunnel_status(tunnel_id)` | 健康狀態、延遲、24 小時在線率、裝置的 `facts` 與 `warnings`，以及最近 10 筆 gateway 事件 |
-| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號、`web`（每個網頁 port 和它的網址，可以直接交給同一條通道的 `browser_open`），`services` 與 `identity`（上次掃描認出來的）、`own`（裝置本機在聽的服務那一列，位址 `localhost`）、`gateway`、`missing`（上次掃描它的網段時沒看到）`since_last`（新的、port 開了 / 關了）與 `watched`（你有在注意它）；另外 `lan` = 上次掃描的網段、閘道，以及跟前一次比變了什麼，`schedule` = 定時重掃（沒有是 null） |
+| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號、`web`（每個網頁 port 和它的網址，可以直接交給同一條通道的 `browser_open`），`services` 與 `identity`（上次掃描認出來的）、`own`（裝置本機在聽的服務那一列，位址 `localhost`）、`gateway`、`missing`（上次掃描它的網段時沒看到）`since_last`（新的、port 開了 / 關了）、`watched`（你有在注意它）、`notes` 與 `labels`；另外 `lan` = 上次掃描的網段、閘道，以及跟前一次比變了什麼，`schedule` = 定時重掃（沒有是 null） |
 
 - 健康狀態分成 online、degraded（通道在，但裝置的 sshd 沒回應）和 offline。
 - `facts` 包含 OS、kernel、開機秒數、CPU、記憶體與根磁碟（KB）、負載、ssh 版本，以及要不要重開機。只有能登入裝置的人拿得到。
@@ -157,6 +157,7 @@ shell 的行為細節請看 [互動 shell](#互動-shell)。
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | 經裝置的 sshd 掃描區網，把找到的主機存進主機清單。`identify`（預設開）會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看憑證），讓 `lan_hosts` 說得出每台是什麼 |
 | `lan_check(tunnel_id, host, ports?, username?)` | 現在再檢查一台區網主機（用 id、位址或標籤指定）：它開過的 port 加上預設的，只探這個位址，幾秒鐘。規則跟 `lan_scan` 一樣。回傳它現在的樣子（沒回應時 `missing` 為 true）與變了什麼 |
+| `lan_wake(tunnel_id, host, username?)` | 從裝置對一台區網主機送網路喚醒封包（裝置上跑 wakeonlan、etherwake 或 python3；Windows 用 PowerShell）。需要 `ssh:exec`、你在裝置上能用的帳號，以及之前掃描讀到的 MAC；機器通常要 10–60 秒開機，之後用 `lan_check` 確認 |
 
 - 只掃私有網段，最多 1024 個位址，一次大約一分鐘。
 - 只限你擁有或身為 ADMIN 的通道。

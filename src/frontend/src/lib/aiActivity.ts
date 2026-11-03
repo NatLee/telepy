@@ -34,6 +34,7 @@ const CATEGORIES: Record<string, ToolCategory> = {
     lan_hosts: "read",
     lan_scan: "read",
     lan_check: "read",
+    lan_wake: "exec",
 };
 
 export function toolCategory(tool: string): ToolCategory | null {

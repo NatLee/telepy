@@ -10,7 +10,7 @@
  * not seen this time, ports changed, each host clickable.
  */
 import React, { useState } from "react";
-import { CalendarClock, EyeOff, ListPlus, Radar, Router, ArrowLeftRight, Bell, Repeat } from "lucide-react";
+import { CalendarClock, EyeOff, ListPlus, Radar, Router, ArrowLeftRight, Bell, Repeat, StickyNote } from "lucide-react";
 import { everyKey } from "@/lib/lanSchedule";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,8 @@ export function PortDelta({ opened, closed, className }: { opened: number[]; clo
 export function ChangeText({ host, className }: { host: LanHost; className?: string }) {
     const { t } = useI18n();
     const change = hostChange(host);
-    if (!host.gateway && !change && !host.watched) return null;
+    const labels = host.labels ?? [];
+    if (!host.gateway && !change && !host.watched && labels.length === 0 && !host.notes) return null;
     return (
         <span className={cn("flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.6875rem]", className)}>
             {host.watched && <span className="inline-flex items-center gap-1 text-primary" title={t("network.watch.on")}><Bell size={11} aria-hidden />{t("network.watch.short")}</span>}
@@ -52,6 +53,8 @@ export function ChangeText({ host, className }: { host: LanHost; className?: str
             {change === "new" && <span className="text-success">{t("network.change.new")}</span>}
             {change === "missing" && <span className="inline-flex items-center gap-1 text-warning"><EyeOff size={11} aria-hidden />{t("network.change.missing")}</span>}
             {host.since_last && change !== "missing" && <PortDelta opened={host.since_last.opened} closed={host.since_last.closed} />}
+            {labels.map((l) => <span key={l} className="font-mono text-muted-foreground">#{l}</span>)}
+            {host.notes && <span className="inline-flex items-center gap-1 text-muted-foreground" title={host.notes}><StickyNote size={11} aria-hidden />{t("network.noteTag")}</span>}
         </span>
     );
 }

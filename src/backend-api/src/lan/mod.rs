@@ -16,6 +16,7 @@ pub mod identify;
 pub mod scan;
 pub mod schedule;
 pub mod tls;
+pub mod wake;
 pub mod watch;
 pub mod web;
 

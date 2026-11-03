@@ -30,7 +30,7 @@ export function hostKind(h: Pick<LanHost, "open_ports" | "ssh_port" | "ssh_banne
 }
 
 type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen" | "identity" | "services"> &
-    Partial<Pick<LanHost, "own" | "source" | "gateway" | "missing" | "since_last" | "watched">>;
+    Partial<Pick<LanHost, "own" | "source" | "gateway" | "missing" | "since_last" | "watched" | "notes" | "labels">>;
 
 /**
  * `is:` 的值 → 這台主機符不符合：裝置自己（self / device / own）、閘道（gateway / router）、上次掃描新出現的（new）、
@@ -89,8 +89,10 @@ export function hostMatchesTerm(row: { host: HostLike; device: { name: string };
     if (type) return deviceKind(host) === type[1];
     const is = /^is:(.+)$/.exec(term);
     if (is) return IS_KEYS[is[1]]?.(host) ?? false;
+    const label = /^(?:label|tag):(.+)$/.exec(term);
+    if (label) return (host.labels ?? []).includes(label[1]);
     if (/^\d{1,5}$/.test(term) && host.open_ports.includes(Number(term))) return true;
-    const fields = [host.label, host.hostname, host.address, host.mac, host.vendor, host.ssh_banner, row.device.name, row.kind, kindLabel(row.kind), identityText(host)];
+    const fields = [host.label, host.hostname, host.address, host.mac, host.vendor, host.ssh_banner, row.device.name, row.kind, kindLabel(row.kind), identityText(host), host.notes, ...(host.labels ?? [])];
     return fields.some((v) => !!v && v.toLowerCase().includes(term));
 }
 

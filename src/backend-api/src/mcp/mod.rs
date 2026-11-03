@@ -197,6 +197,16 @@ pub struct LanScanArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct LanWakeArgs {
+    /// Tunnel id from list_tunnels
+    pub tunnel_id: i64,
+    /// The host's id, address or label (from lan_hosts); it needs a known MAC address
+    pub host: String,
+    /// Device account to run the command as; omit for the tunnel's default
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LanCheckArgs {
     /// Tunnel id from list_tunnels
     pub tunnel_id: i64,
@@ -812,6 +822,45 @@ impl TelepyMcp {
             return Ok(fail(format!("The scan failed: {e}")));
         }
         Ok(CallToolResult::structured(json!({ "scan": summary.status, "new_hosts": summary.inserted, "hosts": hosts })))
+    }
+
+    #[tool(description = "Send a Wake-on-LAN packet to a LAN host from its tunnel's device (the device runs wakeonlan, etherwake or python3; PowerShell on Windows). Needs scope ssh:exec, an account you may use on the device and a MAC address from an earlier scan. The machine must have Wake-on-LAN turned on and usually takes 10–60 s to start; check it afterwards with lan_check.", annotations(title = "Wake LAN host", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
+    async fn lan_wake(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<LanWakeArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
+        }
+        if p.feature_denied(crate::features::Feature::Network) {
+            return Ok(feature_off(crate::features::Feature::Network));
+        }
+        let db = &self.state.db;
+        let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
+        if !p.tunnel_allowed(args.tunnel_id) {
+            return Ok(not_found());
+        }
+        let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
+        if permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten().is_none() {
+            return Ok(not_found());
+        }
+        if tunnel.require_step_up {
+            return Ok(fail(STEP_UP_REFUSAL.to_string()));
+        }
+        let hosts = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default();
+        let raw = args.host.trim();
+        let Some(h) = hosts.iter().find(|h| h.id.to_string() == raw).or_else(|| hosts.iter().find(|h| h.address == raw)).or_else(|| hosts.iter().find(|h| h.label.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(raw)))).cloned() else {
+            return Ok(fail(format!("No host '{raw}' behind this tunnel. Call lan_hosts to see them.")));
+        };
+        let out = crate::api::lan::wake(&self.state, &p.user, &tunnel, &h, args.username.as_deref()).await;
+        let (detail, error) = match &out {
+            Ok(v) => (Some(format!("{} via {}", h.address, v["tool"].as_str().unwrap_or("?"))), None),
+            Err(e) => (Some(h.address.clone()), e.body.get("error").and_then(Value::as_str).map(str::to_string)),
+        };
+        self.audit(&p, "lan_wake", started, Audit { tunnel_id: Some(tunnel.id), detail, error: error.clone(), ..Default::default() }).await;
+        match out {
+            Ok(v) => Ok(CallToolResult::structured(json!({ "sent": true, "tool": v["tool"], "broadcast": v["broadcast"], "mac": v["mac"], "hint": "The machine usually needs 10–60 s to start. Check it with lan_check." }))),
+            Err(_) => Ok(fail(error.unwrap_or_else(|| "The wake-up packet could not be sent.".to_string()))),
+        }
     }
 
     #[tool(description = "Check one LAN host again right now: every port it had open plus the default ports, on that address only (no network sweep, a few seconds). Same rules as lan_scan (owner or ADMIN, scope network:scan). Returns the host as it is now, with `missing` true when it didn't answer, and what changed.", annotations(title = "Check LAN host", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
