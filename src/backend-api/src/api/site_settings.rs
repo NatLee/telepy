@@ -56,6 +56,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許通道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該通道的 Logs。" },
     FieldMeta { name: "device_ip_lookup_url", kind: Kind::Url(512), label: "Device public IP lookup", description: "裝置的公網 IP 先問 Telepy 自己(/api/whoami);Telepy 看到的不是公網位址時(前面的代理或 Docker 把來源換掉了,或裝置跟 Telepy 在同一個 NAT 後面),裝置改問這個網址,它要用純文字回傳呼叫者的 IP(例如 https://api.ipify.org、https://ifconfig.me/ip)。每台裝置每次連上最多問一次、連著時每天一次。留空 = 不問第三方,看不到時只顯示內網 IP。" },
+    FieldMeta { name: "lan_scan_user_agent", kind: Kind::Opt(crate::lan::fingerprint::USER_AGENT_MAX), label: "LAN scan User-Agent", description: "區網掃描辨識網頁時(每個開著的網頁 port 送一個 GET /)帶的 User-Agent,被掃的機器會在紀錄裡看到它。留空 = 一般的桌面 Chrome,看起來就是一次普通的瀏覽;要讓對方認得出是掃描,就填自己的字串(一行、只能用 ASCII)。下次掃描時生效。" },
     FieldMeta { name: "carrier_auto_update", kind: Kind::Bool, label: "Keep device carriers up to date", description: "裝置走網頁 port 時用的小幫手（telepy-carrier）：每天最多問一次 release 頁有沒有新版，有就在背景把伺服器快取裡比較舊的換掉，結果通知每個管理員。只有快取裡已經有從 release 抓來的載體時才會連外；手動放進去的不動。關閉後只在伺服器健康頁按「全部更新」或執行 telepy-server fetch-carriers 時才更新。" },
     FieldMeta { name: "datasets_auto_update", kind: Kind::Bool, label: "Keep IP and vendor data up to date", description: "IP 的國家 / 網路業者（DB-IP Lite）與網卡廠商表（IEEE OUI）：每天最多看一次，已經裝好的資料舊了就在背景下載新的（DB-IP 每月一版，廠商表 30 天一次），換上後立刻生效、不用重啟，結果記在稽核紀錄。還沒裝過的不會自己下載，先在伺服器狀態頁按一次「下載」。查詢一律在本機，不把任何 IP 送出去。" },
     FieldMeta { name: "notify_user_webhooks", kind: Kind::Bool, label: "Personal webhooks", description: "讓每個人在 Webhooks 頁設定自己的 webhook,收他在網頁上本來就會收到的通知(自己通道的狀態、分享、核准、登入…)。關閉後個人 webhook 全部暫停不送,管理員的全站 webhook 不受影響。" },
@@ -116,6 +117,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
     m.insert("device_ip_lookup_url".into(), json!(s.device_ip_lookup_url));
+    m.insert("lan_scan_user_agent".into(), json!(s.lan_scan_user_agent));
     m.insert("carrier_auto_update".into(), json!(s.carrier_auto_update));
     m.insert("datasets_auto_update".into(), json!(s.datasets_auto_update));
     m.insert("notify_user_webhooks".into(), json!(s.notify_user_webhooks));
@@ -176,9 +178,21 @@ fn meta_json() -> Value {
         if let Kind::Choice(choices) = f.kind {
             entry["choices"] = json!(choices);
         }
+        // 留空時實際用的值（設定頁拿來當提示文字）。/ What a blank value means (the page shows it as the placeholder).
+        if let Some(d) = blank_default(f.name) {
+            entry["default"] = json!(d);
+        }
         m.insert(f.name.into(), entry);
     }
     Value::Object(m)
+}
+
+/// 可以留空的字串設定裡，留空代表某個內建值的那些。/ Blank-able string settings whose blank stands for a built-in value.
+fn blank_default(name: &str) -> Option<&'static str> {
+    match name {
+        "lan_scan_user_agent" => Some(crate::lan::fingerprint::DEFAULT_USER_AGENT),
+        _ => None,
+    }
 }
 
 #[utoipa::path(get, path = "/api/site/settings", tag = "Site Settings", security(("bearer" = [])), responses((status = 200, description = "values + meta; empty objects for non-admins", body = super::schemas::SiteSettingsResponse)))]
@@ -425,6 +439,8 @@ fn normalize(name: &str, value: SettingValue) -> Result<SettingValue, ApiError> 
         "server_public_url" => ss::check_public_url(s),
         "server_ssh_host" => ss::check_ssh_host(s),
         "app_name" => crate::app_manifest::check_name(s),
+        // 原封不動放進 HTTP 請求：一行、看得見的 ASCII。/ Goes into an HTTP request as is: one line of visible ASCII.
+        "lan_scan_user_agent" => crate::lan::fingerprint::check_user_agent(s),
         _ => return Ok(value),
     };
     checked.map(SettingValue::Str).map_err(|msg| ApiError::field(name, msg))

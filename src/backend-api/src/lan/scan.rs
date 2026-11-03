@@ -132,6 +132,9 @@ pub struct ScanRequest {
     pub user: User,
     /// 網頁 port 送一個 `GET /` 認出它是什麼（預設開；對方的紀錄裡看得到）。/ Send one `GET /` per web port (default on; visible in the host's logs).
     pub identify: bool,
+    /// 辨識請求帶的 User-Agent（站台設定 `lan_scan_user_agent`，留空 = 一般瀏覽器的）。
+    /// The identify request's User-Agent (site setting `lan_scan_user_agent`; blank = an ordinary browser's).
+    pub user_agent: String,
     /// 使用者自己加的 port（不在預設清單裡的）：沒先說話的也試一個 GET。/ Ports the person added beyond the default list: silent ones get a GET too.
     pub listed: Vec<u16>,
     pub trigger: Trigger,
@@ -230,13 +233,13 @@ async fn probe(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16) -> Optio
 /// 一個網頁 port：照 port 猜的 scheme 先試（https 先 TLS 握手讀憑證），不通再試另一種；送一個 `GET /`、讀回應。
 /// One web port: the scheme the port suggests first (https = a TLS handshake that reads the certificate), then the
 /// other; one `GET /`, then the answer.
-async fn identify_web(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16) -> Option<Service> {
+async fn identify_web(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16, user_agent: &str) -> Option<Service> {
     let https_first = web_scheme(port) == Some("https");
     for tls in if https_first { [true, false] } else { [false, true] } {
         // 逾時（對方收了不回）就不再試另一種：多半一樣不回，只會讓掃描多等。失敗得快（被拒、TLS 握手不成）才換。
         // A timeout (it took the request and said nothing) ends it: the other way would most likely hang too. Only a
         // quick failure (refused, no TLS) tries the other way.
-        let Ok(r) = tokio::time::timeout(IDENTIFY_TIMEOUT, fetch(handle, ip, port, tls)).await else { return None };
+        let Ok(r) = tokio::time::timeout(IDENTIFY_TIMEOUT, fetch(handle, ip, port, tls, user_agent)).await else { return None };
         // 送到 HTTPS port 的明文請求常回 400「plain HTTP request was sent to HTTPS port」：再試 TLS。
         // A plain request to an HTTPS port often gets a 400 saying so: try TLS then.
         if let Some(s) = r {
@@ -249,12 +252,12 @@ async fn identify_web(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16) -
     None
 }
 
-async fn fetch(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16, tls: bool) -> Option<Service> {
+async fn fetch(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16, tls: bool, user_agent: &str) -> Option<Service> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let ch = handle.channel_open_direct_tcpip(ip.to_string(), u32::from(port), "127.0.0.1", 0).await.ok()?;
     let stream = ch.into_stream();
     let default_port = (tls && port == 443) || (!tls && port == 80);
-    let request = fingerprint::http_request(&ip.to_string(), port, default_port);
+    let request = fingerprint::http_request(&ip.to_string(), port, default_port, user_agent);
     let mut buf = Vec::new();
     let cert = if tls {
         let connector = tokio_rustls::TlsConnector::from(super::tls::any_cert_config());
@@ -460,12 +463,12 @@ struct ScanResult {
     gateway: Option<Ipv4Addr>,
 }
 
-/// 裝置自己在聽的 port（從 loopback 連得到的），跟區網主機一樣先聽它先說的；`identify` 開著時，沒先說話的 port 都送一個
-/// GET（裝置自己說它在聽，像使用者自己列的 port 一樣看待；[`fingerprint::NEVER_SEND`] 照樣不送）。
+/// 裝置自己在聽的 port（從 loopback 連得到的），跟區網主機一樣先聽它先說的；`identify` 有值（= 要帶的 User-Agent）時，
+/// 沒先說話的 port 都送一個 GET（裝置自己說它在聽，像使用者自己列的 port 一樣看待；[`fingerprint::NEVER_SEND`] 照樣不送）。
 /// The device's own listening ports (those reachable on its loopback), listened to like LAN hosts first; with
-/// `identify` every port that stayed silent gets one GET (the device itself says it listens, so they count like ports
-/// the person listed; [`fingerprint::NEVER_SEND`] still never gets one).
-async fn own_services(handle: &Handle<ClientHandler>, identify: bool) -> Option<Found> {
+/// `identify` (= the User-Agent to send) every port that stayed silent gets one GET (the device itself says it listens,
+/// so they count like ports the person listed; [`fingerprint::NEVER_SEND`] still never gets one).
+async fn own_services(handle: &Handle<ClientHandler>, identify: Option<&str>) -> Option<Found> {
     let mut listening = device_self::parse_listening(&device_exec(handle, device_self::LISTEN_POSIX).await);
     if listening.is_empty() {
         listening = device_self::parse_listening(&device_exec(handle, device_self::LISTEN_WINDOWS).await);
@@ -488,9 +491,9 @@ async fn own_services(handle: &Handle<ClientHandler>, identify: bool) -> Option<
             services.extend(svc);
         }
     }
-    if identify {
+    if let Some(user_agent) = identify {
         let web: Vec<u16> = open.iter().copied().filter(|p| fingerprint::worth_a_get(*p, true, services.iter().any(|s| s.port == *p))).collect();
-        let pages: Vec<Option<Service>> = stream::iter(web).map(|port| identify_web(handle, lo, port)).buffer_unordered(IDENTIFY_CONCURRENCY).collect().await;
+        let pages: Vec<Option<Service>> = stream::iter(web).map(|port| identify_web(handle, lo, port, user_agent)).buffer_unordered(IDENTIFY_CONCURRENCY).collect().await;
         services.extend(pages.into_iter().flatten());
     }
     open.sort_unstable();
@@ -620,7 +623,7 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<ScanResult, String> 
             .map(|(ip, port)| {
                 let probed = &probed;
                 async move {
-                    let r = identify_web(handle, ip, port).await;
+                    let r = identify_web(handle, ip, port, &req.user_agent).await;
                     let n = probed.fetch_add(1, Ordering::Relaxed) + 1;
                     progress(state, req, |s| s.probed = n);
                     (ip, r)
@@ -684,7 +687,7 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<ScanResult, String> 
     let mut found = found;
     if req.trigger.host().is_none() {
         progress(state, req, |s| s.phase = "self".into());
-        if let Some(own) = own_services(handle, req.identify).await {
+        if let Some(own) = own_services(handle, req.identify.then_some(req.user_agent.as_str())).await {
             found.push(own);
         }
     }

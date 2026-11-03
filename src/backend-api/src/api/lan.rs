@@ -194,6 +194,7 @@ pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: p
     if let Some(e) = scan_denied(state, eff).await? {
         return Err(e);
     }
+    let user_agent = crate::lan::fingerprint::user_agent(&db::settings::get_solo(&state.db).await?.lan_scan_user_agent);
     let allowed = permissions::allowed_usernames(&state.db, user.id, tunnel).await?;
     let username = permissions::choose_username(&allowed, tunnel.default_username_id, username, &tunnel.host_friendly_name).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "username", e))?;
     let subnets: Option<Vec<Network>> = match subnets.filter(|s| !s.is_empty()) {
@@ -221,7 +222,7 @@ pub async fn prepare_scan(state: &AppState, user: &User, tunnel: &Tunnel, eff: p
         .lan_scans
         .begin(tunnel.id, user, &ports, trigger)
         .map_err(|running| ApiError::new(StatusCode::CONFLICT, json!({ "error": "A scan of this network is already running.", "code": "lan_scan_running", "scan": running })))?;
-    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone(), identify, listed, trigger })
+    Ok(ScanRequest { tunnel: tunnel.clone(), username, subnets, ports, user: user.clone(), identify, user_agent, listed, trigger })
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/{id}/lan/hosts", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::LanHostList), (status = 404, body = super::schemas::ErrorBody)))]

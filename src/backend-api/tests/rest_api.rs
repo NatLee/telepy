@@ -469,7 +469,7 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 55);
+    assert_eq!(keys.len(), 56);
     assert_eq!((r.json["values"]["notify_push_max_delay"].as_i64(), r.json["values"]["notify_push_per_hour"].as_i64()), (Some(3600), Some(20)), "status pushes: an hour at most, 20 an hour");
     assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");
@@ -496,6 +496,17 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["ai_session_max_lifetime"], 7200);
     assert_eq!(r.json["values"]["ai_max_sessions_per_user"], 3);
     assert_eq!(r.json["values"]["lan_scan_enabled"], true);
+    // 區網辨識的 User-Agent：留空 = 一般瀏覽器的，meta 把它當提示給設定頁；換行（多塞一個標頭）不收。
+    // The LAN identify User-Agent: blank = an ordinary browser's, which meta gives the page as the placeholder; a line break (an extra header) is refused.
+    assert_eq!(r.json["values"]["lan_scan_user_agent"], "");
+    assert!(r.json["meta"]["lan_scan_user_agent"]["default"].as_str().unwrap().starts_with("Mozilla/5.0 "), "{}", r.json["meta"]["lan_scan_user_agent"]);
+    let r2 = app.post("/api/site/settings", Some(&admin), json!({"lan_scan_user_agent": "curl/8.7.1\r\nX-Extra: 1"})).await;
+    assert_eq!(r2.status, StatusCode::BAD_REQUEST, "{}", r2.text);
+    assert!(r2.json["lan_scan_user_agent"].is_array(), "{}", r2.text);
+    let r2 = app.post("/api/site/settings", Some(&admin), json!({"lan_scan_user_agent": "  curl/8.7.1 "})).await;
+    assert_eq!(r2.json["values"]["lan_scan_user_agent"], "curl/8.7.1");
+    let r2 = app.post("/api/site/settings", Some(&admin), json!({"lan_scan_user_agent": ""})).await;
+    assert_eq!(r2.json["values"]["lan_scan_user_agent"], "");
     assert_eq!(r.json["meta"]["ai_max_sessions_per_user"]["type"], "integer");
 
     // logs: no gateway events yet → 200 with an empty string
