@@ -2305,17 +2305,102 @@ fn find_host<'a>(hosts: &'a [Value], raw: &str) -> Option<&'a Value> {
         .or_else(|| hosts.iter().find(|h| s(h, "label").eq_ignore_ascii_case(raw)))
 }
 
-/// `lan ls` / `lan scan` 的表：多一欄 WHAT（認出來的產品或類型）。/ The host table, with WHAT (the recognised product or type).
+/// `lan ls` / `lan scan` 的表：WHAT（認出來的產品或類型）與 NOTE（裝置自己、閘道、上次掃描的變化）。裝置自己排第一、
+/// 閘道第二、這次沒看到的排最後。
+/// The host table, with WHAT (the recognised product or type) and NOTE (the device itself, the gateway, what the last
+/// scan changed). The device itself first, the gateway second, hosts not seen last.
 fn print_hosts(hosts: &[Value]) {
-    let rows: Vec<Vec<String>> = hosts
+    let rank = |h: &Value| if h["own"] == true { 0 } else if h["gateway"] == true { 1 } else if h["missing"] == true { 3 } else { 2 };
+    let mut sorted: Vec<&Value> = hosts.iter().collect();
+    sorted.sort_by_key(|h| rank(h));
+    let rows: Vec<Vec<String>> = sorted
         .iter()
         .map(|h| {
             let ports = h["open_ports"].as_array().map(|p| p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")).unwrap_or_default();
             let name = [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or("").to_string();
-            vec![h["id"].to_string(), s(h, "address").to_string(), name, lan_what(h), s(h, "username").to_string(), ports, s(h, "source").to_string()]
+            vec![h["id"].to_string(), s(h, "address").to_string(), name, lan_what(h), s(h, "username").to_string(), ports, s(h, "source").to_string(), lan_note(h)]
         })
         .collect();
-    print_table(&["ID", "ADDRESS", "NAME", "WHAT", "LOGIN", "OPEN PORTS", "SOURCE"], &rows, |col, _| if col == 3 { color::DIM } else { color::PLAIN });
+    print_table(&["ID", "ADDRESS", "NAME", "WHAT", "LOGIN", "OPEN PORTS", "SOURCE", "NOTE"], &rows, |col, text| match col {
+        3 => color::DIM,
+        7 if text.contains("not seen") => color::WARN,
+        7 if text.contains("new") || text.contains('+') => color::GOOD,
+        7 => color::DIM,
+        _ => color::PLAIN,
+    });
+}
+
+/// NOTE 一格：裝置自己、閘道、上次掃描新出現 / port 開關、這次沒看到。/ The NOTE cell.
+fn lan_note(h: &Value) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if h["own"] == true {
+        out.push("this device".into());
+    }
+    if h["gateway"] == true {
+        out.push("gateway".into());
+    }
+    let since = &h["since_last"];
+    if since["new"] == true {
+        out.push("new".into());
+    }
+    let ports = port_changes(since);
+    if !ports.is_empty() {
+        out.push(ports);
+    }
+    if h["missing"] == true {
+        out.push("not seen".into());
+    }
+    out.join(", ")
+}
+
+/// `{opened, closed}` → `+443 -80`。/ Opened and closed ports as `+443 -80`.
+fn port_changes(v: &Value) -> String {
+    let list = |k: &str, sign: char| v[k].as_array().into_iter().flatten().filter_map(Value::as_u64).map(|p| format!("{sign}{p}")).collect::<Vec<_>>();
+    [list("opened", '+'), list("closed", '-')].concat().join(" ")
+}
+
+/// 一串位址，最多列 8 個。/ A list of addresses, at most 8 shown.
+fn some_addresses(v: &Value) -> String {
+    let all: Vec<&str> = v.as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let shown = all.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+    if all.len() > 8 {
+        format!("{shown} +{} more", all.len() - 8)
+    } else {
+        shown
+    }
+}
+
+/// 跟前一次掃描比的一行（`changes` 是 null = 還沒比過，回 None）。/ What the last scan changed, as one line (None without data).
+fn lan_changes_line(c: &Value) -> Option<String> {
+    if !c.is_object() {
+        return None;
+    }
+    let count = |k: &str| c[k].as_array().map_or(0, Vec::len);
+    let mut parts = Vec::new();
+    if count("new") > 0 {
+        parts.push(format!("{} new ({})", count("new"), some_addresses(&c["new"])));
+    }
+    if count("gone") > 0 {
+        parts.push(format!("{} not seen ({})", count("gone"), some_addresses(&c["gone"])));
+    }
+    let changed: Vec<String> = c["changed"].as_array().into_iter().flatten().map(|x| format!("{} {}", s(x, "address"), port_changes(x))).collect();
+    if !changed.is_empty() {
+        let shown = changed.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+        parts.push(format!("ports changed on {} ({shown}{})", changed.len(), if changed.len() > 8 { ", …" } else { "" }));
+    }
+    Some(if parts.is_empty() { "Nothing changed since the previous scan.".into() } else { format!("Since the previous scan: {}.", parts.join("; ")) })
+}
+
+/// `lan ls` 上面那一行：上次什麼時候、掃了哪些網段、閘道是誰。/ The line above `lan ls`: when, which networks, the gateway.
+fn lan_meta_line(lan: &Value, off: chrono::FixedOffset) -> Option<String> {
+    let at = chrono::DateTime::parse_from_rfc3339(s(lan, "scanned_at")).ok()?;
+    let nets = lan["networks"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let mut line = format!("Last scan {} of {}", at.with_timezone(&off).format("%Y-%m-%d %H:%M"), if nets.is_empty() { "-" } else { &nets });
+    if !s(lan, "gateway").is_empty() {
+        line.push_str(&format!(", gateway {}", s(lan, "gateway")));
+    }
+    line.push('.');
+    Some(line)
 }
 
 /// 「這台是什麼」一格：產品（· 系統）、只有類型時是類型。/ The WHAT cell: product (· OS), else the type.
@@ -2342,6 +2427,7 @@ fn lan_scan_line(st: &Value) -> String {
         "ports" => format!("Checking ports on {found} machine(s)"),
         "identify" => format!("Recognising web pages ({n}/{total})"),
         "names" => "Looking up names…".into(),
+        "self" => "Listing what the device itself listens on…".into(),
         "done" => format!("Done: {found} machine(s)."),
         other => other.to_string(),
     }
@@ -2350,6 +2436,22 @@ fn lan_scan_line(st: &Value) -> String {
 /// `lan show` 的內容。/ The lines of `lan show`.
 fn lan_show_lines(h: &Value) -> Vec<String> {
     let mut out = vec![format!("{}  {}", s(h, "address"), [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or(""))];
+    if h["own"] == true {
+        out.push("  this device: what the device itself listens on (reached at localhost on it)".into());
+    }
+    if h["gateway"] == true {
+        out.push("  the device's default gateway".into());
+    }
+    if h["since_last"]["new"] == true {
+        out.push("  new in the last scan".into());
+    }
+    let ports = port_changes(&h["since_last"]);
+    if !ports.is_empty() {
+        out.push(format!("  ports since the previous scan: {ports}"));
+    }
+    if h["missing"] == true {
+        out.push(format!("  not seen in the last scan (last seen {})", s(h, "last_seen")));
+    }
     let what = lan_what(h);
     if !what.is_empty() {
         let by = &h["identity"]["by"];
@@ -2398,6 +2500,9 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                 eprintln!("No LAN hosts on {} yet. Scan in the web app (Network page) or add one: telepy lan add {} <address>", name_of(&t), name_of(&t));
                 return Ok(());
             }
+            if let Some(line) = lan_meta_line(&v["lan"], local_offset()) {
+                eprintln!("{line}");
+            }
             print_hosts(&hosts);
         }
         LanAction::Scan { tunnel, subnets, ports, no_identify, account, json: as_json } => {
@@ -2434,11 +2539,15 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
             if s(&st, "phase") == "failed" {
                 bail!("The scan failed: {}", s(&st, "error"));
             }
-            let hosts = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?["hosts"].as_array().cloned().unwrap_or_default();
+            let v = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
             if as_json {
-                return print_json(&json!({ "scan": st, "hosts": hosts }));
+                return print_json(&json!({ "scan": st, "hosts": hosts, "lan": v["lan"] }));
             }
             print_hosts(&hosts);
+            if let Some(line) = lan_changes_line(&st["changes"]) {
+                eprintln!("{line}");
+            }
         }
         LanAction::Show { tunnel, host, json: as_json } => {
             let t = tunnel_of(&tunnel)?;
@@ -2610,6 +2719,25 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_notes_changes_and_the_scan_line() {
+        let h = json!({"own": false, "gateway": true, "missing": false, "since_last": {"new": false, "opened": [443], "closed": [80]}});
+        assert_eq!(lan_note(&h), "gateway, +443 -80");
+        assert_eq!(lan_note(&json!({"own": true, "since_last": null})), "this device");
+        assert_eq!(lan_note(&json!({"missing": true, "since_last": null})), "not seen");
+        assert_eq!(lan_note(&json!({"since_last": {"new": true, "opened": [], "closed": []}})), "new");
+        assert_eq!(lan_changes_line(&Value::Null), None);
+        assert_eq!(lan_changes_line(&json!({"new": [], "gone": [], "changed": []})).unwrap(), "Nothing changed since the previous scan.");
+        let c = json!({"new": ["10.0.0.9"], "gone": ["10.0.0.3"], "changed": [{"address": "10.0.0.2", "opened": [443], "closed": [80]}]});
+        assert_eq!(lan_changes_line(&c).unwrap(), "Since the previous scan: 1 new (10.0.0.9); 1 not seen (10.0.0.3); ports changed on 1 (10.0.0.2 +443 -80).");
+        let many: Vec<String> = (1..=10).map(|i| format!("10.0.0.{i}")).collect();
+        assert!(lan_changes_line(&json!({"new": many, "gone": [], "changed": []})).unwrap().contains("10.0.0.8 +2 more"));
+        let off = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let lan = json!({"networks": ["192.168.1.0/24"], "gateway": "192.168.1.1", "scanned_at": "2026-11-03T06:05:00+00:00"});
+        assert_eq!(lan_meta_line(&lan, off).unwrap(), "Last scan 2026-11-03 14:05 of 192.168.1.0/24, gateway 192.168.1.1.");
+        assert_eq!(lan_meta_line(&Value::Null, off), None);
+    }
 
     #[test]
     fn resolves_names_ids_and_both_account_orders() {

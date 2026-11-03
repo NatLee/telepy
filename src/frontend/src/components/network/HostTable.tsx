@@ -25,6 +25,9 @@ import { hasSsh, serviceName, shortVendor } from "@/lib/lanConnect";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
+import { ChangeText } from "@/components/network/ScanChanges";
+import { isOwn } from "@/lib/lanChanges";
+import { Cpu } from "lucide-react";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
 export type TableRow = HostRow<LanHost, TopologyTunnel>;
@@ -155,13 +158,17 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
                         const online = isOnline(tn);
                         const selected = host.id === selectedHostId;
                         const ports = host.open_ports.slice(0, 5);
+                        // 裝置自己那一列：名稱寫「這台裝置上」、圖示是晶片。/ The device's own row: named "on this device", a chip icon.
+                        const own = isOwn(host);
+                        const look = own ? { icon: <Cpu />, tone: "bg-muted text-foreground ring-border", label: "network.own.chip" as const } : hostIcon(host, r.kind);
                         return (
                             <li
                                 key={host.id}
                                 className={cn(
                                     "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-4 py-2 transition-colors hover:bg-muted/40",
                                     COLS,
-                                    selected && "bg-primary/[0.06] shadow-[inset_2px_0_0_var(--color-primary)]"
+                                    selected && "bg-primary/[0.06] shadow-[inset_2px_0_0_var(--color-primary)]",
+                                    host.missing && !selected && "opacity-75"
                                 )}
                             >
                                 {/* 主機：名稱 + 種類圖示（窄的時候第二行放位址與裝置）。/ Host: name + kind icon (narrow: address and device on a second line). */}
@@ -172,12 +179,13 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
                                     aria-current={selected ? "true" : undefined}
                                     className="flex min-w-0 items-center gap-2.5 rounded-md py-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 >
-                                    <span className={cn("grid size-7 shrink-0 place-items-center rounded-md ring-1 ring-inset [&_svg]:size-3.5", hostIcon(host, r.kind).tone)} title={t(hostIcon(host, r.kind).label)} aria-hidden>
-                                        {hostIcon(host, r.kind).icon}
+                                    <span className={cn("grid size-7 shrink-0 place-items-center rounded-md ring-1 ring-inset [&_svg]:size-3.5", look.tone)} title={t(look.label)} aria-hidden>
+                                        {look.icon}
                                     </span>
                                     <span className="min-w-0">
-                                        <span className="block text-sm text-foreground [overflow-wrap:anywhere]">{r.name}</span>
-                                        {identityLine(host) && <span className="block text-xs text-foreground/75 [overflow-wrap:anywhere]">{identityLine(host)}</span>}
+                                        <span className="block text-sm text-foreground [overflow-wrap:anywhere]">{own ? t("network.own.chip") : r.name}</span>
+                                        {!own && identityLine(host) && <span className="block text-xs text-foreground/75 [overflow-wrap:anywhere]">{identityLine(host)}</span>}
+                                        <ChangeText host={host} />
                                         <span className="block text-xs text-muted-foreground @3xl:hidden [overflow-wrap:anywhere]">
                                             <span className="font-mono">{host.address}</span>
                                             {" · "}
@@ -207,7 +215,7 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
                                 <span className="hidden text-xs text-muted-foreground @3xl:block" title={host.last_seen ? time.format(new Date(host.last_seen)) : undefined}>
                                     {host.last_seen ? fmt.format(new Date(host.last_seen)) : host.source === "manual" ? t("network.manualTag") : "—"}
                                 </span>
-                                <HostQuickActions host={host} tunnel={tn} online={online} onOpenHere={onOpenHere} onOpenWeb={onOpenWeb} onOpenPanel={onOpenHost} onNavigate={onNavigate} openShells={openShells} className="justify-end @3xl:w-32" />
+                                <HostQuickActions terminal={own ? false : undefined} host={host} tunnel={tn} online={online} onOpenHere={onOpenHere} onOpenWeb={onOpenWeb} onOpenPanel={onOpenHost} onNavigate={onNavigate} openShells={openShells} className="justify-end @3xl:w-32" />
                             </li>
                         );
                     })}

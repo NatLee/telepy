@@ -44,3 +44,8 @@ test("device addresses: first LAN IP, the public IP only when it really is publi
     // 裝置回報的公網 IP 優先。/ The reported public IP wins.
     assert.equal(deviceAddresses({ ip: "172.19.0.1", geo: geo("private"), public_ip: "198.51.100.7" })!.public, "198.51.100.7");
 });
+
+test("the device's own services don't make a device one 'with hosts'", () => {
+    const devices = [{ id: 1, hosts: [{ own: true, source: "self" }] }, { id: 2, hosts: [{ source: "scan" }] }];
+    assert.deepEqual(filterDevices(devices, "hosts", () => true).shown.map((d) => d.id), [2]);
+});

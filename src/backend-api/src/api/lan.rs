@@ -38,7 +38,46 @@ fn lan_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError
 
 /// `vendor` = MAC 前綴的廠商（有 OUI 表才有）；`mac_private` = 隨機 / 私有 MAC。
 /// `vendor` from the MAC prefix (when the OUI table is installed); `mac_private` = randomized MAC.
-pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
+/// 掃描的整體結果給網頁 / CLI / MCP 看的樣子。/ The scan summary as the web, CLI and MCP see it.
+pub fn meta_json(m: Option<&db::lan::LanMeta>, tz: i32) -> Value {
+    match m {
+        None => Value::Null,
+        Some(m) => json!({
+            "networks": m.network_list(),
+            "gateway": m.gateway,
+            "scanned_at": opt_db_to_iso(&m.scanned_at, tz),
+            "changes": m.changes.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok()),
+        }),
+    }
+}
+
+/// 上次掃描有掃到它的網段、卻沒看到它（掃到過的主機才算，裝置自己不算）。/ Its network was scanned last time but it wasn't
+/// seen (only hosts a scan has seen before; never the device itself).
+fn missing(h: &LanHost, m: Option<&db::lan::LanMeta>) -> bool {
+    let (Some(m), Ok(ip), Some(seen)) = (m, h.address.parse::<std::net::Ipv4Addr>(), h.last_seen.as_deref()) else { return false };
+    if h.source == "self" {
+        return false;
+    }
+    let scanned = m.network_list().iter().filter_map(|c| lan::parse_cidr(c).ok()).any(|n| n.contains(ip));
+    scanned && m.scanned_at.as_deref().is_some_and(|at| seen < at)
+}
+
+/// 這台主機在上次掃描跟前一次比變了什麼（沒變 = null）。/ What changed for this host in the last scan (null = nothing).
+fn since_last(h: &LanHost, m: Option<&db::lan::LanMeta>) -> Value {
+    let Some(c) = m.and_then(|m| m.changes.as_deref()).and_then(|c| serde_json::from_str::<Value>(c).ok()) else { return Value::Null };
+    let is_new = c["new"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(h.address.as_str())));
+    let ports = c["changed"].as_array().and_then(|a| a.iter().find(|x| x["address"].as_str() == Some(h.address.as_str())));
+    if !is_new && ports.is_none() {
+        return Value::Null;
+    }
+    json!({
+        "new": is_new,
+        "opened": ports.map_or(json!([]), |p| p["opened"].clone()),
+        "closed": ports.map_or(json!([]), |p| p["closed"].clone()),
+    })
+}
+
+pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui, meta: Option<&db::lan::LanMeta>) -> Value {
     let vendor = h.mac.as_deref().and_then(|m| oui.vendor(m));
     let mac_private = h.mac.as_deref().is_some_and(crate::oui::is_private);
     let ports = h.open_port_list();
@@ -46,8 +85,13 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
     let seen: Vec<(u16, &str)> = services.iter().filter(|s| s.proto == "http" || s.proto == "https").map(|s| (s.port, s.proto.as_str())).collect();
     let web: Vec<Value> = crate::lan::web_links(&h.address, &ports, &seen).into_iter().map(|(port, scheme, url)| json!({ "port": port, "scheme": scheme, "url": url })).collect();
     // 每次讀的時候才認（表改了不用重掃）。/ Identified when read, so a better table needs no rescan.
-    let identity = crate::lan::identify::identify(&services, vendor.as_deref(), &ports, false);
+    let gateway = meta.and_then(|m| m.gateway.as_deref()) == Some(h.address.as_str());
+    let identity = crate::lan::identify::identify(&services, vendor.as_deref(), &ports, gateway);
     json!({
+        "own": h.source == "self",
+        "gateway": gateway,
+        "missing": missing(h, meta),
+        "since_last": since_last(h, meta),
         "web": web,
         "services": services,
         "identity": identity,
@@ -130,8 +174,10 @@ async fn list_hosts(State(state): State<AppState>, AuthUser(user): AuthUser, Pat
     let (t, eff) = visible(&state, user.id, id).await?;
     let tz = state.config.tz_offset_minutes;
     let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
+    let meta = db::lan::meta(&state.db, t.id).await?;
     Ok(Json(json!({
-        "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui)).collect::<Vec<_>>(),
+        "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui, meta.as_ref())).collect::<Vec<_>>(),
+        "lan": meta_json(meta.as_ref(), tz),
         "scan": state.lan_scans.get(t.id),
         "can_scan": scan_denied(&state, eff).await?.is_none(),
         "can_edit": eff.satisfies(Permission::Edit),
@@ -211,7 +257,8 @@ async fn add_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path(
         }
     })?;
     notify_updated(&state, &t).await;
-    Ok((StatusCode::CREATED, Json(host_json(&h, state.config.tz_offset_minutes, &state.oui))))
+    let meta = db::lan::meta(&state.db, t.id).await?;
+    Ok((StatusCode::CREATED, Json(host_json(&h, state.config.tz_offset_minutes, &state.oui, meta.as_ref()))))
 }
 
 async fn own_host(state: &AppState, tunnel_id: i64, host_id: i64) -> ApiResult<LanHost> {
@@ -232,7 +279,8 @@ async fn update_host(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     )
     .await?;
     notify_updated(&state, &t).await;
-    Ok(Json(host_json(&own_host(&state, t.id, host_id).await?, state.config.tz_offset_minutes, &state.oui)))
+    let meta = db::lan::meta(&state.db, t.id).await?;
+    Ok(Json(host_json(&own_host(&state, t.id, host_id).await?, state.config.tz_offset_minutes, &state.oui, meta.as_ref())))
 }
 
 #[utoipa::path(delete, path = "/api/reverse/server/{id}/lan/hosts/{host_id}", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), responses((status = 204, description = "Removed (a later scan finds it again if it is still there)"), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
@@ -292,6 +340,7 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: cr
         let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
         let default_username = t.default_username_id.and_then(|d| allowed.iter().find(|u| u.id == d)).map(|u| u.username.clone()).or_else(|| (allowed.len() == 1).then(|| allowed[0].username.clone()));
         let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
+        let meta = db::lan::meta(&state.db, t.id).await?;
         // 裝置自己的位址（內網網卡、公網 IP），跟隧道列表同一個 `endpoint`、同一道門檻。
         // The device's own addresses (LAN interfaces, public IP): the tunnel list's `endpoint`, same gate.
         let endpoint = if permissions::can_see_endpoint(Some(eff), !allowed.is_empty(), user.is_superuser) {
@@ -312,7 +361,8 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: cr
             "default_username": default_username,
             "endpoint": endpoint,
             "scan": state.lan_scans.get(t.id),
-            "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui)).collect::<Vec<_>>(),
+            "lan": meta_json(meta.as_ref(), tz),
+            "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui, meta.as_ref())).collect::<Vec<_>>(),
         }));
     }
     Ok(Json(json!({ "tunnels": out })))
@@ -343,11 +393,11 @@ mod tests {
             created_at: "2026-10-24 00:00:00.000000".into(),
             updated_at: "2026-10-24 00:00:00.000000".into(),
         };
-        let v = host_json(&h, 480, &oui);
+        let v = host_json(&h, 480, &oui, None);
         assert_eq!(v["vendor"], "Raspberry Pi Foundation");
         assert_eq!(v["mac_private"], false);
         h.mac = Some("da:a1:19:00:00:01".into());
-        let v = host_json(&h, 480, &oui);
+        let v = host_json(&h, 480, &oui, None);
         assert!(v["vendor"].is_null());
         assert_eq!(v["mac_private"], true);
     }

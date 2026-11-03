@@ -14,6 +14,7 @@ use russh::ChannelMsg;
 use serde::Serialize;
 use serde_json::json;
 
+use super::device_self::{self, Changes};
 use super::fingerprint::{self, Service};
 use super::{parse_avahi, parse_getent, parse_nmblookup, parse_neighbours, parse_networks, targets, web_scheme, Network};
 use crate::db::{self, lan::Found, tunnels::Tunnel, users::User};
@@ -49,7 +50,7 @@ pub struct ScanStatus {
     pub started_by: String,
     pub started_at: String,
     pub finished_at: Option<String>,
-    /// connecting | networks | discovery | ports | identify | names | done | failed
+    /// connecting | networks | discovery | ports | identify | names | self | done | failed
     pub phase: String,
     pub networks: Vec<String>,
     pub ports: Vec<u16>,
@@ -57,6 +58,10 @@ pub struct ScanStatus {
     pub total: usize,
     pub hosts_found: usize,
     pub error: Option<String>,
+    /// 跟上一次比變了什麼（做完才有）。/ What changed since the previous scan (once done).
+    pub changes: Option<Changes>,
+    /// 裝置的預設閘道（看得到的話）。/ The device's default gateway, when it could be read.
+    pub gateway: Option<String>,
 }
 
 impl ScanStatus {
@@ -106,6 +111,8 @@ fn blank(tunnel_id: i64, user: &User, ports: &[u16]) -> ScanStatus {
         total: 0,
         hosts_found: 0,
         error: None,
+        changes: None,
+        gateway: None,
     }
 }
 
@@ -239,11 +246,49 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
     let tunnel_id = req.tunnel.id;
     let started = Instant::now();
     let result = run(&state, &req).await;
+    let mut changed: Option<Changes> = None;
+    let mut gateway: Option<String> = None;
     let (inserted, updated, error) = match result {
-        Ok(found) => match db::lan::upsert_scanned(&state.db, tunnel_id, &found).await {
-            Ok((i, u)) => (i, u, None),
-            Err(e) => (0, 0, Some(format!("could not save the results: {e}"))),
-        },
+        Ok(r) => {
+            // 掃描前後比，只在這次掃的網段裡：「之前看過」= 掃描或手動加、但曾經被掃到過的（裝置自己除外）；
+            // 「新的」= 清單裡完全沒有的位址（手動加過、第一次被掃到的不算新）。
+            // Before vs after, within this scan's networks only: "seen before" = any host but the device itself that a
+            // scan has seen; "new" = an address the list doesn't have at all (a manual host seen for the first time isn't).
+            let listed: Vec<db::lan::LanHost> = db::lan::hosts_for_tunnel(&state.db, tunnel_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|h| h.source != "self" && h.address.parse::<Ipv4Addr>().is_ok_and(|ip| r.networks.iter().any(|n| n.contains(ip))))
+                .collect();
+            let before: BTreeMap<String, Vec<u16>> = listed
+                .iter()
+                .filter(|h| h.last_seen.is_some())
+                .map(|h| (h.address.clone(), h.open_port_list()))
+                .collect();
+            let known: BTreeSet<String> = listed.iter().map(|h| h.address.clone()).collect();
+            let after: BTreeMap<String, Vec<u16>> = r.found.iter().filter(|f| !f.own).map(|f| (f.address.clone(), f.open_ports.clone())).collect();
+            let mut c = device_self::changes(&before, &after, &req.ports);
+            c.new.retain(|a| !known.contains(a));
+            gateway = r.gateway.map(|g| g.to_string());
+            let at = now_db();
+            match db::lan::upsert_scanned(&state.db, tunnel_id, &r.found, &at).await {
+                Ok((i, u)) => {
+                    let meta = db::lan::LanMeta {
+                        tunnel_id,
+                        networks: serde_json::to_string(&r.networks.iter().map(Network::cidr).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into()),
+                        gateway: gateway.clone(),
+                        scanned_at: Some(at.clone()),
+                        changes: serde_json::to_string(&c).ok(),
+                    };
+                    if let Err(e) = db::lan::save_meta(&state.db, &meta).await {
+                        tracing::warn!(tunnel_id, error = %e, "could not save the scan summary");
+                    }
+                    changed = Some(c);
+                    (i, u, None)
+                }
+                Err(e) => (0, 0, Some(format!("could not save the results: {e}"))),
+            }
+        }
         Err(e) => (0, 0, Some(e)),
     };
     let status = state
@@ -252,17 +297,21 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
             s.finished_at = Some(now_db());
             s.phase = if error.is_some() { "failed".into() } else { "done".into() };
             s.error = error.clone();
+            s.changes = changed.clone();
+            s.gateway = gateway.clone();
         })
         .unwrap_or_else(|| blank(tunnel_id, &req.user, &req.ports));
     let secs = started.elapsed().as_secs_f64();
     let message = match &error {
         None => format!(
-            "LAN scan of {} (ports {}) by {}: {} host(s), {} new, in {secs:.1} s",
+            "LAN scan of {} (ports {}) by {}: {} host(s), {} new, {} gone, {} with port changes, in {secs:.1} s",
             if status.networks.is_empty() { "-".to_string() } else { status.networks.join(", ") },
             req.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(","),
             req.user.username,
             status.hosts_found,
-            inserted
+            inserted,
+            changed.as_ref().map_or(0, |c| c.gone.len()),
+            changed.as_ref().map_or(0, |c| c.changed.len()),
         ),
         Some(e) => format!("LAN scan by {} failed: {e}", req.user.username),
     };
@@ -270,7 +319,7 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
     tracing::info!(tunnel_id, user = %req.user.username, hosts = status.hosts_found, inserted, error = ?error, "LAN scan finished");
     state.hub.notify_user(
         req.user.id,
-        &json!({ "action": "LAN-SCAN-DONE", "tunnel_id": tunnel_id, "hosts_found": status.hosts_found, "inserted": inserted, "error": error, "details": format!("LAN scan of '{}' finished", req.tunnel.host_friendly_name) }),
+        &json!({ "action": "LAN-SCAN-DONE", "tunnel_id": tunnel_id, "hosts_found": status.hosts_found, "inserted": inserted, "gone": changed.as_ref().map_or(0, |c| c.gone.len()), "changed": changed.as_ref().map_or(0, |c| c.changed.len()), "error": error, "details": format!("LAN scan of '{}' finished", req.tunnel.host_friendly_name) }),
     );
     if error.is_none() {
         if let Ok(audience) = crate::api::notify::tunnel_audience(&state, &req.tunnel).await {
@@ -286,7 +335,58 @@ fn progress(state: &AppState, req: &ScanRequest, f: impl FnOnce(&mut ScanStatus)
     }
 }
 
-async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> {
+/// 一次掃描的結果：找到的主機（含裝置自己）、掃了哪些網段、預設閘道。/ What a scan found, which networks, the gateway.
+struct ScanResult {
+    found: Vec<Found>,
+    networks: Vec<Network>,
+    gateway: Option<Ipv4Addr>,
+}
+
+/// 裝置自己在聽的 port（從 loopback 連得到的），跟區網主機一樣先聽它先說的；`identify` 開著時，沒先說話的 port 都送一個
+/// GET（裝置自己說它在聽，像使用者自己列的 port 一樣看待；[`fingerprint::NEVER_SEND`] 照樣不送）。
+/// The device's own listening ports (those reachable on its loopback), listened to like LAN hosts first; with
+/// `identify` every port that stayed silent gets one GET (the device itself says it listens, so they count like ports
+/// the person listed; [`fingerprint::NEVER_SEND`] still never gets one).
+async fn own_services(handle: &Handle<ClientHandler>, identify: bool) -> Option<Found> {
+    let mut listening = device_self::parse_listening(&device_exec(handle, device_self::LISTEN_POSIX).await);
+    if listening.is_empty() {
+        listening = device_self::parse_listening(&device_exec(handle, device_self::LISTEN_WINDOWS).await);
+    }
+    let ports = device_self::local_ports(&listening);
+    if ports.is_empty() {
+        return None;
+    }
+    let lo = Ipv4Addr::LOCALHOST;
+    let seen: Vec<(u16, Option<Option<Service>>)> = stream::iter(ports.iter().copied())
+        .map(|port| async move { (port, probe(handle, lo, port).await) })
+        .buffer_unordered(IDENTIFY_CONCURRENCY)
+        .collect()
+        .await;
+    let mut open: Vec<u16> = Vec::new();
+    let mut services: Vec<Service> = Vec::new();
+    for (port, r) in seen {
+        if let Some(svc) = r {
+            open.push(port);
+            services.extend(svc);
+        }
+    }
+    if identify {
+        let web: Vec<u16> = open.iter().copied().filter(|p| fingerprint::worth_a_get(*p, true, services.iter().any(|s| s.port == *p))).collect();
+        let pages: Vec<Option<Service>> = stream::iter(web).map(|port| identify_web(handle, lo, port)).buffer_unordered(IDENTIFY_CONCURRENCY).collect().await;
+        services.extend(pages.into_iter().flatten());
+    }
+    open.sort_unstable();
+    services.sort_by_key(|s| s.port);
+    let ssh_banner = services.iter().find(|s| s.proto == "ssh").and_then(|s| s.banner.clone());
+    Some(Found { address: "localhost".into(), hostname: None, mac: None, open_ports: open, ssh_banner, services, own: true })
+}
+
+/// 預設閘道：先 POSIX，再 PowerShell。/ The default gateway: POSIX first, then PowerShell.
+async fn read_gateway(handle: &Handle<ClientHandler>) -> Option<Ipv4Addr> {
+    device_self::parse_gateway(&device_exec(handle, device_self::GATEWAY_POSIX).await).or(device_self::parse_gateway(&device_exec(handle, device_self::GATEWAY_WINDOWS).await))
+}
+
+async fn run(state: &AppState, req: &ScanRequest) -> Result<ScanResult, String> {
     let conn = device::connect(state, &req.username, req.tunnel.reverse_port)
         .await
         .map_err(|e| format!("cannot connect to the device as {}: {e:#}", req.username))?;
@@ -294,6 +394,7 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
 
     progress(state, req, |s| s.phase = "networks".into());
     let detected = detect_networks(handle).await;
+    let gateway = read_gateway(handle).await;
     let own: Vec<Ipv4Addr> = detected.iter().map(|n| n.addr).collect();
     let networks: Vec<Network> = match &req.subnets {
         Some(s) => s.clone(),
@@ -454,11 +555,18 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
                 open_ports: ports.into_iter().collect(),
                 ssh_banner,
                 services,
+                own: false,
             }
         })
         .collect();
     progress(state, req, |s| s.hosts_found = found.len());
-    Ok(found)
+    // 5) 裝置自己在聽什麼（本機 loopback）。/ What the device itself listens on (its loopback).
+    progress(state, req, |s| s.phase = "self".into());
+    let mut found = found;
+    if let Some(own) = own_services(handle, req.identify).await {
+        found.push(own);
+    }
+    Ok(ScanResult { found, networks, gateway })
 }
 
 #[cfg(test)]

@@ -33,13 +33,14 @@ export function NetworkTypes({ hosts, active, onPick }: {
                 onClick={pick ?? undefined}
                 aria-pressed={pick ? on : undefined}
                 className={cn(
-                    "grid w-full grid-cols-[1.25rem_minmax(0,7rem)_minmax(0,1fr)_2rem] items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm transition-colors",
+                    // 標籤欄最寬 9rem，放不下就換行，不截成「…」。/ The label column wraps (up to 9rem) instead of ending in "…".
+                    "grid w-full grid-cols-[1.25rem_minmax(0,9rem)_minmax(0,1fr)_2rem] items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm transition-colors",
                     pick && "hover:bg-muted/60",
                     on && "bg-primary/8 ring-1 ring-inset ring-primary/40",
                 )}
             >
                 <span className="text-muted-foreground [&_svg]:size-4" aria-hidden>{icon}</span>
-                <span className="truncate text-foreground">{label}</span>
+                <span className="leading-snug text-foreground [overflow-wrap:anywhere]">{label}</span>
                 <span className="h-2 rounded-full bg-muted" aria-hidden>
                     <span className={cn("block h-2 rounded-full", pick ? "bg-primary/70" : "bg-muted-foreground/40")} style={{ width: `${Math.max(4, (count / max) * 100)}%` }} />
                 </span>

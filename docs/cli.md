@@ -343,13 +343,15 @@ Ending a session is not a revoke: the person can reconnect.
 telepy lan ls box                          # the LAN hosts Telepy knows behind a device
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # by id, address or label
-telepy lan scan box                        # scan its network (network:scan), wait, list with a WHAT column
+telepy lan scan box                        # scan its network (network:scan), wait, list with WHAT and NOTE columns
 telepy lan show box 192.168.1.20           # what each port showed: page title, server, certificate, banner
 ```
 
 Listing and `show` need `tunnels:read`; `scan` needs `network:scan` (add it with `telepy login --scope`). Adding and removing need `tunnels:manage`, which only API tokens can carry.
 
 By default a scan sends one `GET /` to every open web port (HTTPS ones also show their certificate) so it can tell a router from a NAS or a Proxmox host; those machines log it as a visit from the device with the user agent `Telepy-LAN-scan`. Every other port is only listened to. `--no-identify` turns the GET off.
+
+A scan also lists what the device itself listens on (one row, address `localhost`: services that only answer on the device's own loopback open from there too, and the silent ones get the same single `GET /`), marks the device's default gateway, and compares the result with the scan before. `lan scan` ends with a line such as `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`, and the table's NOTE column says `this device`, `gateway`, `new`, `+443 -80` or `not seen`. Only machines in the scanned networks are compared, and ports only where this scan probed them, so a shorter `--ports` list doesn't count as ports closing. `lan ls` starts with when the last scan ran, which networks and the gateway.
 
 ### A LAN web page in your own browser
 
@@ -413,7 +415,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy run <snippet> <target>` | Run a toolbox snippet; `--var name=value`, `-y`, `--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | The LAN hosts Telepy knows behind a device | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | Add a host by hand; `--label`, `--user`, `--port` | `tunnels:manage` |
-| `telepy lan scan <tunnel>` | Scan the device's network and list what was found, with what each machine is; `--subnet`, `--ports`, `--no-identify`, `--account`, `--json` | `network:scan` |
+| `telepy lan scan <tunnel>` | Scan the device's network and list what was found, with what each machine is and what changed since the scan before; `--subnet`, `--ports`, `--no-identify`, `--account`, `--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | What one host is and what each port showed | `tunnels:read` |
 | `telepy lan rm <tunnel> <host>` | Remove a host by id, address or label | `tunnels:manage` |
 | `telepy browse <target> [url]` | Open a scripted browser and print its id (same as `browse open`) | `browser:use` |

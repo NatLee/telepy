@@ -30,14 +30,39 @@ export interface LanHost {
     /** 連這台機器時預設的帳號。/ Default login on this machine. */
     username: string | null;
     ssh_port: number;
-    source: "scan" | "manual";
+    /** `self` = 裝置自己在聽的服務（位址 `localhost`）。/ `self` = the device's own listening services (address `localhost`). */
+    source: "scan" | "manual" | "self";
+    /** 裝置自己（同 `source === "self"`）。/ The device itself. */
+    own?: boolean;
+    /** 它是裝置的預設閘道。/ It is the device's default gateway. */
+    gateway?: boolean;
+    /** 上次掃描有掃它的網段、卻沒看到它。/ Its network was scanned last time but it wasn't seen. */
+    missing?: boolean;
+    /** 上次掃描跟前一次比，它變了什麼（沒變 = null）。/ What the last scan changed for it (null = nothing). */
+    since_last?: { new: boolean; opened: number[]; closed: number[] } | null;
     first_seen: string | null;
     last_seen: string | null;
     created_at: string;
 }
 
-/** connecting | networks | discovery | ports | names | done | failed */
-export type LanScanPhase = "connecting" | "networks" | "discovery" | "ports" | "names" | "done" | "failed";
+/** connecting | networks | discovery | ports | identify | names | self | done | failed */
+export type LanScanPhase = "connecting" | "networks" | "discovery" | "ports" | "identify" | "names" | "self" | "done" | "failed";
+
+/** 兩次掃描之間變了什麼。/ What changed between two scans. */
+export interface LanChanges {
+    new: string[];
+    gone: string[];
+    changed: { address: string; opened: number[]; closed: number[] }[];
+}
+
+/** 一條隧道最近一次掃描的整體結果。/ A tunnel's last scan as a whole. */
+export interface LanSummary {
+    networks: string[];
+    gateway: string | null;
+    scanned_at: string | null;
+    /** null = 還沒比過（舊的掃描）。/ null = not compared yet. */
+    changes: LanChanges | null;
+}
 
 export interface LanScan {
     scan_id: string;
@@ -52,6 +77,9 @@ export interface LanScan {
     total: number;
     hosts_found: number;
     error: string | null;
+    /** 跟前一次比變了什麼（做完才有）。/ What changed since the previous scan (once done). */
+    changes?: LanChanges | null;
+    gateway?: string | null;
 }
 
 export interface TopologyTunnel {
@@ -70,5 +98,7 @@ export interface TopologyTunnel {
     /** 裝置自己的位址（內網網卡、公網 IP），同隧道列表；不能登入裝置的人是 null。/ The device's own addresses, as on the tunnel list; null without an allowed account. */
     endpoint?: TunnelEndpoint | null;
     scan: LanScan | null;
+    /** 最近一次掃描（網段、閘道、時間、變化）；沒掃過 = null。/ The last scan; null when never scanned. */
+    lan?: LanSummary | null;
     hosts: LanHost[];
 }

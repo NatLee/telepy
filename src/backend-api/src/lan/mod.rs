@@ -10,6 +10,7 @@
 //! 這個檔案是純邏輯（解析與範圍計算）；執行在 `scan.rs`，HTTP 在 `api/lan.rs`，SQL 在 `db/lan.rs`。
 //! LAN discovery behind a tunnel's device, done entirely by the device's own sshd (no agent).
 
+pub mod device_self;
 pub mod fingerprint;
 pub mod identify;
 pub mod scan;

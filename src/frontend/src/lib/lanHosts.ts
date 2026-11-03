@@ -29,7 +29,27 @@ export function hostKind(h: Pick<LanHost, "open_ports" | "ssh_port" | "ssh_banne
     return "other";
 }
 
-type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen" | "identity" | "services">;
+type HostLike = Pick<LanHost, "id" | "tunnel_id" | "address" | "hostname" | "label" | "mac" | "vendor" | "ssh_banner" | "open_ports" | "ssh_port" | "last_seen" | "identity" | "services"> &
+    Partial<Pick<LanHost, "own" | "source" | "gateway" | "missing" | "since_last">>;
+
+/**
+ * `is:` 的值 → 這台主機符不符合：裝置自己（self / device / own）、閘道（gateway / router）、上次掃描新出現的（new）、
+ * 這次沒看到的（missing / gone / unseen）、port 有變的（changed / ports）。
+ * `is:` values: the device itself, the gateway, new in the last scan, not seen, ports changed.
+ */
+export const IS_KEYS: Record<string, (h: HostLike) => boolean> = {
+    self: (h) => h.own === true || h.source === "self",
+    device: (h) => h.own === true || h.source === "self",
+    own: (h) => h.own === true || h.source === "self",
+    gateway: (h) => h.gateway === true,
+    router: (h) => h.gateway === true,
+    new: (h) => h.since_last?.new === true,
+    missing: (h) => h.missing === true,
+    gone: (h) => h.missing === true,
+    unseen: (h) => h.missing === true,
+    changed: (h) => !!h.since_last && (h.since_last.opened.length > 0 || h.since_last.closed.length > 0),
+    ports: (h) => !!h.since_last && (h.since_last.opened.length > 0 || h.since_last.closed.length > 0),
+};
 type DeviceLike<H> = { id: number; name: string; hosts: H[] };
 
 export interface HostRow<H extends HostLike, D extends { id: number; name: string }> {
@@ -52,7 +72,7 @@ export function queryTerms(query: string): string[] {
 
 /**
  * 一台主機符不符合一個詞：純數字 = 開著的 port（完全相同）或位址的一部分；`port:N` 只比 port；`kind:x` 只比種類；
- * `type:x` 只比認出來的機器類型（router、nas…）；其他比名稱、位址、主機名稱、MAC、廠商、SSH banner、所在裝置、種類
+ * `type:x` 只比認出來的機器類型（router、nas…）；`is:x` 見 [`IS_KEYS`]；其他比名稱、位址、主機名稱、MAC、廠商、SSH banner、所在裝置、種類
  * （含翻譯後的種類名稱）與認出來的產品、網頁標題。
  * One word against one host: digits = an open port (exact) or part of the address; `port:N` ports only; `kind:x`
  * the kind only; anything else name, address, hostname, MAC, vendor, SSH banner, device and kind (incl. its
@@ -66,6 +86,8 @@ export function hostMatchesTerm(row: { host: HostLike; device: { name: string };
     if (kind) return row.kind === kind[1] || kindLabel(row.kind).toLowerCase().includes(kind[1]);
     const type = /^type:(.+)$/.exec(term);
     if (type) return deviceKind(host) === type[1];
+    const is = /^is:(.+)$/.exec(term);
+    if (is) return IS_KEYS[is[1]]?.(host) ?? false;
     if (/^\d{1,5}$/.test(term) && host.open_ports.includes(Number(term))) return true;
     const fields = [host.label, host.hostname, host.address, host.mac, host.vendor, host.ssh_banner, row.device.name, row.kind, kindLabel(row.kind), identityText(host)];
     return fields.some((v) => !!v && v.toLowerCase().includes(term));

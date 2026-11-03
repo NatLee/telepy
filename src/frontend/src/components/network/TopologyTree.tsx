@@ -14,7 +14,9 @@
  */
 import React, { useEffect, useRef } from "react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
-import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronRight, Folder, FolderOpen } from "lucide-react";
+import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronRight, Folder, FolderOpen, Cpu } from "lucide-react";
+import { ChangeText, ScanLine } from "@/components/network/ScanChanges";
+import { isOwn, splitOwn } from "@/lib/lanChanges";
 import { Pagination } from "@/components/ui/pagination";
 import { useSectionPages, type PaginationState } from "@/hooks/usePagination";
 import { pageSlice } from "@/lib/pagination";
@@ -81,6 +83,7 @@ export const PHASE_LABEL: Record<string, TranslationKey> = {
     ports: "network.phase.ports",
     identify: "network.phase.identify",
     names: "network.phase.names",
+    self: "network.phase.self",
     done: "network.phase.done",
     failed: "network.phase.failed",
 };
@@ -140,7 +143,9 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
         <div
             className={cn(
                 "group flex w-full flex-wrap items-start rounded-xl border transition-[background-color,box-shadow] hover:bg-card hover:shadow-card @3xl:w-80",
-                selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
+                selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface",
+                // 這次沒看到：虛線、淡一點（還能點開看它上次的樣子）。/ Not seen this time: dashed and faded (still opens).
+                host.missing && !selected && "border-dashed opacity-75"
             )}
         >
             <button
@@ -159,6 +164,7 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
                         {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
                     </span>
                     {what && <span className="block text-xs text-foreground/75 [overflow-wrap:anywhere]">{what}</span>}
+                    <ChangeText host={host} className="mt-0.5" />
                     {/* 位址、廠牌、port 放不下就換行，不截斷；port 整組一起換到下一行。/ Address, vendor and ports wrap rather than being cut; the ports move as one group. */}
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
                         {name !== host.address && <span className="font-mono [overflow-wrap:anywhere]">{host.address}</span>}
@@ -177,6 +183,47 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
             </button>
             {/* 有 SSH 的主機：直接開終端機（這裡 / 終端機頁）。/ SSH hosts: open a terminal right away (here / terminal page). */}
             {(ssh || web) && <HostQuickActions compact terminal={ssh} host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenWeb={actions.onOpenWeb} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="ml-auto pr-1 pt-1.5" />}
+        </div>
+    );
+}
+
+/**
+ * 裝置自己在聽的服務（位址 `localhost`）：裝置底下第一個分支，長得像主機但寫明是「這台裝置上」。
+ * The device's own listening services (address `localhost`): the first branch under the device, shaped like a host
+ * but labelled "on this device".
+ */
+function OwnChip({ host, tunnel, online, selected, actions }: { host: LanHost; tunnel: TopologyTunnel; online: boolean; selected: boolean; actions: HostActions }) {
+    const { t } = useI18n();
+    const shown = host.open_ports.slice(0, 6);
+    const more = host.open_ports.length - shown.length;
+    const web = hasWeb(host);
+    return (
+        <div
+            className={cn(
+                "group flex w-full flex-wrap items-start rounded-xl border transition-[background-color,box-shadow] hover:bg-card hover:shadow-card @3xl:w-80",
+                selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
+            )}
+        >
+            <button
+                type="button"
+                onClick={() => actions.onOpenHost(host)}
+                aria-current={selected ? "true" : undefined}
+                className="flex min-w-[10rem] flex-[1_1_10rem] items-start gap-3 rounded-xl py-2 pl-3 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+                <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-foreground ring-1 ring-inset ring-border [&_svg]:size-4" aria-hidden>
+                    <Cpu />
+                </span>
+                <span className="min-w-0 flex-1">
+                    <span className="block text-sm text-foreground">{t("network.own.chip")}</span>
+                    <span className="block text-xs text-foreground/75">{t("network.own.chipSub", { count: host.open_ports.length })}</span>
+                    <span className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                        <span className="font-mono">localhost</span>
+                        {shown.map((p) => <span key={p} className="rounded bg-muted px-1 font-mono text-[0.6875rem] leading-4">{p}</span>)}
+                        {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
+                    </span>
+                </span>
+            </button>
+            {web && <HostQuickActions compact terminal={false} host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenWeb={actions.onOpenWeb} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="ml-auto pr-1 pt-1.5" />}
         </div>
     );
 }
@@ -206,11 +253,12 @@ function ScanProgress({ tn }: { tn: TopologyTunnel }) {
     );
 }
 
-function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
+function DeviceCard({ tn, online, onScan, onAdd, onChanges, focused, onCollapse }: {
     tn: TopologyTunnel;
     online: boolean;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
+    onChanges: (tn: TopologyTunnel) => void;
     focused: boolean;
     onCollapse: () => void;
 }) {
@@ -238,7 +286,7 @@ function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}</span>
                         <span>·</span>
-                        <span>{t("network.hostCount", { count: tn.hosts.length })}</span>
+                        <span>{t("network.hostCount", { count: tn.hosts.filter((h) => !isOwn(h)).length })}</span>
                     </p>
                     {/* 裝置自己的位址：內網（網卡）與外網，點一下複製。/ The device's own addresses: LAN and public, click to copy. */}
                     {tn.endpoint && (
@@ -247,6 +295,7 @@ function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
                             <TunnelEndpointChip endpoint={tn.endpoint} />
                         </div>
                     )}
+                    <ScanLine tn={tn} onOpenChanges={onChanges} />
                 </div>
                 {permission && tn.permission !== "owner" && (
                     <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
@@ -339,14 +388,14 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
                 </span>
             ) : (
                 <span className="ml-auto self-center">
-                    <KindSummary hosts={tn.hosts} />
+                    <KindSummary hosts={tn.hosts.filter((h) => !isOwn(h))} />
                 </span>
             )}
         </button>
     );
 }
 
-function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, selectedHostId, hostPager, hostActions, onScan, onAdd }: {
+function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, selectedHostId, hostPager, hostActions, onScan, onAdd, onChanges }: {
     tn: TopologyTunnel;
     online: boolean;
     last: boolean;
@@ -359,14 +408,17 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
     hostActions: HostActions;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
+    onChanges: (tn: TopologyTunnel) => void;
 }) {
     const { t } = useI18n();
     const ref = useRef<HTMLDivElement>(null);
+    // 裝置自己那一列在最前面、不分頁；其他區網主機（閘道在前、沒看到的在後）分頁。/ The device's own row first and unpaged; LAN hosts page.
+    const { own, lan } = splitOwn(tn.hosts);
     useEffect(() => {
         if (focused) ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, [focused]);
     // 選到的主機在別頁時，跳到那一頁。/ Jump to the page holding the selected host.
-    const selectedAt = tn.hosts.findIndex((h) => h.id === selectedHostId);
+    const selectedAt = lan.findIndex((h) => h.id === selectedHostId);
     const { page, size, setPage } = hostPager;
     useEffect(() => {
         if (selectedAt >= 0 && Math.floor(selectedAt / size) + 1 !== page) setPage(Math.floor(selectedAt / size) + 1);
@@ -381,18 +433,23 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
             </Branch>
         );
     }
-    const hosts = pageSlice(tn.hosts, hostPager.page, hostPager.size);
-    const paged = tn.hosts.length > hostPager.size;
+    const hosts = pageSlice(lan, hostPager.page, hostPager.size);
+    const paged = lan.length > hostPager.size;
     return (
         <Branch last={last} first={first} tickTop={40} solid={online}>
             <div ref={ref} className="flex flex-col @3xl:flex-row @3xl:items-start">
-                <DeviceCard tn={tn} online={online} onScan={onScan} onAdd={onAdd} focused={focused} onCollapse={onToggle} />
+                <DeviceCard tn={tn} online={online} onScan={onScan} onAdd={onAdd} onChanges={onChanges} focused={focused} onCollapse={onToggle} />
                 {/* 裝置 → 主機的橫線（只在寬螢幕）。/ Device → hosts connector on wide screens. */}
                 <span aria-hidden className={cn("mt-8 hidden w-6 shrink-0 border-t @3xl:block", online ? "border-success/60" : "border-dashed border-muted-foreground/40")} />
                 {tn.hosts.length > 0 ? (
                     <ul data-refresh-list className="ml-2.5 @md:ml-5 @3xl:ml-0">
+                        {own && (
+                            <Branch last={hosts.length === 0 && !paged} first tickTop={32} solid={online} hideFirstStubOnWide>
+                                <OwnChip host={own} tunnel={tn} online={online} selected={own.id === selectedHostId} actions={hostActions} />
+                            </Branch>
+                        )}
                         {hosts.map((h, i) => (
-                            <Branch key={h.id} last={i === hosts.length - 1 && !paged} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
+                            <Branch key={h.id} last={i === hosts.length - 1 && !paged} first={i === 0 && !own} tickTop={32} solid={online} hideFirstStubOnWide>
                                 <HostChip host={h} tunnel={tn} online={online} selected={h.id === selectedHostId} actions={hostActions} />
                             </Branch>
                         ))}
@@ -456,7 +513,7 @@ export interface TopologyExpansion {
     toggleFolder: (key: string) => void;
 }
 
-export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion, isOnline, focusTunnel, selectedHostId = null, hostActions, onScan, onAdd }: {
+export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion, isOnline, focusTunnel, selectedHostId = null, hostActions, onScan, onAdd, onChanges }: {
     /** 篩選後的裝置（沒分段時用）。/ The filtered devices (used without sections). */
     tunnels: TopologyTunnel[];
     /** 依群組分段（null = 不分段）。/ Group sections (null = no sections). */
@@ -471,6 +528,8 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
     hostActions: HostActions;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
+    /** 打開「上次掃描變了什麼」。/ Open "what the last scan changed". */
+    onChanges: (tn: TopologyTunnel) => void;
 }) {
     const { t } = useI18n();
     // 裝置在每個資料夾（或整棵樹）裡分頁；主機在每台裝置裡分頁。/ Devices page per folder (or the whole tree); hosts per device.
@@ -494,10 +553,11 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
                         onToggle={() => expansion.toggle(tn.id)}
                         focused={focusTunnel === String(tn.id)}
                         selectedHostId={selectedHostId}
-                        hostPager={hostPages.pager(String(tn.id), tn.hosts.length)}
+                        hostPager={hostPages.pager(String(tn.id), tn.hosts.filter((h) => !isOwn(h)).length)}
                         hostActions={hostActions}
                         onScan={onScan}
                         onAdd={onAdd}
+                        onChanges={onChanges}
                     />
                 ))}
                 {paged && (
@@ -534,7 +594,7 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
                                       collapsed={collapsed}
                                       onToggle={() => expansion.toggleFolder(sec.key)}
                                       online={members.filter(isOnline).length}
-                                      hosts={members.reduce((n, tn) => n + tn.hosts.length, 0)}
+                                      hosts={members.reduce((n, tn) => n + tn.hosts.filter((h) => !isOwn(h)).length, 0)}
                                       filtering={filtering}
                                   />
                                   {!collapsed && <ul className="ml-2.5 @md:ml-5">{deviceList(members, sec.key)}</ul>}

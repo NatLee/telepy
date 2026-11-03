@@ -18,6 +18,7 @@ import type { ConnectTarget } from "@/lib/forwardRecipes";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import { hasSsh, scanRunning } from "@/lib/lanConnect";
 import { hostKind, hostMatches, queryTerms, type HostKind } from "@/lib/lanHosts";
+import { changeCounts, isOwn } from "@/lib/lanChanges";
 import type { LanHost, LanScan, TopologyTunnel } from "@/types/lan";
 
 /** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
@@ -114,7 +115,12 @@ export function useNetworkPage() {
             if (announced.current.has(scan.scan_id)) return;
             announced.current.add(scan.scan_id);
             if (scan.phase === "failed") showError(t("network.scanFailed", { name, error: scan.error ?? "" }));
-            else showSuccess(t("network.scanDone", { name, count: scan.hosts_found }));
+            else {
+                // 跟前一次比有變化就一起說。/ Mention what changed since the previous scan.
+                const c = changeCounts(scan.changes);
+                const done = t("network.scanDone", { name, count: scan.hosts_found });
+                showSuccess(c && c.total > 0 ? `${done} ${t("network.scanDoneChanges", { new: c.new, gone: c.gone, changed: c.changed })}` : done);
+            }
         },
         [showError, showSuccess, t]
     );
@@ -329,7 +335,8 @@ export function useNetworkPage() {
     }, [tunnels, q, t]);
 
     const stats = useMemo(() => {
-        const hosts = tunnels.flatMap((tn) => tn.hosts);
+        // 裝置自己在聽的服務不算一台區網主機。/ The device's own services aren't a LAN host.
+        const hosts = tunnels.flatMap((tn) => tn.hosts).filter((h) => !isOwn(h));
         return {
             devices: tunnels.length,
             online: tunnels.filter(isOnline).length,

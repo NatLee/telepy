@@ -343,13 +343,15 @@ telepy run "restart service" box --var svc=nginx   # -y で「先に確認」の
 telepy lan ls box                          # Telepy が把握している、デバイスの背後の LAN ホスト
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
 telepy lan rm box nas                      # ID、アドレス、ラベルのどれかで指定
-telepy lan scan box                        # ネットワークをスキャン（network:scan）。完了を待ち、WHAT 列付きで一覧
+telepy lan scan box                        # ネットワークをスキャン（network:scan）。完了を待ち、WHAT・NOTE 列付きで一覧
 telepy lan show box 192.168.1.20           # 各ポートで見えたもの：ページタイトル、サーバー、証明書、バナー
 ```
 
 一覧と `show` に必要なのは `tunnels:read` だけで、`scan` には `network:scan` が必要です（`telepy login --scope` で追加）。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
 
 スキャンは既定で、開いている Web ポートごとに `GET /` を 1 回送ります（HTTPS なら証明書も見ます）。これでルーター、NAS、Proxmox などを見分けます。相手のマシンのログには、デバイスから User-Agent `Telepy-LAN-scan` のアクセスが 1 件残ります。ほかのポートは聞くだけです。`--no-identify` で GET を送らなくなります。
+
+スキャンはデバイス自身が待ち受けているサービスも一覧にし（1 行、アドレスは `localhost`。デバイスの localhost でしか応答しないサービスもそこから開けます。最初に何も送ってこないポートには同じく `GET /` を 1 回だけ送ります）、デバイスのデフォルトゲートウェイに印を付け、その前のスキャンと比べます。`lan scan` の最後には `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).` のような行が出て、表の NOTE 列には `this device`、`gateway`、`new`、`+443 -80`、`not seen` が入ります。比べるのはスキャンしたネットワーク内のマシンだけで、ポートも今回調べたものだけなので、`--ports` を減らしても「閉じた」にはなりません。`lan ls` の先頭には前回のスキャンの日時、ネットワーク、ゲートウェイが出ます。
 
 ### LAN の Web ページを自分のブラウザーで
 
@@ -413,7 +415,7 @@ telepy browse close "$ID"
 | `telepy run <snippet> <target>` | ツールボックスのスニペットを実行。`--var name=value`、`-y`、`--timeout` | `ssh:exec` |
 | `telepy lan ls <tunnel>` | Telepy が把握している、デバイスの背後の LAN ホスト | `tunnels:read` |
 | `telepy lan add <tunnel> <address>` | ホストを手動で追加。`--label`、`--user`、`--port` | `tunnels:manage` |
-| `telepy lan scan <tunnel>` | デバイスのネットワークをスキャンし、見つかったものを各マシンの種類付きで一覧。`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
+| `telepy lan scan <tunnel>` | デバイスのネットワークをスキャンし、見つかったものを各マシンの種類とその前のスキャンからの変化付きで一覧。`--subnet`、`--ports`、`--no-identify`、`--account`、`--json` | `network:scan` |
 | `telepy lan show <tunnel> <host>` | 1 台のホストが何か、各ポートで何が見えたか | `tunnels:read` |
 | `telepy lan rm <tunnel> <host>` | ID、アドレス、ラベルでホストを削除 | `tunnels:manage` |
 | `telepy browse <target> [url]` | スクリプト用ブラウザーを開き、ID を表示（`browse open` と同じ） | `browser:use` |

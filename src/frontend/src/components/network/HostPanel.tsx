@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Trash2, Save, Loader2, X, ScreenShare, ChevronRight } from "lucide-react";
+import { Trash2, Save, Loader2, X, ScreenShare, ChevronRight, Cpu } from "lucide-react";
 import { Section } from "@/components/ui/section";
 import { SplitOpen, defaultDeviceUser, lanTerminalUrl } from "@/components/network/HostOpen";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -33,6 +33,8 @@ import type { ConnectTarget } from "@/lib/forwardRecipes";
 import { hasSsh, hostKind, hostName, isValidLogin } from "@/lib/lanConnect";
 import { hostIcon } from "@/components/network/TopologyTree";
 import { HostServices } from "@/components/network/HostServices";
+import { HostChangeNote } from "@/components/network/ScanChanges";
+import { isOwn } from "@/lib/lanChanges";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
@@ -107,7 +109,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
     const target = loaded && loaded.user === deviceUser ? loaded.target : null;
 
     const fmt = useMemo(() => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }), [locale]);
-    const name = hostName(host);
+    const own = isOwn(host);
+    const name = own ? t("network.own.title") : hostName(host);
     const cleanLogin = login.trim();
     const loginOk = isValidLogin(cleanLogin);
     const noDeviceUser = tunnel.usernames.length === 0;
@@ -171,11 +174,12 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             {/* 標題與分頁在面板內捲動時固定在上面。/ Title and tabs stay put while the panel scrolls. */}
             <div className="z-10 rounded-t-xl bg-card xl:sticky xl:top-0">
             <header className="flex items-start gap-3 border-b border-border p-4">
-                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-[17px]" aria-hidden>{hostIcon(host, hostKind(host)).icon}</span>
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-[17px]" aria-hidden>{own ? <Cpu /> : hostIcon(host, hostKind(host)).icon}</span>
                 <div className="min-w-0 flex-1">
                     <h2 className="text-lg leading-tight text-foreground [overflow-wrap:anywhere]">{name}</h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
-                        {t("network.hostOn", { address: host.ssh_port === 22 ? host.address : `${host.address}:${host.ssh_port}`, device: tunnel.name })}
+                        {own ? t("network.own.subtitle", { device: tunnel.name }) : t("network.hostOn", { address: host.ssh_port === 22 ? host.address : `${host.address}:${host.ssh_port}`, device: tunnel.name })}
+                        {host.gateway && ` · ${t("network.change.gateway")}`}
                     </p>
                 </div>
                 <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
@@ -191,6 +195,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                 {tab === "terminal" && (
                     <div className="space-y-4">
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
+                        <HostChangeNote host={host} />
                         {/* 這台機器上的服務：每個 port 一個最直接的用法。/ The services on this machine: each port's most direct use. */}
                         <HostPorts
                             host={host}
@@ -210,6 +215,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         />
                         {/* 終端機的登入設定（SSH 那一列與下面的按鈕都用它）。沒看到 SSH 的機器收成一行，要用再打開。
                             The terminal's login settings (used by the SSH row and the buttons below); folded to one line on machines without SSH. */}
+                        {!own && (
                         <details open={hasSsh(host) || undefined} className="group space-y-4 border-t border-border pt-4 [&[open]>summary]:mb-4">
                         <summary className="cursor-pointer list-none text-sm text-foreground marker:hidden [&::-webkit-details-marker]:hidden">
                             <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
@@ -246,6 +252,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         <p className="text-xs text-muted-foreground">{t("network.open.explain")}</p>
                         </div>
                         </details>
+                        )}
                         {mine.length > 0 && (
                             <div className="space-y-1.5">
                                 <p className="text-sm text-foreground">{t("network.openSessions")}</p>
@@ -271,8 +278,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                 {tab === "commands" && (
                     <div className="space-y-5">
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
-                        {loginFields}
-                        <LanCommands host={host} target={target} login={loginOk ? cleanLogin : ""} tunnelName={tunnel.name} />
+                        {!own && loginFields}
+                        <LanCommands host={host} target={target} login={loginOk ? cleanLogin : ""} tunnelName={tunnel.name} own={own} />
                     </div>
                 )}
 
@@ -296,7 +303,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                             ) : t("network.noOpenPorts")}
                         </Row>
                         {host.ssh_banner && <Row label={t("network.field.banner")}><span className="font-mono text-xs">{host.ssh_banner}</span></Row>}
-                        <Row label={t("network.field.source")}>{host.source === "scan" ? t("network.source.scan") : t("network.source.manual")}</Row>
+                        <Row label={t("network.field.source")}>{own ? t("network.source.self") : host.source === "scan" ? t("network.source.scan") : t("network.source.manual")}</Row>
                         {host.last_seen && <Row label={t("network.field.lastSeen")}>{fmt.format(new Date(host.last_seen))}</Row>}
                         {host.first_seen && <Row label={t("network.field.firstSeen")}>{fmt.format(new Date(host.first_seen))}</Row>}
                     </dl>
@@ -305,7 +312,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
 
                     {/* 可以編輯的人：同一頁下面編輯（原本的第四個分頁在窄面板裡被擠到看不到字）。
                         Editors edit below on the same tab (a fourth tab got squeezed past legibility in the narrow panel). */}
-                    {tunnel.can_edit && (
+                    {tunnel.can_edit && !own && (
                     <Section wrapTitle title={t("network.tab.edit")} className="border-t border-border pt-5">
                     <div className="space-y-4">
                         <div className="space-y-1.5">

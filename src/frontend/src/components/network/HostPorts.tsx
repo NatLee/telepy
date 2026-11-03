@@ -25,6 +25,7 @@ import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { forwardCommand, parseWebInput, shortUrl, type WebInputError } from "@/lib/lanWeb";
 import { serviceName } from "@/lib/lanConnect";
 import { desktopUrl, portRows, type PortRow } from "@/lib/lanPorts";
+import { isOwn } from "@/lib/lanChanges";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -104,6 +105,8 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
     const [tried, setTried] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     const [unfolded, setUnfolded] = useState<number | null>(null);
+    // 裝置自己：SSH = 裝置的終端機頁、桌面 = 裝置本身（不經區網那一跳）。/ The device itself: SSH = its terminal page, desktop = the device.
+    const own = isOwn(host);
     const rows = portRows(host, serviceName);
     const parsed = parseWebInput(host.address, other);
     const otherError = "error" in parsed && (tried || parsed.error !== "empty") ? t(INPUT_ERROR[parsed.error]) : null;
@@ -122,6 +125,15 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
     const action = (r: PortRow) => {
         switch (r.action.kind) {
             case "ssh":
+                if (own) {
+                    return (
+                        <Button size="sm" variant="outline" asChild>
+                            <Link href={getTerminalPageUrl(tunnel, { account: deviceUser ?? undefined })} prefetch={false} onClick={onNavigate} title={t("network.own.terminalHint")} {...(terminal.newTab ? { target: "_blank", rel: "noopener" } : {})}>
+                                <Terminal size={15} /> {t("network.own.terminal")} <ExternalLink size={13} className="text-muted-foreground" />
+                            </Link>
+                        </Button>
+                    );
+                }
                 return (
                     <div className="inline-flex shrink-0" role="group" aria-label={t("network.open.group")}>
                         <Button type="button" size="sm" onClick={terminal.onOpenHere} disabled={!!terminal.reason} title={terminal.reason ?? t("network.open.hereHint")} className="rounded-r-none">
@@ -143,7 +155,7 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
             case "desktop":
                 return has("remote_desktop") ? (
                     <Button size="sm" variant="outline" asChild>
-                        <Link href={desktopUrl(tunnel.id, host.id, r.action.protocol, r.port)} prefetch={false} onClick={onNavigate} title={t("network.ports.desktopHint")}>
+                        <Link href={desktopUrl(tunnel.id, own ? null : host.id, r.action.protocol, r.port)} prefetch={false} onClick={onNavigate} title={t("network.ports.desktopHint")}>
                             <ScreenShare size={15} /> {t("network.ports.desktop")}
                         </Link>
                     </Button>
@@ -162,7 +174,8 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
     return (
         <Section
             wrapTitle
-            title={t("network.ports.title")}
+            title={own ? t("network.own.portsTitle") : t("network.ports.title")}
+            description={own ? t("network.own.portsHint", { device: tunnel.name }) : undefined}
             action={
                 <Button variant="ghost" size="sm" onClick={() => setInfoOpen(true)} title={t("network.web.howTitle")} aria-label={t("network.web.howTitle")} className="px-2">
                     <Info size={15} /> <span className="hidden @md:inline">{t("network.web.how")}</span>
@@ -197,7 +210,7 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
                         ))}
                     </ul>
                 ) : (
-                    <p className="text-sm text-muted-foreground">{host.last_seen ? t("network.ports.noneSeen") : t("network.ports.noneKnown")}</p>
+                    <p className="text-sm text-muted-foreground">{own ? t("network.own.none") : host.last_seen ? t("network.ports.noneSeen") : t("network.ports.noneKnown")}</p>
                 )}
 
                 <form
