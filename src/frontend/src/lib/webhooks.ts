@@ -17,6 +17,8 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "tunnel.host_key_changed": { label: "webhooks.ev.tunnelHostKeyChanged", hint: "webhooks.ev.tunnelHostKeyChangedHint" },
     "device.claim_attempt": { label: "webhooks.ev.deviceClaimAttempt", hint: "webhooks.ev.deviceClaimAttemptHint" },
     "tunnel.device_warning": { label: "webhooks.ev.tunnelDeviceWarning", hint: "webhooks.ev.tunnelDeviceWarningHint" },
+    "lan.new_hosts": { label: "webhooks.ev.lanNewHosts", hint: "webhooks.ev.lanNewHostsHint" },
+    "lan.watched_host": { label: "webhooks.ev.lanWatchedHost", hint: "webhooks.ev.lanWatchedHostHint" },
     "share.received": { label: "webhooks.ev.shareReceived", hint: "webhooks.ev.shareReceivedHint" },
     "share.ended": { label: "webhooks.ev.shareEnded", hint: "webhooks.ev.shareEndedHint" },
     "access.requested": { label: "webhooks.ev.accessRequested", hint: "webhooks.ev.accessRequestedHint" },
@@ -39,10 +41,11 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "webhook.test": { label: "webhooks.ev.test", hint: "webhooks.ev.testHint" },
 };
 
-export const GROUP_ORDER: EventGroup[] = ["status", "device", "sharing", "commands", "sessions", "account", "keys", "admin"];
+export const GROUP_ORDER: EventGroup[] = ["status", "device", "network", "sharing", "commands", "sessions", "account", "keys", "admin"];
 export const GROUP_KEY: Record<EventGroup, TranslationKey> = {
     status: "webhooks.group.status",
     device: "webhooks.group.device",
+    network: "webhooks.group.network",
     sharing: "webhooks.group.sharing",
     commands: "webhooks.group.commands",
     sessions: "webhooks.group.sessions",
@@ -58,6 +61,7 @@ export const AUDIENCE_KEY: Record<EventAudience, TranslationKey> = {
     you: "webhooks.audience.you",
     agent_and_owner: "webhooks.audience.agentAndOwner",
     site: "webhooks.audience.site",
+    watchers: "webhooks.audience.watchers",
 };
 
 export const FORMATS: WebhookFormat[] = ["auto", "slack", "discord", "google_chat", "teams", "telegram", "ntfy", "json"];
@@ -135,7 +139,7 @@ export const PRESET_KEY: Record<PresetId, TranslationKey> = {
 };
 const PRESET_EVENTS: Record<Exclude<PresetId, "all">, string[]> = {
     status: ["tunnel.offline", "tunnel.online", "tunnel.degraded", "tunnel.recovered", "tunnel.device_warning"],
-    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_new_device", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
+    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "lan.new_hosts", "account.sign_in", "account.sign_in_new_device", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
     approvals: ["access.requested", "command.approval_requested"],
 };
 

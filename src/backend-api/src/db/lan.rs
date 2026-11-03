@@ -29,6 +29,8 @@ pub struct LanHost {
     pub source: String,
     pub first_seen: Option<String>,
     pub last_seen: Option<String>,
+    /// 最後一次有掃描探過它（整網段或「檢查這台」）。/ When a scan (full or a check) last covered it.
+    pub checked_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -93,7 +95,7 @@ pub async fn save_meta(db: &Db, m: &LanMeta) -> sqlx::Result<()> {
 }
 
 const T: &str = "telepy_lan_host";
-const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, created_at, updated_at";
+const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, checked_at, created_at, updated_at";
 
 pub async fn hosts_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<LanHost>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM {T} WHERE tunnel_id = ? ORDER BY id")).bind(tunnel_id).fetch_all(&db.read).await
@@ -146,6 +148,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;
     // 存給這台主機的登入一起刪。/ Saved logins for this host go too.
     sqlx::query("DELETE FROM telepy_credential WHERE lan_host_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_lan_watch WHERE host_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
     tx.commit().await
 }
@@ -215,3 +218,125 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found], now: &str)
     tx.commit().await?;
     Ok((inserted, updated))
 }
+
+/// 這些主機被這次掃描探過了（找到或沒找到都算）。/ These hosts were covered by this scan, found or not.
+pub async fn mark_checked(db: &Db, ids: &[i64], at: &str) -> sqlx::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.write.begin().await?;
+    for id in ids {
+        sqlx::query(&format!("UPDATE {T} SET checked_at = ? WHERE id = ?")).bind(at).bind(id).execute(&mut *tx).await?;
+    }
+    tx.commit().await
+}
+
+// ── 定時重掃 / Scheduled rescans ───────────────────────────────────────────
+
+#[derive(Debug, Clone, FromRow)]
+pub struct LanSchedule {
+    pub tunnel_id: i64,
+    /// 設定的人；掃描用他的身分與權限跑。/ Who set it; scans run as them.
+    pub user_id: i64,
+    pub every_secs: i64,
+    pub username: Option<String>,
+    /// JSON 陣列（CIDR）；null = 裝置自己的網段。/ JSON array of CIDRs; null = the device's own networks.
+    pub subnets: Option<String>,
+    /// JSON 陣列；null = 預設 port。/ JSON array; null = the default ports.
+    pub ports: Option<String>,
+    pub identify: bool,
+    pub next_at: String,
+    pub last_at: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl LanSchedule {
+    pub fn subnet_list(&self) -> Option<Vec<String>> {
+        self.subnets.as_deref().and_then(|s| serde_json::from_str(s).ok())
+    }
+    pub fn port_list(&self) -> Option<Vec<i64>> {
+        self.ports.as_deref().and_then(|s| serde_json::from_str(s).ok())
+    }
+}
+
+const SCHED: &str = "tunnel_id, user_id, every_secs, username, subnets, ports, identify, next_at, last_at, last_error, created_at, updated_at";
+
+pub async fn schedule(db: &Db, tunnel_id: i64) -> sqlx::Result<Option<LanSchedule>> {
+    sqlx::query_as(&format!("SELECT {SCHED} FROM telepy_lan_schedule WHERE tunnel_id = ?")).bind(tunnel_id).fetch_optional(&db.read).await
+}
+
+/// 到期的（`next_at` ≤ now）。/ The ones that are due.
+pub async fn due_schedules(db: &Db, now: &str) -> sqlx::Result<Vec<LanSchedule>> {
+    sqlx::query_as(&format!("SELECT {SCHED} FROM telepy_lan_schedule WHERE next_at <= ? ORDER BY next_at")).bind(now).fetch_all(&db.read).await
+}
+
+/// 新增或整組換掉（`last_at` / `last_error` 留著）。/ Insert or replace the settings (last run kept).
+pub async fn save_schedule(db: &Db, s: &LanSchedule) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO telepy_lan_schedule (tunnel_id, user_id, every_secs, username, subnets, ports, identify, next_at, last_at, last_error, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?) \
+         ON CONFLICT(tunnel_id) DO UPDATE SET user_id = excluded.user_id, every_secs = excluded.every_secs, username = excluded.username, subnets = excluded.subnets, \
+         ports = excluded.ports, identify = excluded.identify, next_at = excluded.next_at, updated_at = excluded.updated_at",
+    )
+    .bind(s.tunnel_id)
+    .bind(s.user_id)
+    .bind(s.every_secs)
+    .bind(&s.username)
+    .bind(&s.subnets)
+    .bind(&s.ports)
+    .bind(s.identify)
+    .bind(&s.next_at)
+    .bind(&s.created_at)
+    .bind(&s.updated_at)
+    .execute(&db.write)
+    .await?;
+    Ok(())
+}
+
+/// 跑完一次：下次時間、結果。/ After a run: the next time and how it went.
+pub async fn schedule_ran(db: &Db, tunnel_id: i64, at: &str, next_at: &str, error: Option<&str>) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_lan_schedule SET last_at = ?, next_at = ?, last_error = ? WHERE tunnel_id = ?").bind(at).bind(next_at).bind(error).bind(tunnel_id).execute(&db.write).await?;
+    Ok(())
+}
+
+/// 只把下次往後挪（裝置離線、有別的掃描在跑）。/ Only move the next run (device offline, another scan running).
+pub async fn postpone_schedule(db: &Db, tunnel_id: i64, next_at: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_lan_schedule SET next_at = ? WHERE tunnel_id = ?").bind(next_at).bind(tunnel_id).execute(&db.write).await?;
+    Ok(())
+}
+
+pub async fn delete_schedule(db: &Db, tunnel_id: i64) -> sqlx::Result<bool> {
+    Ok(sqlx::query("DELETE FROM telepy_lan_schedule WHERE tunnel_id = ?").bind(tunnel_id).execute(&db.write).await?.rows_affected() > 0)
+}
+
+// ── 注意的主機 / Watched hosts ─────────────────────────────────────────────
+
+pub async fn set_watch(db: &Db, user_id: i64, host_id: i64, on: bool) -> sqlx::Result<()> {
+    if on {
+        sqlx::query("INSERT OR IGNORE INTO telepy_lan_watch (user_id, host_id, created_at) VALUES (?, ?, ?)").bind(user_id).bind(host_id).bind(now_db()).execute(&db.write).await?;
+    } else {
+        sqlx::query("DELETE FROM telepy_lan_watch WHERE user_id = ? AND host_id = ?").bind(user_id).bind(host_id).execute(&db.write).await?;
+    }
+    Ok(())
+}
+
+/// 這個人在注意的主機（某條隧道的）。/ The hosts of a tunnel this person watches.
+pub async fn watched_by(db: &Db, user_id: i64, tunnel_id: i64) -> sqlx::Result<std::collections::HashSet<i64>> {
+    let rows: Vec<(i64,)> = sqlx::query_as(&format!("SELECT w.host_id FROM telepy_lan_watch w JOIN {T} h ON h.id = w.host_id WHERE w.user_id = ? AND h.tunnel_id = ?"))
+        .bind(user_id)
+        .bind(tunnel_id)
+        .fetch_all(&db.read)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// 一條隧道上每台被注意的主機 → 注意它的人。/ Each watched host of a tunnel → who watches it.
+pub async fn watchers(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<(i64, i64)>> {
+    sqlx::query_as(&format!("SELECT w.host_id, w.user_id FROM telepy_lan_watch w JOIN {T} h ON h.id = w.host_id WHERE h.tunnel_id = ? ORDER BY w.host_id, w.user_id"))
+        .bind(tunnel_id)
+        .fetch_all(&db.read)
+        .await
+}
+

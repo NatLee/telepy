@@ -251,6 +251,34 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // 定時重掃：每條隧道一組，照設定的人的身分、用存下來的參數。/ Scheduled rescans: one per tunnel, run as whoever set it.
+    (
+        "telepy_lan_schedule",
+        r#"CREATE TABLE "telepy_lan_schedule" (
+            "tunnel_id" integer NOT NULL PRIMARY KEY,
+            "user_id" integer NOT NULL,
+            "every_secs" integer NOT NULL,
+            "username" varchar(150) NULL,
+            "subnets" text NULL,
+            "ports" text NULL,
+            "identify" bool NOT NULL DEFAULT 1,
+            "next_at" datetime NOT NULL,
+            "last_at" datetime NULL,
+            "last_error" text NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // 有人在注意的區網主機（每人每台一列）：掃描發現它不見、回來或 port 變了就通知他。/ Hosts someone watches.
+    (
+        "telepy_lan_watch",
+        r#"CREATE TABLE "telepy_lan_watch" (
+            "user_id" integer NOT NULL,
+            "host_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "host_id")
+        )"#,
+    ),
     // 每條隧道最近一次區網掃描的整體結果：網段、預設閘道、什麼時候、跟前一次比變了什麼。/ A tunnel's last LAN scan as a whole.
     (
         "telepy_lan_meta",
@@ -1118,6 +1146,8 @@ const INDEXES: &[&str] = &[
 const COLUMNS: &[(&str, &str, &str)] = &[
     // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
+    // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.
+    ("telepy_lan_host", "checked_at", "datetime NULL"),
     // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
     ("telepy_device_install", "join_facts", "text NULL"),
     ("telepy_device_install", "join_facts_at", "datetime NULL"),

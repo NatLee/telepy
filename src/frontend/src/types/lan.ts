@@ -40,6 +40,10 @@ export interface LanHost {
     missing?: boolean;
     /** 上次掃描跟前一次比，它變了什麼（沒變 = null）。/ What the last scan changed for it (null = nothing). */
     since_last?: { new: boolean; opened: number[]; closed: number[] } | null;
+    /** 最後一次有掃描（整網段或「檢查這台」）探過它。/ When a scan (full or a check) last covered it. */
+    checked_at?: string | null;
+    /** 我有在注意它（掃描發現它不見、回來或 port 變了就通知我）。/ I watch it (told when it goes, comes back or changes ports). */
+    watched?: boolean;
     first_seen: string | null;
     last_seen: string | null;
     created_at: string;
@@ -80,6 +84,24 @@ export interface LanScan {
     /** 跟前一次比變了什麼（做完才有）。/ What changed since the previous scan (once done). */
     changes?: LanChanges | null;
     gateway?: string | null;
+    /** `manual` | `schedule` | `check`（只檢查一台）。/ What started it. */
+    trigger?: "manual" | "schedule" | "check";
+    /** `check` 檢查的主機。/ The host a check looks at. */
+    host_id?: number | null;
+}
+
+/** 定時重掃（每條隧道一組；照設定的人的身分跑）。/ A tunnel's scheduled rescan (runs as whoever set it). */
+export interface LanSchedule {
+    every_secs: number;
+    username: string | null;
+    subnets: string[] | null;
+    ports: number[] | null;
+    identify: boolean;
+    next_at: string;
+    last_at: string | null;
+    last_error: string | null;
+    by: string | null;
+    updated_at: string;
 }
 
 export interface TopologyTunnel {
@@ -100,5 +122,7 @@ export interface TopologyTunnel {
     scan: LanScan | null;
     /** 最近一次掃描（網段、閘道、時間、變化）；沒掃過 = null。/ The last scan; null when never scanned. */
     lan?: LanSummary | null;
+    /** 定時重掃；沒設 = null。/ The scheduled rescan; null when none. */
+    schedule?: LanSchedule | null;
     hosts: LanHost[];
 }

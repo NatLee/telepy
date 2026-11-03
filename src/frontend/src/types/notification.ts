@@ -49,6 +49,8 @@ export const NOTIFICATION_ACTIONS = {
     LAN_SCAN_PROGRESS: "LAN-SCAN-PROGRESS",
     LAN_SCAN_DONE: "LAN-SCAN-DONE",
     UPDATED_LAN_HOSTS: "UPDATED-LAN-HOSTS",
+    LAN_NEW_HOSTS: "LAN-NEW-HOSTS",
+    LAN_HOST_WATCH: "LAN-HOST-WATCH",
     // 一行指令加入裝置的進度（送給發指令的人）。/ One-command join progress (to the ticket owner).
     JOIN_UPDATED: "JOIN-UPDATED",
     // 有人從即時 session 頁結束了你的 session：{tunnel_id, kind, by}。/ Someone ended your session: {tunnel_id, kind, by}.

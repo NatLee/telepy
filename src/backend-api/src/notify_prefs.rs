@@ -76,6 +76,8 @@ pub fn channels(kind: Kind) -> &'static [Channel] {
         | Kind::TunnelHostKeyChanged
         | Kind::DeviceClaimAttempt
         | Kind::DeviceWarning
+        | Kind::LanNewHosts
+        | Kind::LanWatchedHost
         | Kind::ShareReceived
         | Kind::ShareEnded
         | Kind::AccessRequested

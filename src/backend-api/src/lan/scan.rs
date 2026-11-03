@@ -62,6 +62,10 @@ pub struct ScanStatus {
     pub changes: Option<Changes>,
     /// 裝置的預設閘道（看得到的話）。/ The device's default gateway, when it could be read.
     pub gateway: Option<String>,
+    /// `manual` | `schedule` | `check`（只檢查一台）。/ `manual` | `schedule` | `check` (one host only).
+    pub trigger: &'static str,
+    /// `check` 檢查的是哪台。/ The host a `check` looks at.
+    pub host_id: Option<i64>,
 }
 
 impl ScanStatus {
@@ -81,12 +85,12 @@ impl LanScans {
         self.status.get(&tunnel_id).map(|s| s.clone())
     }
     /// 開始一個掃描（同一條隧道已有進行中的就拒絕）。/ Start a scan unless one is running for the tunnel.
-    pub fn begin(&self, tunnel_id: i64, user: &User, ports: &[u16]) -> Result<ScanStatus, ScanStatus> {
+    pub fn begin(&self, tunnel_id: i64, user: &User, ports: &[u16], trigger: Trigger) -> Result<ScanStatus, ScanStatus> {
         let mut entry = self.status.entry(tunnel_id).or_insert_with(|| blank(tunnel_id, user, ports));
         if entry.running() && !entry.scan_id.is_empty() {
             return Err(entry.clone());
         }
-        *entry = ScanStatus { scan_id: crate::util::uuid_hex(), ..blank(tunnel_id, user, ports) };
+        *entry = ScanStatus { scan_id: crate::util::uuid_hex(), trigger: trigger.as_str(), host_id: trigger.host(), ..blank(tunnel_id, user, ports) };
         Ok(entry.clone())
     }
     fn update(&self, tunnel_id: i64, f: impl FnOnce(&mut ScanStatus)) -> Option<ScanStatus> {
@@ -113,6 +117,8 @@ fn blank(tunnel_id: i64, user: &User, ports: &[u16]) -> ScanStatus {
         error: None,
         changes: None,
         gateway: None,
+        trigger: "manual",
+        host_id: None,
     }
 }
 
@@ -128,6 +134,35 @@ pub struct ScanRequest {
     pub identify: bool,
     /// 使用者自己加的 port（不在預設清單裡的）：沒先說話的也試一個 GET。/ Ports the person added beyond the default list: silent ones get a GET too.
     pub listed: Vec<u16>,
+    pub trigger: Trigger,
+}
+
+/// 誰叫這次掃描的。/ What started this scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    /// 有人按了掃描（網頁、CLI、MCP）。/ Someone asked (web, CLI, MCP).
+    Manual,
+    /// 定時重掃（`lan::schedule`）。/ A scheduled rescan.
+    Schedule,
+    /// 只檢查一台主機（它的 /32、它的 port）：不改網段的整體結果，也不看裝置自己。/ One host only (its /32 and ports):
+    /// the network summary stays as it was and the device itself isn't looked at.
+    Check(i64),
+}
+
+impl Trigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Trigger::Manual => "manual",
+            Trigger::Schedule => "schedule",
+            Trigger::Check(_) => "check",
+        }
+    }
+    pub fn host(self) -> Option<i64> {
+        match self {
+            Trigger::Check(id) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,12 +289,10 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
             // 「新的」= 清單裡完全沒有的位址（手動加過、第一次被掃到的不算新）。
             // Before vs after, within this scan's networks only: "seen before" = any host but the device itself that a
             // scan has seen; "new" = an address the list doesn't have at all (a manual host seen for the first time isn't).
-            let listed: Vec<db::lan::LanHost> = db::lan::hosts_for_tunnel(&state.db, tunnel_id)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|h| h.source != "self" && h.address.parse::<Ipv4Addr>().is_ok_and(|ip| r.networks.iter().any(|n| n.contains(ip))))
-                .collect();
+            let in_scan = |h: &db::lan::LanHost| h.source != "self" && h.address.parse::<Ipv4Addr>().is_ok_and(|ip| r.networks.iter().any(|n| n.contains(ip)));
+            let listed: Vec<db::lan::LanHost> = db::lan::hosts_for_tunnel(&state.db, tunnel_id).await.unwrap_or_default().into_iter().filter(|h| in_scan(h)).collect();
+            let meta_before = db::lan::meta(&state.db, tunnel_id).await.ok().flatten();
+            let check = req.trigger.host();
             let before: BTreeMap<String, Vec<u16>> = listed
                 .iter()
                 .filter(|h| h.last_seen.is_some())
@@ -273,16 +306,26 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
             let at = now_db();
             match db::lan::upsert_scanned(&state.db, tunnel_id, &r.found, &at).await {
                 Ok((i, u)) => {
-                    let meta = db::lan::LanMeta {
-                        tunnel_id,
-                        networks: serde_json::to_string(&r.networks.iter().map(Network::cidr).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into()),
-                        gateway: gateway.clone(),
-                        scanned_at: Some(at.clone()),
-                        changes: serde_json::to_string(&c).ok(),
-                    };
-                    if let Err(e) = db::lan::save_meta(&state.db, &meta).await {
-                        tracing::warn!(tunnel_id, error = %e, "could not save the scan summary");
+                    // 這次探過的每台（找到或沒找到）記下時間：之後 `last_seen` 比它早 = 這次沒看到。
+                    // Every host this scan covered, found or not: a `last_seen` older than this = not seen this time.
+                    let covered: Vec<i64> = db::lan::hosts_for_tunnel(&state.db, tunnel_id).await.unwrap_or_default().iter().filter(|h| in_scan(h)).map(|h| h.id).collect();
+                    if let Err(e) = db::lan::mark_checked(&state.db, &covered, &at).await {
+                        tracing::warn!(tunnel_id, error = %e, "could not record which hosts were covered");
                     }
+                    // 「檢查這台」不改網段的整體結果。/ A single-host check leaves the network summary alone.
+                    if check.is_none() {
+                        let meta = db::lan::LanMeta {
+                            tunnel_id,
+                            networks: serde_json::to_string(&r.networks.iter().map(Network::cidr).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into()),
+                            gateway: gateway.clone(),
+                            scanned_at: Some(at.clone()),
+                            changes: serde_json::to_string(&c).ok(),
+                        };
+                        if let Err(e) = db::lan::save_meta(&state.db, &meta).await {
+                            tracing::warn!(tunnel_id, error = %e, "could not save the scan summary");
+                        }
+                    }
+                    announce(&state, &req.tunnel, &listed, meta_before.as_ref(), &c, &after, check.is_none()).await;
                     changed = Some(c);
                     (i, u, None)
                 }
@@ -302,9 +345,14 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
         })
         .unwrap_or_else(|| blank(tunnel_id, &req.user, &req.ports));
     let secs = started.elapsed().as_secs_f64();
+    let what = match req.trigger {
+        Trigger::Manual => "LAN scan",
+        Trigger::Schedule => "Scheduled LAN scan",
+        Trigger::Check(_) => "LAN check",
+    };
     let message = match &error {
         None => format!(
-            "LAN scan of {} (ports {}) by {}: {} host(s), {} new, {} gone, {} with port changes, in {secs:.1} s",
+            "{what} of {} (ports {}) by {}: {} host(s), {} new, {} gone, {} with port changes, in {secs:.1} s",
             if status.networks.is_empty() { "-".to_string() } else { status.networks.join(", ") },
             req.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(","),
             req.user.username,
@@ -313,13 +361,13 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
             changed.as_ref().map_or(0, |c| c.gone.len()),
             changed.as_ref().map_or(0, |c| c.changed.len()),
         ),
-        Some(e) => format!("LAN scan by {} failed: {e}", req.user.username),
+        Some(e) => format!("{what} by {} failed: {e}", req.user.username),
     };
     state.gateway.event("lan_scan", None, None, Some(tunnel_id), message).await;
     tracing::info!(tunnel_id, user = %req.user.username, hosts = status.hosts_found, inserted, error = ?error, "LAN scan finished");
     state.hub.notify_user(
         req.user.id,
-        &json!({ "action": "LAN-SCAN-DONE", "tunnel_id": tunnel_id, "hosts_found": status.hosts_found, "inserted": inserted, "gone": changed.as_ref().map_or(0, |c| c.gone.len()), "changed": changed.as_ref().map_or(0, |c| c.changed.len()), "error": error, "details": format!("LAN scan of '{}' finished", req.tunnel.host_friendly_name) }),
+        &json!({ "action": "LAN-SCAN-DONE", "tunnel_id": tunnel_id, "trigger": req.trigger.as_str(), "host_id": req.trigger.host(), "hosts_found": status.hosts_found, "inserted": inserted, "gone": changed.as_ref().map_or(0, |c| c.gone.len()), "changed": changed.as_ref().map_or(0, |c| c.changed.len()), "error": error, "details": format!("LAN scan of '{}' finished", req.tunnel.host_friendly_name) }),
     );
     if error.is_none() {
         if let Ok(audience) = crate::api::notify::tunnel_audience(&state, &req.tunnel).await {
@@ -327,6 +375,76 @@ pub async fn execute(state: AppState, req: ScanRequest) -> ScanSummary {
         }
     }
     ScanSummary { status, inserted, updated }
+}
+
+/// 一台主機給人看的名字：標籤 > 主機名稱 > 位址。/ A host's display name.
+fn host_name(h: &db::lan::LanHost) -> String {
+    h.label.clone().or_else(|| h.hostname.clone()).unwrap_or_else(|| h.address.clone())
+}
+
+/// 存好之後要說的：網段上出現新機器（整網段掃描、而且之前掃過，才不會第一次就全部算新的）→ owner 與 ADMIN；被注意的
+/// 主機不見了 / 回來了 / port 變了 → 注意它、而且還看得到這條隧道的人。站內通知、webhook（推播跟著 webhook 走）。
+/// What to tell after saving: new machines on the network (full scans only, and only after an earlier scan, so the first
+/// one doesn't call everything new) → the owner and ADMIN sharees; a watched host down / back / ports changed → whoever
+/// watches it and can still see the tunnel. In-app notifications and webhooks (pushes follow the webhooks).
+async fn announce(state: &AppState, tunnel: &Tunnel, before: &[db::lan::LanHost], meta_before: Option<&db::lan::LanMeta>, c: &Changes, after: &BTreeMap<String, Vec<u16>>, full: bool) {
+    let link = format!("/tunnels/network?tunnel={}", tunnel.id);
+    if full && meta_before.is_some() && !c.new.is_empty() {
+        let hosts = db::lan::hosts_for_tunnel(&state.db, tunnel.id).await.unwrap_or_default();
+        let new: Vec<serde_json::Value> = c
+            .new
+            .iter()
+            .map(|a| {
+                let h = hosts.iter().find(|h| &h.address == a);
+                json!({ "id": h.map(|h| h.id), "address": a, "name": h.map(host_name).unwrap_or_else(|| a.clone()) })
+            })
+            .collect();
+        let mut managers = vec![tunnel.user_id];
+        managers.extend(db::sharing::admin_sharee_ids(&state.db, tunnel.id).await.unwrap_or_default());
+        let shown: Vec<&str> = c.new.iter().take(8).map(String::as_str).collect();
+        let more = if c.new.len() > 8 { format!(" +{} more", c.new.len() - 8) } else { String::new() };
+        state.gateway.event("lan_new_hosts", None, None, Some(tunnel.id), format!("{} new machine(s) on the network of {}: {}{more}", c.new.len(), tunnel.host_friendly_name, shown.join(", "))).await;
+        state.webhooks.emit(
+            crate::webhooks::Event::new(crate::webhooks::Kind::LanNewHosts)
+                .tunnel(tunnel)
+                .to(managers.clone(), None)
+                .link(link.clone())
+                .data(json!({ "count": c.new.len(), "hosts": new })),
+        );
+        state.hub.notify_users(managers, &json!({ "action": "LAN-NEW-HOSTS", "tunnel_id": tunnel.id, "tunnel_name": tunnel.host_friendly_name, "count": c.new.len(), "hosts": new }));
+    }
+    let watchers = db::lan::watchers(&state.db, tunnel.id).await.unwrap_or_default();
+    if watchers.is_empty() {
+        return;
+    }
+    for h in before {
+        let users: Vec<i64> = watchers.iter().filter(|(hid, _)| *hid == h.id).map(|(_, u)| *u).collect();
+        if users.is_empty() {
+            continue;
+        }
+        let was_up = super::watch::was_seen(h.last_seen.as_deref(), h.checked_at.as_deref(), meta_before.and_then(|m| m.scanned_at.as_deref()));
+        let now_up = after.contains_key(&h.address);
+        let delta = c.changed.iter().find(|x| x.address == h.address);
+        let (opened, closed) = delta.map_or((vec![], vec![]), |d| (d.opened.clone(), d.closed.clone()));
+        let Some(st) = super::watch::transition(was_up, now_up, &opened, &closed) else { continue };
+        // 只告訴還看得到這條隧道的人。/ Only people who can still see the tunnel.
+        let mut to = Vec::new();
+        for u in users {
+            if crate::permissions::effective_for(&state.db, u, tunnel).await.ok().flatten().is_some() {
+                to.push(u);
+            }
+        }
+        if to.is_empty() {
+            continue;
+        }
+        let data = json!({ "host_id": h.id, "host": host_name(h), "address": h.address, "state": st.as_str(), "opened": opened, "closed": closed });
+        state.webhooks.emit(crate::webhooks::Event::new(crate::webhooks::Kind::LanWatchedHost).tunnel(tunnel).to(to.clone(), None).link(link.clone()).data(data.clone()));
+        let mut msg = json!({ "action": "LAN-HOST-WATCH", "tunnel_id": tunnel.id, "tunnel_name": tunnel.host_friendly_name });
+        if let (Some(m), Some(d)) = (msg.as_object_mut(), data.as_object()) {
+            m.extend(d.clone());
+        }
+        state.hub.notify_users(to, &msg);
+    }
 }
 
 fn progress(state: &AppState, req: &ScanRequest, f: impl FnOnce(&mut ScanStatus)) {
@@ -454,8 +572,10 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<ScanResult, String> 
     let macs: BTreeMap<Ipv4Addr, Option<String>> = neighbours.into_iter().filter(|n| target_set.contains(&n.ip)).map(|n| (n.ip, n.mac)).collect();
     let live: Vec<Ipv4Addr> = open.keys().chain(macs.keys()).copied().collect::<BTreeSet<_>>().into_iter().collect();
 
-    // 3) 只對活主機探測其餘 port。/ The remaining ports, on live hosts only.
-    let rest: Vec<(Ipv4Addr, u16)> = live.iter().flat_map(|ip| req.ports.iter().skip(1).map(move |p| (*ip, *p))).collect();
+    // 3) 只對活主機探測其餘 port；只掃一個位址（「檢查這台」）時每個 port 都試，不靠第一個 port 開著。
+    // The remaining ports, on live hosts only; a single address ("check this host") gets every port regardless.
+    let probe_on: Vec<Ipv4Addr> = if addresses.len() == 1 { addresses.clone() } else { live.clone() };
+    let rest: Vec<(Ipv4Addr, u16)> = probe_on.iter().flat_map(|ip| req.ports.iter().skip(1).map(move |p| (*ip, *p))).collect();
     progress(state, req, |s| {
         s.phase = "ports".into();
         s.probed = 0;
@@ -561,10 +681,12 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<ScanResult, String> 
         .collect();
     progress(state, req, |s| s.hosts_found = found.len());
     // 5) 裝置自己在聽什麼（本機 loopback）。/ What the device itself listens on (its loopback).
-    progress(state, req, |s| s.phase = "self".into());
     let mut found = found;
-    if let Some(own) = own_services(handle, req.identify).await {
-        found.push(own);
+    if req.trigger.host().is_none() {
+        progress(state, req, |s| s.phase = "self".into());
+        if let Some(own) = own_services(handle, req.identify).await {
+            found.push(own);
+        }
     }
     Ok(ScanResult { found, networks, gateway })
 }
@@ -592,12 +714,12 @@ mod tests {
     #[test]
     fn one_scan_per_tunnel() {
         let scans = LanScans::default();
-        let first = scans.begin(7, &user(), &[22]).unwrap();
+        let first = scans.begin(7, &user(), &[22], Trigger::Manual).unwrap();
         assert!(first.running() && !first.scan_id.is_empty());
-        assert_eq!(scans.begin(7, &user(), &[22]).unwrap_err().scan_id, first.scan_id, "a running scan blocks another");
-        assert!(scans.begin(8, &user(), &[22]).is_ok(), "per tunnel");
+        assert_eq!(scans.begin(7, &user(), &[22], Trigger::Manual).unwrap_err().scan_id, first.scan_id, "a running scan blocks another");
+        assert!(scans.begin(8, &user(), &[22], Trigger::Manual).is_ok(), "per tunnel");
         scans.update(7, |s| s.phase = "done".into());
-        let second = scans.begin(7, &user(), &[80]).unwrap();
+        let second = scans.begin(7, &user(), &[80], Trigger::Manual).unwrap();
         assert_ne!(second.scan_id, first.scan_id, "a finished scan can be followed by a new one");
         assert_eq!(second.ports, vec![80]);
     }

@@ -15,7 +15,7 @@
 import React, { useEffect, useRef } from "react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronRight, Folder, FolderOpen, Cpu } from "lucide-react";
-import { ChangeText, ScanLine } from "@/components/network/ScanChanges";
+import { ChangeText, ScanLine, ScheduleLine } from "@/components/network/ScanChanges";
 import { isOwn, splitOwn } from "@/lib/lanChanges";
 import { Pagination } from "@/components/ui/pagination";
 import { useSectionPages, type PaginationState } from "@/hooks/usePagination";
@@ -256,7 +256,7 @@ function ScanProgress({ tn }: { tn: TopologyTunnel }) {
 function DeviceCard({ tn, online, onScan, onAdd, onChanges, focused, onCollapse }: {
     tn: TopologyTunnel;
     online: boolean;
-    onScan: (tn: TopologyTunnel) => void;
+    onScan: (tn: TopologyTunnel, schedule?: boolean) => void;
     onAdd: (tn: TopologyTunnel) => void;
     onChanges: (tn: TopologyTunnel) => void;
     focused: boolean;
@@ -296,6 +296,7 @@ function DeviceCard({ tn, online, onScan, onAdd, onChanges, focused, onCollapse 
                         </div>
                     )}
                     <ScanLine tn={tn} onOpenChanges={onChanges} />
+                    <ScheduleLine tn={tn} onOpen={tn.can_scan ? () => onScan(tn, true) : undefined} />
                 </div>
                 {permission && tn.permission !== "owner" && (
                     <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
@@ -406,7 +407,7 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
     selectedHostId: number | null;
     hostPager: PaginationState;
     hostActions: HostActions;
-    onScan: (tn: TopologyTunnel) => void;
+    onScan: (tn: TopologyTunnel, schedule?: boolean) => void;
     onAdd: (tn: TopologyTunnel) => void;
     onChanges: (tn: TopologyTunnel) => void;
 }) {
@@ -526,7 +527,7 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
     focusTunnel: string | null;
     selectedHostId?: number | null;
     hostActions: HostActions;
-    onScan: (tn: TopologyTunnel) => void;
+    onScan: (tn: TopologyTunnel, schedule?: boolean) => void;
     onAdd: (tn: TopologyTunnel) => void;
     /** 打開「上次掃描變了什麼」。/ Open "what the last scan changed". */
     onChanges: (tn: TopologyTunnel) => void;

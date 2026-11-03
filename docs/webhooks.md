@@ -60,6 +60,8 @@ The last column marks the curated set that site-wide webhooks can subscribe to.
 | `tunnel.host_key_changed` | Device identity | The owner and all sharees | ✓ |
 | `device.claim_attempt` | Device identity | The owner and ADMIN sharees | ✓ |
 | `tunnel.device_warning` | Device identity | The owner and ADMIN sharees | ✓ |
+| `lan.new_hosts` | Network | The owner and ADMIN sharees | ✓ |
+| `lan.watched_host` | Network | Whoever watches that machine | — |
 | `share.received` | Sharing and access | The person it was shared with | |
 | `share.ended` | Sharing and access | Both sides of the share, except whoever ended it | |
 | `access.requested` | Sharing and access | The owner and ADMINs, except the requester | |
@@ -82,6 +84,7 @@ The last column marks the curated set that site-wide webhooks can subscribe to.
 
 A few events need a word more:
 
+- **LAN** (`lan.new_hosts`, `lan.watched_host`): after a scan of a device's network (by hand, scheduled, or a check of one machine) Telepy compares it with what it knew. `lan.new_hosts` = addresses the host list didn't have, from scans of the whole network only and never on a network's first scan; `data` has `count` and `hosts [{id, address, name}]`. `lan.watched_host` goes to people who watch that machine (the Network page's bell, `telepy lan watch`) and can still see the tunnel, when it wasn't seen, came back, or opened or closed ports; `data` has `host_id`, `host`, `address`, `state` (`down` / `up` / `ports`), `opened`, `closed`. Both link to the Network page.
 - **Device warnings** (`tunnel.device_warning`): the root disk has under 10 % or 2 GB free, available memory is under 10 %, the 1-minute load is above twice the CPU count, or a reboot is pending. At most once a day per tunnel and kind. `data` has `warning`, `detail`, `avail`, `total`, `load1` and `cpus`.
 - **Approval requests** (`command.approval_requested`): go to the people the rule names, otherwise to the owner and ADMINs. Not sent for commands you type in your own terminal, but sent for commands from your own MCP agent.
 - **Watching** (`session.watched`): the owner, an ADMIN or an admin started watching your web terminal. `data` has `by`, `account` and `lan_host`.

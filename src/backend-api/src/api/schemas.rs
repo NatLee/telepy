@@ -2892,10 +2892,56 @@ pub struct LanHost {
     pub username: Option<String>,
     pub ssh_port: i64,
     /// `scan` or `manual`
+    /// `scan` | `manual` | `self` (what the device itself listens on, address `localhost`)
     pub source: String,
     pub first_seen: Option<String>,
     pub last_seen: Option<String>,
+    /// When a scan (of its network, or a check of this host) last covered it
+    pub checked_at: Option<String>,
+    /// The device's own listening services (`source = self`)
+    pub own: bool,
+    /// The device's default gateway
+    pub gateway: bool,
+    /// A scan covered it after it was last seen
+    pub missing: bool,
+    /// What the last scan of its network changed for it: `{new, opened, closed}`; null = nothing
+    #[schema(value_type = Option<Object>)]
+    pub since_last: Option<serde_json::Value>,
+    /// You watch it: scans that find it gone, back or with other ports tell you
+    pub watched: bool,
     pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanSchedule {
+    /// One of 3600, 21600, 43200, 86400, 604800
+    #[schema(example = 21600)]
+    pub every_secs: i64,
+    /// The device account the scans use
+    pub username: Option<String>,
+    /// null = the device's own networks
+    pub subnets: Option<Vec<String>>,
+    /// null = the default ports
+    pub ports: Option<Vec<i64>>,
+    pub identify: bool,
+    pub next_at: String,
+    pub last_at: Option<String>,
+    pub last_error: Option<String>,
+    /// Who set it (scans run as them, with their permission checked every time)
+    pub by: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanScheduleInput {
+    /// One of 3600, 21600, 43200, 86400, 604800
+    #[schema(example = 21600)]
+    pub every_secs: i64,
+    pub username: Option<String>,
+    pub subnets: Option<Vec<String>>,
+    pub ports: Option<Vec<i64>>,
+    /// Default true
+    pub identify: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -2914,7 +2960,7 @@ pub struct LanScanStatus {
     pub started_by: String,
     pub started_at: String,
     pub finished_at: Option<String>,
-    /// connecting | networks | discovery | ports | names | done | failed
+    /// connecting | networks | discovery | ports | identify | names | self | done | failed
     pub phase: String,
     #[schema(example = json!(["192.168.1.0/24"]))]
     pub networks: Vec<String>,
@@ -2923,12 +2969,24 @@ pub struct LanScanStatus {
     pub total: i64,
     pub hosts_found: i64,
     pub error: Option<String>,
+    /// What changed since the previous scan, once done: `{new, gone, changed [{address, opened, closed}]}`
+    #[schema(value_type = Option<Object>)]
+    pub changes: Option<serde_json::Value>,
+    pub gateway: Option<String>,
+    /// `manual` | `schedule` | `check`
+    pub trigger: String,
+    /// The host a `check` looks at
+    pub host_id: Option<i64>,
 }
 
 #[derive(ToSchema)]
 pub struct LanHostList {
     pub hosts: Vec<LanHost>,
     pub scan: Option<LanScanStatus>,
+    /// The last scan of the networks: `{networks, gateway, scanned_at, changes}`
+    #[schema(value_type = Option<Object>)]
+    pub lan: Option<serde_json::Value>,
+    pub schedule: Option<LanSchedule>,
     /// The site switch is on and the user owns the tunnel or has ADMIN
     pub can_scan: bool,
     /// The user may add / edit / remove hosts (EDIT)

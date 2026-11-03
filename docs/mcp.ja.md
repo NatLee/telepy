@@ -94,7 +94,7 @@ MCP client ── POST /mcp ─────────────────�
 | `tunnels:read` | トンネルの閲覧 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
 | `ssh:exec` | デバイスでコマンドを実行 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
 | `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
-| `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`（自分が所有する、または ADMIN のトンネルのみ） |
+| `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`（自分が所有する、または ADMIN のトンネルのみ） |
 | `browser:use` | デバイスとして Web を閲覧 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 承認ページでは、`ssh:exec`、`ssh:files`、`browser:use` に「変更可能」、残りの 2 つに「読み取りのみ」のタグが付きます。
@@ -121,7 +121,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- |
 | `list_tunnels` | 見えるトンネル：id、名前、オンラインかどうか、レイテンシ、自分の権限、使えるターゲットの username、このアプリが開いているセッション |
 | `tunnel_status(tunnel_id)` | 健全性、レイテンシ、24 時間の稼働率、デバイスの `facts` と `warnings`、直近 10 件のゲートウェイイベント |
-| `lan_hosts(tunnel_id)` | デバイスの背後の LAN ホスト（スキャンで見つかったものと手動で追加したもの）：アドレス、名前、開いているポート、SSH バナー、ラベル、ログインアカウント、`web`（各 Web ポートとその URL。同じトンネルの `browser_open` にそのまま渡せる）、`services` と `identity`（前回のスキャンで識別したもの）、`own`（デバイス自身が待ち受けているサービスの行。アドレスは `localhost`）、`gateway`、`missing`（前回そのネットワークをスキャンしたときに見えなかった）、`since_last`（新規、開いた・閉じたポート）。さらに `lan` = 前回のスキャンのネットワーク、ゲートウェイ、その前のスキャンからの変化 |
+| `lan_hosts(tunnel_id)` | デバイスの背後の LAN ホスト（スキャンで見つかったものと手動で追加したもの）：アドレス、名前、開いているポート、SSH バナー、ラベル、ログインアカウント、`web`（各 Web ポートとその URL。同じトンネルの `browser_open` にそのまま渡せる）、`services` と `identity`（前回のスキャンで識別したもの）、`own`（デバイス自身が待ち受けているサービスの行。アドレスは `localhost`）、`gateway`、`missing`（前回そのネットワークをスキャンしたときに見えなかった）、`since_last`（新規、開いた・閉じたポート）、`watched`（注目しているか）。さらに `lan` = 前回のスキャンのネットワーク、ゲートウェイ、その前のスキャンからの変化、`schedule` = 定期スキャン（なければ null） |
 
 - 健全性は online、degraded（トンネルは生きているが、デバイスの sshd が応答しない）、offline のいずれかです。
 - `facts` には、OS、カーネル、稼働秒数、CPU、メモリとルートディスク（KB）、負荷、ssh のバージョン、再起動が必要かどうかが入ります。デバイスにログインできる人にだけ返します。
@@ -158,6 +158,7 @@ MCP client ── POST /mcp ─────────────────�
 | ツール | 内容 |
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | デバイスの sshd 経由で LAN をスキャンし、見つかったものをホスト一覧に保存する。`identify`（既定で有効）では開いている Web ポートごとに `GET /` を 1 回送り（HTTPS なら証明書も見て）、`lan_hosts` で各マシンが何かわかるようにする |
+| `lan_check(tunnel_id, host, ports?, username?)` | LAN ホスト 1 台を今すぐ再確認します（id、アドレス、ラベルで指定）。開いていたポートと既定のポートを、そのアドレスだけ数秒で調べます。ルールは `lan_scan` と同じ。今の状態（応答がなければ `missing`）と変化を返します |
 
 - 対象はプライベートレンジのみ、最大 1024 アドレスで、1 回およそ 1 分かかります。
 - 自分が所有する、または ADMIN のトンネルでのみ使えます。
@@ -254,7 +255,7 @@ Telepy は 30 秒ごとに確認します。grant やトークンを失効させ
 | --- | --- |
 | `ssh:exec` のツール | Web ターミナル |
 | `ssh:files` のツール | ファイルマネージャー |
-| `lan_hosts`、`lan_scan` | LAN 探索 |
+| `lan_hosts`、`lan_scan`、`lan_check` | LAN 探索 |
 | `browser:use` のツール | リモートブラウザ |
 
 アプリにスコープが与えられていないだけの場合は、再接続してそのスコープを承認してもらうよう、エラーがエージェントに伝えます。

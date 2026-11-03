@@ -19,6 +19,10 @@ pub enum Kind {
     DeviceClaimAttempt,
     /// 裝置的磁碟 / 記憶體 / 負載 / 重開機警示（`device_facts`）。/ Disk / memory / load / reboot warnings.
     DeviceWarning,
+    /// 區網掃描看到新機器（之前掃過才算）。/ A LAN scan found new machines (only after an earlier scan).
+    LanNewHosts,
+    /// 你注意的區網主機不見了、回來了或 port 變了。/ A LAN host you watch went down, came back or changed ports.
+    LanWatchedHost,
     ShareReceived,
     ShareEnded,
     AccessRequested,
@@ -56,6 +60,8 @@ pub const ALL: &[Kind] = &[
     Kind::TunnelHostKeyChanged,
     Kind::DeviceClaimAttempt,
     Kind::DeviceWarning,
+    Kind::LanNewHosts,
+    Kind::LanWatchedHost,
     Kind::ShareReceived,
     Kind::ShareEnded,
     Kind::AccessRequested,
@@ -84,6 +90,8 @@ pub const STATUS: &[Kind] = &[Kind::TunnelOffline, Kind::TunnelOnline, Kind::Tun
 pub enum Group {
     Status,
     Device,
+    /// 裝置背後的區網（掃描、注意的主機）。/ The LAN behind a device.
+    Network,
     Sharing,
     Commands,
     Sessions,
@@ -97,6 +105,7 @@ impl Group {
         match self {
             Group::Status => "status",
             Group::Device => "device",
+            Group::Network => "network",
             Group::Sharing => "sharing",
             Group::Commands => "commands",
             Group::Sessions => "sessions",
@@ -125,6 +134,8 @@ pub enum Audience {
     AgentAndOwner,
     /// 只有全站 webhook。/ Site-wide webhooks only.
     SiteOnly,
+    /// 注意那台主機的人（而且還看得到那條隧道）。/ Whoever watches that host (and can still see the tunnel).
+    Watchers,
 }
 
 impl Audience {
@@ -137,6 +148,7 @@ impl Audience {
             Audience::You => "you",
             Audience::AgentAndOwner => "agent_and_owner",
             Audience::SiteOnly => "site_only",
+            Audience::Watchers => "watchers",
         }
     }
 }
@@ -159,6 +171,8 @@ impl Kind {
             Kind::TunnelHostKeyChanged => "tunnel.host_key_changed",
             Kind::DeviceClaimAttempt => "device.claim_attempt",
             Kind::DeviceWarning => "tunnel.device_warning",
+            Kind::LanNewHosts => "lan.new_hosts",
+            Kind::LanWatchedHost => "lan.watched_host",
             Kind::ShareReceived => "share.received",
             Kind::ShareEnded => "share.ended",
             Kind::AccessRequested => "access.requested",
@@ -191,6 +205,7 @@ impl Kind {
         match self {
             Kind::TunnelOffline | Kind::TunnelOnline | Kind::TunnelDegraded | Kind::TunnelRecovered => Group::Status,
             Kind::TunnelIpChanged | Kind::TunnelHostKeyChanged | Kind::DeviceClaimAttempt | Kind::DeviceWarning => Group::Device,
+            Kind::LanNewHosts | Kind::LanWatchedHost => Group::Network,
             Kind::ShareReceived | Kind::ShareEnded | Kind::AccessRequested | Kind::AccessDecided => Group::Sharing,
             Kind::CommandApprovalRequested | Kind::CommandApprovalDecided | Kind::CommandBlocked => Group::Commands,
             Kind::SessionStarted | Kind::SessionWatched | Kind::McpSessionOpened | Kind::McpSessionClosed => Group::Sessions,
@@ -203,7 +218,8 @@ impl Kind {
     pub fn audience(self) -> Audience {
         match self {
             Kind::TunnelOffline | Kind::TunnelOnline | Kind::TunnelDegraded | Kind::TunnelRecovered | Kind::TunnelHostKeyChanged => Audience::Tunnel,
-            Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::DeviceWarning | Kind::CommandApprovalRequested => Audience::Managers,
+            Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::DeviceWarning | Kind::LanNewHosts | Kind::CommandApprovalRequested => Audience::Managers,
+            Kind::LanWatchedHost => Audience::Watchers,
             Kind::AccessRequested | Kind::CommandBlocked | Kind::SessionStarted => Audience::ManagersOthers,
             Kind::ShareEnded => Audience::ShareParties,
             Kind::ShareReceived | Kind::SessionWatched | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
@@ -229,6 +245,7 @@ impl Kind {
                 | Kind::TunnelHostKeyChanged
                 | Kind::DeviceClaimAttempt
                 | Kind::DeviceWarning
+                | Kind::LanNewHosts
                 | Kind::AccountSignInFailed
                 | Kind::UserCreated
                 | Kind::CarriersUpdated
@@ -252,6 +269,7 @@ impl Kind {
             | Kind::TunnelHostKeyChanged
             | Kind::DeviceClaimAttempt
             | Kind::DeviceWarning
+            | Kind::LanWatchedHost
             | Kind::CommandBlocked
             | Kind::AccountSignInFailed
             | Kind::AccountSignInNewDevice
@@ -274,6 +292,8 @@ impl Kind {
             Kind::TunnelHostKeyChanged => "Device host key changed",
             Kind::DeviceClaimAttempt => "Device claimed by another account",
             Kind::DeviceWarning => "Device needs attention",
+            Kind::LanNewHosts => "New machines on the network",
+            Kind::LanWatchedHost => "Watched machine changed",
             Kind::ShareReceived => "Tunnel shared with you",
             Kind::ShareEnded => "Share ended",
             Kind::AccessRequested => "Access requested",

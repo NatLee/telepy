@@ -60,6 +60,8 @@ Webhook は、Telepy の通知をブラウザーの外へ送る仕組みです�
 | `tunnel.host_key_changed` | デバイスの識別 | オーナーとすべての共有先 | ✓ |
 | `device.claim_attempt` | デバイスの識別 | オーナーと ADMIN の共有先 | ✓ |
 | `tunnel.device_warning` | デバイスの識別 | オーナーと ADMIN の共有先 | ✓ |
+| `lan.new_hosts` | LAN | オーナーと ADMIN の共有先 | ✓ |
+| `lan.watched_host` | LAN | そのマシンに注目している人 | — |
 | `share.received` | 共有とアクセス | 共有された人 | |
 | `share.ended` | 共有とアクセス | 共有の双方（終了させた人を除く） | |
 | `access.requested` | 共有とアクセス | オーナーと ADMIN（申請者を除く） | |
@@ -82,6 +84,7 @@ Webhook は、Telepy の通知をブラウザーの外へ送る仕組みです�
 
 いくつかのイベントには補足があります。
 
+- **LAN**（`lan.new_hosts`、`lan.watched_host`）：デバイスのネットワークをスキャンした後（手動、定期、1 台だけの確認）、Telepy は把握していた内容と比べます。`lan.new_hosts` はホスト一覧になかったアドレスで、ネットワーク全体のスキャンのときだけ、しかもそのネットワークの初回スキャンでは出ません。`data` には `count` と `hosts [{id, address, name}]` が入ります。`lan.watched_host` はそのマシンに注目していて（ネットワークページのベル、`telepy lan watch`）、まだそのトンネルを見られる人に、今回見えなかった・消えた後に戻った・ポートが開いた／閉じたときに届きます。`data` には `host_id`、`host`、`address`、`state`（`down` / `up` / `ports`）、`opened`、`closed` が入ります。どちらもネットワークページへのリンク付きです。
 - **デバイスの警告**（`tunnel.device_warning`）：ルートディスクの空きが 10 % または 2 GB 未満、使用可能メモリが 10 % 未満、1 分間のロードが CPU 数の 2 倍超、または再起動待ち。トンネルごと・種類ごとに 1 日 1 回までです。`data` には `warning`、`detail`、`avail`、`total`、`load1`、`cpus` が入ります。
 - **承認の依頼**（`command.approval_requested`）：ルールで承認者が指定されていればその人たちへ、なければオーナーと ADMIN へ送ります。自分のターミナルで入力したコマンドでは送られず、自分の MCP エージェントのコマンドでは送られます。
 - **閲覧**（`session.watched`）：オーナー、ADMIN、または管理者が、あなたの Web ターミナルの閲覧を始めたときです。`data` には `by`、`account`、`lan_host` が入ります。

@@ -92,6 +92,8 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::TunnelHostKeyChanged => ("裝置的 host key 變了", "ホストキーが変更"),
         Kind::DeviceClaimAttempt => ("別的帳號想接管裝置", "別アカウントによるデバイスの登録"),
         Kind::DeviceWarning => ("裝置需要注意", "デバイスの要確認"),
+        Kind::LanNewHosts => ("網路上有新機器", "ネットワークに新しいマシン"),
+        Kind::LanWatchedHost => ("注意的機器有變化", "注目しているマシンに変化"),
         Kind::ShareReceived => ("有通道分享給你", "トンネルが共有されました"),
         Kind::ShareEnded => ("分享結束", "共有の終了"),
         Kind::AccessRequested => ("存取申請", "アクセス申請"),
@@ -171,6 +173,32 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
                 format!("{by} 的通道 {other} 指向 {t} 的 SSH 伺服器，已被拒絕"),
                 format!("{by} のトンネル {other} が {t} の SSH サーバーを指していたため拒否されました"),
             )
+        }
+        Kind::LanNewHosts => {
+            let count = d.get("count").and_then(Value::as_u64).unwrap_or(0);
+            let list: Vec<String> = d.get("hosts").and_then(Value::as_array).into_iter().flatten().take(5).map(|h| {
+                let (name, address) = (s(h, "name"), s(h, "address"));
+                if name.is_empty() || name == address { address.to_string() } else { format!("{name} ({address})") }
+            }).collect();
+            let more = count.saturating_sub(list.len() as u64);
+            let list = list.join(", ");
+            tri(
+                lang,
+                format!("{count} new machine(s) on the network behind {t}: {list}{}", if more > 0 { format!(" and {more} more") } else { String::new() }),
+                format!("{t} 背後的網路出現 {count} 台新機器：{list}{}", if more > 0 { format!("，還有 {more} 台") } else { String::new() }),
+                format!("{t} の背後のネットワークに新しいマシンが {count} 台：{list}{}", if more > 0 { format!("、ほか {more} 台") } else { String::new() }),
+            )
+        }
+        Kind::LanWatchedHost => {
+            let (host, address) = (s(d, "host"), s(d, "address"));
+            let who = if host.is_empty() || host == address { address.to_string() } else { format!("{host} ({address})") };
+            let ports = |k: &str, sign: char| d.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).map(|p| format!("{sign}{p}")).collect::<Vec<_>>();
+            let delta = [ports("opened", '+'), ports("closed", '-')].concat().join(" ");
+            match s(d, "state") {
+                "down" => tri(lang, format!("{who} behind {t} wasn't seen in the last scan"), format!("{t} 背後的 {who} 這次掃描沒看到"), format!("{t} の背後の {who} が今回のスキャンで見えませんでした")),
+                "up" => tri(lang, format!("{who} behind {t} is back"), format!("{t} 背後的 {who} 又出現了"), format!("{t} の背後の {who} が戻りました")),
+                _ => tri(lang, format!("{who} behind {t} changed ports: {delta}"), format!("{t} 背後的 {who} port 變了：{delta}"), format!("{t} の背後の {who} のポートが変わりました：{delta}")),
+            }
         }
         Kind::DeviceWarning => {
             let (avail, total) = (s(d, "avail"), s(d, "total"));
@@ -455,4 +483,18 @@ mod tests {
         assert_eq!(Lang::from_pref(None), Lang::En);
         assert_eq!(Lang::from_pref(Some("ja")), Lang::Ja);
     }
+
+    #[test]
+    fn lan_alerts_read_well() {
+        let d = json!({"count": 2, "hosts": [{"name": "nas", "address": "192.168.1.20"}, {"name": "192.168.1.40", "address": "192.168.1.40"}]});
+        assert_eq!(sentence(Kind::LanNewHosts, Lang::En, Some(&tunnel()), &d), "2 new machine(s) on the network behind office-pi: nas (192.168.1.20), 192.168.1.40");
+        assert!(sentence(Kind::LanNewHosts, Lang::ZhTw, Some(&tunnel()), &d).contains("2 台新機器"));
+        let w = |state: &str| json!({"host": "nas", "address": "192.168.1.20", "state": state, "opened": [443], "closed": [80]});
+        assert_eq!(sentence(Kind::LanWatchedHost, Lang::En, Some(&tunnel()), &w("down")), "nas (192.168.1.20) behind office-pi wasn't seen in the last scan");
+        assert_eq!(sentence(Kind::LanWatchedHost, Lang::En, Some(&tunnel()), &w("up")), "nas (192.168.1.20) behind office-pi is back");
+        assert_eq!(sentence(Kind::LanWatchedHost, Lang::En, Some(&tunnel()), &w("ports")), "nas (192.168.1.20) behind office-pi changed ports: +443 -80");
+        assert!(sentence(Kind::LanWatchedHost, Lang::Ja, Some(&tunnel()), &w("up")).contains("戻りました"));
+        assert_eq!(title(Kind::LanNewHosts, Lang::ZhTw), "網路上有新機器");
+    }
+
 }

@@ -14,7 +14,9 @@ pub mod device_self;
 pub mod fingerprint;
 pub mod identify;
 pub mod scan;
+pub mod schedule;
 pub mod tls;
+pub mod watch;
 pub mod web;
 
 pub use web::{web_links, web_scheme, web_url, WEB_HTTPS_PORTS, WEB_HTTP_PORTS};

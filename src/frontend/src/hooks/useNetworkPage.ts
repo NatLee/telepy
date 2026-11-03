@@ -19,7 +19,7 @@ import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import { hasSsh, scanRunning } from "@/lib/lanConnect";
 import { hostKind, hostMatches, queryTerms, type HostKind } from "@/lib/lanHosts";
 import { changeCounts, isOwn } from "@/lib/lanChanges";
-import type { LanHost, LanScan, TopologyTunnel } from "@/types/lan";
+import type { LanHost, LanScan, LanSchedule, TopologyTunnel } from "@/types/lan";
 
 /** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
 const SCAN_ERRORS: Record<string, TranslationKey> = {
@@ -111,9 +111,20 @@ export function useNetworkPage() {
     }, [fetchTopology]);
 
     const announce = useCallback(
-        (name: string, scan: LanScan) => {
+        (tn: TopologyTunnel, scan: LanScan) => {
+            const name = tn.name;
             if (announced.current.has(scan.scan_id)) return;
             announced.current.add(scan.scan_id);
+            // 定時重掃不吵（新機器 / 注意的主機另有提醒）。/ Scheduled rescans stay quiet (new / watched hosts have their own alerts).
+            if (scan.trigger === "schedule") return;
+            if (scan.trigger === "check") {
+                const h = tn.hosts.find((x) => x.id === scan.host_id);
+                const host = h ? h.label || h.hostname || h.address : "?";
+                if (scan.phase === "failed") showError(t("network.checkFailed", { host, error: scan.error ?? "" }));
+                else if (scan.hosts_found > 0) showSuccess(t("network.checkAnswered", { host }));
+                else showError(t("network.checkNoAnswer", { host }));
+                return;
+            }
             if (scan.phase === "failed") showError(t("network.scanFailed", { name, error: scan.error ?? "" }));
             else {
                 // 跟前一次比有變化就一起說。/ Mention what changed since the previous scan.
@@ -144,6 +155,8 @@ export function useNetworkPage() {
             },
             [NOTIFICATION_ACTIONS.LAN_SCAN_DONE]: () => scheduleRefetch(),
             [NOTIFICATION_ACTIONS.UPDATED_LAN_HOSTS]: () => scheduleRefetch(),
+            [NOTIFICATION_ACTIONS.LAN_NEW_HOSTS]: () => scheduleRefetch(),
+            [NOTIFICATION_ACTIONS.LAN_HOST_WATCH]: () => scheduleRefetch(),
             [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg: NotificationPayload) => {
                 if (msg.port !== undefined) setPorts((prev) => ({ ...prev, [String(msg.port)]: msg.status === "connected" }));
             },
@@ -181,7 +194,7 @@ export function useNetworkPage() {
 
     // 自己發起的掃描結束 → 提示一次。/ Announce each of my finished scans once.
     useEffect(() => {
-        for (const tn of tunnels) if (tn.scan && !scanRunning(tn.scan) && tn.scan.started_by === me) announce(tn.name, tn.scan);
+        for (const tn of tunnels) if (tn.scan && !scanRunning(tn.scan) && tn.scan.started_by === me) announce(tn, tn.scan);
     }, [tunnels, announce, me]);
 
     const isOnline = useCallback(
@@ -224,6 +237,89 @@ export function useNetworkPage() {
             }
         },
         [t]
+    );
+
+    /** 錯誤回應 → 一句話（跟開始掃描同一套錯誤碼）。/ An error response as one sentence (the scan's codes). */
+    const scanErrorText = useCallback(
+        (data: { error?: string; code?: string } | null) => {
+            const key = data?.code ? SCAN_ERRORS[data.code] : undefined;
+            if (key) return t(key);
+            if (data?.code === "lan_check_address") return t("network.checkAddress");
+            return t("network.scanError.invalid", { detail: data?.error ?? t("api.unexpectedError") });
+        },
+        [t]
+    );
+
+    /** 存（或停掉）定時重掃；`every` 0 = 停掉。回錯誤訊息或 null。/ Save (or stop) the schedule; `every` 0 stops it. */
+    const saveSchedule = useCallback(
+        async (tn: TopologyTunnel, opts: ScanOptions & { every: number }): Promise<string | null> => {
+            try {
+                const path = `/api/reverse/server/${tn.id}/lan/schedule`;
+                const res = opts.every === 0
+                    ? await apiFetch(path, { method: "DELETE" })
+                    : await apiFetch(path, {
+                        method: "PUT",
+                        body: JSON.stringify({
+                            every_secs: opts.every,
+                            ...(opts.username ? { username: opts.username } : {}),
+                            ...(opts.subnets && opts.subnets.length ? { subnets: opts.subnets } : {}),
+                            ...(opts.ports && opts.ports.length ? { ports: opts.ports } : {}),
+                            identify: opts.identify ?? true,
+                        }),
+                    });
+                if (res.ok) {
+                    const schedule = opts.every === 0 ? null : await readJson<LanSchedule>(res);
+                    setTunnels((prev) => prev.map((x) => (x.id === tn.id ? { ...x, schedule } : x)));
+                    return null;
+                }
+                return scanErrorText(await readJson<{ error?: string; code?: string }>(res));
+            } catch {
+                return t("api.unexpectedError");
+            }
+        },
+        [scanErrorText, t]
+    );
+
+    /** 現在檢查這台（它的 port，不掃整個網段）。/ Check this host now (its ports, no network sweep). */
+    const checkHost = useCallback(
+        async (h: LanHost): Promise<string | null> => {
+            try {
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/check`, { method: "POST", body: JSON.stringify({}) });
+                const data = await readJson<LanScan & { error?: string; code?: string; scan?: LanScan }>(res);
+                if (res.ok && data?.scan_id) {
+                    const scan: LanScan = data;
+                    setTunnels((prev) => prev.map((x) => (x.id === h.tunnel_id ? { ...x, scan } : x)));
+                    return null;
+                }
+                if (data?.code === "lan_scan_running" && data.scan) {
+                    const scan = data.scan;
+                    setTunnels((prev) => prev.map((x) => (x.id === h.tunnel_id ? { ...x, scan } : x)));
+                }
+                return scanErrorText(data);
+            } catch {
+                return t("api.unexpectedError");
+            }
+        },
+        [scanErrorText, t]
+    );
+
+    /** 注意 / 不再注意這台。/ Watch or stop watching a host. */
+    const setWatch = useCallback(
+        async (h: LanHost, on: boolean): Promise<boolean> => {
+            try {
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/watch`, { method: on ? "PUT" : "DELETE" });
+                if (!res.ok) {
+                    showError(t("network.watch.failed"));
+                    return false;
+                }
+                setTunnels((prev) => prev.map((x) => (x.id === h.tunnel_id ? { ...x, hosts: x.hosts.map((y) => (y.id === h.id ? { ...y, watched: on } : y)) } : x)));
+                return true;
+            } catch {
+                showError(t("network.watch.failed"));
+                return false;
+            }
+        },
+        [showError, t]
     );
 
     const addHost = useCallback(
@@ -347,6 +443,6 @@ export function useNetworkPage() {
 
     return {
         state: { tunnels: visible, allTunnels: tunnels, loading, query, stats, focusTunnel },
-        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, addHost, updateHost, deleteHost, loadConnectTarget },
+        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, saveSchedule, checkHost, setWatch, addHost, updateHost, deleteHost, loadConnectTarget },
     };
 }

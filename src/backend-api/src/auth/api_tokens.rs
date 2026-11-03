@@ -161,6 +161,7 @@ pub const ROUTES: &[RouteRule] = {
         rule("GET", "/api/reverse/server/keys/{t}", READ, Path),
         rule("GET", "/api/reverse/server/{t}/connections|usernames|host-key|device-install", READ, Path),
         rule("GET", "/api/reverse/server/{t}/lan/hosts", READ, Path),
+        rule("GET", "/api/reverse/server/{t}/lan/schedule", READ, Path),
         // 「這台電腦的 ssh 進得去嗎」（只讀；POST 是因為要送指紋清單）。/ "Will this computer's ssh get in?" (a read; POST carries the fingerprints).
         rule("POST", "/api/reverse/server/{t}/ssh-check", READ, Path),
         rule("GET", "/api/reverse/lan/topology", READ, None),
@@ -182,6 +183,9 @@ pub const ROUTES: &[RouteRule] = {
         // 檔案：SFTP 的每個操作。/ Files: every SFTP operation.
         rule("*", "/api/sftp/*/{t}/*", FILES, Path),
         rule("GET|POST", "/api/reverse/server/{t}/lan/scan", SCAN, Path),
+        // 定時重掃與「檢查這台」都是掃描。/ Scheduled rescans and single-host checks are scans.
+        rule("PUT|DELETE", "/api/reverse/server/{t}/lan/schedule", SCAN, Path),
+        rule("POST", "/api/reverse/server/{t}/lan/hosts/*/check", SCAN, Path),
         // 瀏覽器：REST 版的 MCP browser_*（session 只屬於開它的那把，隧道在開的時候檢查）。/ Scripted browsers.
         rule("GET|POST", "/api/browser/sessions", BROWSER, Handler),
         rule("DELETE", "/api/browser/sessions/*", BROWSER, Handler),
@@ -199,6 +203,8 @@ pub const ROUTES: &[RouteRule] = {
         rule("PATCH", "/api/reverse/server/{t}/default-username", MANAGE, Path),
         rule("POST", "/api/reverse/server/{t}/lan/hosts", MANAGE, Path),
         rule("PATCH|DELETE", "/api/reverse/server/{t}/lan/hosts/*", MANAGE, Path),
+        // 注意一台主機（自己的偏好，跟釘選一樣）。/ Watching a host (a personal choice, like a pin).
+        rule("PUT|DELETE", "/api/reverse/server/{t}/lan/hosts/*/watch", MANAGE, Path),
         rule("POST", "/tunnels/share/{t}", MANAGE, Path),
         rule("PATCH", "/tunnels/share/{t}/*/expiry|allowed-usernames", MANAGE, Path),
         rule("PATCH", "/tunnels/update-permission/{t}/*", MANAGE, Path),

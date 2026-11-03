@@ -197,9 +197,9 @@ async fn a_scan_lists_the_devices_own_services_its_gateway_and_what_changed() {
     assert_eq!(lanh["since_last"], json!({"new": false, "opened": [], "closed": [extra]}));
     assert_eq!(lanh["missing"], false);
 
-    // 3) 第一個 port（最小的那個，後端會排序）不通 → 這次沒看到它；裝置自己的服務還在。
-    // The first port (the lowest: the backend sorts them) dead: not seen; the device's own services stay.
-    let (done, v) = scan(json!([1, nas.port])).await;
+    // 3) 只探一個沒開的 port → 這次沒看到它；裝置自己的服務還在。（只掃一個位址時每個 port 都會試，所以只給沒開的那個。）
+    // Only a dead port: not seen this time; the device's own services stay. (A single address gets every port, hence only the dead one.)
+    let (done, v) = scan(json!([1])).await;
     assert_eq!(done["changes"]["gone"], json!(["127.0.0.1"]), "{done}");
     let lanh = host(&v, "127.0.0.1");
     assert_eq!(lanh["missing"], true, "{lanh}");
@@ -219,6 +219,138 @@ async fn a_scan_lists_the_devices_own_services_its_gateway_and_what_changed() {
     let events = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await.json;
     let last = events.as_array().unwrap().iter().rev().find(|e| e["event"] == "lan_scan").cloned().unwrap();
     assert!(last["message"].as_str().unwrap().contains("1 gone"), "{last}");
+}
+
+/// 從 hub 收到的通知裡找某個 action（最多等 `secs` 秒）。/ Wait for a notification with that action.
+async fn hub_wait(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, action: &str, secs: u64) -> Option<Value> {
+    let until = tokio::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, rx.recv()).await {
+            Ok(Ok(m)) => {
+                // 每則通知包成 `{"message": …}`。/ Every notification is wrapped as `{"message": …}`.
+                let v: Value = serde_json::from_str(&m).unwrap_or_default();
+                if v["message"]["action"] == action {
+                    return Some(v["message"].clone());
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            _ => return None,
+        }
+    }
+}
+
+/// 定時重掃、「檢查這台」、注意主機的通知、網段上的新機器：排程照設定的人掃（不是第一次掃描不算新）；VIEW 的人能注意
+/// 主機，掃描發現它 port 關了 / 不見了 / 回來了會通知他；新機器只告訴 owner 與 ADMIN。
+/// Scheduled rescans, single-host checks, watched-host alerts and new machines: a schedule scans as whoever set it;
+/// a VIEW sharee can watch a host and hears about ports closing / it going / it coming back; new machines are told to
+/// the owner and ADMIN sharees only, and never on the first scan.
+#[tokio::test]
+async fn schedules_checks_and_watched_hosts() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], true).await;
+    let nas = lab.machine("nas", &[("admin", &[&lab.service])], false).await;
+    let (web, _, stop_web) = web_server("Printer admin").await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let id = dev.tunnel_id;
+    let mut alice_hub = app.state.hub.subscribe_user(alice.id);
+    let mut bob_hub = app.state.hub.subscribe_user(bob.id);
+
+    // 1) 排程：只有 owner / ADMIN 能設，間隔只能選那幾種；VIEW 看得到。/ Only managers set it; fixed intervals; VIEW reads it.
+    let sched = format!("/api/reverse/server/{id}/lan/schedule");
+    let body = json!({"every_secs": 3600, "subnets": ["127.0.0.1/32"], "ports": [nas.port, web]});
+    let r = app.put(&sched, Some(&bob.token), body.clone()).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("lan_scan_forbidden")), "{}", r.text);
+    let r = app.put(&sched, Some(&alice.token), json!({"every_secs": 60})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("every")), "{}", r.text);
+    let r = app.put(&sched, Some(&alice.token), body).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["every_secs"].as_i64(), r.json["by"].as_str(), r.json["username"].as_str()), (Some(3600), Some("alice"), Some("ubuntu")), "{}", r.text);
+    let r = app.get(&sched, Some(&bob.token)).await;
+    assert_eq!(r.json["ports"], json!([nas.port, web]), "{}", r.text);
+
+    // 2) 到期就照 alice 的身分掃；第一次掃描不發「新機器」。/ Due: it scans as alice; the first scan announces nothing new.
+    sqlx::query("UPDATE telepy_lan_schedule SET next_at = '2000-01-01 00:00:00.000000'").execute(&app.state.db.write).await.unwrap();
+    telepy_server::lan::schedule::run_once(&app.state).await;
+    let done = wait_scan(app, &alice.token, id).await;
+    assert_eq!((done["phase"].as_str(), done["trigger"].as_str(), done["started_by"].as_str()), (Some("done"), Some("schedule"), Some("alice")), "{done}");
+    let r = app.get(&sched, Some(&alice.token)).await;
+    assert!(r.json["last_at"].is_string() && r.json["last_error"].is_null(), "{}", r.text);
+    assert!(r.json["next_at"].as_str().unwrap() > r.json["last_at"].as_str().unwrap(), "the next run is an hour later: {}", r.text);
+    assert!(hub_wait(&mut alice_hub, "LAN-NEW-HOSTS", 1).await.is_none(), "no 'new machines' on the first scan");
+    let v = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&bob.token)).await.json;
+    let host = v["hosts"].as_array().unwrap().iter().find(|h| h["address"] == "127.0.0.1").cloned().unwrap();
+    let hid = host["id"].as_i64().unwrap();
+    assert_eq!(host["open_ports"], json!([nas.port, web]));
+    assert!(host["checked_at"].is_string() && host["watched"] == false, "{host}");
+    let scanned_at = v["lan"]["scanned_at"].clone();
+
+    // 3) bob（VIEW）注意這台；只有他自己看得到打勾。/ Bob (VIEW) watches it; only he sees it ticked.
+    let r = app.put(&format!("/api/reverse/server/{id}/lan/hosts/{hid}/watch"), Some(&bob.token), json!({})).await;
+    assert_eq!((r.status, r.json["watched"].as_bool()), (StatusCode::OK, Some(true)), "{}", r.text);
+    let mine = |token: &str| {
+        let token = token.to_string();
+        async move { app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&token)).await.json["hosts"].as_array().unwrap().iter().find(|h| h["id"] == hid).cloned().unwrap() }
+    };
+    assert_eq!(mine(&bob.token).await["watched"], true);
+    assert_eq!(mine(&alice.token).await["watched"], false);
+
+    // 4) 檢查這台：網頁 port 停了 → port 關了，注意的人收到；網段的整體結果不動。
+    // A check after the web port stopped: "ports" to the watcher; the network summary stays.
+    stop_web.abort();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let check = format!("/api/reverse/server/{id}/lan/hosts/{hid}/check");
+    let r = app.post(&check, Some(&bob.token), json!({"ports": [nas.port]})).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "checking is a scan: managers only: {}", r.text);
+    // 測試裡給明確的 port：127.0.0.1 是開發者自己的機器，預設 port 會探到（甚至 GET）它真的服務。
+    // Explicit ports here: 127.0.0.1 is the developer's own machine, and the default ports would probe (even GET) its real services.
+    let r = app.post(&check, Some(&alice.token), json!({"ports": [nas.port, web]})).await;
+    assert_eq!((r.status, r.json["trigger"].as_str(), r.json["host_id"].as_i64()), (StatusCode::ACCEPTED, Some("check"), Some(hid)), "{}", r.text);
+    let done = wait_scan(app, &alice.token, id).await;
+    assert_eq!((done["phase"].as_str(), done["networks"].clone()), (Some("done"), json!(["127.0.0.1/32"])), "{done}");
+    assert_eq!(done["changes"]["changed"][0]["closed"], json!([web]), "{done}");
+    let note = hub_wait(&mut bob_hub, "LAN-HOST-WATCH", 5).await.expect("bob hears about the closed port");
+    assert_eq!((note["state"].as_str(), note["opened"].clone(), note["closed"].clone(), note["host_id"].as_i64()), (Some("ports"), json!([]), json!([web]), Some(hid)), "{note}");
+    assert!(hub_wait(&mut alice_hub, "LAN-HOST-WATCH", 1).await.is_none(), "alice doesn't watch it");
+    let v = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token)).await.json;
+    assert_eq!(v["lan"]["scanned_at"], scanned_at, "a check leaves the last full scan alone");
+
+    // 5) 只探一個不通的 port → 沒看到（missing），再探回來 → 又出現了。
+    // Only a dead port: down (missing); its SSH port again: up.
+    let r = app.post(&check, Some(&alice.token), json!({"ports": [1]})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    wait_scan(app, &alice.token, id).await;
+    assert_eq!(hub_wait(&mut bob_hub, "LAN-HOST-WATCH", 5).await.expect("down")["state"], "down");
+    assert_eq!(mine(&bob.token).await["missing"], true);
+    let r = app.post(&check, Some(&alice.token), json!({"ports": [nas.port]})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    wait_scan(app, &alice.token, id).await;
+    assert_eq!(hub_wait(&mut bob_hub, "LAN-HOST-WATCH", 5).await.expect("up")["state"], "up");
+    assert_eq!(mine(&bob.token).await["missing"], false);
+
+    // 6) 網段上出現沒見過的位址（刪掉再掃）→ owner 收到「新機器」，VIEW 的 bob 沒有；Logs 有一筆。
+    // An address the list doesn't have (deleted, then scanned): the owner hears "new machines", VIEW bob doesn't.
+    let r = app.delete(&format!("/api/reverse/server/{id}/lan/hosts/{hid}"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text);
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/scan"), Some(&alice.token), json!({"subnets": ["127.0.0.1/32"], "ports": [nas.port]})).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    wait_scan(app, &alice.token, id).await;
+    let note = hub_wait(&mut alice_hub, "LAN-NEW-HOSTS", 5).await.expect("alice hears about the new machine");
+    assert_eq!((note["count"].as_u64(), note["hosts"][0]["address"].as_str()), (Some(1), Some("127.0.0.1")), "{note}");
+    assert!(hub_wait(&mut bob_hub, "LAN-NEW-HOSTS", 1).await.is_none(), "new machines go to managers only");
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await.json;
+    let kinds: Vec<&str> = events.as_array().unwrap().iter().filter_map(|e| e["event"].as_str()).collect();
+    assert!(kinds.contains(&"lan_new_hosts") && kinds.contains(&"lan_schedule"), "{kinds:?}");
+
+    // 7) 停掉排程。/ Stop the schedule.
+    let r = app.delete(&sched, Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text);
+    assert!(app.get(&sched, Some(&alice.token)).await.json.is_null());
 }
 
 const VERIFIER: &str = "verifier-verifier-verifier-verifier-verifier-0123";

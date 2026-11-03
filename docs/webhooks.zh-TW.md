@@ -60,6 +60,8 @@ webhook 分兩種。每個人都能建立**個人 webhook**，收自己本來就
 | `tunnel.host_key_changed` | 裝置身分 | owner 與所有被分享者 | ✓ |
 | `device.claim_attempt` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
 | `tunnel.device_warning` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
+| `lan.new_hosts` | 區網 | owner 與 ADMIN 被分享者 | ✓ |
+| `lan.watched_host` | 區網 | 注意那台機器的人 | — |
 | `share.received` | 分享與存取 | 被分享的人 | |
 | `share.ended` | 分享與存取 | 分享的雙方，不含結束分享的人 | |
 | `access.requested` | 分享與存取 | owner 與 ADMIN，不含申請人 | |
@@ -82,6 +84,7 @@ webhook 分兩種。每個人都能建立**個人 webhook**，收自己本來就
 
 有幾個事件要多說一句：
 
+- **區網**（`lan.new_hosts`、`lan.watched_host`）：掃描裝置的網路之後（手動、定時，或只檢查一台），Telepy 會跟原本知道的比。`lan.new_hosts` = 主機清單裡沒有的位址，只有整個網段的掃描才算，一個網路的第一次掃描不算；`data` 有 `count` 與 `hosts [{id, address, name}]`。`lan.watched_host` 送給注意那台機器（網路頁的鈴鐺、`telepy lan watch`）而且還看得到那條通道的人，時機是它這次沒看到、不見後又回來，或 port 開了、關了；`data` 有 `host_id`、`host`、`address`、`state`（`down` / `up` / `ports`）、`opened`、`closed`。兩種都連到網路頁。
 - **裝置警告**（`tunnel.device_warning`）：根磁碟剩不到 10 % 或 2 GB、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數的兩倍，或是等著重開機。每條通道每一種一天最多一次。`data` 有 `warning`、`detail`、`avail`、`total`、`load1`、`cpus`。
 - **核准申請**（`command.approval_requested`）：規則有指定核准人就送給那些人，否則送給 owner 與 ADMIN。自己在終端機打的指令不送，自己的 MCP agent 送出的指令會送。
 - **被看**（`session.watched`）：owner、ADMIN 或管理員開始看你的網頁終端機。`data` 有 `by`、`account`、`lan_host`。

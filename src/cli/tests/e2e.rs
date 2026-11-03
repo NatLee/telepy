@@ -592,6 +592,19 @@ async fn lan_scan_recognises_and_shows() {
     assert!(o.stderr.contains("Nothing changed since the previous scan."), "{}", o.stderr);
     let o = telepy(h, &["lan", "ls", "box"]).await;
     assert!(o.stderr.contains("Last scan ") && o.stderr.contains(" of 127.0.0.1/32."), "{}", o.stderr);
+    // 定時重掃：設、看、停；檢查一台。/ Scheduled rescans: set, show, stop; check one host.
+    let o = telepy(h, &["lan", "schedule", "box", "--every", "6h", "--subnet", "127.0.0.1/32", "--ports", &ports]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("Rescans every 6 hours, next ") && o.stdout.contains("(set by alice)."), "{}", o.stdout);
+    let o = telepy(h, &["lan", "ls", "box"]).await;
+    assert!(o.stderr.contains("Rescans every 6 hours"), "{}", o.stderr);
+    let o = telepy(h, &["lan", "check", "box", "127.0.0.1", "--ports", &ports]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains(&format!("127.0.0.1 answered: ports {web_port}.")), "{}", o.stdout);
+    let o = telepy(h, &["lan", "schedule", "box", "--every", "off"]).await;
+    assert!(o.code == 0 && o.stderr.contains("Stopped the rescans of box."), "{}", o.stderr);
+    let o = telepy(h, &["lan", "schedule", "box"]).await;
+    assert!(o.stdout.contains("No scheduled rescan for box."), "{}", o.stdout);
     let o = telepy(h, &["lan", "show", "box", "127.0.0.1"]).await;
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stdout.contains("is: OpenWrt") && o.stdout.contains(&format!("{web_port}/http  200  title: OpenWrt - LuCI")), "{}", o.stdout);

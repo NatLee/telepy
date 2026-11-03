@@ -103,6 +103,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     device_key_changed: { key: "logs.event.device_key_changed", tone: "warning", category: "change" },
     reverse_port_changed: { key: "logs.event.reverse_port_changed", tone: "outline", category: "change" },
     lan_scan: { key: "logs.event.lan_scan", tone: "outline", category: "change" },
+    lan_schedule: { key: "logs.event.lan_schedule", tone: "outline", category: "change" },
+    lan_new_hosts: { key: "logs.event.lan_new_hosts", tone: "warning", category: "change" },
 };
 
 /** 頁面需要的欄位（`useLogsPage` 的 LogEntry 是它的超集）。/ The fields these helpers read (LogEntry is a superset). */

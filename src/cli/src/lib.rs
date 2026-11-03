@@ -601,6 +601,49 @@ pub enum LanAction {
         #[arg(long)]
         json: bool,
     },
+    /// Check one host again now (needs network:scan): every port it had open plus the defaults, that address only
+    Check {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        /// Ports to probe, comma-separated (default: the ones it had open plus the server's list)
+        #[arg(long, value_delimiter = ',')]
+        ports: Vec<u16>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or set the scheduled rescan (setting needs network:scan): --every 1h|6h|12h|1d|1w, or --every off
+    Schedule {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// How often: 1h, 6h, 12h, 1d or 1w; `off` stops it. Leave out to show the current one
+        #[arg(long)]
+        every: Option<String>,
+        /// Private CIDR to scan instead of the device's own networks (repeatable)
+        #[arg(long = "subnet")]
+        subnets: Vec<String>,
+        /// Ports to probe, comma-separated (default: the server's list)
+        #[arg(long, value_delimiter = ',')]
+        ports: Vec<u16>,
+        /// Don't send a GET / to web ports
+        #[arg(long)]
+        no_identify: bool,
+        /// Device account to scan as (default: the tunnel's default)
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Watch a host: be told when a scan finds it gone, back or with other ports (--off stops)
+    Watch {
+        #[arg(add = ArgValueCompleter::new(complete::tunnel))]
+        tunnel: String,
+        /// Id, address or label
+        host: String,
+        #[arg(long)]
+        off: bool,
+    },
     /// What Telepy saw on one host: what it is, and each port's page title, server, certificate or banner
     Show {
         #[arg(add = ArgValueCompleter::new(complete::tunnel))]
@@ -2350,7 +2393,69 @@ fn lan_note(h: &Value) -> String {
     if h["missing"] == true {
         out.push("not seen".into());
     }
+    if h["watched"] == true {
+        out.push("watched".into());
+    }
     out.join(", ")
+}
+
+/// `--every` 的值 → 秒（跟後端的間隔一樣）；`off` = 0。/ An `--every` value as seconds (the server's intervals); `off` = 0.
+fn parse_every(raw: &str) -> Result<i64> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "0" => Ok(0),
+        "1h" | "60m" | "hourly" => Ok(3600),
+        "6h" => Ok(6 * 3600),
+        "12h" => Ok(12 * 3600),
+        "1d" | "24h" | "daily" => Ok(86_400),
+        "1w" | "7d" | "weekly" => Ok(7 * 86_400),
+        other => bail!("--every takes 1h, 6h, 12h, 1d, 1w or off (not '{other}')."),
+    }
+}
+
+fn every_words(secs: i64) -> String {
+    match secs {
+        3600 => "every hour".into(),
+        86_400 => "every day".into(),
+        604_800 => "every week".into(),
+        s if s % 3600 == 0 => format!("every {} hours", s / 3600),
+        s => format!("every {s} s"),
+    }
+}
+
+/// 排程的一行（沒有 = None）。/ The schedule as one line (None when there is none).
+fn lan_schedule_line(sched: &Value, off: chrono::FixedOffset) -> Option<String> {
+    let every = sched["every_secs"].as_i64()?;
+    let when = |k: &str| chrono::DateTime::parse_from_rfc3339(s(sched, k)).ok().map(|t| t.with_timezone(&off).format("%Y-%m-%d %H:%M").to_string());
+    let mut line = format!("Rescans {}, next {}", every_words(every), when("next_at").unwrap_or_else(|| "-".into()));
+    if !s(sched, "by").is_empty() {
+        line.push_str(&format!(" (set by {})", s(sched, "by")));
+    }
+    line.push('.');
+    if !s(sched, "last_error").is_empty() {
+        line.push_str(&format!(" The last run failed: {}", s(sched, "last_error")));
+    }
+    Some(line)
+}
+
+/// 等掃描（或檢查）結束，一路印進度。/ Wait for a scan or check to end, printing progress.
+fn wait_lan(api: &Api, id: i64, quiet: bool) -> Result<Value> {
+    let (mut last, started) = (String::new(), std::time::Instant::now());
+    loop {
+        let st = api.get(&format!("/api/reverse/server/{id}/lan/scan"))?;
+        let phase = s(&st, "phase").to_string();
+        let line = lan_scan_line(&st);
+        if line != last && !quiet {
+            eprintln!("{line}");
+            last = line;
+        }
+        if phase == "done" || phase == "failed" {
+            return Ok(st);
+        }
+        if started.elapsed() > std::time::Duration::from_secs(600) {
+            bail!("The scan is still running after 10 minutes; check the web app's Network page.");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
 }
 
 /// `{opened, closed}` → `+443 -80`。/ Opened and closed ports as `+443 -80`.
@@ -2428,6 +2533,7 @@ fn lan_scan_line(st: &Value) -> String {
         "identify" => format!("Recognising web pages ({n}/{total})"),
         "names" => "Looking up names…".into(),
         "self" => "Listing what the device itself listens on…".into(),
+        "done" if s(st, "trigger") == "check" => "Done.".into(),
         "done" => format!("Done: {found} machine(s)."),
         other => other.to_string(),
     }
@@ -2451,6 +2557,9 @@ fn lan_show_lines(h: &Value) -> Vec<String> {
     }
     if h["missing"] == true {
         out.push(format!("  not seen in the last scan (last seen {})", s(h, "last_seen")));
+    }
+    if h["watched"] == true {
+        out.push("  you watch it (told when a scan finds it gone, back or with other ports)".into());
     }
     let what = lan_what(h);
     if !what.is_empty() {
@@ -2503,6 +2612,9 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
             if let Some(line) = lan_meta_line(&v["lan"], local_offset()) {
                 eprintln!("{line}");
             }
+            if let Some(line) = lan_schedule_line(&v["schedule"], local_offset()) {
+                eprintln!("{line}");
+            }
             print_hosts(&hosts);
         }
         LanAction::Scan { tunnel, subnets, ports, no_identify, account, json: as_json } => {
@@ -2519,23 +2631,7 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
                 body["username"] = json!(a);
             }
             api.json(Method::POST, &format!("/api/reverse/server/{id}/lan/scan"), Some(&body))?;
-            let (mut last, started) = (String::new(), std::time::Instant::now());
-            let st = loop {
-                let st = api.get(&format!("/api/reverse/server/{id}/lan/scan"))?;
-                let phase = s(&st, "phase").to_string();
-                let line = lan_scan_line(&st);
-                if line != last && !as_json {
-                    eprintln!("{line}");
-                    last = line;
-                }
-                if phase == "done" || phase == "failed" {
-                    break st;
-                }
-                if started.elapsed() > std::time::Duration::from_secs(600) {
-                    bail!("The scan is still running after 10 minutes; check the web app's Network page.");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(800));
-            };
+            let st = wait_lan(api, id, as_json)?;
             if s(&st, "phase") == "failed" {
                 bail!("The scan failed: {}", s(&st, "error"));
             }
@@ -2547,6 +2643,85 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
             print_hosts(&hosts);
             if let Some(line) = lan_changes_line(&st["changes"]) {
                 eprintln!("{line}");
+            }
+        }
+        LanAction::Check { tunnel, host, ports, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let id = t["id"].as_i64().unwrap_or_default();
+            let v = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            let hid = h["id"].as_i64().unwrap_or_default();
+            let mut body = json!({});
+            if !ports.is_empty() {
+                body["ports"] = json!(ports);
+            }
+            api.json(Method::POST, &format!("/api/reverse/server/{id}/lan/hosts/{hid}/check"), Some(&body))?;
+            let st = wait_lan(api, id, as_json)?;
+            if s(&st, "phase") == "failed" {
+                bail!("The check failed: {}", s(&st, "error"));
+            }
+            let v = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?;
+            let now = v["hosts"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_i64() == Some(hid)).cloned()).unwrap_or(Value::Null);
+            if as_json {
+                return print_json(&json!({ "scan": st, "host": now }));
+            }
+            let answered = st["hosts_found"].as_u64().unwrap_or(0) > 0;
+            let ports = now["open_ports"].as_array().map(|p| p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+            if answered {
+                println!("{} answered: ports {}.", s(&now, "address"), if ports.is_empty() { "-" } else { &ports });
+            } else {
+                println!("{} didn't answer on any of the ports tried.", s(h, "address"));
+            }
+            if let Some(line) = lan_changes_line(&st["changes"]).filter(|_| answered) {
+                eprintln!("{line}");
+            }
+        }
+        LanAction::Schedule { tunnel, every, subnets, ports, no_identify, account, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let id = t["id"].as_i64().unwrap_or_default();
+            let path = format!("/api/reverse/server/{id}/lan/schedule");
+            let shown = match every.as_deref().map(parse_every).transpose()? {
+                None => api.get(&path)?,
+                Some(0) => {
+                    api.json(Method::DELETE, &path, None)?;
+                    eprintln!("Stopped the rescans of {}.", name_of(&t));
+                    Value::Null
+                }
+                Some(secs) => {
+                    let mut body = json!({ "every_secs": secs, "identify": !no_identify });
+                    if !subnets.is_empty() {
+                        body["subnets"] = json!(subnets);
+                    }
+                    if !ports.is_empty() {
+                        body["ports"] = json!(ports);
+                    }
+                    if let Some(a) = &account {
+                        body["username"] = json!(a);
+                    }
+                    api.json(Method::PUT, &path, Some(&body))?
+                }
+            };
+            if as_json {
+                return print_json(&shown);
+            }
+            match lan_schedule_line(&shown, local_offset()) {
+                Some(line) => println!("{line}"),
+                None if every.is_none() => println!("No scheduled rescan for {}. Set one with: telepy lan schedule {} --every 6h", name_of(&t), name_of(&t)),
+                None => {}
+            }
+        }
+        LanAction::Watch { tunnel, host, off } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            let method = if off { Method::DELETE } else { Method::PUT };
+            api.json(method, &format!("/api/reverse/server/{}/lan/hosts/{}/watch", t["id"], h["id"]), None)?;
+            if off {
+                eprintln!("No longer watching {}.", s(h, "address"));
+            } else {
+                eprintln!("Watching {}: you'll be told when a scan finds it gone, back or with other ports.", s(h, "address"));
             }
         }
         LanAction::Show { tunnel, host, json: as_json } => {
@@ -2719,6 +2894,19 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_schedule_words() {
+        assert_eq!(parse_every("6h").unwrap(), 21_600);
+        assert_eq!(parse_every("1W").unwrap(), 604_800);
+        assert_eq!(parse_every("off").unwrap(), 0);
+        assert!(parse_every("90m").is_err());
+        let off = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let sched = json!({"every_secs": 21600, "next_at": "2026-11-03T10:00:00+00:00", "by": "alice", "last_error": null});
+        assert_eq!(lan_schedule_line(&sched, off).unwrap(), "Rescans every 6 hours, next 2026-11-03 18:00 (set by alice).");
+        assert_eq!(lan_schedule_line(&Value::Null, off), None);
+        assert_eq!(lan_note(&json!({"watched": true, "since_last": null})), "watched");
+    }
 
     #[test]
     fn lan_notes_changes_and_the_scan_line() {

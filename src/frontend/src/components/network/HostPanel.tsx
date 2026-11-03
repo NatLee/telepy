@@ -34,6 +34,7 @@ import { hasSsh, hostKind, hostName, isValidLogin } from "@/lib/lanConnect";
 import { hostIcon } from "@/components/network/TopologyTree";
 import { HostServices } from "@/components/network/HostServices";
 import { HostChangeNote } from "@/components/network/ScanChanges";
+import { CheckRow, LanAlertsInfoDialog, WatchButton } from "@/components/network/HostAlerts";
 import { isOwn } from "@/lib/lanChanges";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
@@ -77,9 +78,13 @@ interface Props {
     loadConnectTarget: (tn: TopologyTunnel, deviceUser: string | null) => Promise<ConnectTarget>;
     updateHost: (h: LanHost, input: HostInput) => Promise<FormErrors | null>;
     deleteHost: (h: LanHost) => Promise<boolean>;
+    /** 現在檢查這台（回錯誤訊息或 null）。/ Check this host now (an error message or null). */
+    onCheck: (h: LanHost) => Promise<string | null>;
+    /** 注意 / 不再注意。/ Watch or stop watching. */
+    onWatch: (h: LanHost, on: boolean) => Promise<boolean>;
 }
 
-export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost }: Props) {
+export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost, onCheck, onWatch }: Props) {
     const { t, locale } = useI18n();
     const [tab, setTab] = useState<HostPanelTab>(initialTab);
     // 同一台主機上再從列表要求別的分頁。/ Another tab requested for the same host from a list row.
@@ -98,6 +103,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
     const [saving, setSaving] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [limitHit, setLimitHit] = useState(false);
+    const [alertsInfo, setAlertsInfo] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -182,6 +188,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         {host.gateway && ` · ${t("network.change.gateway")}`}
                     </p>
                 </div>
+                <WatchButton host={host} onWatch={onWatch} />
                 <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
                     <X size={16} />
                 </Button>
@@ -196,6 +203,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                     <div className="space-y-4">
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         <HostChangeNote host={host} />
+                        <CheckRow host={host} tunnel={tunnel} online={online} onCheck={onCheck} onInfo={() => setAlertsInfo(true)} />
                         {/* 這台機器上的服務：每個 port 一個最直接的用法。/ The services on this machine: each port's most direct use. */}
                         <HostPorts
                             host={host}
@@ -349,6 +357,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                 )}
             </div>
 
+            <LanAlertsInfoDialog isOpen={alertsInfo} onClose={() => setAlertsInfo(false)} host={host} tunnel={tunnel} onWatch={onWatch} />
             <ConfirmDialog
                 isOpen={confirmDelete}
                 onClose={() => setConfirmDelete(false)}

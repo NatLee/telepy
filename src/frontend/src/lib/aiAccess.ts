@@ -11,7 +11,7 @@ export const SCOPES: { scope: string; label: TranslationKey; description: Transl
     { scope: "tunnels:read", label: "oauth.scope.tunnelsRead", description: "oauth.scope.tunnelsReadDescription", tools: ["list_tunnels", "tunnel_status", "lan_hosts"] },
     { scope: "ssh:exec", label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription", tools: ["ssh_session_open", "ssh_exec", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close"] },
     { scope: "ssh:files", label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription", tools: ["ssh_session_open", "sftp_list", "sftp_read", "sftp_write"] },
-    { scope: "network:scan", label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription", tools: ["lan_scan"] },
+    { scope: "network:scan", label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription", tools: ["lan_scan", "lan_check"] },
     {
         scope: "browser:use",
         label: "oauth.scope.browserUse",
@@ -31,6 +31,7 @@ export const TOOL_LABELS: Record<string, TranslationKey> = {
     sftp_write: "activity.tool.sftp_write",
     lan_hosts: "activity.tool.lan_hosts",
     lan_scan: "activity.tool.lan_scan",
+    lan_check: "activity.tool.lan_check",
     shell_open: "activity.tool.shell_open",
     shell_send: "activity.tool.shell_send",
     shell_read: "activity.tool.shell_read",
@@ -95,7 +96,7 @@ export const REACH_BRANCHES: { id: ReachBranch; scope: string; tools: string[]; 
     { id: "exec", scope: "ssh:exec", tools: ["ssh_exec"], label: "mcp.reach.exec", detail: "mcp.reach.execDetail" },
     { id: "shell", scope: "ssh:exec", tools: ["shell_open", "shell_send", "shell_read"], label: "mcp.reach.shell", detail: "mcp.reach.shellDetail" },
     { id: "files", scope: "ssh:files", tools: ["sftp_list", "sftp_read", "sftp_write"], label: "mcp.reach.files", detail: "mcp.reach.filesDetail" },
-    { id: "scan", scope: "network:scan", tools: ["lan_scan"], label: "mcp.reach.scan", detail: "mcp.reach.scanDetail" },
+    { id: "scan", scope: "network:scan", tools: ["lan_scan", "lan_check"], label: "mcp.reach.scan", detail: "mcp.reach.scanDetail" },
     { id: "browser", scope: "browser:use", tools: ["browser_open", "browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot"], label: "mcp.reach.browser", detail: "mcp.reach.browserDetail" },
 ];
 
