@@ -295,6 +295,14 @@ export interface UploadJob {
     upload: string;
     /** 正在重送第幾次（0 = 沒有）。/ Which resend is under way (0 = none). */
     retry: number;
+    /** 伺服器給的 lease（同一個視窗接著寫用）。/ The server's lease, so this window can continue. */
+    lease?: string | null;
+    /** 從裝置上已有的這裡接著傳（續傳）。/ Continued from what the device already had. */
+    resumedFrom?: number | null;
+    /** 同名衝突：傳好的部分留在裝置上，等使用者選取代或捨棄。/ A name clash: the upload waits for replace / discard. */
+    kept?: boolean;
+    /** 等另一個視窗（可能是剛關掉的分頁）。/ Waiting for another window (maybe a tab just closed). */
+    waitingOther?: boolean;
     error?: string;
 }
 
@@ -365,6 +373,10 @@ const ERROR_KEYS: Record<string, TranslationKey> = {
     step_up_required: "files.err.step_up_required",
     upload_gone: "files.err.upload_gone",
     interrupted: "files.err.interrupted",
+    upload_busy: "files.err.upload_busy",
+    upload_taken: "files.err.upload_taken",
+    local_changed: "files.err.local_changed",
+    not_yours: "files.err.not_yours",
 };
 
 /** 後端的 `code` → 翻譯 key；認不得回 null（顯示後端原文）。/ Backend code → key; null = show the backend text. */

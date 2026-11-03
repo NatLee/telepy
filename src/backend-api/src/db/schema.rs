@@ -305,6 +305,28 @@ const TABLES: &[(&str, &str)] = &[
             "disconnected_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：檔案管理分段上傳在裝置上的暫存檔（Telepy 自己放的才記；完成 / 取消就刪，閒置太久由背景清掉）。
+    // Part files of uploads in progress on devices (only Telepy's own; removed when done / cancelled, or when idle).
+    (
+        "telepy_upload_part",
+        r#"CREATE TABLE "telepy_upload_part" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(64) NOT NULL,
+            "user_id" integer NOT NULL,
+            "upload" varchar(64) NOT NULL,
+            "target" text NOT NULL,
+            "part_path" text NOT NULL,
+            "total" integer NOT NULL,
+            "received" integer NOT NULL DEFAULT 0,
+            "local_name" text NULL,
+            "local_modified" integer NULL,
+            "lease" varchar(64) NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL,
+            UNIQUE ("tunnel_id", "username", "part_path")
+        )"#,
+    ),
     // Rust 自有：每個使用者自己的隧道釘選。/ Per-user tunnel pins.
     (
         "telepy_tunnel_pin",
@@ -1028,6 +1050,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_upload_part_updated" ON "telepy_upload_part" ("updated_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,

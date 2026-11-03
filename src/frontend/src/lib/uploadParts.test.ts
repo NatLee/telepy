@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldersToCreate, MAX_RETRIES, newUploadId, PART_SIZE, partOutcome, partQuery, partRange, retryDelay, safeRel, topName, uploadClashes } from "./uploadParts.ts";
+import { foldersToCreate, hideKnownParts, hoursLeft, isPartFileName, localIdentity, MAX_RETRIES, newUploadId, PART_SIZE, partOutcome, partQuery, partRange, resumable, retryDelay, safeRel, sameLocalFile, topName, uploadClashes } from "./uploadParts.ts";
 
 test("upload ids are what the backend accepts", () => {
     const id = newUploadId();
@@ -56,4 +56,33 @@ test("clashes: same-name files are replaced, same-name folders are merged into",
 
 test("empty folders are created parents first", () => {
     assert.deepEqual(foldersToCreate(["a/b/c", "a/d", "x"]), ["a", "x", "a/b", "a/d", "a/b/c"]);
+});
+
+test("a changed device copy or a different local file starts over; a name clash keeps the upload", () => {
+    assert.deepEqual(partOutcome(409, { code: "upload_mismatch" }), { kind: "fresh" });
+    assert.deepEqual(partOutcome(409, { code: "exists", kept: true, error: "x" }), { kind: "fail", code: "exists", error: "x", kept: true });
+    assert.deepEqual(partOutcome(409, { code: "upload_taken" }), { kind: "fail", code: "upload_taken", error: null });
+});
+
+test("only files above one part try to resume, and only the same local file matches", () => {
+    assert.equal(resumable(PART_SIZE), false);
+    assert.equal(resumable(PART_SIZE + 1), true);
+    const file = { name: "a.iso", size: 9, lastModified: 1700000000123.4 };
+    assert.deepEqual(localIdentity(file), { name: "a.iso", modified: 1700000000123 });
+    const row = { local_name: "a.iso", local_modified: 1700000000123, total: 9 };
+    assert.ok(sameLocalFile(file, row));
+    assert.ok(!sameLocalFile({ ...file, size: 10 }, row), "another size");
+    assert.ok(!sameLocalFile({ ...file, lastModified: 1 }, row), "changed since");
+    assert.ok(!sameLocalFile({ ...file, name: "b.iso" }, row), "another file");
+    assert.ok(!sameLocalFile(file, { ...row, local_name: null }), "no identity recorded");
+});
+
+test("part files the ledger knows are hidden, others stay visible", () => {
+    assert.ok(isPartFileName(".a b.iso.telepy-upload-abcd1234.part"));
+    assert.ok(!isPartFileName("a.telepy-upload-abcd1234.part"), "not hidden");
+    assert.ok(!isPartFileName(".a.telepy-upload-ab.part"), "id too short");
+    const items = [{ name: "a.iso" }, { name: ".a.iso.telepy-upload-abcd1234.part" }, { name: ".b.iso.telepy-upload-zzzz9999.part" }];
+    assert.deepEqual(hideKnownParts(items, [{ part_name: ".a.iso.telepy-upload-abcd1234.part" }]).map((i) => i.name), ["a.iso", ".b.iso.telepy-upload-zzzz9999.part"]);
+    assert.equal(hoursLeft(0), 1);
+    assert.equal(hoursLeft(23 * 3600 + 1), 24);
 });

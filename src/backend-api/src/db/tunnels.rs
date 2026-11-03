@@ -276,6 +276,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM telepy_tunnel_group_member WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_key_group_grant WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_session WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_upload_part WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_label WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     // 錄影的列；檔案由呼叫端（`recording::forget_tunnel`）刪。/ Recording rows; the caller removes the files.
     sqlx::query("DELETE FROM telepy_terminal_recording WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;

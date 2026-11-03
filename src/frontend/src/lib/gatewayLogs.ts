@@ -55,6 +55,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     files_close: { key: "logs.event.files_close", tone: "secondary", category: "session" },
     files_delete: { key: "logs.event.files_delete", tone: "warning", category: "change" },
     files_edit: { key: "logs.event.files_edit", tone: "outline", category: "change" },
+    files_upload_cleaned: { key: "logs.event.files_upload_cleaned", tone: "outline", category: "change" },
     browser_open: { key: "logs.event.browser_open", tone: "default", category: "session" },
     browser_close: { key: "logs.event.browser_close", tone: "secondary", category: "session" },
     desktop_open: { key: "logs.event.desktop_open", tone: "default", category: "session" },
