@@ -105,6 +105,9 @@ export function useDesktopPage() {
     const searchParams = useSearchParams();
     const tunnelParam = searchParams.get("tunnel");
     const hostParam = searchParams.get("lanHost");
+    // 網路頁的服務清單帶來的協定與 port（換主機 / 裝置時清掉）。/ Protocol and port from the network page's services list (cleared on another host / device).
+    const protocolParam = searchParams.get("protocol");
+    const portParam = searchParams.get("port");
     const { t } = useI18n();
     const { showError } = useToast();
 
@@ -225,12 +228,17 @@ export function useDesktopPage() {
         setForm((f) => ({ ...f, account: tunnel.usernames.includes(f.account) ? f.account : tunnel.default_username && tunnel.usernames.includes(tunnel.default_username) ? tunnel.default_username : tunnel.usernames[0] ?? "" }));
     }, [tunnel]);
     useEffect(() => {
+        const wanted = protocolParam === "rdp" || protocolParam === "vnc" || protocolParam === "rustdesk" ? protocolParam : null;
+        if (host && wanted) {
+            setForm((f) => ({ ...f, protocol: wanted, port: portParam && isValidPort(portParam) ? portParam : String(DEFAULT_PORT[wanted]) }));
+            return;
+        }
         const seen = host ? desktopPorts(host.open_ports) : [];
         if (seen.length > 0) setForm((f) => ({ ...f, protocol: seen[0].protocol, port: String(seen[0].port) }));
-    }, [host]);
+    }, [host, protocolParam, portParam]);
 
-    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null }), [replaceQuery]);
-    const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id) }), [replaceQuery]);
+    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null, protocol: null, port: null }), [replaceQuery]);
+    const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id), protocol: null, port: null }), [replaceQuery]);
     const update = useCallback((patch: Partial<DesktopForm>) => setForm((f) => ({ ...f, ...patch })), []);
     const setProtocol = useCallback((protocol: DesktopMode) => {
         setForm((f) => {

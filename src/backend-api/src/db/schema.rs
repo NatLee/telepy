@@ -1082,6 +1082,8 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
+    ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
     ("telepy_device_install", "join_facts", "text NULL"),
     ("telepy_device_install", "join_facts_at", "datetime NULL"),

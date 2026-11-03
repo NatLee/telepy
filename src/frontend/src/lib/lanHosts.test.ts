@@ -112,3 +112,12 @@ test("start view: deep link = topology, then the remembered choice, then the hos
     assert.equal(initialNetworkView(null, HOSTS_VIEW_ABOVE + 1, false), "hosts");
     assert.equal(initialNetworkView("bogus", 0, false), "tree");
 });
+
+test("the default scan ports are the backend's", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { DEFAULT_SCAN_PORTS } = await import("./lanHosts.ts");
+    const rust = readFileSync(new URL("../../../backend-api/src/lan/mod.rs", import.meta.url), "utf8");
+    const m = /pub const DEFAULT_PORTS: &\[u16\] = &\[([^\]]*)\]/.exec(rust);
+    assert.ok(m);
+    assert.deepEqual([...DEFAULT_SCAN_PORTS], m[1].split(",").map((x) => Number(x.trim())));
+});
