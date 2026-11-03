@@ -12,13 +12,16 @@ import { BellRing, Info, Send, Smartphone, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Chip, Section } from "@/components/ui/section";
+import { Field } from "@/components/ui/field";
+import { NativeSelect } from "@/components/ui/native-select";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/Toast";
 import { usePush } from "@/hooks/usePush";
 import { useI18n } from "@/lib/i18n";
-import { lastDelivery, type PushDevice } from "@/lib/push";
+import { delayChoices, lastDelivery, type PushDevice, type PushStatus } from "@/lib/push";
 import { describeUserAgent } from "@/lib/userAgent";
-import { PushFlowDialog } from "./PushFlow";
+import { PushFlowDialog, useWaitLabel } from "./PushFlow";
 
 export function PushSection({ details }: { details: boolean }) {
     const { t, locale } = useI18n();
@@ -98,7 +101,7 @@ export function PushSection({ details }: { details: boolean }) {
                 {t("push.here")}
             </Switch>
             {denied && <Callout tone="warning">{t("push.denied")}</Callout>}
-            {on && <p className="text-xs leading-relaxed text-muted-foreground">{t("push.statusNote")}</p>}
+            {on && view?.status && <StatusWait status={view.status} onSaved={() => void push.refresh()} />}
 
             {view && view.subscriptions.length > 0 && (
                 <div className="space-y-2">
@@ -111,8 +114,43 @@ export function PushSection({ details }: { details: boolean }) {
                 </div>
             )}
 
-            <PushFlowDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} device={push.current} on={on} />
+            <PushFlowDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} device={push.current} on={on} status={view?.status} />
         </Section>
+    );
+}
+
+/**
+ * 上線 / 離線推播：這個人要等多久（跟著帳號，每台裝置一樣）；站台上限以上的選不到，目前的選擇超過時標成「會縮短成…」。
+ * Status pushes: how long this person waits (on the account, the same on every device); choices above the site's limit
+ * are hidden, a current choice above it is marked as shortened.
+ */
+function StatusWait({ status, onSaved }: { status: PushStatus; onSaved: () => void }) {
+    const { t } = useI18n();
+    const { showError } = useToast();
+    const label = useWaitLabel();
+    const [busy, setBusy] = useState(false);
+    const save = async (secs: number) => {
+        setBusy(true);
+        try {
+            const res = await apiFetch("/api/user/settings", { method: "POST", body: JSON.stringify({ push_status_delay: secs }) });
+            if (!res.ok) showError(responseError(res, await readJson(res), t("push.failed", { error: `HTTP ${res.status}` })));
+            onSaved();
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <div className="space-y-1.5">
+            <Field label={t("push.wait.label")} hint={t("push.wait.hint", { perHour: status.per_hour })}>
+                <NativeSelect value={String(status.delay)} disabled={busy} onChange={(e) => void save(Number(e.target.value))}>
+                    {delayChoices(status).map((c) => (
+                        <option key={c.secs} value={c.secs}>
+                            {c.capped ? t("push.wait.capped", { wait: label(c.secs), max: label(status.max_delay) }) : label(c.secs)}
+                        </option>
+                    ))}
+                </NativeSelect>
+            </Field>
+        </div>
     );
 }
 

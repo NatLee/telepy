@@ -8,15 +8,22 @@
  * (`lib/push.pushSpots`); below, what the push service can and cannot see, and when pushes stop.
  */
 import React from "react";
-import { BellRing, CloudCog, Smartphone } from "lucide-react";
+import { BellRing, Clock, CloudCog, PlugZap, Smartphone, Unplug } from "lucide-react";
 import { FlowLink, FlowNode, FlowNow, FlowPath } from "@/components/flow/PathFlow";
 import { Modal } from "@/components/ui/Modal";
 import { Section } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
-import { lastDelivery, pushSpots, type PushDevice } from "@/lib/push";
+import { lastDelivery, pushSpots, type PushDevice, type PushStatus } from "@/lib/push";
 
-export function PushFlowDialog({ isOpen, onClose, device, on }: { isOpen: boolean; onClose: () => void; device: PushDevice | null; on: boolean }) {
+/** 等待時間的字：馬上 / N 分鐘 / N 小時。/ A wait as words: right away / N minutes / N hours. */
+export function useWaitLabel() {
     const { t } = useI18n();
+    return (secs: number) => (secs <= 0 ? t("push.wait.now") : secs % 3600 === 0 ? t("push.wait.hours", { n: secs / 3600 }) : t("push.wait.minutes", { n: Math.round(secs / 60) }));
+}
+
+export function PushFlowDialog({ isOpen, onClose, device, on, status }: { isOpen: boolean; onClose: () => void; device: PushDevice | null; on: boolean; status?: PushStatus }) {
+    const { t } = useI18n();
+    const waitLabel = useWaitLabel();
     const last = device ? lastDelivery(device) : "none";
     const spots = pushSpots(on, last);
     const service = device?.service ? t(`push.service.${device.service}`) : t("push.flow.serviceAny");
@@ -33,6 +40,21 @@ export function PushFlowDialog({ isOpen, onClose, device, on }: { isOpen: boolea
                     <FlowNode icon={Smartphone} title={t("push.flow.device")} sub={t("push.flow.deviceSub")} state={spots.device} stateText={t(spots.device === "ok" ? "push.flow.shown" : "push.flow.idle")} />
                 </FlowPath>
                 <FlowNow failed={now === "failed"}>{now === "failed" ? t("push.flow.now.failed", { error: device?.last_error ?? "" }) : t(`push.flow.now.${now}`)}</FlowNow>
+
+                {/* 上線 / 離線：斷線 ─ 等這個人選的時間 ─ 還沒回來才推 ─ 回來推「恢復」。/ Status: down ─ the person's wait ─ still down → push ─ back → push. */}
+                {status && (
+                    <Section title={t("push.flow.statusTitle")} description={t("push.flow.statusDescription", { wait: waitLabel(status.effective), perHour: status.per_hour })}>
+                        <FlowPath>
+                            <FlowNode icon={Unplug} title={t("push.flow.drops")} state={on ? "ok" : "waiting"} stateText="0:00" />
+                            <FlowLink compact label={t("push.flow.waits", { wait: waitLabel(status.effective) })} state={on ? "ok" : "waiting"} />
+                            <FlowNode icon={Clock} title={t("push.flow.stillDown")} state={on ? "ok" : "waiting"} stateText={`+${waitLabel(status.effective)}`} />
+                            <FlowLink compact label={t("push.flow.pushes")} state={on ? "ok" : "waiting"} />
+                            <FlowNode icon={BellRing} title={t("push.flow.offlinePush")} state={on ? "ok" : "waiting"} stateText={t("push.flow.sent")} />
+                            <FlowLink compact label={t("push.flow.later")} state={on ? "ok" : "waiting"} />
+                            <FlowNode icon={PlugZap} title={t("push.flow.onlinePush")} state={on ? "ok" : "waiting"} stateText={t("push.flow.sent")} />
+                        </FlowPath>
+                    </Section>
+                )}
 
                 <div className="grid gap-5 md:grid-cols-2">
                     <Section title={t("push.flow.seesTitle")}>

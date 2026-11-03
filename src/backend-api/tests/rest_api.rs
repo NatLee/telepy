@@ -339,10 +339,10 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "tapi_visits": true, "shell_history": "keep"}));
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "tapi_visits": true, "shell_history": "keep", "push_status_delay": 60, "push_status_delay_max": 3600}));
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "tapi_visits": true, "shell_history": "keep"}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "tapi_visits": true, "shell_history": "keep", "push_status_delay": 60, "push_status_delay_max": 3600}));
     // 各頁的卡片 / 清單顯示：整份取代，跟著帳號（profile 也帶）。/ Card / list per page: replaced whole, on the account (and the profile).
     let r = app.post("/api/user/settings", Some(&admin), json!({"view_modes": {"tunnels": "list", "key_groups": "card"}})).await;
     assert_eq!(r.json["view_modes"], json!({"key_groups": "card", "tunnels": "list"}), "{}", r.text);
@@ -469,7 +469,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 53);
+    assert_eq!(keys.len(), 55);
+    assert_eq!((r.json["values"]["notify_push_max_delay"].as_i64(), r.json["values"]["notify_push_per_hour"].as_i64()), (Some(3600), Some(20)), "status pushes: an hour at most, 20 an hour");
     assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");
     assert_eq!(r.json["values"]["carrier_auto_update"], true, "device carriers follow new releases by default");

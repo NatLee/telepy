@@ -21,6 +21,10 @@ use p256::{PublicKey, SecretKey};
 use serde_json::{json, Value};
 use sha2::Sha256;
 use telepy_server::webhooks::{Event, Kind, TunnelRef};
+use common::lab::{free_port, Lab, LabKey};
+use std::process::Stdio;
+use telepy_server::{db, monitor::runner};
+use tokio::process::{Child, Command};
 
 #[derive(Clone, Debug)]
 struct Got {
@@ -237,4 +241,115 @@ async fn pushes_are_encrypted_signed_filtered_and_end_with_the_sign_in() {
     app.state.webhooks.emit(approval(45));
     settle().await;
     assert_eq!(inbox.lock().unwrap().len(), before);
+}
+
+fn tunnel_ssh(lab: &Lab, key: &LabKey, reverse_port: u16, target_port: u16) -> Child {
+    Command::new("ssh")
+        .args(["-F", "/dev/null", "-N", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
+        .args(["-o", "ExitOnForwardFailure=yes", "-o", "LogLevel=ERROR", "-i"])
+        .arg(&key.path)
+        .args(["-p", &lab.gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap()
+}
+
+/// 監控迴圈推 n 輪（去彈跳要連兩輪），再等背景的推播送完。/ Step the monitor n cycles, then let the pushes go out.
+async fn step(lab: &Lab, r: &mut runner::Runner, n: usize) {
+    for _ in 0..n {
+        runner::cycle(&lab.app.state, r).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+}
+
+/// 實驗室使用者的網頁登入（推播訂閱要綁在一個登入上）。/ A web sign-in for a lab user (subscriptions belong to one).
+async fn web_sign_in(lab: &Lab, user_id: i64) -> String {
+    let pair = telepy_server::auth::sessions::issue(&lab.app.state, user_id, &telepy_server::client_ip::ClientMeta::default(), "password", None).await.unwrap();
+    pair["access_token"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn status_pushes_wait_follow_the_audience_and_stop_at_the_hourly_cap() {
+    let Some(lab) = Lab::start().await else { return };
+    let (base, inbox) = fake_push_service().await;
+    lab.app.state.push.set_test_service(&base);
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let (alice_web, bob_web) = (web_sign_in(&lab, alice.id).await, web_sign_in(&lab, bob.id).await);
+    let (phone, other) = (Device::new(3), Device::new(4));
+    for (token, dev, path) in [(&alice_web, &phone, "ok/alice"), (&bob_web, &other, "ok/bob")] {
+        let r = lab.app.post("/api/push/subscriptions", Some(token), json!({"endpoint": format!("{base}{path}"), "keys": dev.keys(), "lang": "en"})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    }
+
+    // 每個人自己選等多久：只收固定選項；站台上限把它收窄。/ Each person picks the wait: fixed choices, narrowed by the site.
+    let r = lab.app.post("/api/user/settings", Some(&alice_web), json!({"push_status_delay": 42})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = lab.app.post("/api/user/settings", Some(&alice_web), json!({"push_status_delay": 3600})).await;
+    assert_eq!((r.status, r.json["push_status_delay_max"].as_i64()), (StatusCode::OK, Some(3600)), "{}", r.text);
+    let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"notify_push_max_delay": 0})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = lab.app.get("/api/push", Some(&alice_web)).await;
+    assert_eq!((r.json["status"]["delay"].as_i64(), r.json["status"]["effective"].as_i64()), (Some(3600), Some(0)), "{}", r.text);
+
+    let key = lab.keygen("dev-tunnel");
+    let port = free_port();
+    let t = db::tunnels::create(
+        &lab.app.state.db,
+        db::tunnels::NewTunnel { user_id: alice.id, host_friendly_name: "dev", key: &key.public, reverse_port: port as i64, description: None, default_username_id: None },
+    )
+    .await
+    .unwrap();
+    let sshd = lab.machine("dev", &[], false).await;
+    let status = lab.app.state.status.clone();
+    let wait_listen = |up: bool| {
+        let status = status.clone();
+        async move {
+            while status.listen_ports().is_some_and(|p| p.contains(&port)) != up {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    let mut mon = runner::Runner::default();
+    step(&lab, &mut mon, 2).await;
+    let mut ssh = tunnel_ssh(&lab, &key, port, sshd.port);
+    wait_listen(true).await;
+    step(&lab, &mut mon, 3).await;
+    assert_eq!(inbox.lock().unwrap().len(), 0, "coming up for the first time is not news");
+
+    // 斷線 → 離線推播（只給看得到這條隧道的 alice）；回來 → 上線推播。/ Down → offline (alice only); back → online.
+    ssh.kill().await.unwrap();
+    wait_listen(false).await;
+    step(&lab, &mut mon, 3).await;
+    let got = wait_for(&inbox, 1).await;
+    assert_eq!(got.len(), 1, "bob cannot see alice's tunnel");
+    assert_eq!(got[0].path, "ok/alice");
+    let off = phone.open(&got[0].body);
+    assert_eq!((off["tag"].clone(), off["path"].clone()), (json!(format!("tunnel-{}", t.id)), json!(format!("/tunnels/{}", t.id))));
+    assert_eq!(off["body"], format!("dev is offline (port {port})"));
+
+    let mut ssh = tunnel_ssh(&lab, &key, port, sshd.port);
+    wait_listen(true).await;
+    step(&lab, &mut mon, 3).await;
+    let got = wait_for(&inbox, 2).await;
+    assert_eq!(phone.open(&got[1].body)["body"], format!("dev is back online (port {port})"));
+
+    // 每小時上限：已經送了 2 則，上限 2 → 下一次變化只送一則「還有更多」，之後都不送。
+    // The hourly cap: 2 sent, cap 2 → the next change sends one "more are waiting", then nothing.
+    let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"notify_push_per_hour": 2})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    ssh.kill().await.unwrap();
+    wait_listen(false).await;
+    step(&lab, &mut mon, 3).await;
+    let got = wait_for(&inbox, 3).await;
+    let held = phone.open(&got[2].body);
+    assert_eq!(held["tag"], "status-held", "{held}");
+    let _ssh = tunnel_ssh(&lab, &key, port, sshd.port);
+    wait_listen(true).await;
+    step(&lab, &mut mon, 3).await;
+    settle().await;
+    assert_eq!(inbox.lock().unwrap().len(), 3, "nothing more this hour");
 }

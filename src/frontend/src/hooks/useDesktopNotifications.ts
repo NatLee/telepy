@@ -92,7 +92,7 @@ export function useDesktopNotifications() {
         }
     };
 
-    // 伺服器也會推播的事件（上線 / 離線 / 降級以外的）：這台開著推播就交給推播。/ Events the server pushes too: left to the push when it is on here.
+    // 伺服器也會推播的事件（上線 / 離線 / 降級照這個人選的延遲）：這台開著推播就交給推播。/ Events the server pushes too (status after the person's own wait): left to the push when it is on here.
     const showPushed = (tag: string, body: string, msg?: NotificationPayload, tunnelId?: number) => {
         if (pushActiveHere()) return;
         show(tag, body, msg, tunnelId);
@@ -102,7 +102,7 @@ export function useDesktopNotifications() {
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg: NotificationPayload) => {
             const tunnels = Array.isArray(msg.tunnels) ? (msg.tunnels as { id: number; name: string }[]) : [];
             for (const tn of tunnels) {
-                show(`tunnel-${tn.id}`, t(msg.status === "connected" ? "notify.online" : "notify.offline", { name: tn.name }), msg, tn.id);
+                showPushed(`tunnel-${tn.id}`, t(msg.status === "connected" ? "notify.online" : "notify.offline", { name: tn.name }), msg, tn.id);
             }
         },
         // 有指令等你核准（自己在網頁終端機打的不算）。/ A command waits for your approval (not your own terminal's).
@@ -116,7 +116,7 @@ export function useDesktopNotifications() {
         },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_HEALTH]: (msg: NotificationPayload) => {
             if (msg.health === "degraded" && msg.tunnel_id !== undefined && typeof msg.name === "string") {
-                show(`tunnel-${msg.tunnel_id}`, t("notify.degraded", { name: msg.name }), msg);
+                showPushed(`tunnel-${msg.tunnel_id}`, t("notify.degraded", { name: msg.name }), msg);
             }
         },
         // 其餘也有網頁內提示的事件：分頁在背景時一樣跳桌面通知（每一種都能在偏好設定裡關掉）。

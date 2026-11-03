@@ -35,6 +35,50 @@ use vapid::VapidKey;
 
 /// 每台裝置每分鐘最多幾則。/ Pushes per device per minute.
 pub const PER_MINUTE: usize = 30;
+/// 「離線多久才推」可以選的（秒）；預設 1 分鐘。/ The offline waits one may pick (seconds); 1 minute by default.
+pub const STATUS_DELAYS: [i64; 8] = [0, 60, 120, 300, 600, 900, 1800, 3600];
+pub const DEFAULT_STATUS_DELAY: i64 = 60;
+
+/// 實際等多久：自己選的，但不超過站台上限。/ The wait in effect: one's choice, capped by the site.
+pub fn status_delay(choice: i64, site_max: i64) -> Duration {
+    Duration::from_secs(choice.clamp(0, site_max.max(0)) as u64)
+}
+
+/// 一個人這一小時的上線 / 離線推播。/ One person's status pushes in the current hour.
+#[derive(Default)]
+pub struct StatusCap {
+    sent: VecDeque<Instant>,
+    held: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapOutcome {
+    Send,
+    /// 剛好到上限：送一則「還有更多」。/ Just hit the cap: send one "more are waiting".
+    Hold,
+    Skip,
+}
+
+impl StatusCap {
+    /// 過去一小時送了幾則決定這則：沒到上限 = 送；到了 = 第一次送「還有更多」，之後不送，直到視窗空出來。
+    /// The past hour decides: below the cap = send; at the cap = one "more are waiting", then nothing until room frees up.
+    pub fn admit(&mut self, now: Instant, per_hour: i64) -> CapOutcome {
+        while self.sent.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(3600)) {
+            self.sent.pop_front();
+        }
+        if (self.sent.len() as i64) < per_hour.max(1) {
+            self.held = false;
+            self.sent.push_back(now);
+            return CapOutcome::Send;
+        }
+        if self.held {
+            CapOutcome::Skip
+        } else {
+            self.held = true;
+            CapOutcome::Hold
+        }
+    }
+}
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// 沒有 https 公開網址時給推播服務的聯絡方式。/ The contact given to push services without an https public URL.
 const FALLBACK_SUB: &str = "https://github.com/NatLee/telepy";
@@ -57,6 +101,8 @@ pub struct Push {
     key_path: PathBuf,
     key: Mutex<Option<Arc<VapidKey>>>,
     flood: Mutex<HashMap<i64, VecDeque<Instant>>>,
+    /// 每個人這一小時的上線 / 離線推播。/ Each person's status pushes this hour.
+    status_caps: Mutex<HashMap<i64, StatusCap>>,
     /// 測試用：這個前綴的網址也算推播服務，而且直接連（不經公網解析器）。/ For tests: URLs with this prefix count as a push service, connected directly.
     test_service: Mutex<Option<String>>,
 }
@@ -79,6 +125,7 @@ impl Push {
             key_path: key_path(config),
             key: Mutex::new(None),
             flood: Mutex::new(HashMap::new()),
+            status_caps: Mutex::new(HashMap::new()),
             test_service: Mutex::new(None),
         }
     }
@@ -109,9 +156,11 @@ impl Push {
         Ok(k)
     }
 
-    /// 一件事發生了：背景挑出要推給誰。/ An event happened: push it in the background to whoever should get it.
+    /// 一件事發生了：背景挑出要推給誰。上線 / 離線這類狀態不走這裡（監控迴圈照每個人的延遲送，`status`）。
+    /// An event happened: push it in the background to whoever should get it. Status events don't come here (the
+    /// monitor sends them after each person's delay, `status`).
     pub fn event(self: &Arc<Self>, event: &Event) {
-        if !notice::pushed(event.kind) || event.audience.is_empty() {
+        if !notice::pushed(event.kind) || event.kind.is_status() || event.audience.is_empty() {
             return;
         }
         let (me, event) = (self.clone(), event.clone());
@@ -135,9 +184,7 @@ impl Push {
             if subs.is_empty() {
                 continue;
             }
-            let mine = db::notify_prefs::prefs(&self.db, user).await?;
-            let mutes = db::notify_prefs::mutes(&self.db, user).await?;
-            if !resolve(event.kind, layers_for(&defaults, &mine, &mutes, event.kind, Channel::Desktop, tunnel_id)).0 {
+            if !self.allowed(user, event.kind, tunnel_id, &defaults).await? {
                 continue;
             }
             for sub in subs {
@@ -145,6 +192,64 @@ impl Push {
                 if let Some(n) = notice::notice(event.kind, lang, event.tunnel.as_ref(), &event.data, event.link.as_deref(), sub.details, &app_name) {
                     self.deliver(&sub, &n).await;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// 這個人「桌面通知」那一欄允許這件事（恢復跟著降級）。/ This person's desktop preference allows it (recovered follows degraded).
+    async fn allowed(&self, user: i64, kind: crate::webhooks::Kind, tunnel_id: Option<i64>, defaults: &[db::notify_prefs::DefaultRow]) -> sqlx::Result<bool> {
+        let decide = notice::pref_kind(kind);
+        let mine = db::notify_prefs::prefs(&self.db, user).await?;
+        let mutes = db::notify_prefs::mutes(&self.db, user).await?;
+        Ok(resolve(decide, layers_for(defaults, &mine, &mutes, decide, Channel::Desktop, tunnel_id)).0)
+    }
+
+    /// 誰在收上線 / 離線推播、各等多久（有活著的訂閱的人；站台關掉 = 沒有）。/ Who gets status pushes, and each one's wait.
+    pub async fn status_listeners(&self) -> sqlx::Result<HashMap<i64, Duration>> {
+        let settings = db::settings::get_solo(&self.db).await?;
+        if !settings.notify_push {
+            return Ok(HashMap::new());
+        }
+        Ok(db::push::status_listeners(&self.db).await?.into_iter().map(|(user, choice)| (user, status_delay(choice, settings.notify_push_max_delay))).collect())
+    }
+
+    /// 一條隧道的狀態變化已經持續超過這個人的延遲（或發過的結束了）：照偏好與每小時上限推給他的裝置。
+    /// A status change outlasted this person's delay (or an announced one ended): push it per their preferences and the
+    /// hourly cap.
+    pub fn status(self: &Arc<Self>, user: i64, tunnel: crate::webhooks::TunnelRef, kind: crate::webhooks::Kind) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = me.send_status(user, &tunnel, kind).await {
+                tracing::warn!(error = %e, user, tunnel = tunnel.id, "push: cannot send a status change");
+            }
+        });
+    }
+
+    async fn send_status(&self, user: i64, tunnel: &crate::webhooks::TunnelRef, kind: crate::webhooks::Kind) -> sqlx::Result<()> {
+        let settings = db::settings::get_solo(&self.db).await?;
+        if !settings.notify_push {
+            return Ok(());
+        }
+        let defaults = db::notify_prefs::defaults(&self.db).await?;
+        if !self.allowed(user, kind, Some(tunnel.id), &defaults).await? {
+            return Ok(());
+        }
+        let subs = db::push::live_for_user(&self.db, user).await?;
+        if subs.is_empty() {
+            return Ok(());
+        }
+        let outcome = self.status_caps.lock().unwrap().entry(user).or_default().admit(Instant::now(), settings.notify_push_per_hour);
+        let app_name = app_name(&self.config, &settings);
+        for sub in subs {
+            let lang = Lang::from_pref(Some(&sub.lang));
+            let n = match outcome {
+                CapOutcome::Send => notice::notice(kind, lang, Some(tunnel), &serde_json::json!({}), Some(&format!("/tunnels/{}", tunnel.id)), sub.details, &app_name),
+                CapOutcome::Hold => Some(notice::held(lang, &app_name, settings.notify_push_per_hour)),
+                CapOutcome::Skip => None,
+            };
+            if let Some(n) = n {
+                self.deliver(&sub, &n).await;
             }
         }
         Ok(())
@@ -257,4 +362,33 @@ pub fn key_path(config: &Config) -> PathBuf {
 pub fn app_name(config: &Config, s: &SiteSettings) -> String {
     let host = crate::ssh_host::web_host(config.public_base().as_deref()).or_else(|| config.server_domain.clone());
     crate::app_manifest::effective_name(&s.app_name_mode, &s.app_name, host.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wait_is_ones_choice_within_the_sites_limit() {
+        assert_eq!(status_delay(60, 3600), Duration::from_secs(60));
+        assert_eq!(status_delay(3600, 600), Duration::from_secs(600), "the site's limit wins");
+        assert_eq!(status_delay(300, 0), Duration::ZERO);
+        assert_eq!(status_delay(-5, 3600), Duration::ZERO);
+        assert!(STATUS_DELAYS.contains(&DEFAULT_STATUS_DELAY));
+    }
+
+    #[test]
+    fn the_hourly_cap_sends_one_notice_then_waits_for_room() {
+        let mut cap = StatusCap::default();
+        let t0 = Instant::now();
+        assert_eq!(cap.admit(t0, 2), CapOutcome::Send);
+        assert_eq!(cap.admit(t0 + Duration::from_secs(10), 2), CapOutcome::Send);
+        assert_eq!(cap.admit(t0 + Duration::from_secs(20), 2), CapOutcome::Hold, "one notice says more are waiting");
+        assert_eq!(cap.admit(t0 + Duration::from_secs(30), 2), CapOutcome::Skip);
+        assert_eq!(cap.admit(t0 + Duration::from_secs(3599), 2), CapOutcome::Skip);
+        // 第一則滿一小時：空出一格，可以再送，之後到上限又會有一則提醒。/ The first leaves the window: room again, and a new notice at the cap.
+        assert_eq!(cap.admit(t0 + Duration::from_secs(3600), 2), CapOutcome::Send);
+        assert_eq!(cap.admit(t0 + Duration::from_secs(3601), 2), CapOutcome::Hold);
+        assert_eq!(StatusCap::default().admit(t0, 0), CapOutcome::Send, "a cap below 1 still lets one through");
+    }
 }

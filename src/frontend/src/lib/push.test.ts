@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { bytesToB64url, isIos, keyBytes, lastDelivery, PUSH_SERVICES, pushSpots, pushSupport, type PushEnv } from "./push.ts";
+import { bytesToB64url, delayChoices, isIos, keyBytes, lastDelivery, PUSH_SERVICES, pushSpots, pushSupport, STATUS_DELAYS, statusTimeline, type PushEnv } from "./push.ts";
 
 const env = (over: Partial<PushEnv> = {}): PushEnv => ({ secure: true, serviceWorker: true, pushManager: true, notification: true, ios: false, standalone: false, ...over });
 
@@ -45,4 +45,18 @@ test("the push services match the backend's list", () => {
     const rust = readFileSync(new URL("../../../backend-api/src/push/notice.rs", import.meta.url), "utf8");
     const names = [...rust.matchAll(/\("[a-z.]+", "([a-z]+)"\)/g)].map((m) => m[1]);
     assert.deepEqual([...new Set(names)].sort(), [...PUSH_SERVICES].sort());
+});
+
+test("the offline waits match the backend and respect the site's limit", () => {
+    const rust = readFileSync(new URL("../../../backend-api/src/push/mod.rs", import.meta.url), "utf8");
+    assert.match(rust, new RegExp(`pub const STATUS_DELAYS: \\[i64; ${STATUS_DELAYS.length}\\] = \\[${STATUS_DELAYS.join(", ")}\\];`));
+    const choices = [...STATUS_DELAYS];
+    assert.deepEqual(delayChoices({ choices, max_delay: 300, delay: 60 }).map((c) => c.secs), [0, 60, 120, 300]);
+    assert.deepEqual(delayChoices({ choices, max_delay: 300, delay: 3600 }).at(-1), { secs: 3600, capped: true }, "the current choice stays visible, marked");
+});
+
+test("a blip shorter than the wait sends nothing", () => {
+    assert.deepEqual(statusTimeline(30, 60), { offline: false, online: false });
+    assert.deepEqual(statusTimeline(60, 60), { offline: true, online: true });
+    assert.deepEqual(statusTimeline(5, 0), { offline: true, online: true }, "right away");
 });

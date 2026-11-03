@@ -51,6 +51,9 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "tapi_daily": s.tapi_daily,
         "tapi_visits": s.tapi_visits,
         "shell_history": crate::shell_history::Mode::parse(&s.shell_history).unwrap_or(crate::shell_history::Mode::Keep).as_str(),
+        // 離線多久才推播（秒）與站台上限。/ The offline wait before a push, and the site's longest.
+        "push_status_delay": s.push_status_delay,
+        "push_status_delay_max": site.notify_push_max_delay,
     }))
 }
 
@@ -238,6 +241,17 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             None => None,
             Some(Value::String(m)) if crate::shell_history::Mode::parse(m).is_some() => Some(m.trim().to_string()),
             Some(_) => return Err(ApiError::field("shell_history", format!("Must be one of: {}.", crate::shell_history::Mode::VALUES.join(", ")))),
+        },
+        // 離線多久才推播：只收固定的幾個選項（站台上限在送的時候才收窄）。/ The offline wait: one of the fixed choices.
+        push_status_delay: match body.get("push_status_delay") {
+            None => None,
+            Some(v) => match v.as_i64() {
+                Some(n) if crate::push::STATUS_DELAYS.contains(&n) => Some(n),
+                _ => {
+                    let list = crate::push::STATUS_DELAYS.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+                    return Err(ApiError::field("push_status_delay", format!("Must be one of: {list}.")));
+                }
+            },
         },
         // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
         terminal_detach_secs: match body.get("terminal_detach_secs") {

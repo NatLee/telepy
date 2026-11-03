@@ -1302,6 +1302,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "app_name", "varchar(64) NOT NULL DEFAULT ''"),
     // 推播通知（Web Push）整站開關。/ Push notifications (Web Push), site-wide on / off.
     ("site_settings_sitesettings", "notify_push", "bool NOT NULL DEFAULT 1"),
+    // 上線 / 離線推播：每個人能設的等待上限（秒）與每人每小時最多幾則。/ Status pushes: the longest wait anyone may pick, and per-person per-hour cap.
+    ("site_settings_sitesettings", "notify_push_max_delay", "integer NOT NULL DEFAULT 3600"),
+    ("site_settings_sitesettings", "notify_push_per_hour", "integer NOT NULL DEFAULT 20"),
+    // 這個人要等多久才推「離線」（秒，`push::STATUS_DELAYS` 之一；站台上限會再收窄）。/ How long this person waits before an offline push.
+    ("user_management_usersettings", "push_status_delay", "integer NOT NULL DEFAULT 60"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

@@ -93,6 +93,18 @@ pub async fn live_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Subscripti
         .await
 }
 
+/// 有活著的訂閱的人與他選的「離線多久才推」（沒有設定列 = 預設）。/ People with a live subscription, and their offline wait.
+pub async fn status_listeners(db: &Db) -> sqlx::Result<Vec<(i64, i64)>> {
+    sqlx::query_as(&format!(
+        "SELECT DISTINCT p.user_id, COALESCE(us.push_status_delay, {}) FROM telepy_push_subscription p {LIVE} \
+         LEFT JOIN user_management_usersettings us ON us.user_id = p.user_id",
+        crate::push::DEFAULT_STATUS_DELAY
+    ))
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await
+}
+
 pub async fn get_live(db: &Db, id: i64) -> sqlx::Result<Option<Subscription>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM telepy_push_subscription p {LIVE} WHERE p.id = ?")).bind(now_db()).bind(id).fetch_optional(&db.read).await
 }

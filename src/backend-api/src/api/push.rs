@@ -60,6 +60,7 @@ async fn view(state: &AppState, user_id: i64, sid: Option<i64>) -> ApiResult<Val
         }
     };
     let subs = db::push::live_for_user(&state.db, user_id).await?;
+    let delay = db::users::settings_for(&state.db, user_id).await?.map(|s| s.push_status_delay).unwrap_or(crate::push::DEFAULT_STATUS_DELAY);
     Ok(json!({
         "enabled": settings.notify_push,
         "available": settings.notify_push && public_key.is_some(),
@@ -67,6 +68,14 @@ async fn view(state: &AppState, user_id: i64, sid: Option<i64>) -> ApiResult<Val
         "key_error": key_error,
         "per_minute": crate::push::PER_MINUTE,
         "subscriptions": subs.iter().map(|s| sub_json(s, sid)).collect::<Vec<_>>(),
+        // 上線 / 離線推播：自己選的等待、站台上限下實際的、可選的與每小時上限。/ Status pushes: the wait, the limits and the choices.
+        "status": {
+            "delay": delay,
+            "effective": crate::push::status_delay(delay, settings.notify_push_max_delay).as_secs(),
+            "max_delay": settings.notify_push_max_delay,
+            "per_hour": settings.notify_push_per_hour,
+            "choices": crate::push::STATUS_DELAYS,
+        },
     }))
 }
 
