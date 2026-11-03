@@ -4,6 +4,7 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -93,7 +94,12 @@ pub fn build(state: AppState) -> Router {
     // Login-gated Swagger UI + spec (see api/doc.rs); the switch (OPENAPI_ENABLED / the site setting) is read per
     // request and answers 404 for both while off.
     rest = rest.merge(api::doc::router(&openapi).route_layer(axum::middleware::from_fn_with_state(state.clone(), openapi_gate)));
-    let rest = rest.layer(CompressionLayer::new()).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls)).layer(axum::middleware::from_fn_with_state(state.clone(), ssh_host_guard));
+    // 下載（檔案 / zip）不壓縮：資料過了隧道才到這裡，壓縮只是吃 CPU，還會拿掉 Content-Length（瀏覽器就沒有進度）。
+    // Downloads (files / zips) are not compressed: it only costs CPU here and drops Content-Length (no progress bar).
+    let compress = CompressionLayer::new().compress_when(
+        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream")).and(NotForContentType::const_new("application/zip")),
+    );
+    let rest = rest.layer(compress).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls)).layer(axum::middleware::from_fn_with_state(state.clone(), ssh_host_guard));
 
     // WebSocket 與 MCP 路由不掛壓縮層（升級回應沒有 body；MCP 可能回 SSE 串流）。
     // No compression on WebSockets (no body) or MCP (may stream SSE).

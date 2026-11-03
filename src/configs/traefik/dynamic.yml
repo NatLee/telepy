@@ -33,8 +33,16 @@ http:
     # Compress HTML/JS/CSS/JSON (gzip+brotli). Backend JSON was served uncompressed; this shrinks the
     # render-critical API responses by ~80-90%. Traefik only compresses >1KB, skips already-compressed
     # types, and never compresses WebSockets — so it is attached to the HTTP routers only, not /ws.
+    # 檔案下載（application/octet-stream / application/zip）不壓縮：資料已經過了隧道，再壓只吃 CPU，還會拿掉
+    # Content-Length，瀏覽器就看不到檔案多大、剩多少。後端也一樣排除它們（app.rs）。
+    # Downloads are not compressed: it only costs CPU here and drops Content-Length, so the browser would lose the
+    # size and the progress. The backend excludes them too (app.rs).
     compress:
-      compress: {}
+      compress:
+        excludedContentTypes:
+          - application/octet-stream
+          - application/zip
+          - application/grpc
 
   routers:
     frontend:

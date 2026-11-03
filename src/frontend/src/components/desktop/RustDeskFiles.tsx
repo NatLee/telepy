@@ -42,6 +42,7 @@ import {
     type DeleteItem, type FileActivity, type LocalItem, type RecursiveListing, type RenameProblem, type ZipPlan,
 } from "@/lib/rustdeskFileOps";
 import { collectZip, ZipCollector, zipDirectoryHandle, ZipTooLarge } from "@/lib/zipStream";
+import { readDropped } from "@/lib/droppedFiles";
 import { RustDeskFilesFlowDialog } from "./RustDeskFilesFlow";
 import type { TranslationKey } from "@/locales/en";
 
@@ -126,37 +127,6 @@ function trackSockets(win: FrameWindow): (bytes: Uint8Array) => boolean {
         latest.send(bytes);
         return true;
     };
-}
-
-/** 拖進來的東西（可能有資料夾）→ 檔案 + 相對路徑 + 空資料夾。/ Dropped items, folders included. */
-async function readDropped(dt: DataTransfer): Promise<{ items: LocalItem[]; emptyDirs: string[] }> {
-    type Entry = { isFile: boolean; isDirectory: boolean; name: string; file?: (ok: (f: File) => void, err: (e: unknown) => void) => void; createReader?: () => { readEntries(ok: (e: Entry[]) => void, err: (e: unknown) => void): void } };
-    const entries = Array.from(dt.items ?? [])
-        .map((i) => (i.kind === "file" ? ((i.webkitGetAsEntry?.() ?? null) as unknown as Entry | null) : null))
-        .filter((e): e is Entry => !!e);
-    if (entries.length === 0 || entries.every((e) => e.isFile)) return { items: Array.from(dt.files).map((file) => ({ file, rel: file.name })), emptyDirs: [] };
-    const items: LocalItem[] = [];
-    const emptyDirs: string[] = [];
-    const walk = async (entry: Entry, prefix: string): Promise<void> => {
-        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.isFile && entry.file) {
-            const file = await new Promise<File>((ok, err) => entry.file!(ok, err));
-            items.push({ file, rel });
-            return;
-        }
-        if (!entry.isDirectory || !entry.createReader) return;
-        const reader = entry.createReader();
-        const children: Entry[] = [];
-        for (;;) {
-            const batch = await new Promise<Entry[]>((ok, err) => reader.readEntries(ok, err));
-            if (batch.length === 0) break;
-            children.push(...batch);
-        }
-        if (children.length === 0) emptyDirs.push(rel);
-        for (const c of children) await walk(c, rel);
-    };
-    for (const e of entries) await walk(e, "");
-    return { items, emptyDirs };
 }
 
 /** 存一個 Blob（沒有存檔對話框時）。/ Save a blob through a download link. */

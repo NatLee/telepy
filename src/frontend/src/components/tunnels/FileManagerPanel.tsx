@@ -12,7 +12,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
-    Archive, Copy, CornerLeftUp, Download, Eye, File, FileCode2, FilePlus2, Folder, FolderInput, FolderPlus, Home, Image as ImageIcon, Info, KeyRound,
+    Archive, Copy, CornerLeftUp, Download, Eye, File, FileCode2, FilePlus2, Folder, FolderInput, FolderPlus, FolderUp, Home, Image as ImageIcon, Info, KeyRound,
     Keyboard, Link2, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2, Upload, WifiOff, X, CheckCircle2, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,11 +29,13 @@ import { useFileManager } from "@/hooks/useFileManager";
 import { useFileOps } from "@/hooks/useFileOps";
 import {
     EMPTY_SELECTION, fileKeyAction, formatBytes, imageMime, isSelected, joinPath, KEY_HINTS, languageFor, modeFromString, moveCursor, parentPath, parseMode,
-    previewKind, pruneSelection, selectAll, selectOnly, selectRange, toggleSelection, uploadSummary, type Selection,
+    previewKind, pruneSelection, selectAll, selectOnly, selectRange, toggleSelection, uploadListRows, uploadSummary, type Selection,
 } from "@/lib/fileManager";
 import { ChmodDialog, DeleteDialog, DestinationDialog, DetailsDialog, NameDialog, type NameKind } from "@/components/files/FileDialogs";
 import { FileViewerDialog, type ViewerTarget } from "@/components/files/FileViewerDialog";
 import { FileFlowDialog } from "@/components/files/FileFlowDialog";
+import { readDropped } from "@/lib/droppedFiles";
+import { uploadClashes, type LocalItem } from "@/lib/uploadParts";
 
 interface FileManagerPanelProps {
     serverId: string;
@@ -91,13 +93,14 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
     const [detailsName, setDetailsName] = useState<string | null>(null);
     const [viewer, setViewer] = useState<ViewerTarget | null>(null);
     const [flowOpen, setFlowOpen] = useState(false);
-    const [replace, setReplace] = useState<{ files: File[]; names: string[] } | null>(null);
+    const [replace, setReplace] = useState<{ items: LocalItem[]; emptyDirs: string[]; files: string[]; folders: string[] } | null>(null);
     const [dragFiles, setDragFiles] = useState(false);
     const [dropRow, setDropRow] = useState<string | null>(null);
     const [showUploads, setShowUploads] = useState(true);
     const dragged = useRef<string[] | null>(null);
     const listRef = useRef<HTMLUListElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
 
     // 資料夾在前，其餘照後端的名稱排序。/ Folders first, then the backend's name order.
     const sorted = useMemo(() => [...items].sort((a, b) => Number(isDir(b)) - Number(isDir(a))), [items]);
@@ -143,33 +146,24 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
     // ------------------------------------------------------------ uploads (button + drop)
 
     const startUpload = useCallback(
-        (files: File[]) => {
-            if (!files.length) return;
-            const existing = new Set(sorted.filter((i) => !isDir(i)).map((i) => i.name));
-            const clash = files.filter((f) => existing.has(f.name)).map((f) => f.name);
+        (items: LocalItem[], emptyDirs: string[] = []) => {
+            if (!items.length && !emptyDirs.length) return;
+            const { files, folders } = uploadClashes(
+                [...items.map((i) => i.rel || i.file.name), ...emptyDirs],
+                sorted.map((i) => ({ name: i.name, dir: isDir(i) })),
+            );
             setShowUploads(true);
-            if (clash.length) setReplace({ files, names: clash });
-            else ops.enqueue(files);
+            if (files.length || folders.length) setReplace({ items, emptyDirs, files, folders });
+            else void ops.enqueue(items, { emptyDirs });
         },
         [sorted, ops],
     );
 
+    // 拖進來的可以是資料夾：整個傳上去（裡面的資料夾照建）。/ Dropped folders upload whole.
     const onDropFiles = (e: React.DragEvent) => {
-        const files: File[] = [];
-        let folders = 0;
-        for (const item of Array.from(e.dataTransfer.items ?? [])) {
-            if (item.kind !== "file") continue;
-            const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.();
-            if (entry?.isDirectory) {
-                folders++;
-                continue;
-            }
-            const f = item.getAsFile();
-            if (f) files.push(f);
-        }
-        if (!files.length && !folders) files.push(...Array.from(e.dataTransfer.files ?? []));
-        if (folders) showError(t("files.drop.noFolders", { count: folders }));
-        startUpload(files);
+        void readDropped(e.dataTransfer)
+            .then(({ items, emptyDirs }) => startUpload(items, emptyDirs))
+            .catch((err) => showError(t("files.err.network", { error: err instanceof Error ? err.message : String(err) })));
     };
 
     const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
@@ -222,6 +216,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
     // ------------------------------------------------------------ rendering
 
     const summary = uploadSummary(ops.uploads);
+    const uploadRows = uploadListRows(ops.uploads);
     const folderInSelection = (names: string[]) => names.some((n) => { const i = byName.get(n); return !!i && isDir(i); });
     const chmodInitial = chmodNames?.length === 1 ? (() => { const i = byName.get(chmodNames[0]); return i ? parseMode(i.mode ?? "") ?? modeFromString(i.perm ?? i.permissions?.string) : null; })() : null;
     const dateFmt = useMemo(() => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }), [locale]);
@@ -338,15 +333,29 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                     </div>
                 ) : (
                     <div className="flex gap-2">
-                        <input type="file" multiple ref={fileInputRef} onChange={(e) => { startUpload(Array.from(e.target.files ?? [])); e.target.value = ""; }} className="hidden" />
-                        <Button size="sm" className="flex-1 text-xs h-9 md:h-8 gap-2" onClick={() => fileInputRef.current?.click()} disabled={!enabled}>
-                            <Upload size={14} /> {t("files.uploadFile")}
-                        </Button>
+                        <input type="file" multiple ref={fileInputRef} onChange={(e) => { startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, rel: file.name }))); e.target.value = ""; }} className="hidden" />
+                        <input
+                            type="file"
+                            multiple
+                            ref={folderInputRef}
+                            {...{ webkitdirectory: "" }}
+                            onChange={(e) => { startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, rel: file.webkitRelativePath || file.name }))); e.target.value = ""; }}
+                            className="hidden"
+                        />
+                        {/* 上傳 + 上傳資料夾接在一起（分割按鈕），不會跟「新資料夾」搞混。/ Upload and upload-a-folder as one split button. */}
+                        <div className="flex min-w-0 flex-1">
+                            <Button size="sm" className="min-w-0 flex-1 rounded-r-none text-xs h-9 md:h-8 gap-2" onClick={() => fileInputRef.current?.click()} disabled={!enabled}>
+                                <Upload size={14} /> {t("files.uploadFile")}
+                            </Button>
+                            <Button size="sm" className="h-9 md:h-8 rounded-l-none border-l border-primary-foreground/25 px-2.5" onClick={() => folderInputRef.current?.click()} disabled={!enabled} title={t("files.uploadFolder")} aria-label={t("files.uploadFolder")}>
+                                <FolderUp size={14} />
+                            </Button>
+                        </div>
                         <Button size="sm" variant="outline" className="h-9 md:h-8 gap-1.5 text-xs" onClick={() => setNameDlg({ kind: "mkdir", initial: "" })} disabled={!enabled} title={t("files.new.folder")} aria-label={t("files.new.folder")}>
-                            <FolderPlus size={14} /> <span className="hidden @xs:inline">{t("files.new.folderShort")}</span>
+                            <FolderPlus size={14} /> <span className="hidden @sm:inline">{t("files.new.folderShort")}</span>
                         </Button>
                         <Button size="sm" variant="outline" className="h-9 md:h-8 gap-1.5 text-xs" onClick={() => setNameDlg({ kind: "touch", initial: "" })} disabled={!enabled} title={t("files.new.file")} aria-label={t("files.new.file")}>
-                            <FilePlus2 size={14} /> <span className="hidden @xs:inline">{t("files.new.fileShort")}</span>
+                            <FilePlus2 size={14} /> <span className="hidden @sm:inline">{t("files.new.fileShort")}</span>
                         </Button>
                     </div>
                 )}
@@ -357,21 +366,39 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                             <button type="button" className="min-w-0 flex-1 truncate text-left text-foreground" onClick={() => setShowUploads((v) => !v)} aria-expanded={showUploads}>
                                 {summary.active ? t("files.upload.progress", { done: summary.done, total: summary.total, percent: summary.percent }) : t("files.upload.finished", { done: summary.done, total: summary.total })}
                             </button>
-                            {!summary.active && <button type="button" className="text-muted-foreground hover:text-foreground" onClick={ops.clearUploads} title={t("common.dismiss")}><X size={13} /></button>}
+                            {summary.active > 0 ? (
+                                <button type="button" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => ops.cancelUploads()}>{t("files.upload.cancelAll")}</button>
+                            ) : (
+                                <button type="button" className="text-muted-foreground hover:text-foreground" onClick={ops.clearUploads} title={t("common.dismiss")}><X size={13} /></button>
+                            )}
                         </div>
                         <div className="h-1 bg-muted"><div className="h-1 bg-primary transition-[width]" style={{ width: `${summary.percent}%` }} /></div>
                         {/* 跑完了而且都成功就只留一行摘要。/ Once all finished fine, keep only the summary line. */}
                         {showUploads && (summary.active > 0 || summary.failed > 0) && (
                             <ul className="divide-y divide-border">
-                                {ops.uploads.map((j) => (
+                                {uploadRows.shown.map((j) => (
                                     <li key={j.id} className="flex items-center gap-2 px-2 py-1">
                                         {j.state === "done" ? <CheckCircle2 size={12} className="shrink-0 text-success" /> : j.state === "failed" ? <XCircle size={12} className="shrink-0 text-destructive" /> : j.state === "uploading" ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : <Upload size={12} className="shrink-0 text-muted-foreground" />}
                                         <span className="min-w-0 flex-1 truncate font-mono" title={j.error ? `${j.name}: ${j.error}` : j.name}>{j.name}</span>
-                                        <span className={cn("shrink-0 tabular-nums", j.state === "failed" ? "text-destructive" : "text-muted-foreground")}>
-                                            {j.state === "failed" ? t("files.upload.failed") : j.state === "queued" ? t("files.upload.queued") : j.size ? `${Math.round((Math.min(j.loaded, j.size) / j.size) * 100)}%` : "100%"}
+                                        <span className={cn("shrink-0 tabular-nums", j.state === "failed" ? "text-destructive" : j.retry ? "text-warning" : "text-muted-foreground")}>
+                                            {j.state === "failed"
+                                                ? t("files.upload.failed")
+                                                : j.state === "queued"
+                                                  ? t("files.upload.queued")
+                                                  : j.retry
+                                                    ? t("files.upload.retrying", { attempt: j.retry })
+                                                    : j.size
+                                                      ? `${Math.round((Math.min(j.loaded, j.size) / j.size) * 100)}%`
+                                                      : "100%"}
                                         </span>
+                                        {(j.state === "queued" || j.state === "uploading") && (
+                                            <button type="button" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => ops.cancelUploads([j.id])} title={t("files.upload.cancel")} aria-label={t("files.upload.cancel")}>
+                                                <X size={12} />
+                                            </button>
+                                        )}
                                     </li>
                                 ))}
+                                {uploadRows.waiting > 0 && <li className="px-2 py-1 text-muted-foreground">{t("files.upload.moreWaiting", { count: uploadRows.waiting })}</li>}
                             </ul>
                         )}
                     </div>
@@ -568,9 +595,14 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
             <ConfirmDialog
                 isOpen={!!replace}
                 onClose={() => setReplace(null)}
-                onConfirm={() => { if (replace) ops.enqueue(replace.files); }}
-                title={t("files.replace.title", { count: replace?.names.length ?? 0 })}
-                message={t("files.replace.body", { names: replace?.names.slice(0, 5).join(", ") ?? "" })}
+                onConfirm={() => { if (replace) void ops.enqueue(replace.items, { overwrite: true, emptyDirs: replace.emptyDirs }); }}
+                title={replace?.folders.length ? t("files.replace.titleFolders") : t("files.replace.title", { count: replace?.files.length ?? 0 })}
+                message={
+                    <span className="flex flex-col gap-1.5">
+                        {!!replace?.files.length && <span>{t("files.replace.body", { names: replace.files.slice(0, 5).join(", ") })}</span>}
+                        {!!replace?.folders.length && <span>{t("files.replace.bodyFolders", { names: replace.folders.slice(0, 5).join(", ") })}</span>}
+                    </span>
+                }
                 confirmText={t("files.replace.action")}
                 isDestructive
             />

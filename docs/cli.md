@@ -293,6 +293,8 @@ telepy cp ./config.yml box@pi:/etc/app/
 
 `cp` copies over SFTP through Telepy's API and needs the `ssh:files` scope. `scp` is the OpenSSH way and needs your personal SSH key.
 
+A download is written straight to disk (a device folder arrives as one zip). An upload goes in 8 MiB parts, so a proxy in front of Telepy with a request size limit (Cloudflare allows 100 MB) doesn't stop a big file, and a part that drops is sent again.
+
 ### Sessions, recordings and snippets
 
 ```sh

@@ -10,13 +10,18 @@
 //! - SFTP：每條連線一條**共用**的 sftp channel（SFTP 請求有編號，多人同時用沒問題），檔案管理與 SFTP REST 都走它，
 //!   不必每個請求重開 channel、重做 INIT。它占一個 session 額度；關了或卡住（`ssh::sftp_watch`）就換一條新的，
 //!   沒人用超過 [`IDLE`] 就關掉。
+//! - 大量傳輸（下載、資料夾打包、大的上傳段）用 [`DevicePool::bulk_sftp`] 開**自己的** sftp channel（裝置上另一個
+//!   sftp-server 行程，用完就關，占一個 session 額度）：共用那條的列目錄不會排在幾 MB 的讀取後面，而且每個請求的
+//!   時限放寬到 [`BULK_REQUEST_TIMEOUT`] —— russh-sftp 從**送出**就開始算，16 個 ~255 KiB 的讀取排在一起，裝置的
+//!   上傳比 ~3 Mbit/s 慢時，排在後面的會超過預設的 10 秒。開不了（裝置不讓開更多 session）就退回共用那條。
 //! - 沒有 lease 且閒置超過 [`IDLE`] 的連線由 reaper 關掉；裝置斷線時連線自己失效（`is_closed`），下次取用重連。
 //! - 權限由呼叫端先檢查（`permissions::allowed_usernames`）。連線只是傳輸：不同 Telepy 使用者共用同一條時，
 //!   各自是獨立的 channel（裝置端本來就只看得到同一把服務金鑰）。
 //!
 //! Device SSH connections shared per (tunnel port, OS account). Only session channels count against the
 //! per-connection limit (that is all MaxSessions limits); direct-tcpip users hold a transport lease; SFTP shares
-//! one channel per connection.
+//! one channel per connection, while bulk transfers open their own ([`DevicePool::bulk_sftp`]) with a longer
+//! per-request limit, so listings never queue behind megabytes of reads and slow uplinks don't time reads out.
 
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -187,6 +192,35 @@ impl Drop for PooledSftp {
     }
 }
 
+/// 大量傳輸專屬 sftp channel 的每個請求時限（秒）。/ Per-request limit on a bulk transfer's own channel (seconds).
+pub const BULK_REQUEST_TIMEOUT: u64 = 120;
+
+/// 大量傳輸用的 SFTP：自己的 channel（[`DevicePool::bulk_sftp`]），開不了就是共用那條。drop 時自己的 channel 會關
+/// （session 結束、`ChannelStream` 送 close），額度跟著 lease 還回去。
+/// SFTP for a bulk transfer: its own channel, or the shared one when the device allows no more sessions. Dropping it
+/// closes its own channel and returns the slot.
+pub enum TransferSftp {
+    Own { sftp: SftpSession, _lease: Lease },
+    Shared(PooledSftp),
+}
+
+impl TransferSftp {
+    /// 用的是自己的 channel 嗎。/ Whether it has its own channel.
+    pub fn own(&self) -> bool {
+        matches!(self, Self::Own { .. })
+    }
+}
+
+impl Deref for TransferSftp {
+    type Target = SftpSession;
+    fn deref(&self) -> &SftpSession {
+        match self {
+            Self::Own { sftp, .. } => sftp,
+            Self::Shared(s) => s,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Slot {
     /// 現有連線。同步鎖、短臨界區，從不跨 await。/ Live connections; a short critical section, never held across an await.
@@ -337,6 +371,25 @@ impl DevicePool {
                 }
             };
             return Ok((lease, channel));
+        }
+    }
+
+    /// 大量傳輸用的 SFTP（見模組說明）：自己開一條，開不了就借共用那條。`shared` 已經借到的話直接拿來當退路。
+    /// SFTP for a bulk transfer (see the module notes): its own channel, else the shared one.
+    pub async fn bulk_sftp(&self, state: &AppState, reverse_port: i64, username: &str) -> anyhow::Result<TransferSftp> {
+        let own = async {
+            let (lease, channel) = self.session_channel(state, reverse_port, username).await?;
+            let channel = device::open_sftp(channel).await?;
+            let cfg = russh_sftp::client::Config { request_timeout_secs: BULK_REQUEST_TIMEOUT, ..Default::default() };
+            let sftp = SftpSession::new_with_config(channel.into_stream(), cfg).await.context("start SFTP")?;
+            anyhow::Ok(TransferSftp::Own { sftp, _lease: lease })
+        };
+        match own.await {
+            Ok(t) => Ok(t),
+            Err(e) => {
+                tracing::info!(reverse_port, %username, error = format!("{e:#}"), "device pool: no own SFTP channel for a transfer; using the shared one");
+                Ok(TransferSftp::Shared(self.sftp(state, reverse_port, username).await?))
+            }
         }
     }
 
