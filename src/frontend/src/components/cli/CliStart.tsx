@@ -223,6 +223,8 @@ export function CliStart({ base, username, platform, setPlatform, signIns, brows
                                 <Button variant="outline" size="sm" asChild className="mt-2">
                                     <Link href="/tunnels/keys">{t("cli.try.addKey")}</Link>
                                 </Button>
+                                <span className="mt-3 block">{t("cli.try.noKeyCli")}</span>
+                                <CommandLine value="telepy keys add" className="mt-1.5" />
                             </Callout>
                         ) : keyCount !== null ? (
                             <p className="flex items-center gap-2 text-sm text-muted-foreground">

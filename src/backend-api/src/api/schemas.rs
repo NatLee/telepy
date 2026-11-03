@@ -3219,6 +3219,70 @@ pub struct DeviceKeyViewRow {
     pub owner_disabled: bool,
 }
 
+/// `POST …/ssh-check`: the keys this computer's ssh would offer.
+#[derive(ToSchema)]
+pub struct SshCheckRequest {
+    /// The device login account to check (absent = the one the terminal would pick: the default, else the only one)
+    pub account: Option<String>,
+    /// OpenSSH SHA256 fingerprints (`SHA256:…`) of the public keys ssh would offer, in the order it offers them (≤ 32)
+    pub fingerprints: Vec<String>,
+}
+
+/// One of your keys in an ssh check.
+#[derive(ToSchema)]
+pub struct SshCheckKey {
+    pub id: i64,
+    pub name: String,
+    pub fingerprint: String,
+    pub key_type: String,
+    pub expired: bool,
+    pub expires_at: Option<String>,
+}
+
+/// The device hop of an ssh check.
+#[derive(ToSchema)]
+pub struct SshCheckDevice {
+    /// installed / added_by_hand / pending / error / not_on_device / not_listed (not on the list and the account's file
+    /// not read since the server started, so it may have been added another way) / unknown (no key passes the gateway)
+    pub state: String,
+    /// The offered key most likely to get in (the one the state is about)
+    pub key: Option<SshCheckKey>,
+    /// The sync error for `error`
+    pub error: Option<String>,
+    /// The login account ids the key's direct list entry is limited to (null = not listed directly, or every account)
+    pub listed_accounts: Option<Vec<i64>>,
+    /// When Telepy last read that account's authorized_keys (since the server started)
+    pub file_read_at: Option<String>,
+    /// For not_listed / not_on_device: the `accounts` to send to `POST …/device-keys` with this key so it reaches this
+    /// account without widening it to every account (null = nothing to place)
+    pub place_accounts: Option<Vec<i64>>,
+}
+
+/// `POST …/ssh-check`: whether this computer's ssh gets into the device, hop by hop.
+#[derive(ToSchema)]
+pub struct SshCheck {
+    /// Nothing Telepy knows of stands in the way
+    pub ready: bool,
+    /// In path order: keys_off / no_key / key_expired / no_access / account_not_allowed / step_up / offline /
+    /// not_on_device / not_listed / pending / sync_error
+    pub problems: Vec<String>,
+    #[schema(value_type = Object, example = json!({"id": 4, "name": "box", "online": true, "require_step_up": false}))]
+    pub tunnel: serde_json::Value,
+    #[schema(value_type = Object, example = json!({"username": "pi", "id": 9, "allowed": true}))]
+    pub account: serde_json::Value,
+    /// The gateway hop: ok / no_key / expired / keys_off
+    pub gateway: String,
+    /// The offered keys that are yours
+    pub matched: Vec<SshCheckKey>,
+    /// How many unexpired personal keys you have registered at all
+    pub registered: i64,
+    pub device: SshCheckDevice,
+    #[schema(value_type = Object, example = json!({"required": true, "confirmed": false, "window_secs": 900}))]
+    pub step_up: serde_json::Value,
+    /// You may reach the device's sshd (owner, ADMIN, or at least one allowed account)
+    pub reach: bool,
+}
+
 #[derive(ToSchema)]
 pub struct DeviceKeysAdd {
     /// Ids of your own keys to add to the device's list

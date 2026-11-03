@@ -219,6 +219,35 @@ telepy sftp box@pi
 
 そのうえで OpenSSH を `-F` 付きで起動します。あなた自身の `~/.ssh/config` には一切触れません。
 
+### 自分の SSH 鍵
+
+`ssh`・`scp`・`sftp`・`forward` には、Telepy が知っていて、デバイスのそのアカウントも受け入れる個人用 SSH 鍵が必要です。OpenSSH を起動する前に、telepy はこのコンピューターが差し出す鍵（既定の鍵ファイル、`-i`、ssh-agent の鍵）が各段階でどうなるかを Telepy に尋ねます。何かに阻まれていれば、どの段階で、どう直せばよいかを伝えます。OpenSSH の `Permission denied (publickey)` と、おまけの `Connection closed by UNKNOWN port 65535` だけを残すことはありません。ターミナルでは、その場で直すかどうかも尋ねます。
+
+- **Telepy がその鍵を知らない**：Web のキーのページが鍵を入力済みの状態で開くので、そこで確認します。telepy は鍵が現れるまで待ちます。このコンピューターに鍵がまだなければ、先に `ssh-keygen` で作ります。
+- **鍵がデバイスにない**：telepy がそのアカウント向けにだけデバイスのキーリストへ載せ、Telepy がインストールし終えるまで待ちます。
+- **トンネルがステップアップを求めている**：トンネルのページが開いて本人確認を求めます。telepy は確認を待ちます。
+
+同じ確認と修正は単独でも使えます。
+
+```sh
+telepy keys                                # Telepy にある自分の鍵と、このコンピューターにあるのはどれか
+telepy keys add                            # このコンピューターの鍵を追加（ブラウザーで確認）
+telepy keys add ~/.ssh/id_work.pub --device box@pi   # 特定の鍵を追加し、box の pi にも載せる
+telepy keys check box@pi                   # 段階ごとに：ssh がどこで断られるか
+telepy keys check box@pi --yes             # …そして鍵を box の pi 向けリストに載せる
+```
+
+```text
+✓ this computer    offers 1 key(s): ~/.ssh/id_ed25519
+✓ Telepy           knows your key "laptop"
+✓ box              online
+✗ pi@box           your key isn't in authorized_keys
+```
+
+**鍵の追加がブラウザー経由の理由**：鍵は、追加したときのサインインが終わっても使え続けます。そのためトークンや CLI のサインインは、鍵を読むことと、追加済みの鍵をデバイスに載せることはできても、新しい鍵は追加できません。追加は Web でのワンクリックのままにしてあり、そのすぐ横で telepy が表示した指紋と照らし合わせられます。鍵をデバイスに載せるには `ssh:exec` スコープが必要で、ブラウザーでのサインインには最初から含まれています。そのアカウントでコマンドを実行できる人なら、どのみち自分で鍵を追加できるからです。
+
+ターミナルがない場合、telepy は説明するだけです。確実に断られるときは OpenSSH の前で止まり、確かでないとき（デバイスに手作業で追加した鍵、読めない鍵ファイル）はそのまま接続します。`--no-check` または `TELEPY_NO_KEY_CHECK=1` で確認を省けます。Telepy から見えないハードウェアトークンなどに使います。
+
 ### Web ポートか SSH ポートか
 
 `telepy ssh`・`scp`・`sftp` は、デフォルトでは Telepy の **Web ポート**経由で接続します。`telepy` 自身が Telepy へのホップの ProxyCommand になり、SSH を WebSocket の中で運びます（`/ws/gateway/`、python3 は不要）。
@@ -391,6 +420,9 @@ telepy browse close "$ID"
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | このサインインで開いているブラウザーの一覧、または ID で 1 つを操作 | `browser:use` |
 | `telepy api tokens` | 自分のトークンと呼び出しの集計 | — |
 | `telepy api activity` | トークンと CLI のサインインによる呼び出し（[呼び出しログ](#呼び出しログ)を参照） | — |
+| `telepy keys` | Telepy にある自分の SSH 鍵と、このコンピューターにあるのはどれか。`--json` | — |
+| `telepy keys add [file]` | このコンピューターの鍵を追加：鍵を入力済みのキーのページが開くので、そこで確認。`--name`、`--device <target>` | — |
+| `telepy keys check <target>` | `telepy ssh` が入れるかを段階ごとに確認。`--yes` でそのアカウント向けにデバイスのリストへ鍵を載せる。`--json` | `tunnels:read`（`--yes` は `ssh:exec`） |
 | `telepy doctor` | サーバー、サインイン、スコープ、有効期限、手元の ssh ツール、バージョンを確認 | — |
 | `telepy update` | telepy を更新。`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | bash、zsh、fish、powershell、elvish の Tab 補完スクリプトを出力。シェルを省くと、どのファイルにどの行を追加するかを表示 | — |
@@ -401,7 +433,7 @@ telepy browse close "$ID"
 
 - 1 つのターゲットに対する `exec` と `run` は、リモートコマンドの終了コードで終了します。タイムアウトして強制終了された場合は 124、Telepy が拒否したか実行できなかった場合は 255 です。
 - ターゲットが複数あるときは、どれかが失敗すると `exec` は 1 で終了します。
-- `ssh`・`scp`・`sftp` は OpenSSH の終了コードで終了します。
+- `ssh`・`scp`・`sftp` は OpenSSH の終了コードで終了します。鍵の確認で OpenSSH の前に止まった場合は 1 です（理由が表示されます）。
 - Telepy からのその他のエラーは 1 で終了し、サーバーのメッセージを表示します。
 
 ## トークンとスコープ
@@ -430,6 +462,7 @@ telepy browse close "$ID"
 
 - **トークンはあなた自身です**：あなたのトンネル、そこで使えるアカウント、管理者があなたに設定した機能スイッチ、コマンドルールがすべてそのまま適用されます。あなたが持っている以上の権限は得られません。
 - **アカウントは操作できません**：Web へのサインイン、パスワードや 2 段階認証の設定変更、トークンの追加作成はできません。開かれているのは許可リストにある REST ルートだけで、それぞれ 1 つのスコープが必要です。**トークンで呼べるもの**タブは同じリスト（`GET /api/auth/tokens/routes`）から作られているので、サーバーの動作と食い違うことはありません。
+- **SSH 鍵は追加できません**：鍵の一覧を読むことと、追加済みの鍵をデバイスのリストに載せること（`ssh:exec` が必要）はできますが、鍵の追加は Web で行います。`telepy keys add` がそのページを開きます。
 - **ステップアップのトンネルには使えません**：本人確認を求めるトンネルは、MCP エージェントと同じようにトークンを拒否します。
 - **有効期限があります**：どのトークンも、作成から最長 1 年で期限が切れます。失効はただちに反映されます。
 - **管理者が止められます**：管理者は、全員・ユーザーグループ・特定の 1 人に対して **API トークン**機能をオフにでき（**管理 → ユーザーとアクセス → 機能の権限**）、その人のトークンは動かなくなります。管理者があなたに対してオフにした他の機能（Web ターミナル、ファイルマネージャーなど）も、トークンからは 403 `feature_disabled` で拒否されます。
@@ -537,6 +570,7 @@ telepy api activity --all --user bob       # 管理者：全員分、または�
 | `TELEPY_SSH_VIA=ssh` | Telepy の SSH ポートに直接つなぐ。`--via ssh` と同じ |
 | `TELEPY_SSH_FALLBACK` | その実行での `ask`・`always`・`never`。`--fallback` と同じ |
 | `TELEPY_NO_UPDATE_CHECK=1` | 1 日 1 回の新しいリリースの確認をしない |
+| `TELEPY_NO_KEY_CHECK=1` | `ssh` / `scp` / `sftp` / `forward` の前に鍵を確認しない。`--no-check` と同じ |
 | `TELEPY_RELEASES_URL` | リリースページのミラー。更新の確認と `telepy update` で使う |
 | `TELEPY_RELEASE_KEYS` | 内蔵の鍵の代わりに信頼するリリース公開鍵（署名し直すミラー向け） |
 | `TELEPY_NO_MASCOT=1` | `login` と `doctor` の横に Tapi を表示しない |
@@ -558,7 +592,7 @@ telepy doctor                              # サーバー、サインイン、�
 
 - **macOS がバイナリーを開かせてくれない**：ブラウザーでダウンロードするとこうなります。`xattr -d com.apple.quarantine telepy` を一度実行してください。
 - **`ssh`・`scp`・`sftp` が起動しない**：PATH 上にシステムの OpenSSH クライアントが必要です。
-- **デバイスが SSH 鍵を受け付けない**：`ssh`・`scp`・`sftp` は個人用 SSH 鍵でログインします。Web でそのトンネルの **SSH 設定**ダイアログを開くと、鍵でログインできるか（「鍵でログインできるか確認する」）が分かり、鍵を追加することもできます。
+- **`Permission denied (publickey)`**：`telepy keys check <tunnel>[@account]` を実行すると、鍵がどの段階で断られているか（Telepy が知らない、期限切れ、デバイスのそのアカウントにない、ステップアップが必要…）が分かり、`--yes` で直せるものは直します。`telepy ssh` も最初に同じ確認をします。Web ではトンネルの **SSH 設定**ダイアログでも確認できます（「鍵でログインできるか確認する」）。
 - **Web ポートに届かない**：ターミナルでは、telepy は SSH ポートを使う前に確認します。ターミナルがない場合は切り替えません。`--fallback always`、`TELEPY_SSH_FALLBACK=always`、`telepy config fallback always` のどれかで許可するか、`--via ssh` で最初から SSH ポートを使ってください。
 - **403 `token_scope`**：このコマンドに必要なスコープがトークンにありません（[スコープ](#スコープ)を参照）。そのスコープを持つトークンを作るか、`--scope` を付けてサインインし直してください。
 - **403 `token_route`**：そのエンドポイントはトークンにはまったく開かれていません。アカウント、2 段階認証、トークン自体の管理は Web でしかできません。

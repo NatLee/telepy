@@ -1,8 +1,10 @@
 /**
  * SSH 金鑰頁邏輯：我的金鑰（含指紋 / 最後使用）、我能用的裝置 × 我的金鑰（裝置金鑰清單）、新增 / 刪除 / 改說明、
- * 勾選把金鑰放進某台裝置的清單、立即同步；`?device=<id>` 直接打開那台裝置的管理視窗。
+ * 勾選把金鑰放進某台裝置的清單、立即同步；`?device=<id>` 直接打開那台裝置的管理視窗；`?add=<公鑰>&name=…&from=cli`
+ * 打開先填好的「新增金鑰」（`telepy keys add` 開的，使用者在這裡按下去——token 不能登記金鑰）。
  * Keys page: my keys, the device × key matrix (device key lists), add / delete / describe, toggling a key on a
- * device, sync now; `?device=<id>` opens that device's panel.
+ * device, sync now; `?device=<id>` opens that device's panel; `?add=<public key>&name=…&from=cli` opens the add
+ * dialog prefilled (what `telepy keys add` opens: the person confirms it here — tokens can't register keys).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -28,6 +30,15 @@ export interface NewKey {
     expiresAt?: string;
     /** 放進這個金鑰群組（它授予的裝置都會裝上）。/ Put it in this key group (it goes wherever the group is given). */
     groupId?: number | null;
+    /** `telepy keys add` 要的：成功時說可以回終端機了。/ Asked for by `telepy keys add`: the success toast says so. */
+    fromCli?: boolean;
+}
+
+/** 網址帶來的「新增金鑰」請求（`?add=`）。/ An add-key request from the URL (`?add=`). */
+export interface AddRequest {
+    key: string;
+    name: string;
+    fromCli: boolean;
 }
 
 export function useKeysPage() {
@@ -145,6 +156,7 @@ export function useKeysPage() {
                 }
                 if (failed.length) showError(t("keys.addedButNotOn", { devices: failed.join(", ") }));
                 else if (body.device_of?.length) showSuccess(t("keys.addedAlsoDevice", { name: body.device_of.map((d) => d.name).join(", ") }));
+                else if (k.fromCli) showSuccess(t("keys.addedFromCli", { name: body.host_friendly_name }));
                 else showSuccess(k.deviceIds.length ? t("keys.addedAndQueued", { count: k.deviceIds.length }) : t("keys.added"));
                 await Promise.all([fetchKeys(), fetchDevices()]);
                 return true;
@@ -273,6 +285,24 @@ export function useKeysPage() {
         [pathname, router, searchParams]
     );
 
+    // ?add=<公鑰>&name=…&from=cli：`telepy keys add` 開的。只拿第一行、限長度（網址是別人也能做的連結，按下去的仍是使用者）。
+    // ?add=<public key>&name=…&from=cli from `telepy keys add`. First line only, length-capped (anyone can craft a link;
+    // the person still has to confirm it).
+    const addParam = searchParams.get("add");
+    const nameParam = searchParams.get("name");
+    const fromParam = searchParams.get("from");
+    const addRequest = useMemo<AddRequest | null>(() => {
+        const key = (addParam ?? "").split(/\r?\n/, 1)[0].trim().slice(0, 16384);
+        if (!key) return null;
+        return { key, name: (nameParam ?? "").trim().slice(0, 64), fromCli: fromParam === "cli" };
+    }, [addParam, nameParam, fromParam]);
+    const clearAddRequest = useCallback(() => {
+        const params = new URLSearchParams(searchParams.toString());
+        for (const k of ["add", "name", "from"]) params.delete(k);
+        const qs = params.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }, [pathname, router, searchParams]);
+
     return {
         keys,
         devices,
@@ -281,6 +311,8 @@ export function useKeysPage() {
         pending,
         syncing,
         openDeviceId: deviceParam,
+        addRequest,
+        clearAddRequest,
         refresh,
         fetchDevices,
         addKey,

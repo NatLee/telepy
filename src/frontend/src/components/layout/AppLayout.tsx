@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
@@ -17,6 +17,7 @@ import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
 import { FeatureOffNotice } from "@/components/access/FeatureOffNotice";
 import { featuresForPath, hasFeature } from "@/lib/features";
+import { loginPathFor } from "@/lib/oauthFlow";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -59,9 +60,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     const pageFeatures = featuresForPath(pathname);
     const featureOff = pageFeatures.length > 0 && user && !pageFeatures.some((f) => hasFeature(user, f)) ? pageFeatures[0] : null;
 
+    // 沒登入就打開的網址（例如 `telepy keys add` 開的「新增金鑰」）：登入完回到它。這一頁登入過、後來登出 / 過期的
+    // 照舊回一般登入頁（401 自己會處理同意頁）。
+    // A link opened while signed out (e.g. the add-key page `telepy keys add` opens) comes back after signing in. A page
+    // that was signed in and then signed out / expired goes to the plain sign-in page as before.
+    const wasSignedIn = useRef(false);
     useEffect(() => {
+        if (isAuthenticated) wasSignedIn.current = true;
         if (!isLoading && !isAuthenticated) {
-            router.push("/login");
+            router.push(wasSignedIn.current ? "/login" : loginPathFor(window.location.pathname + window.location.search));
         }
     }, [isAuthenticated, isLoading, router]);
 

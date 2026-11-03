@@ -17,6 +17,7 @@ pub mod authorized_keys;
 pub mod locate;
 pub mod platform;
 pub mod remote;
+pub mod ssh_check;
 pub mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use super::serialize::user_key_json;
 use super::AppJson;
+use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
 use crate::db::{self, keys::UserKey, tunnels::like_prefix, Db};
 use crate::device_keys::authorized_keys::{parse_public_key, weak_key_reason};
@@ -37,10 +38,12 @@ pub fn unique_error(e: sqlx::Error) -> ApiError {
 }
 
 #[utoipa::path(get, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::UserKey>)))]
-async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+async fn list(State(state): State<AppState>, AuthUser(user): AuthUser, delegated: Delegated) -> ApiResult<Json<Value>> {
     let rows = db::keys::user_keys(&state.db, user.id).await?;
     let groups = db::groups::key_group_of(&state.db, user.id).await?;
-    let devices = OwnDevices::load(&state.db, user.id).await?;
+    let mut devices = OwnDevices::load(&state.db, user.id).await?;
+    // 限定隧道的 token（`telepy keys`）：別的隧道的名稱不給。/ A tunnel-limited token doesn't learn other tunnels' names.
+    devices.0.retain(|(id, _, _)| delegated.allows(*id));
     let tz = state.config.tz_offset_minutes;
     Ok(Json(Value::Array(
         rows.iter()

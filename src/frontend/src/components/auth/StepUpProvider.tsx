@@ -5,7 +5,8 @@
  * 第二因素就先開設定（沿用 SecuritySettings），設好按「繼續」再確認一次。成功的 token 存進這個分頁（lib/stepUp）。
  * The step-up flow for sensitive tunnels (mounted in AppLayout): ask `/api/auth/step-up` for a token, open the
  * "confirm it's you" dialog when a proof is needed, or the security settings first when the account has no second
- * factor yet. The token is kept in this tab (lib/stepUp).
+ * factor yet. The token is kept in this tab (lib/stepUp). `?stepUp=1` on any page asks right away (`telepy ssh` opens
+ * the tunnel page with it when the gateway would refuse until you confirm); the parameter is then dropped.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { ShieldCheck } from "lucide-react";
@@ -64,6 +65,14 @@ export function StepUpProvider() {
             return false;
         };
         setStepUpHandler(run);
+        // `?stepUp=1`（`telepy ssh` 開的）：馬上請你確認，然後把參數從網址拿掉，重新整理不會再問。
+        // `?stepUp=1` (opened by `telepy ssh`): ask at once, then drop it from the URL so a reload doesn't ask again.
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("stepUp") === "1") {
+            url.searchParams.delete("stepUp");
+            window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+            void requestStepUp();
+        }
         return () => setStepUpHandler(null);
     }, []);
 

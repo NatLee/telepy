@@ -149,6 +149,11 @@ pub const ROUTES: &[RouteRule] = {
         // Your own tokens and call log, read-only (`telepy api tokens` / `api activity`); create / revoke stay web-only.
         RouteRule { methods: "GET", pattern: "/api/auth/tokens", scope: Option::None, tunnel: None },
         RouteRule { methods: "GET", pattern: "/api/auth/tokens/calls", scope: Option::None, tunnel: None },
+        // 自己的 SSH 公鑰（唯讀；`telepy keys`、在網頁加完金鑰後等它出現）。新增 / 改 / 刪仍只限網頁登入：一把金鑰是一個身分，
+        // 被偷的 token 不能藉此留下一把永遠進得去的金鑰。
+        // Your own SSH public keys, read-only (`telepy keys`, waiting for a key added in the web). Adding / changing /
+        // deleting stays web-only: a key is an identity, and a stolen token must not leave a key behind that keeps working.
+        RouteRule { methods: "GET", pattern: "/api/reverse/user/keys", scope: Option::None, tunnel: None },
         // 讀：隧道、狀態、連線紀錄、帳號、ssh config、群組、區網主機、裝置身分。/ Reads.
         rule("GET", "/api/reverse/server/dashboard", READ, None),
         rule("GET", "/api/reverse/server/keys", READ, None),
@@ -156,6 +161,8 @@ pub const ROUTES: &[RouteRule] = {
         rule("GET", "/api/reverse/server/keys/{t}", READ, Path),
         rule("GET", "/api/reverse/server/{t}/connections|usernames|host-key|device-install", READ, Path),
         rule("GET", "/api/reverse/server/{t}/lan/hosts", READ, Path),
+        // 「這台電腦的 ssh 進得去嗎」（只讀；POST 是因為要送指紋清單）。/ "Will this computer's ssh get in?" (a read; POST carries the fingerprints).
+        rule("POST", "/api/reverse/server/{t}/ssh-check", READ, Path),
         rule("GET", "/api/reverse/lan/topology", READ, None),
         rule("GET", "/tunnels/server/config/{t}", READ, Path),
         rule("GET", "/api/reverse/tunnel-groups", READ, None),
@@ -164,6 +171,11 @@ pub const ROUTES: &[RouteRule] = {
         rule("GET|POST", "/api/ai/sessions", EXEC, Handler),
         rule("DELETE", "/api/ai/sessions/*", EXEC, Handler),
         rule("POST", "/api/ai/sessions/*/exec", EXEC, Handler),
+        // 把自己「已登記」的金鑰放上這台裝置的清單（只能是自己的、只到自己能用的帳號）：能在那個帳號跑指令的人本來就能把
+        // 金鑰加進 authorized_keys，所以跟 exec 同一個 scope；登記新金鑰仍只限網頁。
+        // Put your own, already registered key on the device's list (yours only, only into accounts you may use): whoever
+        // can run commands as that account could append a key anyway, hence exec's scope. Registering a key stays web-only.
+        rule("POST", "/api/reverse/server/{t}/device-keys", EXEC, Path),
         rule("GET", "/api/snippets", EXEC, None),
         rule("GET", "/api/recordings", EXEC, Handler),
         rule("GET", "/api/recordings/*/cast", EXEC, Handler),
@@ -375,6 +387,14 @@ mod tests {
             ("DELETE", "/api/auth/sessions", Option::None),
             ("POST", "/api/oauth/authorize", Option::None),
             ("POST", "/api/reverse/user/keys", Option::None),
+            ("GET", "/api/reverse/user/keys", Some(TokenRoute { scope: Option::None, tunnel: None })),
+            ("GET", "/api/reverse/user/keys/4", Option::None),
+            ("DELETE", "/api/reverse/user/keys/4", Option::None),
+            ("GET", "/api/reverse/user/keys/devices", Option::None),
+            ("POST", "/api/reverse/server/4/ssh-check", rule("tunnels:read", Path(4))),
+            ("POST", "/api/reverse/server/4/device-keys", rule("ssh:exec", Path(4))),
+            ("DELETE", "/api/reverse/server/4/device-keys/2", Option::None),
+            ("POST", "/api/reverse/server/4/device-keys/sync", Option::None),
             ("GET", "/api/reverse/server/abc/connections", Option::None),
             ("GET", "/api/credentials", Option::None),
         ];
