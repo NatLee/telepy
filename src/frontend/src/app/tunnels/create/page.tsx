@@ -64,6 +64,7 @@ export default function CreateTunnelWizard() {
                 icon={<Cable />}
                 title={t("wizard.title")}
                 description={mode === "command" ? t("join.pageSubtitle") : t("wizard.subtitle")}
+                back={{ href: "/tunnels", label: t("tunnelPage.backToList") }}
             />
 
             {showModes && (

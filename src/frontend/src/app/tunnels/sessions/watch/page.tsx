@@ -8,11 +8,11 @@
  * explainer.
  */
 import React, { Suspense, useEffect, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import "xterm/css/xterm.css";
-import { ArrowLeft, Eye, Hand, Info, Keyboard, Undo2, Video, Zap } from "lucide-react";
+import { Eye, Hand, Info, Keyboard, Undo2, Video, Zap } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { usePageCrumb } from "@/hooks/usePageCrumb";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -60,6 +60,8 @@ function WatchInner() {
     }, [hostRef, w.start]);
 
     const user = w.start?.user.username ?? "";
+    // 頁首麵包屑：Telepy › 即時連線 › 正在看 <誰>。/ The header breadcrumb: Telepy › Live sessions › Watching <who>.
+    usePageCrumb(t(user ? "watch.title" : "watch.titleLoading", { user }));
     const phase = watchPhase({ open: w.open, closeCode: w.closed?.code ?? null, detached: w.detached, control: w.control });
     const typing = controller(w.watchers);
     const others = watcherNames({ type: "watchers", watchers: w.watchers?.watchers.filter((x) => x.id !== w.start?.you) ?? [], control: null });
@@ -75,17 +77,11 @@ function WatchInner() {
                 icon={<Eye />}
                 title={user ? t("watch.title", { user }) : t("watch.titleLoading")}
                 description={w.start ? t("watch.subtitle", { tunnel: w.start.tunnel.name, account: where }) : t("watch.subtitleLoading")}
+                back={{ href: `${backTo}${w.start ? `?tunnel=${w.start.tunnel.id}` : ""}`, label: t("watch.back") }}
                 actions={
-                    <>
-                        <Button variant="outline" onClick={() => setInfo(true)}>
-                            <Info size={16} /> {t("watch.howItWorks")}
-                        </Button>
-                        <Button variant="ghost" asChild>
-                            <Link href={`${backTo}${w.start ? `?tunnel=${w.start.tunnel.id}` : ""}`}>
-                                <ArrowLeft size={16} /> {t("watch.back")}
-                            </Link>
-                        </Button>
-                    </>
+                    <Button variant="outline" onClick={() => setInfo(true)}>
+                        <Info size={16} /> {t("watch.howItWorks")}
+                    </Button>
                 }
             />
 

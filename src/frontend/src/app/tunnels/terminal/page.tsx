@@ -15,6 +15,7 @@ import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent, type SideTab } from "@/components/tunnels/TerminalContent";
 import { ToolboxPanel } from "@/components/toolbox/ToolboxPanel";
 import { useFeatures } from "@/hooks/useFeatures";
+import { usePageCrumb } from "@/hooks/usePageCrumb";
 import { Modal } from "@/components/ui/Modal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ToolboxTarget } from "@/lib/snippets";
@@ -103,6 +104,8 @@ function TerminalSession({ serverId }: { serverId: string }) {
         detachPolicy,
     } = state;
     const detachPref = useTerminalDetach();
+    // 頁首麵包屑：Telepy › 終端機（點了回選擇器）› <裝置>。/ The breadcrumb: Telepy › Terminal (back to the picker) › <device>.
+    usePageCrumb(tunnelName ?? null);
     const [whyOpen, setWhyOpen] = useState(false);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);

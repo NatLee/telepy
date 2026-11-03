@@ -37,6 +37,7 @@ import { useTunnelDetails, type TunnelFormErrors } from "@/hooks/useTunnelDetail
 import { useLeaveTunnel, useTunnelModals } from "@/hooks/useTunnelModals";
 import { useTunnelConnections } from "@/hooks/useTunnelConnections";
 import { useWiderThan } from "@/hooks/useWiderThan";
+import { usePageCrumb } from "@/hooks/usePageCrumb";
 import { TUNNEL_TABS, parseTunnelId, parseTunnelTab, tunnelPageUrl, type TunnelTab } from "@/lib/tunnelPage";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
@@ -84,6 +85,9 @@ export function TunnelPageView() {
         if (!id) return;
         router.replace(tunnelPageUrl(id, next), { scroll: false });
     };
+
+    // 頁首麵包屑：Telepy › 通道 › <名稱>。/ The header breadcrumb: Telepy › Tunnels › <name>.
+    usePageCrumb(page.tunnel?.host_friendly_name);
 
     const tunnel = page.tunnel;
     if (!id || page.state === "missing" || (page.state === "error" && !tunnel)) {
@@ -160,30 +164,29 @@ export function TunnelPageView() {
                 title={tunnel.host_friendly_name}
                 titleAddon={<TunnelStatusPill health={health} lastSeenAt={tunnel.last_seen_at} />}
                 description={tunnel.description || undefined}
-                actions={
-                    <>
-                        <Button asChild variant="outline">
-                            <Link href="/tunnels">
-                                <ArrowLeft size={15} /> {t("tunnelPage.backToList")}
-                            </Link>
-                        </Button>
-                        <TunnelActions tunnel={tunnel} {...actions} />
-                    </>
-                }
+                back={{ href: "/tunnels", label: t("tunnelPage.backToList") }}
+                actions={<TunnelActions tunnel={tunnel} {...actions} />}
             />
 
             <SectionOutlineProvider>
             <div className={cn("grid", wide ? "grid-cols-[15rem_minmax(0,1fr)] items-start gap-6" : "gap-4")}>
-                {/* 不夠寬是一列可橫捲的分頁，夠寬是黏在左側的一欄；左欄下面列出這個分頁有哪幾塊，捲到哪塊標哪塊。
-                    A scrolling row when narrow, a sticky left rail when wide; under the rail, the blocks of this tab, the one in view marked. */}
-                <div className={cn("min-w-0", wide ? "sticky top-20 -mx-1 max-h-[calc(100dvh-6rem)] space-y-4 overflow-y-auto px-1 pb-1" : "-mx-1 overflow-x-auto px-1 pb-0.5")}>
-                    <NavTabs tabs={tabs} value={active} onChange={setTab} aria-label={tunnel.host_friendly_name} className={wide ? "sm:flex-col" : "sm:min-w-max sm:flex-row [&_span]:whitespace-nowrap"} />
-                    {wide && <SectionOutline key={active} label={t("tunnelPage.outline")} />}
+                {/* 不夠寬是一列可橫捲的分頁，夠寬是黏在左側的一欄；目前那個分頁底下列出它有哪幾塊，捲到哪塊標哪塊。
+                    A scrolling row when narrow, a sticky left rail when wide; under the current tab, its blocks, the one in view marked. */}
+                <div className={cn("min-w-0", wide ? "sticky top-20 -mx-1 max-h-[calc(100dvh-6rem)] overflow-y-auto px-1 pb-1" : "-mx-1 overflow-x-auto px-1 pb-0.5")}>
+                    <NavTabs
+                        as="nav"
+                        tabs={tabs}
+                        value={active}
+                        onChange={setTab}
+                        aria-label={tunnel.host_friendly_name}
+                        className={wide ? "sm:flex-col" : "sm:min-w-max sm:flex-row [&_span]:whitespace-nowrap"}
+                        below={wide ? <SectionOutline key={active} label={t("tunnelPage.outline")} /> : undefined}
+                    />
                 </div>
 
                 {/* 每一塊是一張卡片（標題列 + 細線 + 內容），一頁有幾塊一眼看得出來。/ Every block is a card, so a tab's blocks read apart. */}
                 <SectionPanels>
-                <div role="tabpanel" className="min-w-0">
+                <div className="min-w-0">
                     {active === "overview" && (
                         <OverviewPanel
                             tunnel={tunnel}
