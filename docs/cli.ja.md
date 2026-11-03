@@ -318,6 +318,16 @@ telepy lan rm box nas                      # ID、アドレス、ラベルのど
 
 一覧に必要なのは `tunnels:read` だけです。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
 
+### LAN の Web ページを自分のブラウザーで
+
+```sh
+telepy forward box 192.168.1.20:8080 --open   # ポートを localhost に転送して、ブラウザーを開く
+telepy forward box@pi nas --open              # `telepy lan ls` のラベルでホストを指定。最初の Web ポートを使う
+telepy forward box localhost:3000 -l 13000    # デバイス自身の 3000 番を localhost:13000 に
+```
+
+`forward` は `telepy ssh` と同じ ssh config を書き、デバイス経由で `ssh -N -L 127.0.0.1:<ローカル>:<ホスト>:<ポート>` を実行します。ローカルのポートが応答したらアドレスを表示し、Ctrl+C まで転送を続けます。ローカルのポートは同じ番号（1024 未満は 10000 を足す）で、使用中なら次の空き番号です。`--local` で指定できます。127.0.0.1 だけで待ち受けるので、使えるのはこのコンピューターだけです。`telepy ssh` と同じく `tunnels:read` と個人用 SSH 鍵が必要です。Web アプリのネットワークページでは、同じページを Telepy のリモートブラウザーで開きます。
+
 ### デバイスのネットワーク上のブラウザー
 
 ```sh
@@ -356,6 +366,7 @@ telepy browse close "$ID"
 | `telepy ssh <target>` | デバイスに SSH。`-L`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`、`--` のあとにコマンド | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy scp [-r] <from>… <to>` | scp でコピー。リモート側は `<tunnel>[@account]:<path>` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
+| `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy config install` | Telepy のブロックを `~/.ssh/config` に入れる。トンネル名か `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |
 | `telepy config tidy` | ssh の設定を簡略化。`--check`、`--wildcards`、`--yes`、`--file`。サインイン不要 | — |

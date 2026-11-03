@@ -8,6 +8,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
+import { sameBrowser } from "@/lib/lanWeb";
+import type { RemoteBrowserPhase } from "@/components/tunnels/RemoteBrowserPanel";
 
 export const MAX_LAN_TERMINALS = 6;
 const DOCK_KEY = "telepy.lanDock";
@@ -35,6 +37,34 @@ export interface LanTerminalSession {
     /** 後端保留中的 shell（重新整理後接回）。/ The server's kept shell, re-attached after a reload. */
     shellId?: string | null;
 }
+
+/**
+ * dock 裡的遠端瀏覽器（最多一個：KasmVNC client 一頁只能有一個）。同一台裝置、同一個帳號再開網頁 = 同一個瀏覽器的新分頁；
+ * 換裝置就要換一個瀏覽器。重新整理不保留（瀏覽器 session 接不回來）。
+ * The dock's remote browser (one at most: the KasmVNC client allows one per page). Another page on the same device
+ * and account = a new tab in it; another device needs another browser. Not kept across reloads.
+ */
+export interface LanBrowserSession {
+    key: number;
+    tunnelId: number;
+    tunnelName: string;
+    reversePort: number;
+    /** 瀏覽器從裝置的哪個帳號出去。/ The device account the browser goes out through. */
+    deviceUser: string;
+    /** 開始時打開的網頁。/ The page it started on. */
+    startUrl: string;
+    /** 最後要求打開的網頁（分頁標籤）。/ The page asked for last (the tab label). */
+    url: string;
+    /** 每要求一個新分頁 +1。/ Bumped for every new tab asked for. */
+    openN: number;
+    phase: RemoteBrowserPhase;
+}
+
+export type WebRequest = Pick<LanBrowserSession, "tunnelId" | "tunnelName" | "reversePort" | "deviceUser" | "url">;
+
+/** 開網頁的結果：開了一個瀏覽器 / 在開著的那個開新分頁 / 開著的是別台裝置的（要先確認換掉）。
+ *  Opening a page: a new browser / a new tab in the open one / the open one is another device's (confirm first). */
+export type WebOpenResult = "started" | "tab" | "busy";
 
 /**
  * 每個開著的分頁登記一個「結束這個 shell」的函式；關分頁時先叫它（元件接著就卸載了，卸載本身不算結束）。
@@ -76,6 +106,7 @@ export function useLanTerminals() {
     const [activeKey, setActiveKey] = useState<number | null>(null);
     const [size, setSize] = useState<DockSize>("normal");
     const [nextKey, setNextKey] = useState(1);
+    const [browser, setBrowser] = useState<LanBrowserSession | null>(null);
     const restored = useRef(false);
 
     // 重新整理後把 dock 帶回來（掛載後才讀 sessionStorage，SSR 安全）。/ Bring the dock back after a reload.
@@ -118,15 +149,54 @@ export function useLanTerminals() {
         lanShellEnders.get(key)?.();
         setSessions((prev) => {
             const rest = prev.filter((s) => s.key !== key);
-            setActiveKey((cur) => (cur === key ? rest[rest.length - 1]?.key ?? null : cur));
+            setActiveKey((cur) => (cur === key ? rest[rest.length - 1]?.key ?? browser?.key ?? null : cur));
             return rest;
         });
-    }, []);
+    }, [browser]);
 
     const closeAll = useCallback(() => {
         lanShellEnders.forEach((end) => end());
         setSessions([]);
+        setBrowser(null);
         setActiveKey(null);
+    }, []);
+
+    /** 在 dock 的瀏覽器打開一個網頁；開著的是別台裝置的就回 "busy"（呼叫端確認後用 `replaceWeb`）。
+     *  Open a page in the dock's browser; "busy" when the open one belongs to another device (then `replaceWeb`). */
+    const openWeb = useCallback((req: WebRequest): WebOpenResult => {
+        if (browser && !sameBrowser(browser, req)) return "busy";
+        if (browser) {
+            setBrowser({ ...browser, url: req.url, openN: browser.openN + 1 });
+            setActiveKey(browser.key);
+            setSize((v) => (v === "min" ? "normal" : v));
+            return "tab";
+        }
+        const key = nextKey;
+        setNextKey(key + 1);
+        setBrowser({ ...req, key, startUrl: req.url, openN: 0, phase: "connecting" });
+        setActiveKey(key);
+        setSize((v) => (v === "min" ? "normal" : v));
+        return "started";
+    }, [browser, nextKey]);
+
+    /** 換掉開著的瀏覽器（新的 key = 舊的卸載、停掉）。/ Replace the open browser (a new key unmounts and stops the old one). */
+    const replaceWeb = useCallback((req: WebRequest) => {
+        const key = nextKey;
+        setNextKey(key + 1);
+        setBrowser({ ...req, key, startUrl: req.url, openN: 0, phase: "connecting" });
+        setActiveKey(key);
+        setSize((v) => (v === "min" ? "normal" : v));
+    }, [nextKey]);
+
+    const closeWeb = useCallback(() => {
+        setBrowser((cur) => {
+            if (cur) setActiveKey((a) => (a === cur.key ? sessions[sessions.length - 1]?.key ?? null : a));
+            return null;
+        });
+    }, [sessions]);
+
+    const setWebPhase = useCallback((phase: RemoteBrowserPhase) => {
+        setBrowser((cur) => (cur && cur.phase !== phase ? { ...cur, phase } : cur));
     }, []);
 
     const setStatus = useCallback((key: number, status: LanTerminalStatus) => {
@@ -148,5 +218,5 @@ export function useLanTerminals() {
         setSize((v) => (v === "min" ? "normal" : v));
     }, []);
 
-    return { sessions, activeKey, size, open, duplicate, close, closeAll, setStatus, setShell, reconnect, select, setSize };
+    return { sessions, browser, activeKey, size, open, duplicate, close, closeAll, setStatus, setShell, reconnect, select, setSize, openWeb, replaceWeb, closeWeb, setWebPhase };
 }

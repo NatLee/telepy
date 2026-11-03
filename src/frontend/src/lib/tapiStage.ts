@@ -268,6 +268,67 @@ export function pearlAt(p: Pearl, t: number, width: number, height: number): { x
     return { x: snap(x), y: snap(y), size };
 }
 
+/* ── 地面：每個場景下緣的一層 / The ground under each scene ──────── */
+
+/*
+ * 頁首在上面、下面什麼都沒有，整頁看起來就會頭重腳輕（Tapi 其實在正中間）。所以每個場景的下緣都有自己的「地面」：
+ * 珍奶的杯底沉著一層粉圓、紙飛機底下是雲、終端機最下面是一條狀態列。
+ * With the header on top and nothing at the bottom, the page reads top-heavy (Tapi is in fact in the middle), so each
+ * scene gets a ground along its lower edge: pearls settled at the bottom of the cup, clouds under the planes, a status
+ * bar under the terminal.
+ */
+
+/** 地面有多高（px）：畫面高度的一成左右，手機矮一點。/ How tall the ground is (px): about a tenth of the height, less on phones. */
+export function groundDepth(width: number, height: number): number {
+    const depth = Math.min(128, Math.max(44, Math.round(Math.max(0, height) * 0.095)));
+    return width < 640 ? Math.round(depth * 0.72) : depth;
+}
+
+/** 杯底的粉圓兩層：後面小顆、淡、堆得高一點；前面大顆、實。/ Two layers of settled pearls: back = small, faint, piled higher; front = big, solid. */
+export const BED_LAYERS = [
+    { unit: 3, alpha: 0.34, rise: 1.25 },
+    { unit: 5, alpha: 0.85, rise: 1 },
+] as const;
+
+/**
+ * 粉圓堆在 `x` 的高度（px）：幾座慢慢起伏的小山加上細一點的起伏，低的地方只剩薄薄一層。
+ * The pile's height at `x` (px): a few slow mounds plus finer ripples; the dips keep only a thin layer.
+ */
+export function bedHeight(x: number, depth: number, seed = 0): number {
+    const swell = Math.sin(x / 260 + 1.1 + seed) * 0.32 + Math.sin(x / 97 + 0.4 + seed * 2) * 0.17 + Math.sin(x / 41 + seed * 3) * 0.07;
+    return Math.max(0.16, 0.56 + swell) * depth;
+}
+
+/**
+ * 沉在杯底的粉圓（左上角，px）：一排排錯開疊起來（像真的堆在一起），每顆偏一點點，超過那裡的高度就不放；從上面那排
+ * 開始排，下面的畫在前面。
+ * The pearls settled at the bottom (top-left corners, px): staggered rows stacked like a real pile, each nudged a
+ * little, none above the pile's height there; upper rows come first, so lower ones are drawn in front.
+ */
+export function pearlBed(width: number, height: number, layer: 0 | 1, seed = 13): { x: number; y: number }[] {
+    const l = BED_LAYERS[layer];
+    const size = 8 * l.unit;
+    const depth = groundDepth(width, height) * l.rise;
+    const dx = size * 0.9;
+    const dy = size * 0.72;
+    const rand = seeded(seed + layer * 389);
+    const snap = (v: number) => Math.round(v / l.unit) * l.unit || 0;
+    const rows: { x: number; y: number }[][] = [];
+    for (let r = 0; r * dy < depth; r++) {
+        const row: { x: number; y: number }[] = [];
+        for (let x = -size / 2 + (r % 2 ? dx / 2 : 0); x < width + size / 2; x += dx) {
+            const jx = (rand() - 0.5) * l.unit * 2;
+            const jy = (rand() - 0.5) * l.unit * 2;
+            const room = bedHeight(x + size / 2, depth, layer) - (r * dy + size * 0.45);
+            // 堆頂參差一點：最上面那層偶爾少一顆。/ A ragged top: the top layer misses a pearl now and then.
+            if (room < 0 || (r > 0 && room < size * 0.5 && rand() < 0.35)) continue;
+            row.push({ x: snap(x + jx), y: snap(height - size * 0.7 - r * dy + jy) });
+        }
+        rows.push(row);
+    }
+    return rows.reverse().flat();
+}
+
 /* ── 每一頁的場景 / A scene per page ─────────────────────────── */
 
 /**
@@ -380,6 +441,38 @@ export function planeAt(p: Flyer, t: number, width: number, height: number): { x
     return { x: snap(x), y: snap(yAt(x)), size, unit: l.unit, trail };
 }
 
+/** 紙飛機底下的兩層雲：後面那層高、淡、慢。/ Two cloud layers under the planes: the back one taller, fainter, slower. */
+export const CLOUD_LAYERS = [
+    { unit: 4, alpha: 0.55, rise: 1.35, speed: 5 },
+    { unit: 6, alpha: 0.95, rise: 1, speed: 11 },
+] as const;
+/** 雲一圈多寬（px），往左飄，飄完一圈接回去。/ How wide one loop of clouds is (px); they drift left and wrap. */
+export const CLOUD_PERIOD = 1440;
+
+/**
+ * 雲頂的輪廓：每一欄（一個像素寬）從底下算起有幾格高。十朵大小不一的圓雲疊在一起，最低也蓋住地面的四成，頭尾接得起來
+ * （往左飄的時候看不出接縫）。
+ * The cloud tops: for each column (one pixel wide), how many pixels tall from the bottom. Ten round puffs of different
+ * sizes overlap, never lower than 40 % of the ground, and the ends meet so the drifting band has no seam.
+ */
+export function cloudTops(depth: number, layer: 0 | 1, seed = 17): number[] {
+    const l = CLOUD_LAYERS[layer];
+    const cols = Math.round(CLOUD_PERIOD / l.unit);
+    const top = (depth * l.rise) / l.unit;
+    const rand = seeded(seed + layer * 613);
+    const puffs = Array.from({ length: 10 }, (_, i) => ({ cx: ((i + rand() * 0.7) / 10) * cols, r: top * (0.4 + rand() * 0.55), base: top * (0.2 + rand() * 0.35) }));
+    return Array.from({ length: cols }, (_, x) => {
+        let h = top * 0.42;
+        for (const p of puffs) {
+            for (const shift of [-cols, 0, cols]) {
+                const d = x - p.cx - shift;
+                if (Math.abs(d) < p.r) h = Math.max(h, p.base + Math.sqrt(p.r * p.r - d * d));
+            }
+        }
+        return Math.max(1, Math.round(h));
+    });
+}
+
 /* ── 終端機的字（CLI 頁）/ Terminal glyphs (CLI pages) ─────────── */
 
 /** 往上飄的字（像資料穿過通道）。/ The characters drifting up (data through the tunnel). */
@@ -390,6 +483,19 @@ export function glyphAt(i: number, t: number, seed = 5): string {
     const step = Math.floor(Math.max(0, t) / (2.5 + (i % 5) * 0.7));
     const rand = seeded(seed + i * 7919 + step * 104729);
     return GLYPHS[Math.floor(rand() * GLYPHS.length)];
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * 終端機最下面那條狀態列（tmux 的預設樣子）：左邊 session 與視窗，右邊標題與本地時間（窄的時候只留時間）。
+ * The terminal's status bar at the bottom, in tmux's default shape: session and window on the left, title and local
+ * time on the right (only the time when narrow).
+ */
+export function statusLine(now: Date): { left: string; title: string; clock: string } {
+    const two = (n: number) => String(n).padStart(2, "0");
+    const date = `${two(now.getDate())}-${MONTHS[now.getMonth()]}-${two(now.getFullYear() % 100)}`;
+    return { left: "[telepy] 0:login*", title: '"tapi@telepy"', clock: `${two(now.getHours())}:${two(now.getMinutes())} ${date}` };
 }
 
 /* ── 印章（授權頁）/ Stamps (approval page) ──────────────────── */

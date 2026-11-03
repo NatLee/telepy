@@ -2009,6 +2009,21 @@ pub struct RemoteBrowserStartRequest {
     pub username: Option<String>,
     /// Optional id chosen by the caller (letters, digits, `-`, ≤ 64). With it, each start step is pushed to the caller as a `REMOTE-BROWSER-PROGRESS` notification `{tunnel_id, progress_id, step: proxy|browser, state: active|done|failed, attempt?, attempts?, secs?, reason?}`
     pub progress_id: Option<String>,
+    /// Optional page to open first (http / https only; e.g. a LAN host's web page `http://192.168.1.10:8080/`). Chromium starts on a blank page and is sent there; 400 `bad_url` otherwise
+    pub url: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct RemoteBrowserOpenRequest {
+    /// http / https URL to open in a new tab of the session
+    pub url: String,
+}
+
+#[derive(ToSchema)]
+pub struct RemoteBrowserTab {
+    pub url: String,
+    /// DevTools target id of the new tab
+    pub id: Option<String>,
 }
 
 #[derive(ToSchema)]

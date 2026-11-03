@@ -41,7 +41,10 @@ fn lan_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError
 pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
     let vendor = h.mac.as_deref().and_then(|m| oui.vendor(m));
     let mac_private = h.mac.as_deref().is_some_and(crate::oui::is_private);
+    let ports = h.open_port_list();
+    let web: Vec<Value> = crate::lan::web_links(&h.address, &ports).into_iter().map(|(port, scheme, url)| json!({ "port": port, "scheme": scheme, "url": url })).collect();
     json!({
+        "web": web,
         "vendor": vendor,
         "mac_private": mac_private,
         "id": h.id,
@@ -49,7 +52,7 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
         "address": h.address,
         "hostname": h.hostname,
         "mac": h.mac,
-        "open_ports": h.open_port_list(),
+        "open_ports": ports,
         "ssh_banner": h.ssh_banner,
         "label": h.label,
         "username": h.username,

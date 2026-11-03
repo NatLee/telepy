@@ -11,10 +11,12 @@ export type TerminalMainView = "terminal" | "browser" | "files";
  * @param tunnel - Object with tunnel id and reverse_port.
  * @param options - Optional mainView to open a specific tab; `lanHost` (+ `lanUser`, `lanAuth` = how that hop
  *   logs in, see lib/lanAuth.ts, `lanAccount` = the device account the hop goes through) opens the shell on a machine of the device's LAN, reached through the device.
+ *   `browserUrl` (with `mainView: "browser"`) starts the remote browser on that page at once (a LAN host's web page);
+ *   `account` = the device account to start with when no LAN host is given.
  */
 export function getTerminalPageUrl(
     tunnel: { id: number; reverse_port: number },
-    options?: { mainView?: TerminalMainView; lanHost?: number; lanUser?: string; lanAuth?: string; lanAccount?: string }
+    options?: { mainView?: TerminalMainView; lanHost?: number; lanUser?: string; lanAuth?: string; lanAccount?: string; browserUrl?: string; account?: string }
 ): string {
     let url = `/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`;
     if (options?.mainView && options.mainView !== "terminal") {
@@ -25,6 +27,9 @@ export function getTerminalPageUrl(
         if (options.lanUser) url += `&lanUser=${encodeURIComponent(options.lanUser)}`;
         if (options.lanAuth) url += `&lanAuth=${encodeURIComponent(options.lanAuth)}`;
         if (options.lanAccount) url += `&lanAccount=${encodeURIComponent(options.lanAccount)}`;
+    } else if (options?.account) {
+        url += `&account=${encodeURIComponent(options.account)}`;
     }
+    if (options?.browserUrl && options.mainView === "browser") url += `&browserUrl=${encodeURIComponent(options.browserUrl)}`;
     return url;
 }

@@ -15,6 +15,10 @@ pub mod cast;
 pub mod color;
 pub mod complete;
 pub mod creds;
+pub mod forward;
+/// 區網主機的網頁 port 表：與伺服器共用同一個檔。/ LAN web ports, shared with the server.
+#[path = "../../backend-api/src/lan/web.rs"]
+pub mod lan_web;
 pub mod tapi;
 /// Tapi 的像素格：與伺服器共用同一個檔（網頁的 `lib/mascot.ts` 是同一份）。/ Tapi's grids, shared with the server.
 #[path = "../../backend-api/src/mascot.rs"]
@@ -101,6 +105,8 @@ pub enum Cmd {
     Scp(ScpArgs),
     /// Open sftp to a device
     Sftp(SftpArgs),
+    /// Bring a port behind a device to your computer (ssh -L through Telepy): `forward <tunnel> <host>[:port] --open` opens a LAN web page in your own browser
+    Forward(ForwardArgs),
     /// Install Telepy's ssh config blocks into ~/.ssh/config (like the web's SSH config dialog)
     Config(ConfigArgs),
     /// Run a command on one or many devices through Telepy (command rules apply)
@@ -258,6 +264,26 @@ pub struct ScpArgs {
     /// Sources and destination; the remote one as <tunnel>[@account]:<path>
     #[arg(required = true, num_args = 2.., add = ArgValueCompleter::new(complete::remote_or_path))]
     pub paths: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ForwardArgs {
+    /// <tunnel>[@account] (account@tunnel works too)
+    #[arg(add = ArgValueCompleter::new(complete::target))]
+    pub target: String,
+    /// What to reach, as the device sees it: <host>[:port]. A LAN host's address, label or id, or localhost for the device itself; without a port, the host's first web port
+    pub to: String,
+    /// Local port (default: the same port, +10000 below 1024, or the next free one)
+    #[arg(short = 'l', long)]
+    pub local: Option<u16>,
+    /// Open the page in your browser once the forward is up
+    #[arg(long)]
+    pub open: bool,
+    /// Use https:// in the printed address (default: by the port, like the web app)
+    #[arg(long)]
+    pub https: bool,
+    #[command(flatten)]
+    pub opts: SshOpts,
 }
 
 #[derive(Args, Debug)]
@@ -623,6 +649,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Ssh(a) => ssh(&api, &a),
                 Cmd::Scp(a) => scp(&api, &a),
                 Cmd::Sftp(a) => sftp(&api, &a),
+                Cmd::Forward(a) => forward_cmd(&api, &a),
                 Cmd::Config(a) => config(&api, a).map(|_| 0),
                 Cmd::Exec(a) => exec(&api, &a),
                 Cmd::Cp(a) => cp(&api, &a).map(|_| 0),
@@ -1048,6 +1075,89 @@ fn ssh(api: &Api, a: &SshArgs) -> Result<i32> {
     }
     cmd.args(extra_opts(&a.opts)).arg(&alias).args(&a.command);
     hand_over(cmd)
+}
+
+/// `telepy forward`：寫好 ssh config，`ssh -N -L 127.0.0.1:<本機>:<主機>:<port>` 經裝置，等本機 port 接得通再印網址
+/// （`--open` 打開瀏覽器），然後一直轉到 Ctrl+C。主機可以是區網主機表裡的位址、標籤或 id。
+/// `telepy forward`: the ssh config, then `ssh -N -L 127.0.0.1:<local>:<host>:<port>` through the device; once the
+/// local port answers, print the address (`--open` opens the browser) and keep forwarding until Ctrl+C. The host may
+/// be an address, label or id from the device's LAN host list.
+fn forward_cmd(api: &Api, a: &ForwardArgs) -> Result<i32> {
+    let (raw_host, raw_port) = forward::parse_to(&a.to).map_err(|e| anyhow!(e))?;
+    let d = dashboard(api)?;
+    let (t, _) = resolve(&d.tunnels, &a.target)?;
+    // 區網主機表裡的名字 → 位址；沒給 port 就用它第一個網頁 port。/ A LAN host's name → its address; its first web port by default.
+    let (host, known_web) = if forward::is_device_itself(&raw_host) {
+        (raw_host.clone(), None)
+    } else {
+        let hosts = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"])).ok().and_then(|v| v["hosts"].as_array().cloned()).unwrap_or_default();
+        match find_host(&hosts, &raw_host) {
+            Some(h) => {
+                let web = h["web"].as_array().and_then(|w| w.first()).and_then(|w| w["port"].as_u64()).and_then(|p| u16::try_from(p).ok());
+                (s(h, "address").to_string(), web)
+            }
+            None => (raw_host.clone(), None),
+        }
+    };
+    let port = raw_port.or(known_web).ok_or_else(|| anyhow!("No port given and no web port known for '{raw_host}' behind {}. Write it as {raw_host}:<port>.", name_of(&t)))?;
+    let local = match a.local {
+        Some(p) => {
+            if std::net::TcpListener::bind(("127.0.0.1", p)).is_err() {
+                bail!("Port {p} on this computer is in use. Pick another with --local, or leave it out.");
+            }
+            p
+        }
+        None => forward::local_candidates(port)
+            .into_iter()
+            .find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+            .or_else(|| std::net::TcpListener::bind(("127.0.0.1", 0)).ok().and_then(|l| l.local_addr().ok()).map(|a| a.port()))
+            .ok_or_else(|| anyhow!("No free local port found."))?,
+    };
+    let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-F").arg(&file).args(["-N", "-o", "ExitOnForwardFailure=yes", "-L"]).arg(forward::local_spec(local, &host, port));
+    cmd.args(extra_opts(&a.opts)).arg(&alias);
+    let mut child = cmd.spawn().with_context(|| "cannot run ssh (is OpenSSH installed?)")?;
+    // 本機 port 接得通 = 轉好了（ssh 起不來就說它怎麼結束的）。/ The local port answering = forwarding (or say how ssh ended).
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            bail!("ssh ended before the forward was up ({status}). Run with --ssh-opt -v to see why.");
+        }
+        if std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], local)), std::time::Duration::from_millis(300)).is_ok() {
+            break;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            let _ = child.kill();
+            bail!("The forward did not come up within 30 seconds.");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let shown = forward::local_url(port, local, a.https).unwrap_or_else(|| format!("localhost:{local}"));
+    let target_text = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+    println!("{shown}");
+    eprintln!("Forwarding {shown} → {target_text} behind {}. Press Ctrl+C to stop.", name_of(&t));
+    if a.open {
+        match forward::local_url(port, local, a.https) {
+            Some(url) => {
+                if let Err(e) = open_in_browser(&url) {
+                    eprintln!("Could not open a browser ({e}); open {url} yourself.");
+                }
+            }
+            None => eprintln!("Port {port} is not a known web port, so nothing was opened (add --https or open it yourself)."),
+        }
+    }
+    let status = child.wait()?;
+    Ok(status.code().unwrap_or(0))
+}
+
+/// 打開瀏覽器；`TELEPY_NO_BROWSER` = 不開（測試）。/ Open the browser; `TELEPY_NO_BROWSER` = don't (tests).
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    if std::env::var_os("TELEPY_NO_BROWSER").is_some() || oauth::open_browser(url) {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("no browser opener worked"))
+    }
 }
 
 fn scp(api: &Api, a: &ScpArgs) -> Result<i32> {

@@ -11,6 +11,9 @@
 //! LAN discovery behind a tunnel's device, done entirely by the device's own sshd (no agent).
 
 pub mod scan;
+pub mod web;
+
+pub use web::{web_links, web_scheme, web_url, WEB_HTTPS_PORTS, WEB_HTTP_PORTS};
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
@@ -21,6 +24,7 @@ use regex::Regex;
 /// 預設探測的 port：SSH、HTTP(S)、SMB、RDP、VNC、常見的 web 管理介面、RustDesk 的 Direct IP（21118）。/ Default probe ports.
 pub const DEFAULT_PORTS: &[u16] = &[22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118];
 pub const MAX_PORTS: usize = 32;
+
 /// 一次掃描最多幾個位址（= 一個 /22）。/ Address cap per scan (a /22).
 pub const MAX_ADDRESSES: usize = 1024;
 /// 偵測到比這更大的網段時，只掃裝置所在的 /24。/ Larger detected networks shrink to the device's /24.
@@ -287,6 +291,8 @@ pub fn targets(networks: &[Network], own: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
 
 #[cfg(test)]
 mod tests {
+
+
     use super::*;
 
     #[test]

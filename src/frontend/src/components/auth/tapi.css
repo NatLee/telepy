@@ -10,12 +10,21 @@
     --tapi-tea: #f4e9da;
     --tapi-tea-deep: #e9d8c2;
     --tapi-ink: #4a2026;
-    background: var(--tapi-tea);
+    /* 下緣的顏色：珍奶越往杯底越濃，其他場景不變。/ The colour at the bottom: milk tea gets richer towards the bottom; other scenes stay flat. */
+    --tapi-tea-bottom: var(--tapi-tea);
+    background: linear-gradient(180deg, var(--tapi-tea) 45%, var(--tapi-tea-bottom));
 }
 
 .dark .tapi-shell {
     --tapi-tea: #1f1813;
     --tapi-tea-deep: #2c221b;
+}
+
+.tapi-shell[data-scene="tea"] {
+    --tapi-tea-bottom: #ebd8be;
+}
+.dark .tapi-shell[data-scene="tea"] {
+    --tapi-tea-bottom: #2b2019;
 }
 
 /* ── Tapi ───────────────────────────────────────────────────── */

@@ -117,7 +117,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
     let mut presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip).as_account(&session.username));
-    let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username)).await;
+    let opened_at = session.start_target.as_deref().map(|t| format!("opened at {t}"));
+    let audit = crate::session_audit::ConsoleSession::open_for_with(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username), opened_at.as_deref()).await;
     crate::session_audit::webhook_started(&state, session.server_id, user.id, &user.username, "browser", Some(&session.username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 

@@ -25,14 +25,19 @@ async fn mock_kasm(log: KasmLog, ws_port: u16) -> String {
         if headers.get("x-internal-token").and_then(|v| v.to_str().ok()) != Some("internal-secret") {
             return (StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"})));
         }
-        log.0.lock().unwrap().push(format!("create proxy={}", body["proxy"].as_str().unwrap_or("")));
+        log.0.lock().unwrap().push(format!("create proxy={} homepage={}", body["proxy"].as_str().unwrap_or(""), body["homepage"].as_str().unwrap_or("-")));
         (StatusCode::CREATED, Json(json!({"session_id": "kasm-1", "ws_port": port})))
+    }
+    // agent / 網頁的 CDP 動作：記下來，照動作回答。/ CDP actions: logged and answered per action.
+    async fn cdp(State((log, _)): State<(KasmLog, u16)>, Path(id): Path<String>, Json(body): Json<Value>) -> Json<Value> {
+        log.0.lock().unwrap().push(format!("cdp {id} {} {}", body["action"].as_str().unwrap_or(""), body["url"].as_str().unwrap_or("")));
+        Json(json!({"url": body["url"], "title": "Admin", "id": "T1"}))
     }
     async fn delete(State((log, _)): State<(KasmLog, u16)>, Path(id): Path<String>) -> Json<Value> {
         log.0.lock().unwrap().push(format!("delete {id}"));
         Json(json!({"status": "stopped"}))
     }
-    let app = Router::new().route("/sessions", post(create)).route("/sessions/{id}", axum::routing::delete(delete)).with_state((log, ws_port));
+    let app = Router::new().route("/sessions", post(create)).route("/sessions/{id}", axum::routing::delete(delete)).route("/sessions/{id}/cdp", post(cdp)).with_state((log, ws_port));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -252,4 +257,83 @@ async fn remote_browser_ends_when_access_is_lost() {
     let msg = msg.expect("browser_close");
     assert!(msg.contains("the login account is no longer allowed"), "{msg}");
     assert!(log.0.lock().unwrap().iter().any(|l| l == "delete kasm-1"), "the kasm session is stopped: {:?}", log.0.lock().unwrap());
+}
+
+/// 區網主機的網頁：開始時帶網址 → Chromium 先開空白頁、再經 CDP 導向（網址不進 shell）；稽核只記主機:port；
+/// 同一個瀏覽器開新分頁；壞網址 400；看不到那條隧道的人碰不到這個 session。
+/// A LAN host's web page: the start URL goes over CDP after a blank start (never into a shell), the audit keeps only
+/// host:port, new tabs open in the same browser, bad URLs are 400, and nobody else can reach the session.
+#[tokio::test]
+async fn a_start_url_and_new_tabs_go_over_devtools() {
+    let Some(mut lab) = common::lab::Lab::start().await else { return };
+    let log = KasmLog::default();
+    let vnc_port = mock_vnc_ws().await;
+    let kasm = mock_kasm(log.clone(), vnc_port).await;
+    lab.reconfigure(|c| {
+        c.kasm_api = kasm;
+        c.kasm_host = "127.0.0.1".to_string();
+        c.hostname = "127.0.0.1".to_string();
+        c.remote_browser_gc = false;
+    });
+    let alice = lab.user("alice").await;
+    let mallory = lab.user("mallory").await;
+    let edge = lab.machine("edge", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "edge", &edge).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let (app, token, id) = (&lab.app, alice.token.clone(), dev.tunnel_id);
+    let start = format!("/api/reverse/server/{id}/remote-browser/start");
+
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "http://"] {
+        let r = app.post(&start, Some(&token), json!({ "url": bad })).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}: {}", r.text);
+        assert_eq!(r.json["code"], "bad_url");
+    }
+    assert!(log.0.lock().unwrap().is_empty(), "nothing started for a bad URL");
+
+    let r = app.post(&start, Some(&token), json!({ "url": "http://192.168.1.10:8080/admin?token=secret" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let sid = r.json["session_id"].as_str().unwrap().to_string();
+    assert!(log.0.lock().unwrap()[0].ends_with(" homepage=about:blank"), "{:?}", log.0.lock().unwrap());
+    let mut navigated = false;
+    for _ in 0..50 {
+        if log.0.lock().unwrap().iter().any(|l| l == "cdp kasm-1 navigate http://192.168.1.10:8080/admin?token=secret") {
+            navigated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(navigated, "{:?}", log.0.lock().unwrap());
+
+    // the audit line names only host:port
+    let base = lab.ws_base().await;
+    let (mut ws, _) = connect_async(format!("{base}/ws/remote-browser/{sid}/")).await.unwrap();
+    ws.send(Message::Text(json!({"type": "auth", "token": token}).to_string().into())).await.unwrap();
+    let ready = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(ready, Message::Text(json!({"type": "ready"}).to_string().into()));
+    let mut msg = String::new();
+    for _ in 0..50 {
+        if let Some(m) = sqlx::query_scalar::<_, String>("SELECT message FROM telepy_gateway_event WHERE event = 'browser_open'").fetch_optional(&app.state.db.read).await.unwrap() {
+            msg = m;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(msg.contains("opened at 192.168.1.10:8080"), "{msg}");
+    assert!(!msg.contains("secret") && !msg.contains("/admin"), "{msg}");
+
+    // another page = a new tab in the same browser
+    let open = format!("/api/reverse/server/remote-browser/{sid}/open");
+    let r = app.post(&open, Some(&token), json!({ "url": "https://192.168.1.11:8006/" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["id"], "T1");
+    assert!(log.0.lock().unwrap().iter().any(|l| l == "cdp kasm-1 new_tab https://192.168.1.11:8006/"), "{:?}", log.0.lock().unwrap());
+    let r = app.post(&open, Some(&token), json!({ "url": "chrome://settings" })).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["code"], "bad_url");
+    // someone who can't see the tunnel gets nothing, even with the session id
+    let r = app.post(&open, Some(&mallory.token), json!({ "url": "http://192.168.1.12/" })).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = app.post("/api/reverse/server/remote-browser/nope/open", Some(&token), json!({ "url": "http://192.168.1.12/" })).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    ws.close(None).await.unwrap();
 }

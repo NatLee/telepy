@@ -69,7 +69,8 @@ fn answer(stream: &mut std::net::TcpStream, done_page: Option<&str>, client_id: 
     let _ = stream.flush();
 }
 
-fn open_browser(url: &str) -> bool {
+/// 用系統的預設瀏覽器打開網址（`telepy forward --open` 也用）。/ Open a URL in the default browser (also `telepy forward --open`).
+pub fn open_browser(url: &str) -> bool {
     let mut cmd = if cfg!(target_os = "macos") {
         std::process::Command::new("open")
     } else if cfg!(windows) {

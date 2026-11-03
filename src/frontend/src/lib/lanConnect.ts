@@ -4,6 +4,7 @@
  * one-liner and a coarse host kind for the topology view.
  */
 import { buildSegments, jumpServerSpec, LOCAL_PRESETS, shq, type ConnectMode, type ConnectTarget, type Segment, type Token } from "@/lib/forwardRecipes";
+import { webScheme } from "@/lib/lanWeb";
 import type { LanHost, LanScan } from "@/types/lan";
 
 // 主機種類搬到 lib/lanHosts.ts（node 測試得到）；這裡轉出去，舊的 import 照常可用。
@@ -63,8 +64,6 @@ const SERVICES: Record<number, string> = {
     5900: "VNC", 6379: "Redis", 8000: "HTTP", 8006: "Proxmox", 8080: "HTTP", 8443: "HTTPS", 8888: "HTTP", 9000: "HTTP",
     9090: "HTTP", 9100: "Printer", 21118: "RustDesk", 27017: "MongoDB", 32400: "Plex",
 };
-const WEB_HTTPS = new Set([443, 8006, 8443]);
-const WEB_HTTP = new Set([80, 3000, 5000, 8000, 8080, 8888, 9000, 9090, 32400]);
 
 export function serviceName(port: number): string | null {
     return SERVICES[port] ?? null;
@@ -79,9 +78,8 @@ export function suggestLocalPort(port: number): number {
 
 /** 轉發後在瀏覽器打開的網址（網頁服務才有）。/ The URL to open after forwarding (web services only). */
 export function forwardUrl(port: number, localPort: number): string | null {
-    if (WEB_HTTPS.has(port)) return `https://localhost:${localPort}`;
-    if (WEB_HTTP.has(port)) return `http://localhost:${localPort}`;
-    return null;
+    const scheme = webScheme(port);
+    return scheme ? `${scheme}://localhost:${localPort}` : null;
 }
 
 const tok = (text: string, kind: Token["kind"]): Token => ({ text, kind });

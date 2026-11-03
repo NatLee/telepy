@@ -737,7 +737,7 @@ impl TelepyMcp {
         })))
     }
 
-    #[tool(description = "Machines on the local network behind a tunnel's device, from earlier scans and manual entries: address, hostname, open ports, SSH banner, label and the login user to use. Reach them with ssh_exec on the device (e.g. `ssh -o BatchMode=yes user@address …`) or let the user open a web terminal.", annotations(title = "LAN hosts", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "Machines on the local network behind a tunnel's device, from earlier scans and manual entries: address, hostname, open ports, SSH banner, label, the login user to use and `web` (each web port with its URL). Reach them with ssh_exec on the device (e.g. `ssh -o BatchMode=yes user@address …`), open a `web` URL with browser_open on the same tunnel (the browser goes out through the device, so LAN addresses work), or let the user open a web terminal.", annotations(title = "LAN hosts", read_only_hint = true, open_world_hint = false))]
     async fn lan_hosts(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
