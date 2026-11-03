@@ -9,6 +9,7 @@
 //! - `POST   /api/reverse/server/{id}/authorized-keys/restore/{removal_id}`：把移掉的行接回去（7 天內；擁有者 / ADMIN）
 //! - `GET    /api/reverse/server/{id}/authorized-keys/removals`：最近的移除（擁有者 / ADMIN）
 //! - `GET    /api/reverse/user/keys/devices`：金鑰頁的矩陣——我的金鑰 × 我能用的裝置（依裝置名稱排序）
+//! - `POST   /api/reverse/server/{id}/ssh-check`：這台電腦送的金鑰（指紋）進得去哪個帳號嗎——每一關的狀況（`ssh_check`）
 //!
 //! REST endpoints for per-device key lists, the live authorized_keys audit, removal undo and the keys-page matrix.
 
@@ -24,6 +25,7 @@ use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, device_keys::Installed, device_keys::SyncStatus, tunnels::Tunnel};
 use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, plan_removal, remove_key_lines, restore_lines};
+use crate::device_keys::ssh_check;
 use crate::device_keys::view::{self, KnownKey};
 use crate::device_keys::{self as dk, remote::AuthorizedKeysFile, Desired};
 use crate::error::{ApiError, ApiResult};
@@ -42,6 +44,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(audit_restore))
         .routes(routes!(audit_removals))
         .routes(routes!(my_devices))
+        .routes(routes!(ssh_check))
 }
 
 /// 稽核讀檔的整體逾時（每個帳號一條 SSH 連線，並行）。/ Overall audit deadline.
@@ -708,6 +711,119 @@ fn batch_fingerprints(body: &Value) -> ApiResult<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+/// `fingerprints`：1 到 [`ssh_check::MAX_OFFERED`] 個 OpenSSH SHA256 指紋（去掉結尾的 `=`、去重、保留順序）。
+/// `fingerprints`: 1 to [`ssh_check::MAX_OFFERED`] OpenSSH SHA256 fingerprints (trailing `=` dropped, deduplicated, order kept).
+fn offered_fingerprints(body: &Value) -> ApiResult<Vec<String>> {
+    let bad = || coded(StatusCode::BAD_REQUEST, "bad_fingerprints", format!("fingerprints must be a list of up to {} SHA256 fingerprints", ssh_check::MAX_OFFERED));
+    let list = match body.get("fingerprints") {
+        None | Some(Value::Null) => return Ok(vec![]),
+        Some(Value::Array(l)) if l.len() <= ssh_check::MAX_OFFERED => l,
+        _ => return Err(bad()),
+    };
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for v in list {
+        let fp = v.as_str().filter(|s| ssh_check::valid_fingerprint(s)).ok_or_else(bad)?.trim_end_matches('=').to_string();
+        if !out.contains(&fp) {
+            out.push(fp);
+        }
+    }
+    Ok(out)
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/ssh-check", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::SshCheckRequest, responses((status = 200, body = super::schemas::SshCheck), (status = 400, description = "Bad fingerprints (code bad_fingerprints)", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn ssh_check(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    let offered = offered_fingerprints(&body)?;
+    let tz = state.config.tz_offset_minutes;
+    let allowed = permissions::allowed_usernames(&state.db, me.id, &t).await?;
+    // 帳號：給了就照給的（不允許也照實回答），沒給就跟終端機一樣挑（預設 / 唯一的那個）。
+    // The account: as given (even one you may not use, answered as such), else picked like the terminal does.
+    let account: Option<String> = match body.get("account").and_then(Value::as_str).map(str::trim).filter(|a| !a.is_empty()) {
+        Some(a) => Some(a.to_string()),
+        None => permissions::choose_username(&allowed, t.default_username_id, None, &t.host_friendly_name).ok(),
+    };
+    let account_row = match &account {
+        Some(a) => db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().find(|u| &u.username == a),
+        None => None,
+    };
+    let account_allowed = account.as_ref().is_some_and(|a| allowed.iter().any(|u| &u.username == a));
+
+    // 送出的金鑰裡哪幾把是我的（照送出的順序）。/ Which offered keys are mine, in offered order.
+    let keys = db::keys::user_keys(&state.db, me.id).await?;
+    let parsed: Vec<(&db::keys::UserKey, crate::device_keys::authorized_keys::ParsedKey)> = keys.iter().filter_map(|k| parse_public_key(&k.key).map(|p| (k, p))).collect();
+    let mine: Vec<&(&db::keys::UserKey, crate::device_keys::authorized_keys::ParsedKey)> = offered.iter().filter_map(|fp| parsed.iter().find(|(_, p)| &p.fingerprint == fp)).collect();
+    let keys_off = !state.features.allowed(&me, crate::features::Feature::KeysPersonal).await?;
+    let gateway = ssh_check::gateway_state(keys_off, &mine.iter().map(|(k, p)| ssh_check::Mine { fingerprint: p.fingerprint.clone(), expired: k.expired() }).collect::<Vec<_>>());
+    let key_json = |k: &db::keys::UserKey, p: &crate::device_keys::authorized_keys::ParsedKey| {
+        json!({ "id": k.id, "name": k.host_friendly_name, "fingerprint": p.fingerprint, "key_type": p.label, "expired": k.expired(), "expires_at": k.expires_at.as_deref().map(|e| db_to_iso(e, tz)) })
+    };
+
+    // 裝置那一關：只看過得了 gateway 的金鑰（沒到期的）；挑最可能進得去的那把。
+    // The device hop: only keys that pass the gateway (unexpired); the one most likely to get in.
+    let mut device = ssh_check::DeviceState::Unknown;
+    let mut device_key: Option<Value> = None;
+    let mut device_error: Option<String> = None;
+    let mut entry_accounts: Option<Option<Vec<i64>>> = None;
+    let mut file_read_at: Option<String> = None;
+    if let (ssh_check::GatewayState::Ok, true, Some(acct)) = (gateway, account_allowed, account.as_deref()) {
+        let snap = snapshot(&state, &t).await?;
+        // 同一個 port 以前那條隧道留下的、讀失敗的不算。/ Ignore failed reads and snapshots of an earlier tunnel on the port.
+        let since = parse_db_datetime(&t.created_at).map(|d| d.and_utc());
+        let file = state.device_keys.snapshot(t.reverse_port, acct).filter(|s| s.error.is_none() && !since.is_some_and(|c| s.at < c));
+        file_read_at = file.as_ref().map(|s| s.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let in_file: Option<BTreeSet<String>> = file.map(|s| parse_authorized_keys(s.content.as_deref().unwrap_or("")).into_iter().filter_map(|l| l.key.map(|k| k.bare)).collect());
+        let candidates: Vec<_> = mine.iter().filter(|(k, _)| !k.expired()).collect();
+        let states: Vec<(ssh_check::DeviceState, Option<String>)> = candidates
+            .iter()
+            .map(|(_, p)| {
+                let target = snap.targets(&p.bare).into_iter().find(|v| v["username"] == acct);
+                let status = target.as_ref().and_then(|v| v["status"].as_str().map(str::to_string));
+                let error = target.as_ref().and_then(|v| v["error"].as_str().map(str::to_string));
+                (ssh_check::device_state(status.as_deref(), in_file.as_ref().map(|s| s.contains(&p.bare))), error)
+            })
+            .collect();
+        if let Some(i) = ssh_check::best(&states.iter().map(|(s, _)| *s).collect::<Vec<_>>()) {
+            let (k, p) = candidates[i];
+            device = states[i].0;
+            device_error = states[i].1.clone();
+            device_key = Some(key_json(k, p));
+            let direct = db::device_keys::effective_entries_for_tunnel(&state.db, t.id).await?.into_iter().find(|e| e.is_direct() && e.user_id == me.id && e.user_key_id == k.id);
+            entry_accounts = direct.map(|e| e.account_ids());
+        }
+    }
+    let step_up = t.require_step_up && !state.step_up.recent(me.id);
+    let online = dk::online(&state, t.reverse_port);
+    let reach = permissions::can_reach_device(Some(eff), !allowed.is_empty());
+    let problems = ssh_check::problems(&ssh_check::Facts { gateway, reach, account_allowed, step_up, online, device });
+    // 這把金鑰放上清單時那一列要選的帳號（null = 不用改）。/ The accounts its list entry should name (null = no change).
+    let place = match (&device_key, &account_row) {
+        (Some(_), Some(a)) if matches!(device, ssh_check::DeviceState::NotListed | ssh_check::DeviceState::NotOnDevice) => {
+            ssh_check::place_accounts(entry_accounts.as_ref().map(|o| o.as_deref()), a.id).map(|ids| json!(ids))
+        }
+        _ => None,
+    };
+    let registered = keys.iter().filter(|k| !k.expired()).count();
+    Ok(Json(json!({
+        "ready": problems.is_empty(),
+        "problems": problems,
+        "tunnel": { "id": t.id, "name": t.host_friendly_name, "online": online, "require_step_up": t.require_step_up },
+        "account": { "username": account, "id": account_row.as_ref().map(|a| a.id), "allowed": account_allowed },
+        "gateway": gateway,
+        "matched": mine.iter().map(|(k, p)| key_json(k, p)).collect::<Vec<_>>(),
+        "registered": registered,
+        "device": {
+            "state": device,
+            "key": device_key,
+            "error": device_error,
+            "listed_accounts": entry_accounts.flatten(),
+            "file_read_at": file_read_at,
+            "place_accounts": place,
+        },
+        "step_up": { "required": t.require_step_up, "confirmed": t.require_step_up && !step_up, "window_secs": crate::step_up::WINDOW.as_secs() },
+        "reach": reach,
+    })))
 }
 
 #[utoipa::path(get, path = "/api/reverse/user/keys/devices", tag = "Device Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::KeyDevice>)))]

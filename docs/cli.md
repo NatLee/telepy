@@ -219,6 +219,35 @@ Each run writes two files into `~/.ssh/telepy/` (move that folder with `TELEPY_S
 
 Then it starts OpenSSH with `-F`. Your own `~/.ssh/config` stays untouched.
 
+### Your SSH key
+
+`ssh`, `scp`, `sftp` and `forward` need a personal SSH key that Telepy knows and that the device accepts for that account. Before OpenSSH starts, telepy asks Telepy what happens to the keys this computer offers (the default key files, `-i`, and your ssh-agent), one hop at a time. When something is in the way, it says which hop and how to fix it, instead of leaving you with OpenSSH's `Permission denied (publickey)` and a `Connection closed by UNKNOWN port 65535` for good measure. In a terminal it offers to fix it on the spot:
+
+- **Telepy doesn't know your key**: the web's Keys page opens with the key filled in, you confirm it there, and telepy waits until it shows up. No key on this computer yet? It makes one with `ssh-keygen` first.
+- **The key isn't on the device**: telepy puts it on the device's key list for that account only, and waits until Telepy has installed it.
+- **The tunnel asks for step-up**: the tunnel page opens and asks you to confirm it's you; telepy waits for that.
+
+The same check and fixes are there on their own:
+
+```sh
+telepy keys                                # your keys in Telepy, and which of them this computer has
+telepy keys add                            # add this computer's key (you confirm it in the browser)
+telepy keys add ~/.ssh/id_work.pub --device box@pi   # a particular key, then put it on box for pi
+telepy keys check box@pi                   # hop by hop: what would turn ssh away
+telepy keys check box@pi --yes             # …and put your key on box's list for pi
+```
+
+```text
+✓ this computer    offers 1 key(s): ~/.ssh/id_ed25519
+✓ Telepy           knows your key "laptop"
+✓ box              online
+✗ pi@box           your key isn't in authorized_keys
+```
+
+**Why the browser for adding a key**: a key keeps working after the sign-in that added it is gone, so a token or a CLI sign-in may read your keys and place one you already added, but never add a new one. That stays one click in the web, next to the fingerprint telepy printed. Placing a key needs the `ssh:exec` scope, which the browser sign-in has: whoever can run commands as that account could add the key there themselves anyway.
+
+Without a terminal telepy only explains. It stops before OpenSSH when ssh would certainly be refused, and connects anyway when it can't be sure (a key added to the device by hand, a key file it can't read). `--no-check` or `TELEPY_NO_KEY_CHECK=1` skips the check, for example for a hardware token Telepy can't see.
+
 ### Web port or SSH port
 
 `telepy ssh`, `scp` and `sftp` reach Telepy through its **web port** by default. `telepy` itself is the ProxyCommand for the hop to Telepy and carries the SSH inside a WebSocket (`/ws/gateway/`; no python3 needed).
@@ -385,6 +414,9 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | List the browsers this sign-in has open, or act on one by its id | `browser:use` |
 | `telepy api tokens` | Your tokens with their call summary | — |
 | `telepy api activity` | Calls made with your tokens and CLI sign-ins (see [The call log](#the-call-log)) | — |
+| `telepy keys` | Your SSH keys in Telepy and which of them this computer has; `--json` | — |
+| `telepy keys add [file]` | Add this computer's key: the Keys page opens with it filled in and you confirm it there; `--name`, `--device <target>` | — |
+| `telepy keys check <target>` | Hop by hop, whether `telepy ssh` gets in; `--yes` puts your key on the device's list for that account, `--json` | `tunnels:read` (`--yes`: `ssh:exec`) |
 | `telepy doctor` | Check the server, the sign-in, scopes, expiry, the local ssh tools and the version | — |
 | `telepy update` | Update telepy; `--check`, `--to <version>` | — |
 | `telepy completions [shell]` | Print the Tab completion script for bash, zsh, fish, powershell or elvish; without a shell, which line to add where | — |
@@ -395,7 +427,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 
 - `exec` and `run` on a single target exit with the remote command's code. It is 124 when the command timed out and was killed, and 255 when Telepy refused it or couldn't run it.
 - With several targets, `exec` exits 1 when any of them failed.
-- `ssh`, `scp` and `sftp` exit with OpenSSH's code.
+- `ssh`, `scp` and `sftp` exit with OpenSSH's code, or 1 when the key check stopped them before OpenSSH started (the reason is printed).
 - Any other error from Telepy exits 1 and prints the server's message.
 
 ## Tokens and scopes
@@ -424,6 +456,7 @@ The live version of this picture is behind the **Four ways in** button on the AP
 
 - **A token is you.** Your tunnels, the accounts you may use on them, the feature switches an admin set for you and command rules all apply. It never gets more than you have.
 - **It can't manage your account.** It can't sign in to the web, change your password or two-step settings, or create more tokens. Only the REST routes on an allow-list are open to it, each needing one scope. The **What a token can call** tab is built from that same list (`GET /api/auth/tokens/routes`), so it can't disagree with the server.
+- **It can't add SSH keys.** It can read your key list and put a key you already added on a device's list (with `ssh:exec`), but adding a key happens in the web: `telepy keys add` opens it for you.
 - **Step-up tunnels refuse it.** Tunnels that ask you to confirm it's you refuse tokens, exactly like MCP agents.
 - **It expires.** Every token expires, at most a year after it was created. Revoking takes effect at once.
 - **Admins can switch it off.** Admins can turn the **API tokens** feature off for everyone, a user group or one person (**Admin → Users & access → Feature permissions**), and that person's tokens stop working. Other features turned off for you (web terminal, file manager, …) are refused to your tokens too, with 403 `feature_disabled`.
@@ -531,6 +564,7 @@ telepy api activity --all --user bob       # admins: everyone's, or one person's
 | `TELEPY_SSH_VIA=ssh` | Go straight to Telepy's SSH port, like `--via ssh` |
 | `TELEPY_SSH_FALLBACK` | `ask`, `always` or `never` for this run, like `--fallback` |
 | `TELEPY_NO_UPDATE_CHECK=1` | No daily look for a newer release |
+| `TELEPY_NO_KEY_CHECK=1` | Skip the key check before `ssh` / `scp` / `sftp` / `forward`, like `--no-check` |
 | `TELEPY_RELEASES_URL` | A mirror of the releases page, for the update check and `telepy update` |
 | `TELEPY_RELEASE_KEYS` | Release public keys to trust instead of the built-in ones (for a re-signing mirror) |
 | `TELEPY_NO_MASCOT=1` | No Tapi next to `login` and `doctor` |
@@ -552,7 +586,7 @@ It checks the server, your sign-in, its scopes and expiry, the local `ssh` / `sc
 
 - **macOS won't open the binary.** That happens after a browser download. Run `xattr -d com.apple.quarantine telepy` once.
 - **`ssh`, `scp` or `sftp` can't start.** They need the system's OpenSSH client on your PATH.
-- **The device turns your SSH key away.** `ssh`, `scp` and `sftp` log in with your personal SSH key. The tunnel's **SSH config** dialog in the web shows whether your key gets in ("Make sure your key gets you in") and can add it.
+- **`Permission denied (publickey)`.** Run `telepy keys check <tunnel>[@account]`: it says which hop turns the key away (Telepy doesn't know it, it expired, it isn't on the device for that account, step-up…) and fixes what it can with `--yes`. `telepy ssh` runs the same check first. In the web, the tunnel's **SSH config** dialog shows the same thing ("Make sure your key gets you in").
 - **The web port can't be reached.** In a terminal, telepy asks before it uses the SSH port. Without a terminal it doesn't fall back: allow it with `--fallback always`, `TELEPY_SSH_FALLBACK=always` or `telepy config fallback always`, or go straight to the SSH port with `--via ssh`.
 - **403 `token_scope`.** The token lacks the scope this command needs (see [Scopes](#scopes)). Create a token that has it, or sign in again with `--scope`.
 - **403 `token_route`.** That endpoint isn't open to tokens at all: your account, two-step settings and the tokens themselves are managed in the web only.

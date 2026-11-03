@@ -7,7 +7,7 @@
  * Lives in the layout, so switching sub-pages neither refetches nor drops dialog state; the add / details / delete
  * dialogs and the per-device panel (`?device=<id>`, openable from any sub-page) exist once.
  */
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AddKeyModal } from "@/components/keys/AddKeyModal";
 import { DeviceKeysModal } from "@/components/keys/DeviceKeysModal";
@@ -16,6 +16,7 @@ import { useKeysPage } from "@/hooks/useKeysPage";
 import { useKeyGroups } from "@/hooks/useKeyGroups";
 import { useTunnelGroups } from "@/hooks/useTunnelGroups";
 import { useI18n } from "@/lib/i18n";
+import { useFeatures } from "@/hooks/useFeatures";
 import type { UserKey } from "@/types/keys";
 
 function useKeysAreaState() {
@@ -48,17 +49,29 @@ export function useKeysArea(): KeysArea {
 function KeysAreaDialogs({ area }: { area: KeysArea }) {
     const { t } = useI18n();
     const { page, keyGroups, detailsId, setDetailsId, deleting, setDeleting } = area;
+    // `?add=`（`telepy keys add`）：打開先填好的新增視窗；「個人 SSH 金鑰」被關掉時不開（頁面上本來就有說明）。
+    // `?add=` (`telepy keys add`) opens the prefilled add dialog; not while personal keys are turned off (the page says so).
+    const keysOn = useFeatures().has("keys.personal");
+    const request = page.addRequest;
+    const { setAddOpen } = area;
+    useEffect(() => {
+        if (request && keysOn) setAddOpen(true);
+    }, [request, keysOn, setAddOpen]);
     const details = page.keys.find((k) => k.id === detailsId) ?? null;
     const deletingOn = deleting ? (page.placements.get(deleting.id) ?? []).length : 0;
     return (
         <>
             <AddKeyModal
                 isOpen={area.addOpen}
-                onClose={() => area.setAddOpen(false)}
+                onClose={() => {
+                    area.setAddOpen(false);
+                    if (request) page.clearAddRequest();
+                }}
                 devices={page.devices}
                 keyGroups={keyGroups.groups}
+                initial={request}
                 onSubmit={async (k) => {
-                    const ok = await page.addKey(k);
+                    const ok = await page.addKey({ ...k, fromCli: request?.fromCli });
                     if (ok && k.groupId) void keyGroups.load();
                     return ok;
                 }}

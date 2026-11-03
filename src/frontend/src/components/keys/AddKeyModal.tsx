@@ -1,10 +1,12 @@
 /**
- * 新增金鑰：貼上公鑰後即時顯示類型 / 位元數 / SHA256 指紋與強度警告；可同時勾選要裝到哪些裝置。
+ * 新增金鑰：貼上公鑰後即時顯示類型 / 位元數 / SHA256 指紋與強度警告；可同時勾選要裝到哪些裝置。`initial` = 網址帶來的
+ * 公鑰與名稱（`telepy keys add`），`fromCli` 時先提醒：只加自己剛在終端機要加的那把，並對照指紋。
  * Add a key: pasting shows the type, size, SHA256 fingerprint and strength warnings right away; you can
- * also pick devices whose key list should get it.
+ * also pick devices whose key list should get it. `initial` = a key and name from the URL (`telepy keys add`); with
+ * `fromCli` it first says to add only the key you just asked for in your terminal and to compare the fingerprint.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { HardDrive, KeyRound, Loader2 } from "lucide-react";
+import { HardDrive, KeyRound, Loader2, Terminal } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +19,7 @@ import type { TranslationKey } from "@/locales/en";
 import { fingerprint, keyProblem, parsePublicKey, type KeyProblem } from "@/lib/sshKeys";
 import type { KeyDevice } from "@/types/keys";
 import type { KeyGroup } from "@/types/groups";
-import type { NewKey } from "@/hooks/useKeysPage";
+import type { AddRequest, NewKey } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyList";
 import { OnlineDot } from "./DeviceMatrix";
 import { DeviceFilterBar, DeviceFilterFooter, useDeviceFilter } from "./DeviceFilter";
@@ -36,6 +38,7 @@ export function AddKeyModal({
     onClose,
     devices,
     keyGroups = [],
+    initial = null,
     onSubmit,
 }: {
     isOpen: boolean;
@@ -43,6 +46,8 @@ export function AddKeyModal({
     devices: KeyDevice[];
     /** 我的金鑰群組（有的話可以直接放進去）。/ My key groups (the new key can go straight into one). */
     keyGroups?: KeyGroup[];
+    /** 先填好的公鑰與名稱（網址的 `?add=`）。/ A key and name to start from (the URL's `?add=`). */
+    initial?: AddRequest | null;
     onSubmit: (k: NewKey) => Promise<boolean>;
 }) {
     const { t } = useI18n();
@@ -56,6 +61,14 @@ export function AddKeyModal({
     const [expiryDate, setExpiryDate] = useState("");
     const [computed, setComputed] = useState<{ key: string; fp: string } | null>(null);
     const [submitting, setSubmitting] = useState(false);
+
+    // 打開時套用網址帶來的公鑰與名稱（每個請求一次）。/ Take the URL's key and name when opened (once per request).
+    const [applied, setApplied] = useState<AddRequest | null>(null);
+    if (isOpen && initial && applied !== initial) {
+        setApplied(initial);
+        setKey(initial.key);
+        setNameInput(initial.name || null);
+    }
 
     const parsed = useMemo(() => parsePublicKey(key), [key]);
     const problem = key.trim() ? keyProblem(key) : null;
@@ -116,6 +129,11 @@ export function AddKeyModal({
             }
         >
             <form id="add-key-form" onSubmit={submit} className="space-y-5">
+                {initial?.fromCli && initial.key === key && (
+                    <Callout tone="warning" icon={<Terminal />} title={t("keys.fromCli.title")}>
+                        {t("keys.fromCli.body")}
+                    </Callout>
+                )}
                 <div className="space-y-2">
                     <Label htmlFor="add-key-content">
                         {t("keys.sshPublicKey")} <span className="text-destructive">*</span>

@@ -16,6 +16,8 @@ pub mod color;
 pub mod complete;
 pub mod creds;
 pub mod forward;
+pub mod keycheck;
+pub mod keys;
 /// 區網主機的網頁 port 表：與伺服器共用同一個檔。/ LAN web ports, shared with the server.
 #[path = "../../backend-api/src/lan/web.rs"]
 pub mod lan_web;
@@ -127,6 +129,8 @@ pub enum Cmd {
     Lan(LanArgs),
     /// Your API tokens and the calls made with them: `api tokens`, `api activity [--follow]`
     Api(ApiArgs),
+    /// Your SSH keys in Telepy: ls / add (in your browser) / check whether ssh gets into a device and fix it
+    Keys(KeysArgs),
     /// Check the server, the sign-in, its scopes, the local ssh and whether a newer telepy is out
     Doctor,
     /// Update telepy to the latest release (checked against the release's SHA256SUMS); --check only reports
@@ -234,6 +238,9 @@ pub struct SshOpts {
     /// When the web port can't be reached: ask, always or never fall back to the SSH port (overrides `telepy config fallback`)
     #[arg(long, value_parser = ["ask", "always", "never"], env = "TELEPY_SSH_FALLBACK")]
     pub fallback: Option<String>,
+    /// Skip Telepy's check that your SSH key gets in before connecting (also TELEPY_NO_KEY_CHECK=1)
+    #[arg(long)]
+    pub no_check: bool,
 }
 
 #[derive(Args, Debug)]
@@ -374,6 +381,48 @@ pub struct CpArgs {
     pub from: String,
     #[arg(add = ArgValueCompleter::new(complete::remote_or_path))]
     pub to: String,
+}
+
+#[derive(Args, Debug)]
+pub struct KeysArgs {
+    #[command(subcommand)]
+    pub action: Option<KeysAction>,
+    /// Machine-readable output (for the list)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum KeysAction {
+    /// Your keys in Telepy, and which of them this computer has (the default)
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add this computer's key to Telepy: the web app's add dialog opens prefilled and you confirm it there (no key yet = ssh-keygen makes one)
+    Add {
+        /// The public key file (or a private key with a readable public half); default: the key ssh offers
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: Option<PathBuf>,
+        /// The key's name in Telepy (default: this computer's name)
+        #[arg(long)]
+        name: Option<String>,
+        /// Then also put it on this device's key list: <tunnel>[@account]
+        #[arg(long, add = ArgValueCompleter::new(complete::target))]
+        device: Option<String>,
+    },
+    /// Check, hop by hop, whether `telepy ssh <target>` gets in, and fix what Telepy can
+    Check {
+        /// <tunnel>[@account] (account@tunnel works too)
+        #[arg(add = ArgValueCompleter::new(complete::target))]
+        target: String,
+        /// Fix without asking: put your key on the device's key list for this account
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Machine-readable output (the keys offered and the server's answer)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -623,7 +672,11 @@ pub fn run(cli: Cli) -> Result<i32> {
     if matches!(result, Ok(0)) {
         update::finish(check);
     }
-    result
+    // 金鑰檢查擋下、說明已經印過：結束碼 1，不再多一行 `telepy: …`。/ Stopped by the key check (explained): exit 1, no extra line.
+    match result {
+        Err(e) if e.is::<keycheck::Stopped>() => Ok(1),
+        other => other,
+    }
 }
 
 fn run_command(cli: Cli) -> Result<i32> {
@@ -660,6 +713,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
+                Cmd::Keys(a) => keys_cmd(&api, a),
                 Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_) => unreachable!(),
             }
         }
@@ -995,11 +1049,31 @@ fn server_slug(server: &str) -> String {
     server.split("://").nth(1).unwrap_or(server).chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
 }
 
-/// 寫好這條隧道 + 帳號的 `ssh -F` 檔，回 (檔案, 別名)。/ Write the `ssh -F` file for a tunnel + account.
+/// 寫好的 `ssh -F` 檔與它是給哪條隧道、哪個帳號的。/ A written `ssh -F` file and the tunnel + account it is for.
+struct Prepared {
+    file: PathBuf,
+    alias: String,
+    tunnel_id: i64,
+    tunnel: String,
+    account: String,
+}
+
+/// 寫好這條隧道 + 帳號的 `ssh -F` 檔，再檢查這台電腦的金鑰進不進得去（`--no-check` 不檢查），回 (檔案, 別名)。
+/// Write the `ssh -F` file for a tunnel + account, check that this computer's key gets in (unless `--no-check`).
 fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)> {
+    let p = write_ssh_config(api, raw, opts)?;
+    // 交給 OpenSSH 之前先問 Telepy 這台電腦的金鑰進不進得去（被擋就說哪一關、為什麼、怎麼修）。
+    // Before OpenSSH: ask Telepy whether this computer's key gets in (a refusal says which hop, why and the fix).
+    if !opts.no_check {
+        keycheck::before_ssh(api, &keycheck::Target { tunnel_id: p.tunnel_id, tunnel: &p.tunnel, account: &p.account }, &p.file, &p.alias, &extra_opts(opts))?;
+    }
+    Ok((p.file, p.alias))
+}
+
+fn write_ssh_config(api: &Api, raw: &str, opts: &SshOpts) -> Result<Prepared> {
     let d = dashboard(api)?;
     let (t, wanted) = resolve(&d.tunnels, raw)?;
-    let (uid, _) = account(api, &t, wanted.as_deref())?;
+    let (uid, account_name) = account(api, &t, wanted.as_deref())?;
     let id = t["id"].as_i64().unwrap_or_default();
     let cfg = api.get(&format!("/tunnels/server/config/{id}?username_id={uid}"))?;
     let stanzas = sshcfg::parse_stanzas(s(&cfg, "config"));
@@ -1020,7 +1094,7 @@ fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     }
-    Ok((file, alias))
+    Ok(Prepared { file, alias, tunnel_id: id, tunnel: name_of(&t).to_string(), account: account_name })
 }
 
 /// 經網頁 port 那一跳的 ProxyCommand：`telepy _carrier --url <ws> --tcp <SSH 主機:port> --fallback … --server …`。
@@ -1859,6 +1933,83 @@ fn run_snippet(api: &Api, a: &RunArgs) -> Result<i32> {
     run_jobs(api, &[Job { tunnel: t, account: acc }], &command, a.timeout, false, false)
 }
 
+// ---------------------------------------------------------------- keys
+
+fn keys_cmd(api: &Api, a: KeysArgs) -> Result<i32> {
+    match a.action.unwrap_or(KeysAction::Ls { json: false }) {
+        KeysAction::Ls { json } => keys_ls(api, json || a.json).map(|_| 0),
+        KeysAction::Add { file, name, device } => {
+            let offered = keys::offered_by_default(&ssh_dir(), &creds::home_dir());
+            keycheck::register(api, &offered, file.as_deref(), name.as_deref())?;
+            match device {
+                Some(target) => keys_check(api, &target, true, false),
+                None => Ok(0),
+            }
+        }
+        KeysAction::Check { target, yes, json } => keys_check(api, &target, yes, json),
+    }
+}
+
+/// `telepy keys check <target>`：寫好這條的 ssh config（跟 `telepy ssh` 一樣），再一關一關看。
+/// `telepy keys check <target>`: the same ssh config as `telepy ssh`, then hop by hop.
+fn keys_check(api: &Api, target: &str, yes: bool, as_json: bool) -> Result<i32> {
+    let opts = SshOpts { via: "web".into(), no_check: true, ..Default::default() };
+    let p = write_ssh_config(api, target, &opts)?;
+    keycheck::report(api, &keycheck::Target { tunnel_id: p.tunnel_id, tunnel: &p.tunnel, account: &p.account }, &p.file, &p.alias, yes, as_json)
+}
+
+/// `telepy keys`：你在 Telepy 的金鑰，與這台電腦有哪幾把。/ Your keys in Telepy and which of them this computer has.
+fn keys_ls(api: &Api, as_json: bool) -> Result<()> {
+    let mine = keycheck::my_keys(api)?;
+    let home = creds::home_dir();
+    let offered = keys::offered_by_default(&ssh_dir(), &home);
+    let here = |k: &Value| k["fingerprint"].as_str().and_then(|fp| offered.find(fp));
+    if as_json {
+        let rows: Vec<Value> = mine
+            .iter()
+            .map(|k| {
+                let local = here(k);
+                json!({
+                    "id": k["id"], "name": k["host_friendly_name"], "type": k["key_type"], "fingerprint": k["fingerprint"],
+                    "expires_at": k["expires_at"], "expired": k["expired"], "last_used_at": k["last_used_at"],
+                    "on_this_computer": local.is_some(), "path": local.and_then(|l| l.path.clone()),
+                })
+            })
+            .collect();
+        return print_json(&Value::Array(rows));
+    }
+    if mine.is_empty() {
+        println!("You have no SSH keys in Telepy yet; `telepy ssh` needs one. Add this computer's: telepy keys add");
+        return Ok(());
+    }
+    let t = now();
+    let rows: Vec<Vec<String>> = mine
+        .iter()
+        .map(|k| {
+            let expires = match (k["expired"].as_bool(), k["expires_at"].as_str()) {
+                (Some(true), _) => "expired".to_string(),
+                (_, Some(e)) => e.get(..10).unwrap_or(e).to_string(),
+                _ => "never".to_string(),
+            };
+            let local = match here(k) {
+                Some(l) => l.path.as_ref().map(|p| keys::display_path(p, &home)).unwrap_or_else(|| "ssh agent".into()),
+                None => String::new(),
+            };
+            vec![s(k, "host_friendly_name").to_string(), s(k, "key_type").to_string(), s(k, "fingerprint").to_string(), expires, table::ago(k["last_used_at"].as_str(), t), local]
+        })
+        .collect();
+    print_table(&["NAME", "TYPE", "FINGERPRINT", "EXPIRES", "LAST USED", "ON THIS COMPUTER"], &rows, |col, text| match (col, text) {
+        (3, "expired") => color::BAD,
+        (5, t) if !t.is_empty() => color::GOOD,
+        _ => color::PLAIN,
+    });
+    if !mine.iter().any(|k| here(k).is_some() && k["expired"] != true) {
+        println!();
+        println!("None of these is on this computer, so `telepy ssh` from here would be refused. Add its key: telepy keys add");
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- doctor
 
 fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
@@ -1898,6 +2049,18 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
                         let how = if token.is_some() { "token from the environment".to_string() } else { profile.as_ref().map(|p| format!("{:?} in the {}", p.kind, p.store.clone().unwrap_or_default())).unwrap_or_default() };
                         check(true, "sign-in", format!("{} ({how})", s(&me, "username")));
                         tapi_color = s(&me, "tapi_color").to_string();
+                        // 這台電腦的金鑰在不在 Telepy（ssh / scp / sftp 要它）；伺服器太舊讀不到就不說。
+                        // Whether this computer's key is in Telepy (ssh / scp / sftp need it); silent on an older server.
+                        if let Ok(mine) = keycheck::my_keys(&api) {
+                            let offered = keys::offered_by_default(&ssh_dir(), &creds::home_dir());
+                            let hit = mine.iter().find(|k| k["expired"] != true && k["fingerprint"].as_str().is_some_and(|fp| offered.find(fp).is_some()));
+                            match (hit, offered.keys.is_empty()) {
+                                (Some(k), _) => check(true, "ssh key", format!("\"{}\" ({}) is in Telepy", s(k, "host_friendly_name"), s(k, "fingerprint"))),
+                                // 只是提醒：只用 exec / cp 的人不需要金鑰。/ A warning only: exec / cp need no key.
+                                (None, true) => println!("{} ssh key: this computer has none; `telepy keys add` makes and adds one (ssh / scp / sftp need it)", warn()),
+                                (None, false) => println!("{} ssh key: none of this computer's keys is in Telepy; `telepy keys add` adds it (ssh / scp / sftp need it)", warn()),
+                            }
+                        }
                         if let Some(c) = me.get("credential").filter(|c| c.is_object()) {
                             let scopes: Vec<&str> = c["scopes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
                             check(!scopes.is_empty(), "scopes", scopes.join(" "));

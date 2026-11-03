@@ -219,6 +219,35 @@ telepy sftp box@pi
 
 接著用 `-F` 啟動 OpenSSH。你自己的 `~/.ssh/config` 完全不會被碰到。
 
+### 你的 SSH 金鑰
+
+`ssh`、`scp`、`sftp`、`forward` 需要一把 Telepy 認得、而且裝置那個帳號也收的個人 SSH 金鑰。啟動 OpenSSH 之前，telepy 會先問 Telepy：這台電腦送出的金鑰（預設的金鑰檔、`-i`、ssh-agent 裡的）在每一關會怎樣。被擋的話，它會說是哪一關、怎麼修，不會只丟給你一句 OpenSSH 的 `Permission denied (publickey)`，再附贈一句 `Connection closed by UNKNOWN port 65535`。在終端機裡，它還會問你要不要當場修好：
+
+- **Telepy 不認得你的金鑰**：打開網頁的金鑰頁並先填好這把金鑰，你在網頁上確認，telepy 等它出現。這台電腦還沒有金鑰的話，會先用 `ssh-keygen` 做一把。
+- **金鑰不在裝置上**：telepy 把它放上這台裝置的金鑰清單，只放到這個帳號，然後等 Telepy 裝好。
+- **這條通道要求 step-up**：打開通道頁請你確認身分，telepy 等你確認。
+
+同樣的檢查和修法也可以單獨使用：
+
+```sh
+telepy keys                                # 你在 Telepy 的金鑰，以及這台電腦有哪幾把
+telepy keys add                            # 加入這台電腦的金鑰（在瀏覽器裡確認）
+telepy keys add ~/.ssh/id_work.pub --device box@pi   # 指定一把，順便放上 box 的 pi 帳號
+telepy keys check box@pi                   # 一關一關看：ssh 會被哪裡擋下
+telepy keys check box@pi --yes             # ……並把你的金鑰放上 box 的 pi 帳號清單
+```
+
+```text
+✓ this computer    offers 1 key(s): ~/.ssh/id_ed25519
+✓ Telepy           knows your key "laptop"
+✓ box              online
+✗ pi@box           your key isn't in authorized_keys
+```
+
+**為什麼加金鑰要走瀏覽器**：金鑰在加它的那個登入結束後還是有效，所以 token 和 CLI 登入可以讀你的金鑰、把你已經加過的放上裝置，但不能新增。新增留在網頁上按一下，旁邊就是 telepy 印出來的指紋可以對照。把金鑰放上裝置需要 `ssh:exec` 這個 scope，瀏覽器登入預設就有：能以那個帳號執行指令的人，本來就能自己把金鑰加進去。
+
+沒有終端機時，telepy 只會說明。確定會被拒絕的情況，它在 OpenSSH 之前就停下；不能確定的情況（金鑰是手動加到裝置上的、讀不到的金鑰檔）照樣連線。`--no-check` 或 `TELEPY_NO_KEY_CHECK=1` 可以跳過檢查，例如 Telepy 看不到的硬體金鑰。
+
 ### 網頁連接埠還是 SSH 連接埠
 
 `telepy ssh`、`scp`、`sftp` 預設經由 Telepy 的**網頁連接埠**連線。`telepy` 自己就是通往 Telepy 那一段的 ProxyCommand，把 SSH 包在 WebSocket 裡傳送（`/ws/gateway/`，不需要 python3）。
@@ -385,6 +414,9 @@ telepy browse close "$ID"
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | 列出這個登入開著的瀏覽器，或用 id 操作其中一個 | `browser:use` |
 | `telepy api tokens` | 你的 token 與呼叫摘要 | — |
 | `telepy api activity` | 你的 token 與 CLI 登入發出的呼叫（見[呼叫紀錄](#呼叫紀錄)） | — |
+| `telepy keys` | 你在 Telepy 的 SSH 金鑰，以及這台電腦有哪幾把；`--json` | — |
+| `telepy keys add [file]` | 加入這台電腦的金鑰：打開已填好的金鑰頁，在網頁上確認；`--name`、`--device <target>` | — |
+| `telepy keys check <target>` | 一關一關檢查 `telepy ssh` 進不進得去；`--yes` 把你的金鑰放上裝置那個帳號的清單，`--json` | `tunnels:read`（`--yes`：`ssh:exec`） |
 | `telepy doctor` | 檢查伺服器、登入、scope、到期日、本機的 ssh 工具與版本 | — |
 | `telepy update` | 更新 telepy；`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | 印出 bash、zsh、fish、powershell 或 elvish 的 Tab 補完腳本；不給 shell 就告訴你該加哪一行、加在哪 | — |
@@ -395,7 +427,7 @@ telepy browse close "$ID"
 
 - 對單一目標執行的 `exec` 和 `run`，會以遠端指令的結束碼結束。逾時並被終止時是 124，Telepy 拒絕或無法執行時是 255。
 - 有多個目標時，只要其中一個失敗，`exec` 就以 1 結束。
-- `ssh`、`scp`、`sftp` 以 OpenSSH 的結束碼結束。
+- `ssh`、`scp`、`sftp` 以 OpenSSH 的結束碼結束；金鑰檢查在 OpenSSH 之前就擋下時是 1（會印出原因）。
 - Telepy 的其他錯誤一律以 1 結束，並印出伺服器的訊息。
 
 ## Token 與 scope
@@ -424,6 +456,7 @@ telepy browse close "$ID"
 
 - **token 就是你本人**：你的通道、你在通道上能用的帳號、管理員替你設的功能開關、指令規則，全都照樣適用。它永遠不會拿到比你更多的權限。
 - **它管不了你的帳號**：它不能登入網頁、不能改密碼或兩步驟驗證的設定，也不能再建立 token。它只能呼叫白名單上的 REST 路由，每條各需要一個 scope。**token 能呼叫什麼**分頁就是用同一份清單產生的（`GET /api/auth/tokens/routes`），所以不可能和伺服器說的不一樣。
+- **它不能新增 SSH 金鑰**：它可以讀你的金鑰清單，也能把你已經加過的金鑰放上裝置（要 `ssh:exec`），但新增金鑰要在網頁上做：`telepy keys add` 會幫你打開。
 - **需要 step-up 的通道會拒絕它**：要求你先確認身分的通道一律拒絕 token，和 MCP agent 一樣。
 - **它會過期**：每個 token 都有期限，最長是建立後一年。撤銷則是立即生效。
 - **管理員可以關掉它**：管理員可以對所有人、某個使用者群組或單一個人關閉 **API token** 功能（**管理 → 使用者與權限 → 功能權限**），那個人的 token 就會失效。管理員替你關掉的其他功能（網頁終端機、檔案管理員……）一樣會拒絕你的 token，回應 403 `feature_disabled`。
@@ -531,6 +564,7 @@ telepy api activity --all --user bob       # 管理員：所有人的，或某�
 | `TELEPY_SSH_VIA=ssh` | 直接連 Telepy 的 SSH 連接埠，等同 `--via ssh` |
 | `TELEPY_SSH_FALLBACK` | 這次執行用 `ask`、`always` 或 `never`，等同 `--fallback` |
 | `TELEPY_NO_UPDATE_CHECK=1` | 不做每天一次的新版檢查 |
+| `TELEPY_NO_KEY_CHECK=1` | `ssh` / `scp` / `sftp` / `forward` 之前不檢查金鑰，等同 `--no-check` |
 | `TELEPY_RELEASES_URL` | 發行版頁面的鏡像，給更新檢查與 `telepy update` 用 |
 | `TELEPY_RELEASE_KEYS` | 改信任這些發行公鑰，取代內建的（給重新簽名的鏡像用） |
 | `TELEPY_NO_MASCOT=1` | `login` 與 `doctor` 旁邊不顯示 Tapi |
@@ -552,7 +586,7 @@ telepy doctor                              # 伺服器、登入、scope、到期
 
 - **macOS 不讓你開執行檔**：用瀏覽器下載的檔案會這樣。執行一次 `xattr -d com.apple.quarantine telepy` 就好。
 - **`ssh`、`scp` 或 `sftp` 跑不起來**：它們需要 PATH 裡有系統的 OpenSSH 用戶端。
-- **裝置不收你的 SSH 金鑰**：`ssh`、`scp`、`sftp` 是用你的個人 SSH 金鑰登入的。網頁上這條通道的 **SSH 設定**對話框會顯示你的金鑰進不進得去（「確認你的金鑰進得去」），也能幫你加上去。
+- **`Permission denied (publickey)`**：執行 `telepy keys check <tunnel>[@account]`，它會說金鑰被哪一關擋下（Telepy 不認得、過期了、沒放到裝置那個帳號、要 step-up……），加 `--yes` 能修的就修好。`telepy ssh` 本身也會先跑同樣的檢查。網頁上這條通道的 **SSH 設定**對話框也看得到（「確認你的金鑰進得去」）。
 - **網頁連接埠連不上**：在終端機裡，telepy 會先問過你才改走 SSH 連接埠。沒有終端機時不會改走：可以用 `--fallback always`、`TELEPY_SSH_FALLBACK=always` 或 `telepy config fallback always` 允許，或用 `--via ssh` 直接走 SSH 連接埠。
 - **403 `token_scope`**：這個 token 缺少指令需要的 scope（見 [Scope](#scope)）。建立一把有這個 scope 的 token，或加上 `--scope` 重新登入。
 - **403 `token_route`**：這個端點根本不開放給 token：你的帳號、兩步驟驗證和 token 本身，都只能在網頁上管理。

@@ -37,6 +37,8 @@ async fn telepy_env(home: &Path, args: &[&str], envs: &[(&str, &str)]) -> Out {
         .env("TELEPY_NO_EXEC", "1")
         .env_remove("TELEPY_URL")
         .env_remove("TELEPY_TOKEN")
+        // 開發者的 ssh-agent 不算這台「電腦」的金鑰。/ The developer's ssh-agent is not this test computer's.
+        .env_remove("SSH_AUTH_SOCK")
         .stdin(std::process::Stdio::null())
         .output()
         .await
@@ -231,6 +233,121 @@ async fn cli_against_the_server() {
 }
 
 /// Unix 秒 → `YYYY-MM-DD`（UTC）。/ Unix seconds → a UTC date.
+/// 金鑰不對時 `telepy ssh` 說清楚是哪一關：這台電腦沒有金鑰 → Telepy 不認得它 → `keys add`（網頁那邊按下去）→
+/// 不在裝置的清單上 → `keys check --yes` 放上去、等 Telepy 裝好 → 連得進去。HOME 是暫存目錄，金鑰都是現做的。
+/// When the key is wrong, `telepy ssh` says which hop: no key on this computer → Telepy doesn't know it → `keys add`
+/// (confirmed on the web side) → not on the device's list → `keys check --yes` puts it there and waits → it gets in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ssh_explains_and_fixes_a_missing_key() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    // 正式環境的同步迴圈（lab 沒有起）：放上清單之後才會裝上去。/ The production sync loop (the lab doesn't run it).
+    tokio::spawn(telepy_server::device_keys::run(lab.app.state.clone()));
+    let carol = lab.user("carol").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service])], MachineOpts { shell: true, ..Default::default() }).await;
+    m.account_home("pi");
+    let dev = lab.device(&carol, "box", &m).await;
+    lab.username(&carol, &dev, "pi").await;
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&carol.token), json!({"name": "laptop cli", "scopes": ["tunnels:read", "ssh:exec"], "expires_at": expires})).await;
+    assert_eq!(r.status.as_u16(), 201, "{}", r.text);
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+    // OpenSSH 展開 `~` 用的是帳號的家目錄、不是 $HOME：測試的 HOME 是暫存目錄，所以金鑰檔明寫（還不存在也行）。
+    // OpenSSH expands `~` from the account's home, not $HOME, and this test's HOME is a temp dir: name the key file (it may not exist yet).
+    let key_file = h.join(".ssh").join("id_ed25519");
+    let key_arg = key_file.to_str().unwrap().to_string();
+    let ssh = ["ssh", "box@pi", "-i", key_arg.as_str(), "--via", "ssh", "--ssh-opt", "-o BatchMode=yes", "--", "echo", "in-$USER"];
+
+    // 1) 這台電腦沒有金鑰：說清楚，不交給 OpenSSH。/ No key on this computer: explained, OpenSSH never runs.
+    let o = telepy(h, &ssh).await;
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("This computer has no SSH key") && o.stderr.contains("telepy keys add"), "{}", o.stderr);
+    assert!(!o.stderr.contains("Permission denied") && !o.stderr.contains("telepy: "), "only Telepy's explanation: {}", o.stderr);
+
+    // 2) 有一把，但 Telepy 不認得：指紋與修法。/ A key Telepy doesn't know: its fingerprint and the fix.
+    std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+    let st = std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", "carol@laptop", "-f"]).arg(&key_file).status().unwrap();
+    assert!(st.success());
+    let public = std::fs::read_to_string(h.join(".ssh").join("id_ed25519.pub")).unwrap().trim().to_string();
+    let fp = telepy_cli::keys::fingerprint(&public).unwrap();
+    let o = telepy(h, &ssh).await;
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("Telepy doesn't know any SSH key this computer offers") && o.stderr.contains(&fp), "{}", o.stderr);
+    assert!(o.stderr.contains("belong to other computers") && o.stderr.contains("adds ~/.ssh/id_ed25519.pub"), "{}", o.stderr);
+    let o = telepy(h, &["keys"]).await;
+    assert!(o.stdout.contains("carol-laptop") && o.stdout.contains("None of these is on this computer"), "{}", o.stdout);
+    let o = telepy(h, &["doctor"]).await;
+    assert!(o.stdout.contains("ssh key: none of this computer's keys is in Telepy"), "{}", o.stdout);
+
+    // 3) `keys add`：印出網頁的網址（公鑰已填好）與指紋，等網頁那邊加好（這裡用 API 代替按下去）。
+    // `keys add` prints the web address (key filled in) and the fingerprint, then waits for the web side (the API here).
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_telepy"))
+        .args(["keys", "add"])
+        .env("HOME", h)
+        .env("USERPROFILE", h)
+        .env("TELEPY_CONFIG_DIR", h.join("config"))
+        .env("TELEPY_SSH_DIR", h.join("ssh"))
+        .env("TELEPY_NO_KEYRING", "1")
+        .env("TELEPY_NO_BROWSER", "1")
+        .env_remove("TELEPY_URL")
+        .env_remove("TELEPY_TOKEN")
+        .env_remove("SSH_AUTH_SOCK")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let r = lab.app.post("/api/reverse/user/keys", Some(&carol.token), json!({"host_friendly_name": "carol-mac", "key": public})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output()).await.expect("keys add finishes").unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("/tunnels/keys?add=ssh-ed25519%20") && err.contains("&from=cli") && err.contains(&fp), "{err}");
+    assert!(err.contains("Added \"carol-mac\" to Telepy."), "{err}");
+    let o = telepy(h, &["keys", "add"]).await;
+    assert!(o.code == 0 && o.stderr.contains("is already in Telepy as \"carol-mac\""), "{}", o.stderr);
+
+    // 4) Telepy 認得了，但裝置的清單上沒有、那個帳號的檔案裡也沒有（先同步一次，讓 Telepy 讀過檔）：確定會被拒絕，
+    // 沒有終端機可問 → 說明，不交給 OpenSSH。（沒讀過檔的「不確定」那條路在後端的 tests/ssh_check.rs。）
+    // Telepy knows it, but neither the device's list nor the account's file has it (synced first, so the file was
+    // read): certainly refused, no terminal to ask → explained, OpenSSH never runs. (The uncertain path, file not read,
+    // is in the backend's tests/ssh_check.rs.)
+    let r = lab.app.post(&format!("/api/reverse/server/{}/device-keys/sync", dev.tunnel_id), Some(&carol.token), json!({})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let o = telepy(h, &ssh).await;
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("box won't let your key \"carol-mac\"") && o.stderr.contains("telepy keys check box@pi --yes"), "{}", o.stderr);
+    assert!(!o.stderr.contains("Permission denied"), "{}", o.stderr);
+
+    // 5) `keys check --yes`：一關一關列出，放上清單（只到 pi），等裝好。/ Hop by hop, placed (pi only), installed.
+    let o = telepy(h, &["keys", "check", "box@pi", "--yes"]).await;
+    assert_eq!(o.code, 0, "{}\n{}", o.stdout, o.stderr);
+    assert!(o.stdout.contains("knows your key \"carol-mac\"") && o.stdout.contains("your key is installed"), "{}", o.stdout);
+    assert!(o.stderr.contains("\"carol-mac\" is installed on box for pi."), "{}", o.stderr);
+    assert!(m.authorized_keys("pi").contains(public.split_whitespace().nth(1).unwrap()));
+
+    // 6) 連得進去；檢查沒話說。/ It gets in, and the check has nothing to say.
+    let o = telepy(h, &ssh).await;
+    assert!(o.code == 0 && o.stdout.contains("in-pi"), "{}\n{}", o.stdout, o.stderr);
+    assert!(!o.stderr.contains("✗") && !o.stderr.contains("Telepy hasn't"), "{}", o.stderr);
+    let o = telepy(h, &["keys", "check", "box@pi", "--json"]).await;
+    let v: Value = serde_json::from_str(&o.stdout).unwrap_or_else(|_| panic!("{} {}", o.stdout, o.stderr));
+    assert_eq!((v["check"]["ready"].as_bool(), v["offered"][0]["fingerprint"].as_str()), (Some(true), Some(fp.as_str())), "{v}");
+    let o = telepy(h, &["doctor"]).await;
+    assert!(o.stdout.contains("ssh key: \"carol-mac\""), "{}", o.stdout);
+    // --no-check：不問 Telepy（伺服器太舊時的樣子）。/ --no-check skips it (what an older server looks like).
+    let o = telepy(h, &[&ssh[..2], &["--no-check"], &ssh[2..]].concat()).await;
+    assert!(o.code == 0 && o.stdout.contains("in-pi"), "{}", o.stderr);
+}
+
 fn chrono_like(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     // civil_from_days（Howard Hinnant）。
