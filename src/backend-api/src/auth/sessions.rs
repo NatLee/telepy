@@ -123,6 +123,13 @@ pub fn revoked(state: &AppState, sid: i64, reason: &str) {
     state.sessions.revoked.insert(sid, Some(reason.to_string()));
     state.sessions.touched.invalidate(&sid);
     state.hub.session_ended(sid, reason);
+    // 那台瀏覽器的推播訂閱跟著走（登出的裝置不該再收到通知）。/ That browser's push subscription goes too.
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::db::push::delete_for_session(&db, sid).await {
+            tracing::warn!(error = %e, session = sid, "push: cannot drop the subscription of a revoked sign-in");
+        }
+    });
 }
 
 /// 撤銷一個 session（DB + 快取 + 開著的頁面）。回傳是否真的撤銷了（已撤銷的回 false）。

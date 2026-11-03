@@ -58,6 +58,9 @@ schemars = "1"
 # two-factor login: passkeys (WebAuthn) and TOTP (secret encrypted at rest, QR code as SVG)
 webauthn-rs = { version = "0.5.5", features = ["conditional-ui"] }
 aes-gcm = "0.10"
+# Web Push：RFC 8291 的 ECDH / HKDF 與 VAPID 的 ES256（p256 跟 russh 用的同一版）。/ Web Push: RFC 8291 ECDH / HKDF and VAPID ES256 (the same p256 as russh).
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
+hkdf = "0.12"
 sha1 = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # misc

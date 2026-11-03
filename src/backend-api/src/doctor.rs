@@ -202,6 +202,7 @@ pub async fn run_with(config: &Config, db: Result<Db, String>, audit_max_age: Op
     );
     out.extend(database);
     out.extend(keys);
+    out.push(push_check(config));
     out.push(ssh_host);
     out.extend(services);
     out.extend(data);
@@ -403,6 +404,19 @@ fn geoip_check(geoip_dir: &Path, oui_dir: &Path) -> Check {
         crate::datasets::Freshness::Missing => check("geoip", "GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Download it on Server health → Companion services (IP and vendor data), or run telepy-server geoip in the backend container"),
         crate::datasets::Freshness::Fresh(d) => check("geoip", "GeoIP", Status::Ok, d),
         crate::datasets::Freshness::Stale(d, built) => check("geoip", "GeoIP", Status::Warn, d).fp(&["stale", &built]),
+    }
+}
+
+/// 推播的 VAPID 金鑰：只讀，不產生（沒有 = 第一次用到時才產生）。/ The push VAPID key: read only, never created here.
+fn push_check(config: &Config) -> Check {
+    let path = crate::push::key_path(config);
+    match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => check("push", "push notifications", Status::Info, format!("no VAPID key yet: {} is created the first time someone opens Preferences → Notifications", path.display())),
+        Err(e) => check("push", "push notifications", Status::Fail, format!("cannot read {}: {e}", path.display())).fp(&["unreadable"]),
+        Ok(text) => match crate::push::vapid::VapidKey::parse(&text) {
+            Ok(k) => check("push", "push notifications", Status::Ok, format!("VAPID key in {} (public key {}…); keep it in backups: a new key ends every device's subscription", path.display(), &k.public_key()[..16])),
+            Err(e) => check("push", "push notifications", Status::Fail, format!("{} is not a VAPID key ({e}): restore it from a backup, or delete it so Telepy makes a new one (every device then turns push on again)", path.display())).fp(&["broken"]),
+        },
     }
 }
 

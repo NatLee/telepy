@@ -302,6 +302,8 @@ pub struct Webhooks {
     gate: tokio::sync::Semaphore,
     flood: Mutex<HashMap<i64, Flood>>,
     retries: Mutex<Vec<Duration>>,
+    /// 推播通知：每件 `emit` 的事也推給收件人的裝置。/ Push notifications: every emitted event also goes to recipients' devices.
+    push: Arc<crate::push::Push>,
 }
 
 fn client(strict: bool) -> reqwest::Client {
@@ -340,6 +342,7 @@ fn clip_body(body: &[u8]) -> String {
 
 impl Webhooks {
     pub fn new(config: &Config, db: Db, hub: Arc<Hub>) -> Self {
+        let push = Arc::new(crate::push::Push::new(config, db.clone()));
         Self {
             db,
             hub,
@@ -351,7 +354,13 @@ impl Webhooks {
             gate: tokio::sync::Semaphore::new(16),
             flood: Mutex::new(HashMap::new()),
             retries: Mutex::new(vec![Duration::from_secs(10), Duration::from_secs(60)]),
+            push,
         }
+    }
+
+    /// 推播通知（跟 webhook 共用同一份事件與收件人）。/ Push notifications (the same events and recipients as webhooks).
+    pub fn push(&self) -> Arc<crate::push::Push> {
+        self.push.clone()
     }
 
     /// 測試用：重試間隔。/ For tests: the retry delays.
@@ -414,6 +423,8 @@ impl Webhooks {
 
     /// 發一件事：背景挑出要收的 webhook 送出。/ Emit an event; matching webhooks get it in the background.
     pub fn emit(self: &Arc<Self>, event: Event) {
+        // 推播：同一件事、同一份收件人。/ Push: the same event and recipients.
+        self.push.event(&event);
         let me = self.clone();
         tokio::spawn(async move {
             let settings = match db::settings::get_solo(&me.db).await {

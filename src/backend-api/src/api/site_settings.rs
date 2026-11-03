@@ -60,6 +60,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "datasets_auto_update", kind: Kind::Bool, label: "Keep IP and vendor data up to date", description: "IP 的國家 / 網路業者（DB-IP Lite）與網卡廠商表（IEEE OUI）：每天最多看一次，已經裝好的資料舊了就在背景下載新的（DB-IP 每月一版，廠商表 30 天一次），換上後立刻生效、不用重啟，結果記在稽核紀錄。還沒裝過的不會自己下載，先在伺服器狀態頁按一次「下載」。查詢一律在本機，不把任何 IP 送出去。" },
     FieldMeta { name: "notify_user_webhooks", kind: Kind::Bool, label: "Personal webhooks", description: "讓每個人在 Webhooks 頁設定自己的 webhook,收他在網頁上本來就會收到的通知(自己通道的狀態、分享、核准、登入…)。關閉後個人 webhook 全部暫停不送,管理員的全站 webhook 不受影響。" },
     FieldMeta { name: "notify_private_targets", kind: Kind::Bool, label: "Allow private network targets", description: "允許個人 webhook 連到內網、本機或雲端 metadata 這類位址(例如公司內部的 Mattermost)。伺服器會照使用者填的網址連線,開啟前請確認內網沒有不該被觸碰的服務。全站 webhook 一律允許。" },
+    FieldMeta { name: "notify_push", kind: Kind::Bool, label: "Push notifications", description: "Let people turn on push notifications on their devices (Preferences → Notifications): the notifications they get in the web reach their phone or computer even when Telepy is closed. Telepy encrypts each message for that device; the browser's push service (Google, Apple, Mozilla or Microsoft) carries it without being able to read it. Off = nothing is pushed; the devices stay subscribed." },
     FieldMeta { name: "notify_max_webhooks", kind: Kind::Int, label: "Webhooks per person", description: "每個人最多可以建立幾個個人 webhook。0 到 100。" },
     FieldMeta { name: "user_key_max_days", kind: Kind::Int, label: "Personal key lifetime (days)", description: "個人 SSH 金鑰最長可以用幾天。設了之後,新增或續期的金鑰都必須在這個天數內到期(沒填就自動用最長效期);到期的金鑰會被 gateway 拒絕,並從裝置的 authorized_keys 移除。設 0 = 不限制。" },
     FieldMeta { name: "mfa_require_totp", kind: Kind::Bool, label: "Require an authenticator app", description: "要求每個帳號都設定驗證器 App(TOTP)。還沒設定的使用者登入後只能先完成設定,才能使用其他功能。開啟前你自己的帳號必須已經設定好。變更後立即生效。" },
@@ -150,6 +151,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("server_ssh_host".into(), json!(s.server_ssh_host));
     m.insert("app_name_mode".into(), json!(s.app_name_mode));
     m.insert("app_name".into(), json!(s.app_name));
+    m.insert("notify_push".into(), json!(s.notify_push));
     Value::Object(m)
 }
 
