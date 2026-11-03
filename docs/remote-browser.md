@@ -30,13 +30,13 @@ If a step fails, the list stops on it with the reason, and **Try again** starts 
 
 ### A web page on the device's LAN
 
-On the **Network** page, open a host and look at **Web pages** on its **Connect** tab. Every web port the last scan saw is listed with its address, and **Another page** takes a port, a port and path (`8080/admin`), a path or a full `http(s)://` address.
+On the **Network** page, open a host: its **Connect** tab starts with **Services on this machine**, one row per open port with its most direct use (a terminal for SSH, the remote desktop page for RDP / VNC / RustDesk, `telepy forward` for anything else). Web ports show their address and the page title the scan saw, and **Another page** takes a port, a port and path (`8080/admin`), a path or a full `http(s)://` address.
 
 - **Open here** starts the remote browser in the panel at the bottom of the Network page, already on that page. More pages on the same device open as new tabs in the same browser; a page on another device asks before it replaces the browser.
 - The ↗ button opens the same page on the terminal page's browser view, in a new tab.
 - The tree and the **All hosts** table show a globe button on every host with a web port.
 
-The page loads as if from the device, so LAN addresses, local names and the device's own `localhost` all work. Downloads stay in the remote browser. When you want your own browser instead (downloads, saved passwords, extensions), run `telepy forward <tunnel> <host>:<port> --open` from the [CLI](cli.md); the host panel's **Commands** tab has it ready to copy. **How it works** next to **Web pages** draws both ways side by side.
+The page loads as if from the device, so LAN addresses, local names and the device's own `localhost` all work. Downloads stay in the remote browser. When you want your own browser instead (downloads, saved passwords, extensions), run `telepy forward <tunnel> <host>:<port> --open` from the [CLI](cli.md); the host panel's **Commands** tab has it ready to copy. The info button next to **Services on this machine** draws both ways side by side, and the page's own **How it works** shows every way to a machine with its state right now.
 
 The audit log records `opened at <host>:<port>` with the session, never the path or query (they often carry tokens).
 
