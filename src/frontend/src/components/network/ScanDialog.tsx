@@ -10,15 +10,18 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Segmented } from "@/components/ui/segmented";
+import { Switch } from "@/components/ui/switch";
+import { DEFAULT_SCAN_PORTS as DEFAULT_PORT_LIST } from "@/lib/lanHosts";
 import { useI18n } from "@/lib/i18n";
 import { parsePortList } from "@/lib/lanConnect";
 import type { ScanOptions } from "@/hooks/useNetworkPage";
 import type { TopologyTunnel } from "@/types/lan";
 
-/** 與後端 `lan::DEFAULT_PORTS` 相同。/ Same as the backend's default ports. */
-export const DEFAULT_SCAN_PORTS = "22, 80, 443, 445, 3389, 5900, 8080, 8443";
+/** 與後端 `lan::DEFAULT_PORTS` 相同（`lib/lanHosts` 的測試比對）。/ Same as the backend's default ports. */
+export const DEFAULT_SCAN_PORTS = DEFAULT_PORT_LIST.join(", ");
 
 interface Props {
     tunnel: TopologyTunnel | null;
@@ -36,6 +39,7 @@ function ScanForm({ tunnel, onClose, startScan }: Props & { tunnel: TopologyTunn
     const [account, setAccount] = useState<string | null>(tunnel.default_username ?? tunnel.usernames[0] ?? null);
     const [subnets, setSubnets] = useState("");
     const [ports, setPorts] = useState(DEFAULT_SCAN_PORTS);
+    const [identify, setIdentify] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
 
@@ -48,7 +52,7 @@ function ScanForm({ tunnel, onClose, startScan }: Props & { tunnel: TopologyTunn
         const nets = subnets.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
         setBusy(true);
         setError(null);
-        const err = await startScan(tunnel, { username: account, subnets: nets, ports: list });
+        const err = await startScan(tunnel, { username: account, subnets: nets, ports: list, identify });
         setBusy(false);
         if (err) setError(err);
         else onClose();
@@ -87,10 +91,17 @@ function ScanForm({ tunnel, onClose, startScan }: Props & { tunnel: TopologyTunn
                 </div>
                 <div className="space-y-1.5">
                     <Label htmlFor="scan-ports">{t("network.scanForm.ports")}</Label>
-                    <Input id="scan-ports" value={ports} onChange={(e) => setPorts(e.target.value)} spellCheck={false} className="font-mono" />
+                    <Textarea id="scan-ports" value={ports} onChange={(e) => setPorts(e.target.value)} spellCheck={false} rows={3} className="min-h-0 resize-none font-mono" />
                     <p className="text-xs text-muted-foreground">
                         {tn("network.scanForm.portsHint", { reset: <button type="button" className="text-primary underline-offset-2 hover:underline" onClick={() => setPorts(DEFAULT_SCAN_PORTS)}>{t("network.scanForm.resetPorts")}</button> })}
                     </p>
+                </div>
+                {/* 預設開，但說清楚對方會看到什麼。/ On by default, saying plainly what the other machines see. */}
+                <div className="space-y-1.5 rounded-lg border border-border bg-surface p-3">
+                    <Switch checked={identify} onCheckedChange={setIdentify} size="sm">
+                        {t("network.scanForm.identify")}
+                    </Switch>
+                    <p className="text-xs text-muted-foreground">{t("network.scanForm.identifyHint")}</p>
                 </div>
                 {error && <Callout tone="danger">{error}</Callout>}
             </div>

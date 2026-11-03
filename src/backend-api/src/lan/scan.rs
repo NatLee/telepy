@@ -1,4 +1,4 @@
-//! 區網掃描的執行：連到裝置、找網段、探測、讀鄰居表、反查名稱、存結果、通知、記 Log。
+//! 區網掃描的執行：連到裝置、找網段、探測、讀鄰居表、反查名稱、辨識服務（網頁 port 一個 `GET /`）、存結果、通知、記 Log。
 //! 一條隧道同時只跑一個掃描；狀態放記憶體（重啟就沒了，結果已存在 DB）。
 //! Running a LAN scan through the device; one scan per tunnel at a time, status kept in memory.
 
@@ -14,7 +14,8 @@ use russh::ChannelMsg;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{parse_avahi, parse_getent, parse_nmblookup, parse_neighbours, parse_networks, parse_ssh_banner, targets, Network};
+use super::fingerprint::{self, Service};
+use super::{parse_avahi, parse_getent, parse_nmblookup, parse_neighbours, parse_networks, targets, web_scheme, Network};
 use crate::db::{self, lan::Found, tunnels::Tunnel, users::User};
 use crate::ssh::device::{self, ClientHandler};
 use crate::state::AppState;
@@ -27,6 +28,12 @@ pub const CONCURRENCY: usize = 48;
 /// 開著的 port 等 banner 的時間（SSH 伺服器一連上就送；任何 port 上的 SSH 都認得出來）。
 /// How long an open port gets to send a banner (SSH servers send theirs at once, on any port).
 const BANNER_TIMEOUT: Duration = Duration::from_millis(800);
+/// 辨識一個網頁 port 的時限（TLS 握手 + 讀回應）。/ The limit for fingerprinting one web port (TLS + the answer).
+const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(5);
+/// 同時辨識幾個網頁 port（比探測少：每個都要讀一整個回應）。/ Web ports fingerprinted at once.
+const IDENTIFY_CONCURRENCY: usize = 16;
+/// 網頁回應最多讀多少（標題通常在前幾 KB）。/ How much of a page is read (the title sits in the first KBs).
+const IDENTIFY_MAX: usize = 64 * 1024;
 const EXEC_TIMEOUT: Duration = Duration::from_secs(15);
 const EXEC_OUTPUT: usize = 256 * 1024;
 
@@ -42,7 +49,7 @@ pub struct ScanStatus {
     pub started_by: String,
     pub started_at: String,
     pub finished_at: Option<String>,
-    /// connecting | networks | discovery | ports | names | done | failed
+    /// connecting | networks | discovery | ports | identify | names | done | failed
     pub phase: String,
     pub networks: Vec<String>,
     pub ports: Vec<u16>,
@@ -110,6 +117,10 @@ pub struct ScanRequest {
     pub subnets: Option<Vec<Network>>,
     pub ports: Vec<u16>,
     pub user: User,
+    /// 網頁 port 送一個 `GET /` 認出它是什麼（預設開；對方的紀錄裡看得到）。/ Send one `GET /` per web port (default on; visible in the host's logs).
+    pub identify: bool,
+    /// 使用者自己加的 port（不在預設清單裡的）：沒先說話的也試一個 GET。/ Ports the person added beyond the default list: silent ones get a GET too.
+    pub listed: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,34 +154,83 @@ async fn read_neighbours(handle: &Handle<ClientHandler>) -> Vec<super::Neighbour
     parse_neighbours(&device_exec(handle, NEIGHBOURS_WINDOWS).await)
 }
 
-/// 由裝置的 sshd 對 ip:port 開 direct-tcpip；開得起來 = port 開著。要 banner 時讀第一行（SSH）。
-/// Ask the device's sshd for a direct-tcpip channel to ip:port; success = open. Optionally read a banner.
-async fn probe(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16, banner: bool) -> Option<Option<String>> {
+/// 由裝置的 sshd 對 ip:port 開 direct-tcpip；開得起來 = port 開著。不是網頁 port 時聽它自己先說的那一行（SSH、FTP、VNC…）——
+/// 只聽、不送。網頁 port 不等（HTTP 伺服器不會先說話），留給辨識那一步。
+/// Ask the device's sshd for a direct-tcpip channel to ip:port; success = open. Non-web ports are listened to for the
+/// line they send first (SSH, FTP, VNC…) — listen only, never send. Web ports aren't waited on (HTTP servers don't
+/// speak first); the identify step handles them.
+async fn probe(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16) -> Option<Option<Service>> {
     let ch = tokio::time::timeout(PROBE_TIMEOUT, handle.channel_open_direct_tcpip(ip.to_string(), u32::from(port), "127.0.0.1", 0))
         .await
         .ok()?
         .ok()?;
-    let mut text = None;
-    if banner {
-        let mut ch = ch;
-        let mut buf = Vec::new();
-        let _ = tokio::time::timeout(BANNER_TIMEOUT, async {
-            while let Some(msg) = ch.wait().await {
-                if let ChannelMsg::Data { data } = msg {
-                    buf.extend_from_slice(&data);
-                    if buf.contains(&b'\n') || buf.len() >= 255 {
-                        break;
-                    }
+    let mut ch = ch;
+    if web_scheme(port).is_some() {
+        let _ = ch.close().await;
+        return Some(None);
+    }
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(BANNER_TIMEOUT, async {
+        while let Some(msg) = ch.wait().await {
+            if let ChannelMsg::Data { data } = msg {
+                buf.extend_from_slice(&data);
+                if buf.contains(&b'\n') || buf.len() >= 255 {
+                    break;
                 }
             }
-        })
-        .await;
-        text = parse_ssh_banner(&buf);
-        let _ = ch.close().await;
-    } else {
-        let _ = ch.close().await;
+        }
+    })
+    .await;
+    let _ = ch.close().await;
+    Some(fingerprint::parse_banner(&buf).map(|(proto, text)| Service { port, proto: proto.into(), banner: Some(text), ..Default::default() }))
+}
+
+/// 一個網頁 port：照 port 猜的 scheme 先試（https 先 TLS 握手讀憑證），不通再試另一種；送一個 `GET /`、讀回應。
+/// One web port: the scheme the port suggests first (https = a TLS handshake that reads the certificate), then the
+/// other; one `GET /`, then the answer.
+async fn identify_web(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16) -> Option<Service> {
+    let https_first = web_scheme(port) == Some("https");
+    for tls in if https_first { [true, false] } else { [false, true] } {
+        // 逾時（對方收了不回）就不再試另一種：多半一樣不回，只會讓掃描多等。失敗得快（被拒、TLS 握手不成）才換。
+        // A timeout (it took the request and said nothing) ends it: the other way would most likely hang too. Only a
+        // quick failure (refused, no TLS) tries the other way.
+        let Ok(r) = tokio::time::timeout(IDENTIFY_TIMEOUT, fetch(handle, ip, port, tls)).await else { return None };
+        // 送到 HTTPS port 的明文請求常回 400「plain HTTP request was sent to HTTPS port」：再試 TLS。
+        // A plain request to an HTTPS port often gets a 400 saying so: try TLS then.
+        if let Some(s) = r {
+            let wrong_door = !tls && s.status == Some(400) && s.title.as_deref().is_some_and(|t| t.to_ascii_lowercase().contains("https"));
+            if !wrong_door {
+                return Some(s);
+            }
+        }
     }
-    Some(text)
+    None
+}
+
+async fn fetch(handle: &Handle<ClientHandler>, ip: Ipv4Addr, port: u16, tls: bool) -> Option<Service> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let ch = handle.channel_open_direct_tcpip(ip.to_string(), u32::from(port), "127.0.0.1", 0).await.ok()?;
+    let stream = ch.into_stream();
+    let default_port = (tls && port == 443) || (!tls && port == 80);
+    let request = fingerprint::http_request(&ip.to_string(), port, default_port);
+    let mut buf = Vec::new();
+    let cert = if tls {
+        let connector = tokio_rustls::TlsConnector::from(super::tls::any_cert_config());
+        let name = rustls::pki_types::ServerName::IpAddress(std::net::IpAddr::V4(ip).into());
+        let mut s = connector.connect(name, stream).await.ok()?;
+        let cert = s.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| fingerprint::cert_info(c.as_ref()));
+        s.write_all(&request).await.ok()?;
+        let _ = (&mut s).take(IDENTIFY_MAX as u64).read_to_end(&mut buf).await;
+        cert
+    } else {
+        let mut s = stream;
+        s.write_all(&request).await.ok()?;
+        let _ = (&mut s).take(IDENTIFY_MAX as u64).read_to_end(&mut buf).await;
+        None
+    };
+    let mut svc = fingerprint::parse_http(&buf, tls, port).or_else(|| cert.is_some().then(|| Service { port, proto: "https".into(), ..Default::default() }))?;
+    svc.cert = cert;
+    Some(svc)
 }
 
 /// 執行一次掃描（呼叫端已做權限檢查並 `LanScans::begin` 過）。結果存進 DB、通知、寫進隧道的 Logs。
@@ -254,13 +314,13 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
     let first = req.ports[0];
     let probed = AtomicUsize::new(0);
     let last_note = std::sync::Mutex::new(Instant::now());
-    let mut open: BTreeMap<Ipv4Addr, (BTreeSet<u16>, Option<String>)> = BTreeMap::new();
-    let results: Vec<(Ipv4Addr, Option<Option<String>>)> = stream::iter(addresses.iter().copied())
+    let mut open: BTreeMap<Ipv4Addr, (BTreeSet<u16>, Vec<Service>)> = BTreeMap::new();
+    let results: Vec<(Ipv4Addr, Option<Option<Service>>)> = stream::iter(addresses.iter().copied())
         .map(|ip| {
             let probed = &probed;
             let last_note = &last_note;
             async move {
-                let r = probe(handle, ip, first, true).await;
+                let r = probe(handle, ip, first).await;
                 let n = probed.fetch_add(1, Ordering::Relaxed) + 1;
                 let due = {
                     let mut t = last_note.lock().unwrap();
@@ -280,12 +340,10 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
         .collect()
         .await;
     for (ip, r) in results {
-        if let Some(banner) = r {
+        if let Some(service) = r {
             let e = open.entry(ip).or_default();
             e.0.insert(first);
-            if banner.is_some() {
-                e.1 = banner;
-            }
+            e.1.extend(service);
         }
     }
 
@@ -304,11 +362,11 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
         s.hosts_found = live.len();
     });
     let probed = AtomicUsize::new(0);
-    let results: Vec<(Ipv4Addr, u16, Option<Option<String>>)> = stream::iter(rest.into_iter())
+    let results: Vec<(Ipv4Addr, u16, Option<Option<Service>>)> = stream::iter(rest.into_iter())
         .map(|(ip, port)| {
             let probed = &probed;
             async move {
-                let r = probe(handle, ip, port, true).await;
+                let r = probe(handle, ip, port).await;
                 probed.fetch_add(1, Ordering::Relaxed);
                 (ip, port, r)
             }
@@ -317,11 +375,42 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
         .collect()
         .await;
     for (ip, port, r) in results {
-        if let Some(banner) = r {
+        if let Some(service) = r {
             let e = open.entry(ip).or_default();
             e.0.insert(port);
-            if banner.is_some() {
-                e.1 = banner;
+            e.1.extend(service);
+        }
+    }
+
+    // 3b) 辨識：每個開著的網頁 port 一個 `GET /`（TLS 的順便讀憑證）。/ Identify: one `GET /` per open web port.
+    if req.identify {
+        let listed = &req.listed;
+        let web: Vec<(Ipv4Addr, u16)> = open
+            .iter()
+            .flat_map(|(ip, (ports, services))| ports.iter().filter(move |p| fingerprint::worth_a_get(**p, listed.contains(p), services.iter().any(|s| s.port == **p))).map(move |p| (*ip, *p)))
+            .collect();
+        progress(state, req, |s| {
+            s.phase = "identify".into();
+            s.probed = 0;
+            s.total = web.len();
+        });
+        let probed = AtomicUsize::new(0);
+        let seen: Vec<(Ipv4Addr, Option<Service>)> = stream::iter(web.into_iter())
+            .map(|(ip, port)| {
+                let probed = &probed;
+                async move {
+                    let r = identify_web(handle, ip, port).await;
+                    let n = probed.fetch_add(1, Ordering::Relaxed) + 1;
+                    progress(state, req, |s| s.probed = n);
+                    (ip, r)
+                }
+            })
+            .buffer_unordered(IDENTIFY_CONCURRENCY)
+            .collect()
+            .await;
+        for (ip, svc) in seen {
+            if let (Some(svc), Some(e)) = (svc, open.get_mut(&ip)) {
+                e.1.push(svc);
             }
         }
     }
@@ -355,13 +444,16 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
     let found: Vec<Found> = live
         .iter()
         .map(|ip| {
-            let (ports, banner) = open.get(ip).cloned().unwrap_or_default();
+            let (ports, mut services) = open.get(ip).cloned().unwrap_or_default();
+            services.sort_by_key(|s| s.port);
+            let ssh_banner = services.iter().find(|s| s.proto == "ssh").and_then(|s| s.banner.clone());
             Found {
                 address: ip.to_string(),
                 hostname: names.get(ip).cloned(),
                 mac: macs.get(ip).cloned().flatten(),
                 open_ports: ports.into_iter().collect(),
-                ssh_banner: banner,
+                ssh_banner,
+                services,
             }
         })
         .collect();

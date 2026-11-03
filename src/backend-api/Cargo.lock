@@ -4132,6 +4132,7 @@ dependencies = [
  "rmcp",
  "russh",
  "russh-sftp",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
@@ -4143,6 +4144,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
  "tower",
@@ -4159,6 +4161,7 @@ dependencies = [
  "vt100",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "x509-parser",
  "zip",
 ]
 

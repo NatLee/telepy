@@ -31,6 +31,8 @@ import { DOCK_BAR, DOCK_GAP, dockBodyHeight, TerminalDock } from "@/components/n
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { shortUrl } from "@/lib/lanWeb";
 import { ScanDialog } from "@/components/network/ScanDialog";
+import { NetworkTypes } from "@/components/network/NetworkTypes";
+import { DEVICE_KINDS, type DeviceKind } from "@/lib/lanIdentity";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
 import { useLanTerminals, type WebRequest } from "@/hooks/useLanTerminals";
@@ -154,6 +156,15 @@ function NetworkInner() {
     const allRows = useMemo(() => flattenHosts(allTunnels), [allTunnels]);
     const tableRows = useMemo(() => flattenHosts(tunnels), [tunnels]);
     const recentList = useMemo(() => recentRows(recent.recent, allRows).slice(0, 6), [recent.recent, allRows]);
+    // 搜尋裡的 `type:` 詞（圖表上亮起的那條）；點一條就換掉它。/ The search's `type:` term (the lit bar); a click replaces it.
+    const activeType = useMemo(() => {
+        const m = /(?:^|\s)type:(\S+)/.exec(query.toLowerCase());
+        return m && (DEVICE_KINDS as readonly string[]).includes(m[1]) ? (m[1] as DeviceKind) : null;
+    }, [query]);
+    const pickType = (kind: DeviceKind | null) => {
+        const rest = query.split(/\s+/).filter((w) => w && !/^type:/i.test(w));
+        actions.setQuery([...rest, ...(kind ? [`type:${kind}`] : [])].join(" "));
+    };
     // 開著終端機時，頁面底部與右側面板都要留出 dock 的高度（dock 浮在內容上方；放大時是整個視窗的覆蓋層，不用留）。
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
     const dockOffset = (terms.sessions.length || terms.browser) && terms.size !== "max" ? `calc(${DOCK_BAR} + ${dockBodyHeight(terms.size)} + ${DOCK_GAP} + 0.5rem)` : "0px";
@@ -238,6 +249,9 @@ function NetworkInner() {
                             <Input ref={searchRef} type="search" value={query} onChange={(e) => actions.setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && query) { e.preventDefault(); actions.setQuery(""); } }} placeholder={t("network.searchPlaceholder")} aria-label={t("network.searchPlaceholder")} title={t("network.searchHint")} className="h-full min-h-10 pl-9" />
                         </div>
                     </div>
+
+                    {/* 網路上有什麼：每種機器一條，點一條 = 搜尋 type:。/ What's on the network: one bar per type; a click searches type:. */}
+                    <NetworkTypes hosts={allRows.map((r) => r.host)} active={activeType} onPick={pickType} />
 
                     {stats.hosts === 0 && <Callout tone="tip">{t("network.firstScanTip")}</Callout>}
 

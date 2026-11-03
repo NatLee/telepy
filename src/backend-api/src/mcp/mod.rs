@@ -190,8 +190,10 @@ pub struct LanScanArgs {
     pub username: Option<String>,
     /// Private CIDRs to scan (at most 1024 addresses), e.g. ["192.168.1.0/24"]; omit to scan the device's own networks
     pub subnets: Option<Vec<String>>,
-    /// Ports to probe; omit for 22, 80, 443, 445, 3389, 5900, 8080, 8443
+    /// Ports to probe; omit for 22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118, 53, 554, 631, 5000, 5001, 8006, 8123, 9000, 9090, 9100
     pub ports: Option<Vec<i64>>,
+    /// Recognise web pages: one GET / per open web port (HTTPS ones also show their certificate), so lan_hosts can say what each machine is. Default true; the machines log it as a visit from the device
+    pub identify: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -776,7 +778,7 @@ impl TelepyMcp {
         if tunnel.require_step_up {
             return Ok(fail(STEP_UP_REFUSAL.to_string()));
         }
-        let req = match crate::api::lan::prepare_scan(&self.state, &p.user, &tunnel, eff, args.username.as_deref(), args.subnets, args.ports).await {
+        let req = match crate::api::lan::prepare_scan(&self.state, &p.user, &tunnel, eff, args.username.as_deref(), args.subnets, args.ports, args.identify.unwrap_or(true)).await {
             Ok(r) => r,
             Err(e) => {
                 let msg = e.body.get("error").or(e.body.get("detail")).and_then(Value::as_str).unwrap_or("The scan could not start.").to_string();
