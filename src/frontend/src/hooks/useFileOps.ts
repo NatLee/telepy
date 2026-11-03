@@ -14,7 +14,7 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { fileErrorKey, isActiveUpload, joinPath, nextUploads, type Busy, type BusyKind, type UploadJob } from "@/lib/fileManager";
-import { foldersToCreate, newUploadId, safeRel, type LocalItem } from "@/lib/uploadParts";
+import { foldersToCreate, newUploadId, safeRel, sameLocalFile, type LocalItem, type UnfinishedUpload } from "@/lib/uploadParts";
 import { cancelUpload, uploadInParts } from "@/lib/uploadXhr";
 
 export interface OpResult<T = Record<string, unknown>> {
@@ -77,10 +77,12 @@ function startBrowserDownload(url: string) {
 }
 
 let nextJobId = 1;
+/** 有「正在上傳」的未完成上傳時多久再看一次。/ How soon an "uploading now" entry is looked at again. */
+const UNFINISHED_RECHECK = 15_000;
 
 export function useFileOps(serverId: string, username: string, currentPath: string, reload: () => void) {
     const { t } = useI18n();
-    const { showError, showSuccess } = useToast();
+    const { showError, showSuccess, showToast } = useToast();
     const [busy, setBusy] = useState<Busy | null>(null);
     const [uploads, setUploads] = useState<UploadJob[]>([]);
     const started = useRef(new Set<number>());
@@ -227,6 +229,38 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
 
     // ------------------------------------------------------------ uploads
 
+    // ------------------------------------------------------------ unfinished uploads (the ledger)
+
+    /** 這個資料夾裡沒傳完的上傳（Telepy 記下的暫存檔）。/ Unfinished uploads into this folder (Telepy's own part files). */
+    const [unfinished, setUnfinished] = useState<UnfinishedUpload[]>([]);
+    const loadUnfinished = useCallback(async () => {
+        if (!currentPath) return;
+        const r = await request<{ uploads: UnfinishedUpload[] }>("uploads", { method: "GET", query: `?dir=${encodeURIComponent(currentPath)}` });
+        setUnfinished(r.ok && Array.isArray(r.data?.uploads) ? r.data.uploads : []);
+    }, [currentPath, request]);
+    useEffect(() => {
+        setUnfinished([]);
+        void loadUnfinished();
+    }, [loadUnfinished]);
+    // 「正在上傳」的那一筆可能是剛關掉的分頁：過一下再看一次，才會變成可以繼續 / 捨棄。
+    // An "uploading now" entry may be a tab that just closed: look again shortly so it becomes continuable.
+    useEffect(() => {
+        if (!unfinished.some((u) => u.active)) return;
+        const timer = setTimeout(() => void loadUnfinished(), UNFINISHED_RECHECK);
+        return () => clearTimeout(timer);
+    }, [unfinished, loadUnfinished]);
+
+    /** 捨棄一個沒傳完的上傳（自己的；擁有者 / Admin 可以捨棄別人的）。/ Discard an unfinished upload. */
+    const discardUnfinished = useCallback(
+        async (u: UnfinishedUpload) => {
+            const r = await request("upload-part", { method: "DELETE", query: `?${new URLSearchParams({ path: u.target, upload: u.upload }).toString()}` }, "deleting");
+            if (!r.ok) showError(r.message);
+            await loadUnfinished();
+            reloadRef.current();
+        },
+        [request, showError, loadUnfinished],
+    );
+
     /**
      * 排進佇列。`items` 的 `rel` 是相對路徑（資料夾上傳時含資料夾，`parents` 會把它們建起來）；`emptyDirs` 先建。
      * Queue files; `rel` may hold folders (created on the way); `emptyDirs` are created first.
@@ -265,17 +299,30 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
     );
     const patchJob = useCallback((id: number, patch: Partial<UploadJob>) => setUploads((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j))), []);
 
+    /** 選回當初那個檔案就接著傳；不是同一個（名字、大小、修改時間不同）回 false。/ Continue with the same local file. */
+    const continueUnfinished = useCallback(
+        (u: UnfinishedUpload, file: File) => {
+            if (!sameLocalFile(file, u)) return false;
+            void enqueue([{ file, rel: u.name }]);
+            return true;
+        },
+        [enqueue],
+    );
+
     useEffect(() => {
         const ids = nextUploads(uploads).filter((id) => !started.current.has(id));
         if (!ids.length) {
             const finished = uploads.length > 0 && !uploads.some(isActiveUpload);
             if (finished && started.current.size > 0) {
                 started.current.clear();
-                const failed = uploads.filter((j) => j.state === "failed");
+                const failed = uploads.filter((j) => j.state === "failed" && !j.kept);
+                const kept = uploads.filter((j) => j.kept);
                 const done = uploads.filter((j) => j.state === "done").length;
                 if (failed.length) showError(t("files.uploadSomeFailed", { count: failed.length, name: failed[0].name, reason: failed[0].error ?? "" }));
+                else if (kept.length) showToast(t("files.upload.keptToast", { name: kept[0].name, count: kept.length }), "warning");
                 else if (done) showSuccess(t("files.uploadedCount", { count: done }));
                 reloadRef.current();
+                void loadUnfinished();
             }
             return;
         }
@@ -290,20 +337,34 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
             }
             const abort = new AbortController();
             abortsRef.current.set(id, abort);
-            uploadInParts(base("upload-part"), file, {
+            let keepFile = false;
+            uploadInParts({ start: base("upload-start"), part: base("upload-part") }, file, {
                 upload: job.upload,
+                lease: job.lease,
                 target: job.target,
                 overwrite: job.overwrite,
                 parents: job.parents,
                 onProgress: (loaded) => patchJob(id, { loaded }),
                 onRetry: (retry) => patchJob(id, { retry }),
+                onWaitingOther: (waitingOther) => patchJob(id, { waitingOther }),
+                onStarted: ({ upload, lease, resumedFrom }) => patchJob(id, { upload, lease, resumedFrom }),
                 signal: abort.signal,
             })
                 .then((r) => {
-                    if (r.ok) patchJob(id, { state: "done", loaded: job.size, retry: 0 });
+                    if (r.ok) patchJob(id, { state: "done", loaded: job.size, retry: 0, kept: false });
                     else {
                         const key = fileErrorKey(r.code);
-                        patchJob(id, { state: "failed", retry: 0, error: key ? t(key) : r.error || (r.status ? `HTTP ${r.status}` : t("files.err.network", { error: "" })) });
+                        // 同名衝突時傳好的部分還在裝置上：留著本機檔案，「取代」就不必重傳。
+                        // On a name clash the upload waits on the device: keep the local file so replacing needs no re-upload.
+                        keepFile = !!r.kept;
+                        patchJob(id, {
+                            state: "failed",
+                            retry: 0,
+                            kept: !!r.kept,
+                            upload: r.upload,
+                            lease: r.lease,
+                            error: r.kept ? t("files.upload.keptNote") : key ? t(key) : r.error || (r.status ? `HTTP ${r.status}` : t("files.err.network", { error: "" })),
+                        });
                     }
                 })
                 .catch((e) => {
@@ -311,11 +372,11 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
                     else patchJob(id, { state: "failed", retry: 0, error: e instanceof Error ? e.message : String(e) });
                 })
                 .finally(() => {
-                    filesRef.current.delete(id);
+                    if (!keepFile) filesRef.current.delete(id);
                     abortsRef.current.delete(id);
                 });
         }
-    }, [uploads, base, patchJob, showError, showSuccess, t]);
+    }, [uploads, base, patchJob, showError, showSuccess, showToast, t, loadUnfinished]);
 
     /** 取消一個（排隊中的直接拿掉；傳到一半的停下來並刪裝置上的暫存檔）。/ Cancel one upload. */
     const cancelUploads = useCallback(
@@ -334,6 +395,28 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
         [uploads, base],
     );
 
+    /** 同名衝突後選「取代」：同一個上傳接著用（裝置上已經傳完，只差改名）。/ Replace after a name clash: no re-upload. */
+    const replaceKept = useCallback(
+        (id: number) => {
+            if (!filesRef.current.has(id)) return;
+            started.current.delete(id);
+            setUploads((prev) => prev.map((j) => (j.id === id && j.kept ? { ...j, state: "queued", overwrite: true, kept: false, error: undefined, retry: 0 } : j)));
+        },
+        [],
+    );
+
+    /** 同名衝突後選「捨棄」：刪掉裝置上傳好的部分。/ Discard after a name clash: remove what was uploaded. */
+    const discardKept = useCallback(
+        (id: number) => {
+            const job = uploads.find((j) => j.id === id && j.kept);
+            if (!job) return;
+            void cancelUpload(base("upload-part"), job.target, job.upload).then(() => void loadUnfinished());
+            filesRef.current.delete(id);
+            patchJob(id, { state: "cancelled", kept: false });
+        },
+        [uploads, base, patchJob, loadUnfinished],
+    );
+
     // 面板收起來（終端機頁切到工具箱）時，傳到一半的照樣在背景傳完，跟以前一樣；排隊中的等面板回來。
     // A hidden panel (terminal page → Toolbox) lets running uploads finish in the background, as before.
 
@@ -348,6 +431,12 @@ export function useFileOps(serverId: string, username: string, currentPath: stri
         enqueue,
         cancelUploads,
         clearUploads,
+        replaceKept,
+        discardKept,
+        unfinished,
+        loadUnfinished,
+        discardUnfinished,
+        continueUnfinished,
         pathOf,
         mkdir,
         touch,

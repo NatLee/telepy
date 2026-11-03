@@ -26,7 +26,9 @@ use crate::db::{self, tunnels::Tunnel};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::sftp::links::{self, Link};
+use crate::db::upload_parts::{self, NewPart, PartRow};
 use crate::sftp::ops::{self, PartStep};
+use crate::uploads::{self, Resume};
 use crate::sftp;
 use crate::ssh::pool::{PooledSftp, TransferSftp};
 use crate::state::AppState;
@@ -40,7 +42,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(download_link))
         .routes(routes!(fetch))
         .routes(routes!(upload))
+        .routes(routes!(upload_start))
         .routes(routes!(upload_part, upload_part_cancel))
+        .routes(routes!(unfinished_uploads))
         .routes(routes!(mkdir))
         .routes(routes!(touch))
         .routes(routes!(rename))
@@ -258,7 +262,8 @@ async fn fetch(State(state): State<AppState>, Path(token): Path<String>) -> Resp
 /// 檔案，連結還在，跟編輯器存檔一樣）。
 /// Put a finished part file at `target`; an existing file is replaced only with `overwrite` (keeping its mode; through
 /// a symlink the file it points to is replaced and the link stays, like the editor's save).
-async fn finish_part(state: &AppState, op: &Op, part: &str, target: &str, overwrite: bool) -> ApiResult<()> {
+/// `keep` = 同名衝突時留著暫存檔（使用者可以選擇取代，不必重傳）。/ `keep` = keep the part file on a name clash.
+async fn finish_part(state: &AppState, op: &Op, part: &str, target: &str, overwrite: bool, keep: bool) -> ApiResult<()> {
     let real = match op.sftp.symlink_metadata(target).await {
         Ok(m) if m.is_symlink() && overwrite => op.sftp.canonicalize(target).await.unwrap_or_else(|_| target.to_string()),
         _ => target.to_string(),
@@ -271,6 +276,11 @@ async fn finish_part(state: &AppState, op: &Op, part: &str, target: &str, overwr
         }
         Ok(m) => {
             if !overwrite {
+                // 上傳途中別人放了同名的檔案：留著傳好的部分，讓使用者決定要不要取代。
+                // Someone put a same-name file there meanwhile: keep what was uploaded and let the person decide.
+                if keep {
+                    return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": format!("{target} already exists"), "code": "exists", "kept": true })));
+                }
                 let _ = op.sftp.remove_file(part).await;
                 return Err(coded(StatusCode::CONFLICT, "exists", format!("{target} already exists")));
             }
@@ -316,8 +326,10 @@ async fn upload(
         }
         let filename = field.file_name().map(str::to_string).unwrap_or_else(|| "upload".to_string());
         let target = sftp::upload_target(&op.sftp, &dest, &filename).await;
-        let part = ops::part_path(&target, &crate::util::random_alnum(16));
+        let upload = crate::util::random_alnum(16);
+        let part = ops::part_path(&target, &upload);
         let mut file = op.sftp.create(&part).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let row = record_part(&state, &op, user.id, &upload, &target, &part, 0, None, None).await?;
         let written = async {
             while let Some(chunk) = field.chunk().await.map_err(|e| ApiError::bad_request(e.to_string()))? {
                 file.write_all(&chunk).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -326,9 +338,11 @@ async fn upload(
         };
         if let Err(e) = written.await {
             let _ = op.sftp.remove_file(part.as_str()).await;
+            let _ = upload_parts::remove(&state.db, row).await;
             return Err(e);
         }
-        finish_part(&state, &op, &part, &target, true).await?;
+        finish_part(&state, &op, &part, &target, true, false).await?;
+        let _ = upload_parts::remove(&state.db, row).await;
         return Ok(Json(json!({ "success": "File uploaded successfully", "path": target })));
     }
     Err(ApiError::bad_request("File and destination path required"))
@@ -345,6 +359,147 @@ fn flag(q: &HashMap<String, String>, key: &str) -> bool {
     matches!(q.get(key).map(String::as_str), Some("1" | "true"))
 }
 
+/// 帳本記一筆（`crate::uploads`）。/ Record a part file in the ledger.
+#[allow(clippy::too_many_arguments)]
+async fn record_part(state: &AppState, op: &Op, user_id: i64, upload: &str, target: &str, part: &str, total: u64, local: Option<(&str, i64)>, lease: Option<&str>) -> ApiResult<i64> {
+    let now = crate::util::now_db();
+    Ok(upload_parts::start(
+        &state.db,
+        NewPart {
+            tunnel_id: op.t.id,
+            username: &op.username,
+            user_id,
+            upload,
+            target,
+            part_path: part,
+            total,
+            local_name: local.map(|l| l.0),
+            local_modified: local.map(|l| l.1),
+            lease,
+            now: &now,
+        },
+    )
+    .await?)
+}
+
+/// 這個請求能寫這個上傳嗎：自己的，而且（有 lease 的話）是同一個視窗。/ May this request write this upload?
+fn may_write(row: &PartRow, user_id: i64, lease: Option<&str>) -> bool {
+    row.user_id == user_id && row.lease.as_deref().is_none_or(|l| Some(l) == lease)
+}
+
+fn taken() -> ApiError {
+    coded(StatusCode::CONFLICT, "upload_taken", "This upload continued in another window")
+}
+
+/// 續傳前比對：裝置上暫存檔 `[from, to)` 的 SHA-256（十六進位）。/ SHA-256 of the part file's `[from, to)`, as hex.
+async fn part_digest(sftp: &russh_sftp::client::SftpSession, part: &str, from: u64, to: u64) -> Result<String, SftpError> {
+    use sha2::Digest;
+    let mut f = sftp.open(part).await?;
+    f.seek(std::io::SeekFrom::Start(from)).await.map_err(SftpError::from)?;
+    let mut buf = vec![0u8; usize::try_from(to.saturating_sub(from)).unwrap_or(0)];
+    f.read_exact(&mut buf).await.map_err(SftpError::from)?;
+    Ok(sha2::Sha256::digest(&buf).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[utoipa::path(post, path = "/api/sftp/upload-start/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), request_body = super::schemas::SftpUploadStart, responses((status = 200, description = "An upload id + lease; `resumed` = continue at `offset` (send `check` = SHA-256 of the local `[check_from, offset)` with the first part)", body = super::schemas::SftpUploadStarted), (status = 400, description = "code = invalid_name | path_required | bad_offset", body = super::schemas::SftpError), (status = 409, description = "code = exists | is_directory | upload_busy (another window is uploading this file right now)", body = super::schemas::SftpError)))]
+async fn upload_start(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let op = Op::open(&state, &user, id, &username, &headers).await?;
+    let target = op.path(str_field(&body, "path"))?;
+    check_name(&target)?;
+    let total = body.get("total").and_then(Value::as_u64).ok_or_else(|| coded(StatusCode::BAD_REQUEST, "bad_offset", "total is required"))?;
+    let overwrite = body.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+    if let Ok(m) = op.sftp.metadata(target.as_str()).await {
+        if m.is_dir() {
+            return Err(coded(StatusCode::CONFLICT, "is_directory", format!("{target} is a folder")));
+        }
+        if !overwrite {
+            return Err(coded(StatusCode::CONFLICT, "exists", format!("{target} already exists")));
+        }
+    }
+    let local_name = body.pointer("/local/name").and_then(Value::as_str).filter(|n| !n.is_empty() && n.len() <= 1024);
+    let local_modified = body.pointer("/local/modified").and_then(Value::as_i64);
+    let resume = body.get("resume").and_then(Value::as_bool).unwrap_or(true);
+    let previous = str_field(&body, "lease").filter(|l| !l.is_empty());
+    let lease = crate::util::random_alnum(24);
+    let now = chrono::Utc::now();
+    if let (true, Some(name), Some(modified)) = (resume, local_name, local_modified) {
+        for row in upload_parts::resumable(&state.db, op.t.id, &op.username, user.id, &target, total, name, modified).await? {
+            let size = ops::size_of(&op.sftp, &row.part_path).await.map_err(|e| sftp_error(&e, "stat"))?;
+            let same_window = previous.is_some() && row.lease.as_deref() == previous;
+            match uploads::decide(uploads::idle_for(&row.updated_at, now), same_window, size, total) {
+                Resume::Busy => {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        json!({ "error": "This file is being uploaded here from another window right now", "code": "upload_busy", "received": row.received }),
+                    ));
+                }
+                Resume::Continue { offset, check_from } => {
+                    upload_parts::take_lease(&state.db, row.id, &lease, &crate::util::db_time(now)).await?;
+                    return Ok(Json(json!({ "upload": row.upload, "lease": lease, "offset": offset, "check_from": check_from, "resumed": true })));
+                }
+                Resume::Stale => {
+                    // 暫存檔不見了（有人刪了、裝置清過）或大小不對：帳本那筆丟掉，有檔案就一起刪。
+                    // The part file is gone (removed on the device) or the wrong size: drop the entry and the file.
+                    if size.is_some() {
+                        let _ = op.sftp.remove_file(row.part_path.as_str()).await;
+                    }
+                    upload_parts::remove(&state.db, row.id).await?;
+                }
+            }
+        }
+    }
+    let upload = crate::util::random_alnum(16);
+    let part = ops::part_path(&target, &upload);
+    record_part(&state, &op, user.id, &upload, &target, &part, total, local_name.zip(local_modified), Some(&lease)).await?;
+    Ok(Json(json!({ "upload": upload, "lease": lease, "offset": 0, "check_from": null, "resumed": false })))
+}
+
+#[utoipa::path(get, path = "/api/sftp/uploads/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("dir" = Option<String>, Query, description = "Folder; default the home folder")), responses((status = 200, description = "Unfinished uploads into this folder (Telepy's own part files), kept for 24 h after their last activity", body = super::schemas::SftpUnfinished), (status = 404, body = super::schemas::SftpError)))]
+async fn unfinished_uploads(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let op = Op::open(&state, &user, id, &username, &headers).await?;
+    let dir = q.get("dir").map(|d| sftp::resolve_path(d, &op.home)).unwrap_or_else(|| op.home.clone());
+    let dir = dir.trim_end_matches('/');
+    let manage = permissions::check_access(&state.db, user.id, &op.t, Permission::Admin).await?;
+    let now = chrono::Utc::now();
+    let tz = state.config.tz_offset_minutes;
+    let mut items: Vec<Value> = Vec::new();
+    for (row, by) in upload_parts::for_account(&state.db, op.t.id, &op.username).await? {
+        if ops::parent(&row.target).trim_end_matches('/') != dir {
+            continue;
+        }
+        let idle = uploads::idle_for(&row.updated_at, now);
+        let active = idle < uploads::BUSY_FOR;
+        // 照裝置上實際的樣子：暫存檔不見了（有人刪了、裝置清過）就把帳本那筆拿掉；大小以裝置上的為準。
+        // As the device has it: a part file that is gone (removed there) drops its entry; the size is the device's.
+        let received = match ops::size_of(&op.sftp, &row.part_path).await {
+            Ok(Some(size)) => size as i64,
+            Ok(None) if !active => {
+                upload_parts::remove(&state.db, row.id).await?;
+                continue;
+            }
+            _ => row.received,
+        };
+        let mine = row.user_id == user.id;
+        items.push(json!({
+                "upload": row.upload,
+                "name": sftp::basename(&row.target),
+                "target": row.target,
+                "part_name": sftp::basename(&row.part_path),
+                "total": row.total,
+                "received": received,
+                "by": by,
+                "mine": mine,
+                "updated_at": crate::util::db_to_iso(&row.updated_at, tz),
+                "active": active,
+                "removed_in": uploads::RETENTION.saturating_sub(idle).as_secs(),
+                "local_name": row.local_name,
+                "local_modified": row.local_modified,
+                "can_discard": mine || manage,
+        }));
+    }
+    Ok(Json(json!({ "dir": dir, "uploads": items, "retention_secs": uploads::RETENTION.as_secs() })))
+}
+
 /// 從多大的一段起寫在自己的 sftp channel 上。/ Parts from this size get their own SFTP channel.
 const BULK_PART: u64 = 1024 * 1024;
 
@@ -352,7 +507,7 @@ fn part_done(target: &str, total: u64) -> Json<Value> {
     Json(json!({ "received": total, "done": true, "path": target }))
 }
 
-#[utoipa::path(put, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id chosen by the client (8–64 letters or digits)"), ("offset" = u64, Query, description = "Where this part starts (0 = the first part; creates or restarts the upload)"), ("total" = u64, Query, description = "The file's size; the part that reaches it renames the upload onto the target"), ("overwrite" = Option<bool>, Query, description = "1 = replace an existing file (its mode is kept)"), ("parents" = Option<bool>, Query, description = "1 = create missing folders above the target (first part)"), ("retry" = Option<bool>, Query, description = "1 = this part is being sent again after a lost answer")), request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The part's bytes (≤ 32 MiB)"), responses((status = 200, body = super::schemas::SftpUploadPart), (status = 400, description = "code = bad_upload | bad_offset | invalid_name | path_required", body = super::schemas::SftpError), (status = 403, description = "code = dir_not_writable | permission_denied | step_up_required", body = super::schemas::SftpError), (status = 409, description = "code = exists | is_directory | upload_offset (carries `received`: resume from there) | upload_gone (start again)", body = super::schemas::SftpError), (status = 413, description = "code = too_large", body = super::schemas::SftpError)))]
+#[utoipa::path(put, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id (from upload-start, or chosen by the client: 8–64 letters or digits)"), ("offset" = u64, Query, description = "Where this part starts (0 = the first part; creates or restarts the upload)"), ("total" = u64, Query, description = "The file's size; the part that reaches it renames the upload onto the target"), ("lease" = Option<String>, Query, description = "The lease from upload-start (required once the upload has one)"), ("check" = Option<String>, Query, description = "First part after resuming: SHA-256 (hex) of the local bytes [check_from, offset)"), ("overwrite" = Option<bool>, Query, description = "1 = replace an existing file (its mode is kept)"), ("parents" = Option<bool>, Query, description = "1 = create missing folders above the target (first part)"), ("retry" = Option<bool>, Query, description = "1 = this part is being sent again after a lost answer")), request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The part's bytes (≤ 32 MiB)"), responses((status = 200, body = super::schemas::SftpUploadPart), (status = 400, description = "code = bad_upload | bad_offset | invalid_name | path_required", body = super::schemas::SftpError), (status = 403, description = "code = dir_not_writable | permission_denied | step_up_required", body = super::schemas::SftpError), (status = 409, description = "code = exists (`kept`: the uploaded part waits; resend the last part with overwrite=1 to replace) | is_directory | upload_offset (carries `received`: resume from there) | upload_gone (start again) | upload_mismatch (the device's part file differs from the local file: start again) | upload_taken (another window continued this upload)", body = super::schemas::SftpError), (status = 413, description = "code = too_large", body = super::schemas::SftpError)))]
 async fn upload_part(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -371,7 +526,13 @@ async fn upload_part(
         return Err(coded(StatusCode::BAD_REQUEST, "bad_offset", "offset is past the end of the file"));
     }
     let overwrite = flag(&q, "overwrite");
+    let lease = q.get("lease").map(String::as_str).filter(|l| !l.is_empty());
     let part = ops::part_path(&target, upload);
+    // 帳本：別人的、或已經被另一個視窗接手的，不能寫。/ The ledger: someone else's, or taken over by another window, can't be written.
+    let row = upload_parts::by_part(&state.db, op.t.id, &op.username, &part).await?;
+    if row.as_ref().is_some_and(|r| !may_write(r, user.id, lease)) {
+        return Err(taken());
+    }
     let part_size = ops::size_of(&op.sftp, &part).await.map_err(|e| sftp_error(&e, "stat"))?;
     // 目標現在的樣子（只有需要時才問）。/ The target as it is now (asked only when needed).
     let target_now = || async { op.sftp.metadata(target.as_str()).await.ok() };
@@ -379,6 +540,7 @@ async fn upload_part(
     // A big part is written on its own SFTP channel; small ones (most files of a folder) use the shared one.
     let big = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n >= BULK_PART);
     let mut bulk: Option<TransferSftp> = None;
+    let row_id;
     let mut file = match ops::part_step(offset, part_size) {
         PartStep::Start => {
             if let Some(m) = target_now().await {
@@ -400,22 +562,44 @@ async fn upload_part(
                 bulk = Some(transfer(&state, &op.t, &op.username).await?);
             }
             let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
-            writer.create(part.as_str()).await.map_err(|e| create_error(&op, &e, &target))?
+            let f = writer.create(part.as_str()).await.map_err(|e| create_error(&op, &e, &target))?;
+            row_id = record_part(&state, &op, user.id, upload, &target, &part, total, None, lease).await?;
+            f
         }
         PartStep::Append => {
+            // 續傳後的第一段：裝置上暫存檔最後那一段要跟本機檔案一樣，不然（有人動過暫存檔、或本機是另一個檔案）從頭來。
+            // The first part after resuming: the end of the part file must match the local file, else start over.
+            if let Some(check) = q.get("check") {
+                let from = offset.saturating_sub(uploads::CHECK_LEN);
+                let have = part_digest(&op.sftp, &part, from, offset).await.map_err(|e| sftp_error(&e, "read"))?;
+                if !have.eq_ignore_ascii_case(check) {
+                    let _ = op.sftp.remove_file(part.as_str()).await;
+                    let _ = upload_parts::remove_part(&state.db, op.t.id, &op.username, &part).await;
+                    return Err(coded(StatusCode::CONFLICT, "upload_mismatch", "The unfinished upload on the device doesn't match this file; it starts over"));
+                }
+            }
             if big {
                 bulk = Some(transfer(&state, &op.t, &op.username).await?);
             }
             let writer: &russh_sftp::client::SftpSession = bulk.as_deref().unwrap_or(&op.sftp);
             let mut f = writer.open_with_flags(part.as_str(), russh_sftp::protocol::OpenFlags::WRITE).await.map_err(|e| sftp_error(&e, "open"))?;
             f.seek(std::io::SeekFrom::Start(offset)).await.map_err(|e| sftp_error(&SftpError::from(e), "seek"))?;
+            row_id = match &row {
+                Some(r) => r.id,
+                // 這個版本之前開始的上傳：補記一筆。/ An upload begun before the ledger existed: record it now.
+                None => record_part(&state, &op, user.id, upload, &target, &part, total, None, lease).await?,
+            };
             f
         }
         PartStep::Resume(received) => {
             return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": format!("The device has {received} bytes of this upload; continue from there"), "code": "upload_offset", "received": received })));
         }
         PartStep::Gone => {
-            // 最後一段其實已經完成改名（回覆沒收到）。/ The last part already renamed it; its answer was lost.
+            // 暫存檔不見了：帳本那筆也拿掉。最後一段其實已經完成改名（回覆沒收到）就算完成。
+            // The part file is gone: drop its entry. If the last part already renamed it (answer lost), it's done.
+            if row.is_some() {
+                let _ = upload_parts::remove_part(&state.db, op.t.id, &op.username, &part).await;
+            }
             if matches!(target_now().await, Some(m) if !m.is_dir() && m.size == Some(total)) {
                 return Ok(part_done(&target, total));
             }
@@ -423,6 +607,7 @@ async fn upload_part(
         }
     };
     let mut written = 0u64;
+    let mut beat = std::time::Instant::now();
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| coded(StatusCode::BAD_REQUEST, "interrupted", format!("The upload was cut off: {e}")))?;
@@ -434,10 +619,17 @@ async fn upload_part(
             return Err(coded(StatusCode::BAD_REQUEST, "bad_offset", "More data than the file's size"));
         }
         file.write_all(&chunk).await.map_err(|e| sftp_error(&SftpError::from(e), "write"))?;
+        // 慢的裝置一段要寫很久：途中也說「還在寫」，另一個視窗才不會以為沒人在傳。
+        // On a slow device a part takes a while: keep saying "still writing" so another window doesn't take over.
+        if beat.elapsed() >= uploads::HEARTBEAT {
+            beat = std::time::Instant::now();
+            let _ = upload_parts::touch(&state.db, row_id, offset + written, &crate::util::now_db()).await;
+        }
     }
     file.shutdown().await.map_err(|e| sftp_error(&SftpError::from(e), "write"))?;
     drop(bulk);
     let received = offset + written;
+    upload_parts::touch(&state.db, row_id, received, &crate::util::now_db()).await?;
     if received < total {
         return Ok(Json(json!({ "received": received, "done": false })));
     }
@@ -445,16 +637,34 @@ async fn upload_part(
     if have != total {
         return Err(ApiError::new(StatusCode::CONFLICT, json!({ "error": format!("The device has {have} of {total} bytes; continue from there"), "code": "upload_offset", "received": have.min(total) })));
     }
-    finish_part(&state, &op, &part, &target, overwrite).await?;
-    Ok(part_done(&target, total))
+    // 同名衝突時留著暫存檔與帳本（使用者可以選擇取代）；其他結果都把帳本那筆拿掉。
+    // On a name clash the part file and its entry stay (the person may replace); otherwise the entry goes.
+    match finish_part(&state, &op, &part, &target, overwrite, true).await {
+        Err(e) if e.body.get("kept").is_some() => Err(e),
+        done => {
+            let _ = upload_parts::remove(&state.db, row_id).await;
+            done.map(|_| part_done(&target, total))
+        }
+    }
 }
 
-#[utoipa::path(delete, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id")), responses((status = 200, description = "{removed}: the unfinished part file is gone", body = super::schemas::SftpUploadCancel), (status = 400, body = super::schemas::SftpError)))]
+#[utoipa::path(delete, path = "/api/sftp/upload-part/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "Full target path"), ("upload" = String, Query, description = "Upload id")), responses((status = 200, description = "{removed}: the unfinished part file is gone (yours; the owner and Admins may discard anyone's)", body = super::schemas::SftpUploadCancel), (status = 400, body = super::schemas::SftpError), (status = 403, description = "code = not_yours", body = super::schemas::SftpError)))]
 async fn upload_part_cancel(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
     let op = Op::open(&state, &user, id, &username, &headers).await?;
     let target = op.path(q.get("path").map(String::as_str))?;
     let upload = q.get("upload").map(String::as_str).filter(|u| ops::valid_upload_id(u)).ok_or_else(|| coded(StatusCode::BAD_REQUEST, "bad_upload", "upload must be 8–64 letters or digits"))?;
-    let removed = op.sftp.remove_file(ops::part_path(&target, upload)).await.is_ok();
+    let part = ops::part_path(&target, upload);
+    if let Some(row) = upload_parts::by_part(&state.db, op.t.id, &op.username, &part).await? {
+        if row.user_id != user.id && !permissions::check_access(&state.db, user.id, &op.t, Permission::Admin).await? {
+            return Err(coded(StatusCode::FORBIDDEN, "not_yours", "Only the person uploading it, the owner or an Admin can discard this upload"));
+        }
+        upload_parts::remove(&state.db, row.id).await?;
+    }
+    // 只刪一般檔案（被換成資料夾或連結就不碰）。/ Only a regular file is removed.
+    let removed = match op.sftp.symlink_metadata(part.as_str()).await {
+        Ok(m) if !m.is_dir() && !m.is_symlink() => op.sftp.remove_file(part.as_str()).await.is_ok(),
+        _ => false,
+    };
     Ok(Json(json!({ "removed": removed })))
 }
 

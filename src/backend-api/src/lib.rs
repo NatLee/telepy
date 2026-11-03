@@ -58,6 +58,7 @@ pub mod step_up;
 pub mod tokens;
 pub mod tunnel_name;
 pub mod tunnel_service;
+pub mod uploads;
 pub mod util;
 pub mod vault;
 pub mod webhooks;

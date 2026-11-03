@@ -13,7 +13,7 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
     Archive, Copy, CornerLeftUp, Download, Eye, File, FileCode2, FilePlus2, Folder, FolderInput, FolderPlus, FolderUp, Home, Image as ImageIcon, Info, KeyRound,
-    Keyboard, Link2, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2, Upload, WifiOff, X, CheckCircle2, XCircle,
+    Keyboard, Link2, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2, TriangleAlert, Upload, WifiOff, X, CheckCircle2, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -35,7 +35,7 @@ import { ChmodDialog, DeleteDialog, DestinationDialog, DetailsDialog, NameDialog
 import { FileViewerDialog, type ViewerTarget } from "@/components/files/FileViewerDialog";
 import { FileFlowDialog } from "@/components/files/FileFlowDialog";
 import { readDropped } from "@/lib/droppedFiles";
-import { uploadClashes, type LocalItem } from "@/lib/uploadParts";
+import { hideKnownParts, hoursLeft, uploadClashes, type LocalItem, type UnfinishedUpload } from "@/lib/uploadParts";
 
 interface FileManagerPanelProps {
     serverId: string;
@@ -101,9 +101,14 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
     const listRef = useRef<HTMLUListElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    /** 「繼續」要選回當初那個檔案。/ "Continue" asks for the same local file again. */
+    const continueInputRef = useRef<HTMLInputElement>(null);
+    const continuing = useRef<UnfinishedUpload | null>(null);
+    const [showUnfinished, setShowUnfinished] = useState(false);
 
     // 資料夾在前，其餘照後端的名稱排序。/ Folders first, then the backend's name order.
-    const sorted = useMemo(() => [...items].sort((a, b) => Number(isDir(b)) - Number(isDir(a))), [items]);
+    // 帳上有的上傳暫存檔不列成檔案，改顯示在「沒傳完的上傳」。/ Recorded part files show as unfinished uploads instead.
+    const sorted = useMemo(() => hideKnownParts(items, ops.unfinished).sort((a, b) => Number(isDir(b)) - Number(isDir(a))), [items, ops.unfinished]);
     const order = useMemo(() => sorted.map((i) => i.name), [sorted]);
     const byName = useMemo(() => new Map(sorted.map((i) => [i.name, i])), [sorted]);
 
@@ -217,6 +222,11 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
 
     const summary = uploadSummary(ops.uploads);
     const uploadRows = uploadListRows(ops.uploads);
+    // 這個視窗正在傳、或等著選取代的，已經在上傳清單裡，不再列成「沒傳完」。/ This window's own uploads are listed above already.
+    const unfinished = useMemo(() => {
+        const mine = new Set(ops.uploads.filter((j) => j.kept || j.state === "queued" || j.state === "uploading").map((j) => j.upload));
+        return ops.unfinished.filter((u) => !mine.has(u.upload));
+    }, [ops.uploads, ops.unfinished]);
     const folderInSelection = (names: string[]) => names.some((n) => { const i = byName.get(n); return !!i && isDir(i); });
     const chmodInitial = chmodNames?.length === 1 ? (() => { const i = byName.get(chmodNames[0]); return i ? parseMode(i.mode ?? "") ?? modeFromString(i.perm ?? i.permissions?.string) : null; })() : null;
     const dateFmt = useMemo(() => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }), [locale]);
@@ -283,7 +293,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFlowOpen(true)} title={t("files.flow.button")} aria-label={t("files.flow.button")}>
                             {ops.busy ? <Loader2 size={14} className="animate-spin" /> : <Info size={14} />}
                         </Button>
-                        <RefreshButton variant="ghost" size="icon" className="h-7 w-7" iconSize={14} onRefresh={refresh} busy={loading} failed={!!error} disabled={!enabled} title={t("files.refresh")} aria-label={t("files.refresh")} />
+                        <RefreshButton variant="ghost" size="icon" className="h-7 w-7" iconSize={14} onRefresh={() => { void ops.loadUnfinished(); return refresh(); }} busy={loading} failed={!!error} disabled={!enabled} title={t("files.refresh")} aria-label={t("files.refresh")} />
                     </div>
                 </div>
 
@@ -378,19 +388,31 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                             <ul className="divide-y divide-border">
                                 {uploadRows.shown.map((j) => (
                                     <li key={j.id} className="flex items-center gap-2 px-2 py-1">
-                                        {j.state === "done" ? <CheckCircle2 size={12} className="shrink-0 text-success" /> : j.state === "failed" ? <XCircle size={12} className="shrink-0 text-destructive" /> : j.state === "uploading" ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : <Upload size={12} className="shrink-0 text-muted-foreground" />}
+                                        {j.kept ? <TriangleAlert size={12} className="shrink-0 text-warning" /> : j.state === "done" ? <CheckCircle2 size={12} className="shrink-0 text-success" /> : j.state === "failed" ? <XCircle size={12} className="shrink-0 text-destructive" /> : j.state === "uploading" ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : <Upload size={12} className="shrink-0 text-muted-foreground" />}
                                         <span className="min-w-0 flex-1 truncate font-mono" title={j.error ? `${j.name}: ${j.error}` : j.name}>{j.name}</span>
-                                        <span className={cn("shrink-0 tabular-nums", j.state === "failed" ? "text-destructive" : j.retry ? "text-warning" : "text-muted-foreground")}>
-                                            {j.state === "failed"
+                                        <span className={cn("shrink-0 tabular-nums", j.state === "failed" && !j.kept ? "text-destructive" : j.retry || j.waitingOther || j.kept ? "text-warning" : "text-muted-foreground")}>
+                                            {j.kept
+                                                ? t("files.upload.waiting")
+                                                : j.state === "failed"
                                                 ? t("files.upload.failed")
                                                 : j.state === "queued"
                                                   ? t("files.upload.queued")
-                                                  : j.retry
+                                                  : j.waitingOther
+                                                    ? t("files.upload.waitingOther")
+                                                    : j.retry
                                                     ? t("files.upload.retrying", { attempt: j.retry })
+                                                    : j.resumedFrom && j.state === "uploading" && j.size
+                                                      ? t("files.upload.resumed", { percent: Math.round((Math.min(j.loaded, j.size) / j.size) * 100) })
                                                     : j.size
                                                       ? `${Math.round((Math.min(j.loaded, j.size) / j.size) * 100)}%`
                                                       : "100%"}
                                         </span>
+                                        {j.kept && (
+                                            <>
+                                                <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => ops.replaceKept(j.id)}>{t("files.replace.action")}</button>
+                                                <button type="button" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => ops.discardKept(j.id)}>{t("files.unfinished.discard")}</button>
+                                            </>
+                                        )}
                                         {(j.state === "queued" || j.state === "uploading") && (
                                             <button type="button" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => ops.cancelUploads([j.id])} title={t("files.upload.cancel")} aria-label={t("files.upload.cancel")}>
                                                 <X size={12} />
@@ -400,6 +422,68 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                                 ))}
                                 {uploadRows.waiting > 0 && <li className="px-2 py-1 text-muted-foreground">{t("files.upload.moreWaiting", { count: uploadRows.waiting })}</li>}
                             </ul>
+                        )}
+                    </div>
+                )}
+
+                {/* 沒傳完的上傳（Telepy 在裝置上記下的暫存檔）。/ Unfinished uploads (Telepy's recorded part files). */}
+                {unfinished.length > 0 && (
+                    <div className="rounded-md border border-border bg-surface text-xs">
+                        <input
+                            type="file"
+                            ref={continueInputRef}
+                            className="hidden"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                const u = continuing.current;
+                                e.target.value = "";
+                                continuing.current = null;
+                                if (!file || !u) return;
+                                setShowUploads(true);
+                                if (!ops.continueUnfinished(u, file)) showError(t("files.unfinished.different", { name: u.name }));
+                            }}
+                        />
+                        <button type="button" className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-foreground" onClick={() => setShowUnfinished((v) => !v)} aria-expanded={showUnfinished}>
+                            <Upload size={12} className="shrink-0 text-warning" />
+                            <span className="min-w-0 flex-1 truncate">{t("files.unfinished.title", { count: unfinished.length })}</span>
+                            <span className="shrink-0 text-muted-foreground">{showUnfinished ? t("files.unfinished.hide") : t("files.unfinished.show")}</span>
+                        </button>
+                        {showUnfinished && (
+                            <>
+                                <p className="border-t border-border px-2 py-1.5 text-muted-foreground">{t("files.unfinished.note")}</p>
+                                <ul className="divide-y divide-border border-t border-border">
+                                    {unfinished.map((u) => (
+                                        <li key={u.upload} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-1">
+                                            <span className="min-w-0 flex-1 truncate font-mono" title={u.target}>{u.name}</span>
+                                            <span className="shrink-0 tabular-nums text-muted-foreground">{formatBytes(u.received)} / {formatBytes(u.total)}</span>
+                                            <span className="basis-full text-muted-foreground">
+                                                {[
+                                                    u.mine ? null : t("files.unfinished.by", { name: u.by ?? "?" }),
+                                                    u.active ? t("files.unfinished.active") : t("files.unfinished.removedIn", { hours: hoursLeft(u.removed_in) }),
+                                                ].filter(Boolean).join(" · ")}
+                                            </span>
+                                            {u.mine && !u.active && u.local_name && (
+                                                <button
+                                                    type="button"
+                                                    className="text-primary hover:underline"
+                                                    onClick={() => {
+                                                        continuing.current = u;
+                                                        continueInputRef.current?.click();
+                                                    }}
+                                                    title={t("files.unfinished.continueHint")}
+                                                >
+                                                    {t("files.unfinished.continue")}
+                                                </button>
+                                            )}
+                                            {u.can_discard && !u.active && (
+                                                <button type="button" className="text-muted-foreground hover:text-destructive" onClick={() => void ops.discardUnfinished(u)}>
+                                                    {t("files.unfinished.discard")}
+                                                </button>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </>
                         )}
                     </div>
                 )}

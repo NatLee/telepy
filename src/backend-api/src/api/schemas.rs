@@ -1873,6 +1873,67 @@ pub struct SftpUploadCancel {
     pub removed: bool,
 }
 
+/// The local file an upload comes from: resuming needs the same name, size and modification time.
+#[derive(ToSchema)]
+pub struct SftpLocalFile {
+    pub name: String,
+    /// Milliseconds since the epoch (`File.lastModified`)
+    pub modified: i64,
+}
+
+/// Start (or resume) an upload of `total` bytes to `path`.
+#[derive(ToSchema)]
+pub struct SftpUploadStart {
+    pub path: String,
+    pub total: u64,
+    pub overwrite: Option<bool>,
+    pub local: Option<SftpLocalFile>,
+    /// false = never resume (the client can't verify the bytes)
+    pub resume: Option<bool>,
+    /// This window's lease from an earlier start of the same upload
+    pub lease: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUploadStarted {
+    pub upload: String,
+    /// Send it with every part; another window taking over makes it stale (409 upload_taken)
+    pub lease: String,
+    /// Where to continue (0 = from the start)
+    pub offset: u64,
+    /// When resumed: hash the local bytes [check_from, offset) and send them as `check` with the first part
+    pub check_from: Option<u64>,
+    pub resumed: bool,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUnfinishedUpload {
+    pub upload: String,
+    pub name: String,
+    pub target: String,
+    /// The hidden part file's name next to the target
+    pub part_name: String,
+    pub total: u64,
+    pub received: u64,
+    pub by: Option<String>,
+    pub mine: bool,
+    pub updated_at: String,
+    /// Written to within the last 30 s
+    pub active: bool,
+    /// Seconds until the cleanup removes it (counted from the last activity)
+    pub removed_in: u64,
+    pub local_name: Option<String>,
+    pub local_modified: Option<i64>,
+    pub can_discard: bool,
+}
+
+#[derive(ToSchema)]
+pub struct SftpUnfinished {
+    pub dir: String,
+    pub uploads: Vec<SftpUnfinishedUpload>,
+    pub retention_secs: u64,
+}
+
 /// `{error, code}`；code = path_required | invalid_name | exists | not_found | permission_denied | dir_not_writable |
 /// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed |
 /// bad_upload | bad_offset | upload_offset (with `received`) | upload_gone | interrupted

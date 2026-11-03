@@ -36,6 +36,7 @@ pub mod tunnel_keys;
 pub mod tunnel_sessions;
 pub mod tunnel_tags;
 pub mod tunnels;
+pub mod upload_parts;
 pub mod users;
 pub mod web_sessions;
 pub mod webhooks;
