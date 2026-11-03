@@ -22,6 +22,7 @@ import { AuthProvider } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/Toast";
 import { I18nProvider, UserSettingsSync } from "@/lib/i18n";
 import { ConsoleHello } from "@/components/brand/ConsoleHello";
+import { AppBoot } from "@/components/app/AppBoot";
 
 // 粉圓(jf-openhuninn)不走 next/font:整顆 2.2MB,會讓每頁都等它下載完才從系統字換過來。改由
 // scripts/subset-huninn.py 切成 unicode-range 子集(huninn.css),瀏覽器只抓頁面上出現的字所在的區塊,
@@ -56,6 +57,10 @@ export const metadata: Metadata = {
   // 每一頁（含登入頁）的 HTML 都帶著這行，低調登入頁也是，所以不寫產品在做什麼。
   // Every page's HTML carries this line, the discreet sign-in page too, so it doesn't say what the product does.
   description: "Telepy",
+  // 裝成 app（PWA）：manifest 由後端依網站設定的 App 名稱產生（只有名字與圖示，同樣不寫產品在做什麼）。
+  // Installing as an app (PWA): the backend builds the manifest from the App name site setting (name and icons only).
+  manifest: "/api/app/manifest.webmanifest",
+  appleWebApp: { capable: true, statusBarStyle: "default" },
 };
 
 // 繪製前先把 <html lang>、主題 class 與顯示大小設好(語言:cookie → 瀏覽器語言;主題:localStorage →
@@ -79,6 +84,11 @@ const BOOTSTRAP_SCRIPT = `
     var theme = localStorage.getItem("telepy.theme") || "system";
     var dark = theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", dark);
+    // 視窗標題列 / 狀態列的顏色(lib/userPrefs.ts 的 THEME_COLORS)。/ The title / status bar colour (THEME_COLORS).
+    var meta = document.createElement("meta");
+    meta.name = "theme-color";
+    meta.content = dark ? "#110f0d" : "#fbf9f8";
+    document.head.appendChild(meta);
     // 顯示大小(lib/userPrefs.ts 的 UI_SCALE_*):85–130%,100 = 預設不設。/ Display scale, 85–130%.
     var scale = parseInt(localStorage.getItem("telepy.uiScale") || "", 10);
     if (scale >= 85 && scale <= 130 && scale !== 100) document.documentElement.style.fontSize = scale + "%";
@@ -102,6 +112,7 @@ export default function RootLayout({
             <AuthProvider>
               <UserSettingsSync />
               <ConsoleHello />
+              <AppBoot />
               <SshHostGate>{children}</SshHostGate>
             </AuthProvider>
           </ToastProvider>

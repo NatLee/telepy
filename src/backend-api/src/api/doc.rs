@@ -58,6 +58,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "User Management", description = "Personal settings and user administration"),
         (name = "Access", description = "Feature permissions (admins): groups and which Telepy features each person may use. Separate from tunnel sharing, which decides which tunnels they reach"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),
+        (name = "App", description = "Installing Telepy as an app (PWA): the public web app manifest, named per the site settings"),
         (name = "Logs", description = "SSH gateway events"),
         (name = "Device join", description = "One-command device join: the web mints a short-lived ticket; the device's install script registers itself, installs the reverse tunnel and waits for a verified login"),
         (name = "LAN", description = "Machines on the networks behind each device: discovery through the device's sshd, the jump-host list and the topology view"),

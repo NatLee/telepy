@@ -19,7 +19,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { Settings, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, HeartPulse, Waypoints, Server } from "lucide-react";
+import { AppWindow, Settings, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, HeartPulse, Waypoints, Server } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import type { TranslationKey } from "@/locales/en";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
 import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
+import { APP_NAME_KEYS, AppNamePanel } from "@/components/settings/AppNamePanel";
 import { SettingRow } from "@/components/settings/SettingRow";
 import { ServerSettingsTab } from "@/components/settings/ServerSettings";
 import { movedSettingsTab } from "@/lib/adminAreas";
@@ -51,6 +52,8 @@ const SITE_TABS: Record<SiteTabId, { label: TranslationKey; icon: React.ReactNod
     devices: { label: "settings.groupDevices", icon: <Waypoints size={15} />, banner: "settings.devicesBanner" },
     ai: { label: "settings.groupAi", icon: <Bot size={15} />, banner: "settings.aiBanner" },
     notify: { label: "settings.groupNotify", icon: <Bell size={15} />, banner: "settings.notifyBanner" },
+    // 裝成 app（PWA）時的名稱。/ What an installed app (PWA) is called.
+    app: { label: "settings.groupApp", icon: <AppWindow size={15} />, banner: "settings.appBanner" },
     // 伺服器：訪客位址與原本只能寫在 .env 的設定（.env > 這頁 > 預設）。/ Server: visitor addresses and the former .env-only settings.
     server: { label: "settings.groupServer", icon: <Server size={15} />, banner: "settings.serverBanner" },
 };
@@ -150,11 +153,11 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     const { t } = useI18n();
     const { state, actions } = settings;
     const { settingsObj, meta, loading } = state;
-    const { handleToggle, handleUpdate } = actions;
+    const { handleToggle, handleUpdate, applyValues } = actions;
     // 後端的鍵是字母序；開關整個功能的那個排最前面。/ Keys arrive sorted; the switch that turns a feature on goes first.
     // 登入頁的樣子與允許的註冊網域各有自己的面板，不在一般清單裡。/ The sign-in look and the allowed registration domains have their own panels.
     const entries = Object.entries(settingsObj)
-        .filter(([k]) => siteTabOf(k) === tab && !SIGNIN_LOOK_KEYS.includes(k) && !REGISTER_DOMAIN_KEYS.includes(k))
+        .filter(([k]) => siteTabOf(k) === tab && !SIGNIN_LOOK_KEYS.includes(k) && !REGISTER_DOMAIN_KEYS.includes(k) && !APP_NAME_KEYS.includes(k))
         .sort(([a], [b]) => Number(!LEAD_KEYS.includes(a)) - Number(!LEAD_KEYS.includes(b)));
 
     return (
@@ -172,7 +175,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                     </div>
                     {t("settings.loading")}
                 </div>
-            ) : entries.length === 0 ? (
+            ) : entries.length === 0 && tab === "app" ? null : entries.length === 0 ? (
                 <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
                     {t("settings.empty")}
                 </div>
@@ -187,6 +190,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             )}
 
             {tab === "general" && !loading && <RegisterDomainsPanel values={settingsObj} onSave={handleUpdate} />}
+            {tab === "app" && !loading && <AppNamePanel values={settingsObj} env={state.env} onSaved={applyValues} />}
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
             {/* 位址檢查搬到管理區的「伺服器狀態」頁（那是診斷，不是設定）；這裡只留一個指路。
                 The address check lives on the admin "Server health" page now (a diagnostic, not a setting); only a pointer here. */}

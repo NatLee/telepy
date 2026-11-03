@@ -756,6 +756,8 @@ mod tests {
             server_google_client_id: String::new(),
             server_public_url: String::new(),
             server_ssh_host: String::new(),
+            app_name_mode: "telepy".into(),
+            app_name: String::new(),
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

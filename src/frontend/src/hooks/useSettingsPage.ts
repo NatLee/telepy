@@ -84,8 +84,14 @@ export function useSettingsPage() {
     const handleUpdate = (keyName: string, newValue: unknown) =>
         saveSetting(keyName, newValue, settingsObj[keyName]);
 
+    // 自己送出儲存的面板（一次存好幾個值）把回應的 values 放回來，不必整頁重新載入。
+    // Panels that save on their own (several values at once) put the answer's values back without a reload.
+    const applyValues = (values: unknown) => {
+        if (values && typeof values === "object") setSettingsObj(values as Record<string, unknown>);
+    };
+
     return {
         state: { settingsObj, meta, env, loading },
-        actions: { fetchSettings, handleToggle, handleUpdate },
+        actions: { fetchSettings, handleToggle, handleUpdate, applyValues },
     };
 }

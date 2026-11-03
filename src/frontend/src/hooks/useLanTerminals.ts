@@ -7,6 +7,7 @@
  * shells. Closing a tab (× / close all) ends its shell explicitly.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { sameBrowser } from "@/lib/lanWeb";
 import type { RemoteBrowserPhase } from "@/components/tunnels/RemoteBrowserPanel";
@@ -126,6 +127,10 @@ export function useLanTerminals() {
     useEffect(() => {
         if (restored.current) saveDock(sessions);
     }, [sessions]);
+    // 關分頁 / 視窗前問一聲：dock 裡有連著、一斷線就結束的 shell 時（伺服器留著的 shell 有 shellId，重新整理會接回）。
+    // Ask before the tab / window closes while the dock has a connected shell that ends with it (kept shells carry a
+    // shellId and come back after a reload).
+    useLeaveGuard(() => sessions.some((s) => s.status === "connected" && !s.shellId));
 
     const open = useCallback((s: Omit<LanTerminalSession, "key" | "status" | "attempt">): boolean => {
         if (sessions.length >= MAX_LAN_TERMINALS) return false;

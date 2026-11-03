@@ -30,10 +30,11 @@ import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/
 import { ensureMeasured } from "@/lib/xtermMeasure";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import {
-    canResume, isDropCode, loadShells, parseShellFrame, reconnectDelay, shellStoreKey, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE,
+    canResume, endsWhenLeaving, isDropCode, loadShells, parseShellFrame, reconnectDelay, shellStoreKey, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE,
     updateShells, withShell, withoutShell, type DetachGrace, type ShellFrame,
 } from "@/lib/terminalDetach";
 import { endKeptShell } from "@/lib/terminalShellSocket";
+import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { parseWatchersFrame, type WatchersFrame } from "@/lib/terminalWatch";
 import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
 import { lanAuthFrame, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
@@ -742,6 +743,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             .catch(() => { /* 只影響標頭顯示 / header only */ });
         return () => { cancelled = true; };
     }, [serverId, accessToken, lanHostId]);
+
+    // 關分頁 / 視窗前問一聲：有連著的 shell 一斷線就會結束時（裝成 app 後焦點不在終端機時 Ctrl+W 會關掉整個視窗）。
+    // Ask before the tab / window closes while a connected shell would end with it (installed as an app, Ctrl+W
+    // closes the whole window when the focus is outside the terminal).
+    useLeaveGuard(() => endsWhenLeaving([...sessionsRef.current.values()].map((s) => ({
+        connected: !s.disposed && s.ws?.readyState === WebSocket.OPEN,
+        graceSecs: s.grace?.secs ?? null,
+    }))));
 
     // 卸載 / 換 server：銷毀所有 session（所有 WS 關閉 → 後端殺掉所有 shell）。
     // Unmount / server switch: destroy every session (all shells killed server-side).

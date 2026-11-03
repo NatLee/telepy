@@ -95,3 +95,13 @@ test("the layers say who decided", () => {
     assert.equal(detachLayers(300, 1800, null).find((x) => x.decides)?.layer, "user", "no device in view = assume user");
     assert.equal(detachLayers(300, 1800, null)[2].value, null);
 });
+
+test("leaving warns only while a connected shell would end", async () => {
+    const { endsWhenLeaving } = await import("./terminalDetach.ts");
+    assert.equal(endsWhenLeaving([]), false);
+    assert.equal(endsWhenLeaving([{ connected: true, graceSecs: 0 }]), true, "the default ends at once");
+    assert.equal(endsWhenLeaving([{ connected: true, graceSecs: null }]), true, "no shell frame yet = no promise to keep it");
+    assert.equal(endsWhenLeaving([{ connected: true, graceSecs: 300 }]), false, "kept: a reload re-attaches it");
+    assert.equal(endsWhenLeaving([{ connected: false, graceSecs: 0 }]), false, "already closed");
+    assert.equal(endsWhenLeaving([{ connected: true, graceSecs: 300 }, { connected: true, graceSecs: 0 }]), true);
+});

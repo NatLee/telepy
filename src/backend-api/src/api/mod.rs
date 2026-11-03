@@ -5,6 +5,7 @@ pub mod access;
 pub mod access_requests;
 pub mod ai;
 pub mod api_tokens;
+pub mod app;
 pub mod auth;
 pub mod carriers;
 pub mod datasets;

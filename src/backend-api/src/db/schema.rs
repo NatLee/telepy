@@ -1249,6 +1249,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "server_google_client_id", "varchar(256) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "server_public_url", "varchar(512) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "server_ssh_host", "varchar(253) NOT NULL DEFAULT ''"),
+    // 裝成 app（PWA）時的名稱：telepy / domain / custom，custom 時用 app_name。/ The installed app's name: telepy / domain / custom (app_name).
+    ("site_settings_sitesettings", "app_name_mode", "varchar(16) NOT NULL DEFAULT 'telepy'"),
+    ("site_settings_sitesettings", "app_name", "varchar(64) NOT NULL DEFAULT ''"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
