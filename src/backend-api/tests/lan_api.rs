@@ -353,6 +353,80 @@ async fn schedules_checks_and_watched_hosts() {
     assert!(app.get(&sched, Some(&alice.token)).await.json.is_null());
 }
 
+/// 喚醒與備註 / 標籤：喚醒在裝置上跑（假的 `wakeonlan` 接住參數，不送任何封包），要知道 MAC、要有能用的帳號，廣播位址照
+/// 上次掃描的網段；備註與標籤只有 EDIT 能改，標籤照通道標籤的規則。
+/// Waking and notes / labels: waking runs on the device (a stub `wakeonlan` catches the arguments, no packet is sent),
+/// needs a known MAC and an account you may use, and the broadcast follows the last scan's networks; notes and labels
+/// need EDIT, labels follow the tunnel label rules.
+#[cfg(unix)]
+#[tokio::test]
+async fn waking_a_host_and_its_notes_and_labels() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let boxm = lab.machine_with("box", &[("ubuntu", &[&lab.service])], MachineOpts { allow_jump: true, shell: true, ..Default::default() }).await;
+    let home = boxm.account_home("ubuntu");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let args = home.join("wake-args");
+    write_exec(&bin.join("wakeonlan"), &format!("#!/bin/sh\necho \"$@\" >> '{}'\n", args.display()));
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    lab.share(&alice, &dev, &carol, "view", &[]).await;
+    let id = dev.tunnel_id;
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "192.168.77.20"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let hid = r.json["id"].as_i64().unwrap();
+    let wake = format!("/api/reverse/server/{id}/lan/hosts/{hid}/wake");
+
+    // 沒有 MAC 就不能喚醒。/ No MAC, no wake.
+    let r = app.post(&wake, Some(&bob.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("lan_wake_mac")), "{}", r.text);
+    sqlx::query("UPDATE telepy_lan_host SET mac = 'AA-BB-CC-00-00-20' WHERE id = ?").bind(hid).execute(&app.state.db.write).await.unwrap();
+
+    // 沒有能用的帳號（carol）不行；bob（VIEW + ubuntu）可以，廣播位址不知道網段時是 255.255.255.255。
+    // Carol (no account) can't; Bob (VIEW + ubuntu) can, broadcasting to 255.255.255.255 without a known network.
+    let r = app.post(&wake, Some(&carol.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("no_account")), "{}", r.text);
+    let r = app.post(&wake, Some(&bob.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["tool"].as_str(), r.json["broadcast"].as_str(), r.json["mac"].as_str()), (Some("wakeonlan"), Some("255.255.255.255"), Some("aa:bb:cc:00:00:20")), "{}", r.text);
+
+    // 上次掃描記下網段之後，送到那個網段的廣播位址。/ After a scan recorded the network, its broadcast address.
+    telepy_server::db::lan::save_meta(
+        &app.state.db,
+        &telepy_server::db::lan::LanMeta { tunnel_id: id, networks: "[\"192.168.77.0/24\"]".into(), gateway: None, scanned_at: Some("2026-11-03 10:00:00.000000".into()), changes: None },
+    )
+    .await
+    .unwrap();
+    let r = app.post(&wake, Some(&bob.token), json!({})).await;
+    assert_eq!(r.json["broadcast"], "192.168.77.255", "{}", r.text);
+    assert_eq!(std::fs::read_to_string(&args).unwrap(), "-i 255.255.255.255 aa:bb:cc:00:00:20\n-i 192.168.77.255 aa:bb:cc:00:00:20\n");
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await.json;
+    let woke = events.as_array().unwrap().iter().filter(|e| e["event"] == "lan_wake").count();
+    assert_eq!(woke, 2, "{events}");
+
+    // 備註與標籤：EDIT 才能改；標籤小寫、排序、去重，壞的回欄位錯誤。/ Notes and labels: EDIT only; labels normalised.
+    let host = format!("/api/reverse/server/{id}/lan/hosts/{hid}");
+    let r = app.patch(&host, Some(&bob.token), json!({"notes": "rack 2"})).await;
+    assert!(r.status == StatusCode::FORBIDDEN || r.status == StatusCode::NOT_FOUND, "VIEW can't edit: {}", r.text);
+    let r = app.patch(&host, Some(&alice.token), json!({"notes": "  rack 2, top shelf\nUPS on the left  ", "labels": ["Rack-2", "prod", "prod"]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["notes"].as_str(), r.json["labels"].clone()), (Some("rack 2, top shelf\nUPS on the left"), json!(["prod", "rack-2"])), "{}", r.text);
+    let r = app.patch(&host, Some(&alice.token), json!({"labels": ["no spaces please"]})).await;
+    assert_eq!((r.status, r.json["labels"].is_array()), (StatusCode::BAD_REQUEST, true), "{}", r.text);
+    let many: Vec<String> = (0..13).map(|i| format!("l{i}")).collect();
+    let r = app.patch(&host, Some(&alice.token), json!({"labels": many})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = app.patch(&host, Some(&alice.token), json!({"notes": "x".repeat(2001)})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = app.patch(&host, Some(&alice.token), json!({"notes": "", "labels": []})).await;
+    assert_eq!((r.json["notes"].clone(), r.json["labels"].clone()), (Value::Null, json!([])), "{}", r.text);
+}
+
 const VERIFIER: &str = "verifier-verifier-verifier-verifier-verifier-0123";
 
 async fn mcp_token(app: &TestApp, web: &str, scope: &str) -> String {

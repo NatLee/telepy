@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_schedule, put_schedule, delete_schedule))
         .routes(routes!(check_host))
         .routes(routes!(watch_host, unwatch_host))
+        .routes(routes!(wake_host))
         .routes(routes!(topology))
 }
 
@@ -119,6 +120,8 @@ pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui, meta: Option<&db::
         "first_seen": opt_db_to_iso(&h.first_seen, tz),
         "last_seen": opt_db_to_iso(&h.last_seen, tz),
         "checked_at": opt_db_to_iso(&h.checked_at, tz),
+        "notes": h.notes,
+        "labels": h.label_list(),
         "created_at": db_to_iso(&h.created_at, tz),
     })
 }
@@ -257,6 +260,28 @@ fn optional_text(body: &Value, key: &str, max: usize) -> Result<Option<Option<St
 }
 
 /// 登入帳號：網頁終端機會把它交給 ssh，只收安全字元。/ The login name goes to ssh: safe characters only.
+/// 備註：最多 2000 字，頭尾空白去掉、換行留著；空的 = 清掉。/ Notes: up to 2000 characters, trimmed, newlines kept.
+fn host_notes(body: &Value) -> Result<Option<Option<String>>, ApiError> {
+    optional_text(body, "notes", 2000)
+}
+
+/// 標籤：跟通道標籤同一套規則，最多 12 個；整組換掉。/ Labels: the tunnel label rules, at most 12; replaces the set.
+fn host_labels(body: &Value) -> Result<Option<String>, ApiError> {
+    let Some(v) = body.get("labels") else { return Ok(None) };
+    let list: Vec<String> = match v {
+        Value::Null => Vec::new(),
+        Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).ok_or_else(|| ApiError::field("labels", "Labels must be strings."))).collect::<Result<_, _>>()?,
+        _ => return Err(ApiError::field("labels", "Expected a list of labels.")),
+    };
+    let labels = db::tunnel_tags::normalize_labels(&list).map_err(|e| ApiError::field("labels", e))?;
+    if labels.len() > MAX_HOST_LABELS {
+        return Err(ApiError::field("labels", format!("At most {MAX_HOST_LABELS} labels.")));
+    }
+    Ok(Some(json!(labels).to_string()))
+}
+
+const MAX_HOST_LABELS: usize = 12;
+
 fn login_name(body: &Value) -> Result<Option<Option<String>>, ApiError> {
     let v = optional_text(body, "username", 64)?;
     if let Some(Some(u)) = &v {
@@ -315,10 +340,18 @@ async fn update_host(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     let label = optional_text(&body, "label", 100)?;
     let username = login_name(&body)?;
     let port = ssh_port(&body)?;
+    let notes = host_notes(&body)?;
+    let labels = host_labels(&body)?;
     db::lan::update(
         &state.db,
         h.id,
-        db::lan::HostPatch { label: label.as_ref().map(|o| o.as_deref()), username: username.as_ref().map(|o| o.as_deref()), ssh_port: port },
+        db::lan::HostPatch {
+            label: label.as_ref().map(|o| o.as_deref()),
+            username: username.as_ref().map(|o| o.as_deref()),
+            ssh_port: port,
+            notes: notes.as_ref().map(|o| o.as_deref()),
+            labels: labels.as_deref(),
+        },
     )
     .await?;
     notify_updated(&state, &t).await;
@@ -521,6 +554,70 @@ async fn unwatch_host(State(state): State<AppState>, AuthUser(user): AuthUser, P
     Ok(Json(json!({ "watched": false })))
 }
 
+/// 喚醒：在裝置上跑一段指令送出 Wake-on-LAN 封包（`lan::wake`）。誰能用：看得到這條隧道、而且在這裡有能用的帳號的人
+/// （跟開終端機一樣：能在那個帳號跑指令的人本來就能自己送）。
+/// Wake: run a command on the device that sends the Wake-on-LAN packet (`lan::wake`). Who: anyone who can see the tunnel
+/// and has an account they may use here (like opening a terminal: whoever can run commands there could send it anyway).
+#[utoipa::path(post, path = "/api/reverse/server/{id}/lan/hosts/{host_id}/wake", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), request_body = Object, responses(
+    (status = 200, description = "Sent: `{tool, broadcast, mac}`; the machine needs Wake-on-LAN turned on and usually 10–60 s to start", body = Object),
+    (status = 400, description = "lan_wake_mac (no MAC known) / device_offline / username", body = super::schemas::LanError),
+    (status = 403, description = "no_account (no account you may use on the device)", body = super::schemas::LanError),
+    (status = 404, body = super::schemas::ErrorBody),
+    (status = 502, description = "lan_wake_failed (the device had no tool to send it, or the login failed)", body = super::schemas::LanError),
+))]
+async fn wake_host(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path((id, host_id)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, _) = visible(&state, user.id, id).await?;
+    super::step_up::check(&state, user.id, &t, &headers)?;
+    let h = own_host(&state, t.id, host_id).await?;
+    let out = wake(&state, &user, &t, &h, json_str(&body, "username").as_deref()).await?;
+    Ok(Json(out))
+}
+
+/// 喚醒的共用部分（網頁、CLI、MCP）。/ The shared part of waking (web, CLI, MCP).
+pub async fn wake(state: &AppState, user: &User, t: &Tunnel, h: &LanHost, username: Option<&str>) -> ApiResult<Value> {
+    let mac = h.mac.as_deref().and_then(lan::wake::parse_mac).ok_or_else(|| lan_error(StatusCode::BAD_REQUEST, "lan_wake_mac", "Telepy doesn't know this machine's MAC address yet: a scan reads it from the device's neighbour table while the machine is on."))?;
+    let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
+    if allowed.is_empty() {
+        return Err(lan_error(StatusCode::FORBIDDEN, "no_account", "You have no account you may use on this device."));
+    }
+    let username = permissions::choose_username(&allowed, t.default_username_id, username, &t.host_friendly_name).map_err(|e| lan_error(StatusCode::BAD_REQUEST, "username", e))?;
+    if let Some(listen) = state.status.listen_ports() {
+        if !u16::try_from(t.reverse_port).map(|p| listen.contains(&p)).unwrap_or(false) {
+            return Err(lan_error(StatusCode::BAD_REQUEST, "device_offline", format!("The device '{}' is offline.", t.host_friendly_name)));
+        }
+    }
+    let networks: Vec<Network> = db::lan::meta(&state.db, t.id).await?.map(|m| m.network_list().iter().filter_map(|c| lan::parse_cidr(c).ok()).collect()).unwrap_or_default();
+    let broadcast = lan::wake::broadcast_for(h.address.parse().ok(), &networks);
+    let run = |cmd: String| {
+        let state = state.clone();
+        let username = username.clone();
+        async move {
+            match state.pool.session_channel(&state, t.reverse_port, &username).await {
+                Ok((_lease, ch)) => crate::ssh::exec::run_on(ch, &cmd, std::time::Duration::from_secs(20), 16 * 1024).await.map(|r| r.stdout.text).map_err(|e| format!("{e:#}")),
+                Err(e) => Err(format!("cannot log in to the device as {username}: {e:#}")),
+            }
+        }
+    };
+    let mut sent = run(lan::wake::posix_command(&mac, broadcast)).await.map(|o| lan::wake::parse_result(&o));
+    if matches!(sent, Ok(None)) {
+        sent = run(lan::wake::windows_command(&mac, broadcast)).await.map(|o| lan::wake::parse_result(&o));
+    }
+    let name = h.label.clone().or_else(|| h.hostname.clone()).unwrap_or_else(|| h.address.clone());
+    let mac_s = lan::wake::mac_text(&mac);
+    match sent {
+        Ok(Some((tool, b))) => {
+            state.gateway.event("lan_wake", None, None, Some(t.id), format!("{} sent a wake-up packet to {name} ({mac_s}) through the device, with {tool}", user.username)).await;
+            Ok(json!({ "tool": tool, "broadcast": if b.is_empty() { Value::Null } else { json!(b) }, "mac": mac_s, "username": username }))
+        }
+        Ok(None) => Err(lan_error(
+            StatusCode::BAD_GATEWAY,
+            "lan_wake_failed",
+            "The device has nothing to send a wake-up packet with: install wakeonlan (or etherwake, or python3) on it, or use a Windows device's PowerShell.",
+        )),
+        Err(e) => Err(lan_error(StatusCode::BAD_GATEWAY, "lan_wake_failed", e)),
+    }
+}
+
 #[utoipa::path(get, path = "/api/reverse/lan/topology", tag = "LAN", security(("bearer" = [])), responses((status = 200, description = "Every tunnel the user can see with its status and LAN hosts, for the topology view", body = super::schemas::LanTopology)))]
 async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: crate::auth::extractor::Delegated) -> ApiResult<Json<Value>> {
     let tz = state.config.tz_offset_minutes;
@@ -592,6 +689,8 @@ mod tests {
             first_seen: None,
             last_seen: None,
             checked_at: None,
+            notes: None,
+            labels: "[]".into(),
             created_at: "2026-10-24 00:00:00.000000".into(),
             updated_at: "2026-10-24 00:00:00.000000".into(),
         };

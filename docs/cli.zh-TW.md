@@ -348,6 +348,8 @@ telepy lan show box 192.168.1.20           # 每個 port 看到什麼：網頁�
 telepy lan check box 192.168.1.20          # 現在只再探那一台（network:scan）
 telepy lan schedule box --every 6h         # 裝置在線時用你的身分定時重掃（1h、6h、12h、1d、1w；off 停掉）
 telepy lan watch box 192.168.1.20          # 掃描發現它不見、回來或 port 變了就告訴你
+telepy lan wake box 192.168.1.20           # 從裝置送網路喚醒封包（ssh:exec；需要掃描讀到的 MAC）
+telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # 標籤與備註（tunnels:manage）
 ```
 
 列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
@@ -357,6 +359,8 @@ telepy lan watch box 192.168.1.20          # 掃描發現它不見、回來或 p
 掃描也會列出裝置本機在聽的服務（一列，位址是 `localhost`：只回應裝置自己 localhost 的服務也從那裡打得開，沒先說話的 port 一樣只送一個 `GET /`）、標出裝置的預設閘道，並跟前一次掃描比較。`lan scan` 最後一行會像 `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).`，表格的 NOTE 欄寫 `this device`、`gateway`、`new`、`+443 -80` 或 `not seen`。只比這次掃過的網段裡的機器，port 也只比這次有探的，所以 `--ports` 給得比較少，不會算成「關了」。`lan ls` 開頭會寫上次掃描的時間、網段與閘道。
 
 **定時重掃**（`lan schedule`，或網頁掃描視窗裡的「定時重掃」）用設定的人的身分、在裝置在線時跑同一個掃描；那個人失去 owner / ADMIN 時會自己停掉。整個網段的掃描之後，清單裡沒有的位址會告訴 owner 與 ADMIN 被分享者（一個網路的第一次掃描不算）。**注意**一台主機（`lan watch`，網頁上的鈴鐺）後，掃描或 `lan check` 發現它不見、回來，或 port 開了、關了就會告訴你。兩種都有站內通知、桌面通知、推播與 webhook 事件 `lan.new_hosts` / `lan.watched_host`，照你的通知偏好。只掃一個位址時（像 `lan check`）每個 port 都會試，不只最小的那個。
+
+**喚醒機器**：網路喚醒封包只在裝置自己的網路裡傳得到，所以 `lan wake`（或網頁主機面板的「喚醒」）由裝置送出：依序試 `wakeonlan`、`etherwake` / `ether-wake`（也用 `sudo -n` 試）與 `python3`，Windows 裝置用 PowerShell，廣播到那台主機的網段，UDP 9。那台機器要開啟 Wake-on-LAN，Telepy 也要知道它的 MAC 位址（機器開著時掃描一次，會從裝置的鄰居表讀到）。看得到這條通道、而且在那裡有能用帳號的人都能喚醒它的機器；每次喚醒都記在通道的日誌裡。**標籤與備註**（`lan edit`，或主機面板的「細節」分頁）由你自己寫，掃描不會動，網頁的搜尋也找得到（`label:rack-2`，或備註裡的任何一個字）。
 
 ### 用自己的瀏覽器開區網的網頁
 
@@ -425,6 +429,8 @@ telepy browse close "$ID"
 | `telepy lan check <tunnel> <host>` | 現在再探一台：它開過的 port 加上預設的，只探這個位址；`--ports`、`--json` | `network:scan` |
 | `telepy lan schedule <tunnel>` | 看或設定定時重掃；`--every 1h\|6h\|12h\|1d\|1w\|off`、`--subnet`、`--ports`、`--no-identify`、`--account` | 看要 `tunnels:read`，設定要 `network:scan` |
 | `telepy lan watch <tunnel> <host>` | 掃描發現它不見、回來或 port 變了就告訴你；`--off` | `tunnels:manage` |
+| `telepy lan wake <tunnel> <host>` | 從裝置送網路喚醒封包（用它上面的 wakeonlan、etherwake 或 python3）；`--account` | `ssh:exec` |
+| `telepy lan edit <tunnel> <host>` | 改名稱、登入帳號、SSH port、標籤（`--labels a,b`）或備註（`--note`）；給空值就清掉 | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | 用 id、位址或標籤移除主機 | `tunnels:manage` |
 | `telepy browse <target> [url]` | 開一個腳本化瀏覽器並印出它的 id（等同 `browse open`） | `browser:use` |
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | 列出這個登入開著的瀏覽器，或用 id 操作其中一個 | `browser:use` |

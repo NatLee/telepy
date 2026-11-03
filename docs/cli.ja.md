@@ -348,6 +348,8 @@ telepy lan show box 192.168.1.20           # 各ポートで見えたもの：�
 telepy lan check box 192.168.1.20          # そのマシンだけを今すぐ再確認（network:scan）
 telepy lan schedule box --every 6h         # デバイスがオンラインの間、あなたとして定期スキャン（1h、6h、12h、1d、1w。off で停止）
 telepy lan watch box 192.168.1.20          # スキャンで消えた・戻った・ポートが変わったときに知らせる
+telepy lan wake box 192.168.1.20           # デバイスから Wake-on-LAN パケットを送る（ssh:exec。スキャンで得た MAC が必要）
+telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # ラベルとメモ（tunnels:manage）
 ```
 
 一覧と `show` に必要なのは `tunnels:read` だけで、`scan` には `network:scan` が必要です（`telepy login --scope` で追加）。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
@@ -357,6 +359,8 @@ telepy lan watch box 192.168.1.20          # スキャンで消えた・戻っ�
 スキャンはデバイス自身が待ち受けているサービスも一覧にし（1 行、アドレスは `localhost`。デバイスの localhost でしか応答しないサービスもそこから開けます。最初に何も送ってこないポートには同じく `GET /` を 1 回だけ送ります）、デバイスのデフォルトゲートウェイに印を付け、その前のスキャンと比べます。`lan scan` の最後には `Since the previous scan: 1 new (192.168.1.40); 1 not seen (192.168.1.33); ports changed on 1 (192.168.1.20 +443 -80).` のような行が出て、表の NOTE 列には `this device`、`gateway`、`new`、`+443 -80`、`not seen` が入ります。比べるのはスキャンしたネットワーク内のマシンだけで、ポートも今回調べたものだけなので、`--ports` を減らしても「閉じた」にはなりません。`lan ls` の先頭には前回のスキャンの日時、ネットワーク、ゲートウェイが出ます。
 
 **定期スキャン**（`lan schedule`、または Web のスキャン画面の「このスキャンを繰り返す」）は、設定した人として、デバイスがオンラインの間に同じスキャンを実行します。その人がオーナー／ADMIN でなくなると自動で止まります。ネットワーク全体のスキャンの後、一覧になかったアドレスはオーナーと ADMIN の共有先に知らせます（そのネットワークの初回スキャンでは出ません）。ホストに**注目**すると（`lan watch`、Web のベル）、スキャンや `lan check` で消えた・戻った・ポートが開いた／閉じたときに知らせます。どちらもページ内通知、デスクトップ通知、プッシュ、Webhook イベント `lan.new_hosts` / `lan.watched_host` になり、通知の設定に従います。1 つのアドレスだけをスキャンするとき（`lan check` など）は、一番小さいポートだけでなく全ポートを試します。
+
+**マシンの起動**：Wake-on-LAN パケットはデバイス自身のネットワークの中でしか届かないので、`lan wake`（または Web のホストパネルの「起動」）はデバイスに送らせます。`wakeonlan`、`etherwake` / `ether-wake`（`sudo -n` でも）、`python3` を順に試し、Windows デバイスでは PowerShell を使って、ホストのネットワークへ UDP 9 でブロードキャストします。マシン側で Wake-on-LAN を有効にし、MAC アドレスが分かっている必要があります（マシンが動いているときにスキャンすると、デバイスの近隣テーブルから読み取ります）。トンネルを見られて、そこで使えるアカウントがある人なら誰でもそのマシンを起動でき、起動のたびにトンネルのログに残ります。**ラベルとメモ**（`lan edit`、またはホストパネルの「詳細」タブ）はあなたが書くもので、スキャンでは変わりません。Web の検索でも見つかります（`label:rack-2`、またはメモ内の語）。
 
 ### LAN の Web ページを自分のブラウザーで
 
@@ -425,6 +429,8 @@ telepy browse close "$ID"
 | `telepy lan check <tunnel> <host>` | 1 台を今すぐ再確認：開いていたポートと既定のポートを、そのアドレスだけ。`--ports`、`--json` | `network:scan` |
 | `telepy lan schedule <tunnel>` | 定期スキャンの表示・設定。`--every 1h\|6h\|12h\|1d\|1w\|off`、`--subnet`、`--ports`、`--no-identify`、`--account` | 表示は `tunnels:read`、設定は `network:scan` |
 | `telepy lan watch <tunnel> <host>` | スキャンで消えた・戻った・ポートが変わったときに知らせる。`--off` | `tunnels:manage` |
+| `telepy lan wake <tunnel> <host>` | デバイスから Wake-on-LAN パケットを送る（デバイス上の wakeonlan・etherwake・python3）。`--account` | `ssh:exec` |
+| `telepy lan edit <tunnel> <host>` | 名前・ログイン・SSH ポート・ラベル（`--labels a,b`）・メモ（`--note`）を変更。空の値で消去 | `tunnels:manage` |
 | `telepy lan rm <tunnel> <host>` | ID、アドレス、ラベルでホストを削除 | `tunnels:manage` |
 | `telepy browse <target> [url]` | スクリプト用ブラウザーを開き、ID を表示（`browse open` と同じ） | `browser:use` |
 | `telepy browse ls` / `go` / `text` / `shot` / `click` / `type` / `close` | このサインインで開いているブラウザーの一覧、または ID で 1 つを操作 | `browser:use` |

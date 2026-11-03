@@ -9,7 +9,7 @@ import type { TranslationKey } from "@/locales/en";
 /** scope 與它開放的工具(與後端 mcp/ 的檢查一致)。/ Scopes and the tools they unlock (mirrors mcp/). */
 export const SCOPES: { scope: string; label: TranslationKey; description: TranslationKey; tools: string[] }[] = [
     { scope: "tunnels:read", label: "oauth.scope.tunnelsRead", description: "oauth.scope.tunnelsReadDescription", tools: ["list_tunnels", "tunnel_status", "lan_hosts"] },
-    { scope: "ssh:exec", label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription", tools: ["ssh_session_open", "ssh_exec", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close"] },
+    { scope: "ssh:exec", label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription", tools: ["ssh_session_open", "ssh_exec", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close", "lan_wake"] },
     { scope: "ssh:files", label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription", tools: ["ssh_session_open", "sftp_list", "sftp_read", "sftp_write"] },
     { scope: "network:scan", label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription", tools: ["lan_scan", "lan_check"] },
     {
@@ -32,6 +32,7 @@ export const TOOL_LABELS: Record<string, TranslationKey> = {
     lan_hosts: "activity.tool.lan_hosts",
     lan_scan: "activity.tool.lan_scan",
     lan_check: "activity.tool.lan_check",
+    lan_wake: "activity.tool.lan_wake",
     shell_open: "activity.tool.shell_open",
     shell_send: "activity.tool.shell_send",
     shell_read: "activity.tool.shell_read",

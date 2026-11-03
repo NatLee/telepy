@@ -2909,6 +2909,10 @@ pub struct LanHost {
     pub since_last: Option<serde_json::Value>,
     /// You watch it: scans that find it gone, back or with other ports tell you
     pub watched: bool,
+    /// The person's notes (scans never touch them)
+    pub notes: Option<String>,
+    /// Labels, the tunnel label rules (at most 12)
+    pub labels: Vec<String>,
     pub created_at: String,
 }
 
@@ -3010,6 +3014,10 @@ pub struct LanHostPatch {
     /// Default login on this machine (letters, digits, `.`, `_`, `-`; up to 64)
     pub username: Option<String>,
     pub ssh_port: Option<i64>,
+    /// Up to 2000 characters; empty clears
+    pub notes: Option<String>,
+    /// Replaces the set: lowercase letters, digits and `. _ - =`, starting with a letter or digit; at most 12
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]

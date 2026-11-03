@@ -21,6 +21,13 @@ import { hostKind, hostMatches, queryTerms, type HostKind } from "@/lib/lanHosts
 import { changeCounts, isOwn } from "@/lib/lanChanges";
 import type { LanHost, LanScan, LanSchedule, TopologyTunnel } from "@/types/lan";
 
+/** 喚醒的錯誤碼 → 翻譯；其餘用後端的說明。/ Wake error codes → messages. */
+const WAKE_ERRORS: Record<string, TranslationKey> = {
+    lan_wake_mac: "network.wake.errMac",
+    no_account: "network.noDeviceUser",
+    device_offline: "network.deviceOffline",
+};
+
 /** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
 const SCAN_ERRORS: Record<string, TranslationKey> = {
     lan_scan_disabled: "network.scanError.disabled",
@@ -42,7 +49,12 @@ export interface HostInput {
     label?: string | null;
     username?: string | null;
     ssh_port?: number | null;
+    notes?: string | null;
+    labels?: string[];
 }
+
+/** 喚醒的結果：送出去了（用什麼、送到哪）或一句錯誤。/ Waking: sent (with what, where to) or an error sentence. */
+export type WakeResult = { ok: true; tool: string; broadcast: string | null } | { ok: false; error: string };
 
 /** 欄位錯誤（DRF 形狀 `{field: [msg]}`）或整體錯誤。/ Field errors or a general message. */
 export type FormErrors = Record<string, string> & { _?: string };
@@ -303,6 +315,22 @@ export function useNetworkPage() {
         [scanErrorText, t]
     );
 
+    /** 送 Wake-on-LAN 封包（裝置上跑）。/ Send a Wake-on-LAN packet (run on the device). */
+    const wakeHost = useCallback(
+        async (h: LanHost): Promise<WakeResult> => {
+            try {
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/wake`, { method: "POST", body: JSON.stringify({}) });
+                const data = await readJson<{ tool?: string; broadcast?: string | null; error?: string; code?: string }>(res);
+                if (res.ok && data?.tool) return { ok: true, tool: data.tool, broadcast: data.broadcast ?? null };
+                const key = data?.code ? WAKE_ERRORS[data.code] : undefined;
+                return { ok: false, error: key ? t(key) : (data?.error ?? t("api.unexpectedError")) };
+            } catch {
+                return { ok: false, error: t("api.unexpectedError") };
+            }
+        },
+        [t]
+    );
+
     /** 注意 / 不再注意這台。/ Watch or stop watching a host. */
     const setWatch = useCallback(
         async (h: LanHost, on: boolean): Promise<boolean> => {
@@ -443,6 +471,6 @@ export function useNetworkPage() {
 
     return {
         state: { tunnels: visible, allTunnels: tunnels, loading, query, stats, focusTunnel },
-        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, saveSchedule, checkHost, setWatch, addHost, updateHost, deleteHost, loadConnectTarget },
+        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, saveSchedule, checkHost, setWatch, wakeHost, addHost, updateHost, deleteHost, loadConnectTarget },
     };
 }

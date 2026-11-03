@@ -1148,6 +1148,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.
     ("telepy_lan_host", "checked_at", "datetime NULL"),
+    // 使用者寫的備註與標籤（JSON 陣列，跟通道標籤同規則）。/ The person's notes and labels (JSON array, tunnel label rules).
+    ("telepy_lan_host", "notes", "text NULL"),
+    ("telepy_lan_host", "labels", "text NOT NULL DEFAULT '[]'"),
     // 一鍵加入腳本偵測到的環境（JSON：shell、SSH client / server、init、keepalive 模式）。/ What the join script found (JSON).
     ("telepy_device_install", "join_facts", "text NULL"),
     ("telepy_device_install", "join_facts_at", "datetime NULL"),

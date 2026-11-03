@@ -31,6 +31,10 @@ pub struct LanHost {
     pub last_seen: Option<String>,
     /// 最後一次有掃描探過它（整網段或「檢查這台」）。/ When a scan (full or a check) last covered it.
     pub checked_at: Option<String>,
+    /// 使用者寫的備註（掃描不會動）。/ The person's notes (scans never touch them).
+    pub notes: Option<String>,
+    /// JSON 陣列：標籤（`tunnel_tags::normalize_labels` 的規則）。/ JSON array of labels (the tunnel label rules).
+    pub labels: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -38,6 +42,9 @@ pub struct LanHost {
 impl LanHost {
     pub fn open_port_list(&self) -> Vec<u16> {
         serde_json::from_str(&self.open_ports).unwrap_or_default()
+    }
+    pub fn label_list(&self) -> Vec<String> {
+        serde_json::from_str(&self.labels).unwrap_or_default()
     }
     pub fn service_list(&self) -> Vec<crate::lan::fingerprint::Service> {
         serde_json::from_str(&self.services).unwrap_or_default()
@@ -95,7 +102,7 @@ pub async fn save_meta(db: &Db, m: &LanMeta) -> sqlx::Result<()> {
 }
 
 const T: &str = "telepy_lan_host";
-const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, checked_at, created_at, updated_at";
+const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, checked_at, notes, labels, created_at, updated_at";
 
 pub async fn hosts_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<LanHost>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM {T} WHERE tunnel_id = ? ORDER BY id")).bind(tunnel_id).fetch_all(&db.read).await
@@ -127,6 +134,9 @@ pub struct HostPatch<'a> {
     pub label: Option<Option<&'a str>>,
     pub username: Option<Option<&'a str>>,
     pub ssh_port: Option<i64>,
+    pub notes: Option<Option<&'a str>>,
+    /// 整組換掉（JSON 陣列）。/ Replaces the set (a JSON array).
+    pub labels: Option<&'a str>,
 }
 
 pub async fn update(db: &Db, id: i64, p: HostPatch<'_>) -> sqlx::Result<()> {
@@ -139,6 +149,12 @@ pub async fn update(db: &Db, id: i64, p: HostPatch<'_>) -> sqlx::Result<()> {
     }
     if let Some(v) = p.ssh_port {
         sqlx::query(&format!("UPDATE {T} SET ssh_port = ? WHERE id = ?")).bind(v).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(v) = p.notes {
+        sqlx::query(&format!("UPDATE {T} SET notes = ? WHERE id = ?")).bind(v).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(v) = p.labels {
+        sqlx::query(&format!("UPDATE {T} SET labels = ? WHERE id = ?")).bind(v).bind(id).execute(&mut *tx).await?;
     }
     sqlx::query(&format!("UPDATE {T} SET updated_at = ? WHERE id = ?")).bind(now_db()).bind(id).execute(&mut *tx).await?;
     tx.commit().await

@@ -177,6 +177,8 @@ pub const ROUTES: &[RouteRule] = {
         // Put your own, already registered key on the device's list (yours only, only into accounts you may use): whoever
         // can run commands as that account could append a key anyway, hence exec's scope. Registering a key stays web-only.
         rule("POST", "/api/reverse/server/{t}/device-keys", EXEC, Path),
+        // 喚醒一台區網主機 = 在裝置上跑一段指令。/ Waking a LAN host = running a command on the device.
+        rule("POST", "/api/reverse/server/{t}/lan/hosts/*/wake", EXEC, Path),
         rule("GET", "/api/snippets", EXEC, None),
         rule("GET", "/api/recordings", EXEC, Handler),
         rule("GET", "/api/recordings/*/cast", EXEC, Handler),

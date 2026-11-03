@@ -35,6 +35,10 @@ import { hostIcon } from "@/components/network/TopologyTree";
 import { HostServices } from "@/components/network/HostServices";
 import { HostChangeNote } from "@/components/network/ScanChanges";
 import { CheckRow, LanAlertsInfoDialog, WatchButton } from "@/components/network/HostAlerts";
+import { WakeRow } from "@/components/network/HostWake";
+import { Textarea } from "@/components/ui/textarea";
+import { parseLabels } from "@/lib/tunnelLabels";
+import type { WakeResult } from "@/hooks/useNetworkPage";
 import { isOwn } from "@/lib/lanChanges";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
@@ -82,9 +86,13 @@ interface Props {
     onCheck: (h: LanHost) => Promise<string | null>;
     /** 注意 / 不再注意。/ Watch or stop watching. */
     onWatch: (h: LanHost, on: boolean) => Promise<boolean>;
+    /** 送 Wake-on-LAN。/ Send Wake-on-LAN. */
+    onWake: (h: LanHost) => Promise<WakeResult>;
+    /** 點標籤 = 在頁面搜尋它。/ A label click searches the page for it. */
+    onSearch?: (query: string) => void;
 }
 
-export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost, onCheck, onWatch }: Props) {
+export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost, onCheck, onWatch, onWake, onSearch }: Props) {
     const { t, locale } = useI18n();
     const [tab, setTab] = useState<HostPanelTab>(initialTab);
     // 同一台主機上再從列表要求別的分頁。/ Another tab requested for the same host from a list row.
@@ -98,7 +106,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
     const [deviceUser, setDeviceUser] = useState<string | null>(defaultDeviceUser(tunnel));
     // 載入結果帶著它是哪個帳號的，換帳號時舊的就不顯示。/ The loaded target remembers its account.
     const [loaded, setLoaded] = useState<{ user: string | null; target: ConnectTarget } | null>(null);
-    const [form, setForm] = useState({ label: host.label ?? "", username: host.username ?? "", ssh_port: String(host.ssh_port) });
+    const [form, setForm] = useState({ label: host.label ?? "", username: host.username ?? "", ssh_port: String(host.ssh_port), notes: host.notes ?? "", labels: (host.labels ?? []).join(", ") });
     const [errors, setErrors] = useState<FormErrors>({});
     const [saving, setSaving] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -139,8 +147,13 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             setErrors({ username: t("network.form.loginInvalid") });
             return;
         }
+        const labels = parseLabels(form.labels);
+        if (labels.invalid.length > 0 || labels.tooMany) {
+            setErrors({ labels: labels.tooMany ? t("network.form.labelsTooMany") : t("network.form.labelsInvalid", { labels: labels.invalid.join(", ") }) });
+            return;
+        }
         setSaving(true);
-        const res = await updateHost(host, { label: form.label.trim() || null, username: username || null, ssh_port: port });
+        const res = await updateHost(host, { label: form.label.trim() || null, username: username || null, ssh_port: port, notes: form.notes.trim() || null, labels: labels.labels });
         setSaving(false);
         if (res) setErrors(res);
         else {
@@ -204,6 +217,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         <HostChangeNote host={host} />
                         <CheckRow host={host} tunnel={tunnel} online={online} onCheck={onCheck} onInfo={() => setAlertsInfo(true)} />
+                        <WakeRow host={host} tunnel={tunnel} online={online} onWake={onWake} />
                         {/* 這台機器上的服務：每個 port 一個最直接的用法。/ The services on this machine: each port's most direct use. */}
                         <HostPorts
                             host={host}
@@ -311,6 +325,20 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                             ) : t("network.noOpenPorts")}
                         </Row>
                         {host.ssh_banner && <Row label={t("network.field.banner")}><span className="font-mono text-xs">{host.ssh_banner}</span></Row>}
+                        {(host.labels ?? []).length > 0 && (
+                            <Row label={t("network.field.labels")}>
+                                <span className="flex flex-wrap gap-1">
+                                    {(host.labels ?? []).map((l) =>
+                                        onSearch ? (
+                                            <button key={l} type="button" onClick={() => onSearch(`label:${l}`)} title={t("network.labelSearch", { label: l })} className="rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80 hover:border-foreground/30">{l}</button>
+                                        ) : (
+                                            <span key={l} className="rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80">{l}</span>
+                                        )
+                                    )}
+                                </span>
+                            </Row>
+                        )}
+                        {host.notes && <Row label={t("network.field.notes")}><span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{host.notes}</span></Row>}
                         <Row label={t("network.field.source")}>{own ? t("network.source.self") : host.source === "scan" ? t("network.source.scan") : t("network.source.manual")}</Row>
                         {host.last_seen && <Row label={t("network.field.lastSeen")}>{fmt.format(new Date(host.last_seen))}</Row>}
                         {host.first_seen && <Row label={t("network.field.firstSeen")}>{fmt.format(new Date(host.first_seen))}</Row>}
@@ -339,6 +367,16 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                                 <Input id="lan-port" inputMode="numeric" value={form.ssh_port} onChange={(e) => setForm({ ...form, ssh_port: e.target.value })} placeholder="22" className="font-mono" />
                                 {errors.ssh_port && <p className="text-xs text-destructive">{errors.ssh_port}</p>}
                             </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="lan-labels">{t("network.field.labels")}</Label>
+                            <Input id="lan-labels" value={form.labels} onChange={(e) => setForm({ ...form, labels: e.target.value })} placeholder="rack-2, prod" autoComplete="off" spellCheck={false} className="font-mono" />
+                            <p className={cn("text-xs", errors.labels ? "text-destructive" : "text-muted-foreground")}>{errors.labels ?? t("network.form.labelsHint")}</p>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="lan-notes">{t("network.field.notes")}</Label>
+                            <Textarea id="lan-notes" value={form.notes} maxLength={2000} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder={t("network.form.notesPlaceholder")} />
+                            {errors.notes && <p className="text-xs text-destructive">{errors.notes}</p>}
                         </div>
                         {errors._ && <p className="text-sm text-destructive">{errors._}</p>}
                         <div className="flex flex-wrap justify-between gap-2">
