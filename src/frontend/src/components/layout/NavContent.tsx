@@ -15,6 +15,7 @@ import { LanguageSwitcher } from "./LanguageSwitcher";
 import { ScaleSwitcher } from "./ScaleSwitcher";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { OPEN_PREFS_EVENT, UserPreferencesModal, type PrefsTab } from "./UserPreferencesModal";
+import { isTunnelPagePath } from "@/lib/tunnelPage";
 
 interface NavLink {
     key: TranslationKey;
@@ -108,7 +109,9 @@ export const navLinks: NavLink[] = navSections.flatMap((section) => section.link
 
 /** /tunnels 只比對自己,其他連結比對前綴。/ /tunnels matches exactly; the others match by prefix. */
 export function isNavActive(pathname: string, href: string) {
-    return pathname === href || (href !== "/tunnels" && pathname.startsWith(href));
+    // 通道頁面（`/tunnels/<id>`）算在「通道」底下。/ A tunnel's page counts under Tunnels.
+    if (href === "/tunnels") return pathname === href || isTunnelPagePath(pathname);
+    return pathname === href || pathname.startsWith(href);
 }
 
 /**

@@ -232,4 +232,5 @@ export interface TunnelActionHandlers {
 }
 
 /** 通道詳細資訊對話框的分頁。/ Tabs of the tunnel details dialog. */
-export type TunnelDetailsTab = "general" | "connection" | "device" | "identity" | "sessions" | "connections";
+/** 通道頁面的分頁（`lib/tunnelPage.ts`）。/ The tunnel page's tabs (`lib/tunnelPage.ts`). */
+export type TunnelDetailsTab = import("@/lib/tunnelPage").TunnelTab;

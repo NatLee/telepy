@@ -367,7 +367,7 @@ Telepy 的盤點與刪除腳本大約 25 KB，所以長腳本會分段寫進裝�
 - **相容模式**：是繞道，不是修好。SSH 心跳關閉，斷線發現得慢。
 - **非 root 的 OpenWrt**：讀不到 `/etc/dropbear/*_host_key`，又沒有 `/etc/ssh/*.pub` 和 ssh-keyscan 時，主機金鑰沒有來源，腳本會停下來說明。
 - **`/etc/rc.local`**：那裡手寫的通道指令，不會被自動改名或切換。
-- **網頁連接埠沒有小幫手**：ARM 路由器（aarch64、armv7、armv6）有預編的 `telepy-carrier`。其他 CPU（MIPS）又沒有 python3 的路由器沒有小幫手，所以在通道詳情的「連線方式」分頁選「自動」會裝一個只走 SSH 連接埠的新服務，並說明這件事（`no_carrier`）。
+- **網頁連接埠沒有小幫手**：ARM 路由器（aarch64、armv7、armv6）有預編的 `telepy-carrier`。其他 CPU（MIPS）又沒有 python3 的路由器沒有小幫手，所以在通道頁面的「連線方式」分頁選「自動」會裝一個只走 SSH 連接埠的新服務，並說明這件事（`no_carrier`）。
 - **多個位址**：腳本把 SSH 伺服器綁定的位址當成通道的目標。伺服器綁了多個非 loopback 位址時，取第一個。
 
 ## 十、測試過的環境

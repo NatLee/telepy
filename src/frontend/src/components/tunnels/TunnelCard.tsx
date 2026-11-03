@@ -6,6 +6,8 @@
  * border — no accent bar, glow or lift.
  */
 import React from "react";
+import Link from "next/link";
+import { tunnelPageUrl } from "@/lib/tunnelPage";
 import { ArrowLeftRight, Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
@@ -52,8 +54,11 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                 </div>
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-1">
-                        <h3 className="text-[1.125rem] text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
-                            {tunnel.host_friendly_name}
+                        {/* 名稱 = 通道頁面的連結（Ctrl / ⌘ 點開新分頁）。/ The name links to the tunnel's page. */}
+                        <h3 className="min-w-0 truncate text-[1.125rem] leading-tight text-foreground" title={tunnel.host_friendly_name}>
+                            <Link href={tunnelPageUrl(tunnel.id)} prefetch={false} className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                                {tunnel.host_friendly_name}
+                            </Link>
                         </h3>
                         <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} />
                     </div>
@@ -68,7 +73,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
                         <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                         <DeviceNameChip summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
-                        <SshNameChip name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "general")} />
+                        <SshNameChip name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "settings")} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} onShare={() => actions.onShare(tunnel.id)} />
                         <TunnelPresenceButton presence={tunnel.presence} tunnelId={tunnel.id} />
                         <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} />

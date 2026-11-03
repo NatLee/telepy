@@ -93,7 +93,7 @@ The device's ssh gets `ProxyCommand ~/.ssh/telepy-<install id>-ws.sh`. That smal
 
 Inside is the very same SSH session: the same host key, the same key login and forward rules. Nothing extra is trusted, and there is no separate auth message, because authentication happens in the SSH inside.
 
-Choose it in the wizard's connection step or in the one-command join (`transport: websocket`). What got installed shows up on the tunnel details' How it connects tab as the `carrier` fact: `binary <target>`, `python3` or `none`.
+Choose it in the wizard's connection step or in the one-command join (`transport: websocket`). What got installed shows up on the tunnel page's How it connects tab as the `carrier` fact: `binary <target>`, `python3` or `none`.
 
 #### Which carrier a device gets
 
@@ -139,7 +139,7 @@ The one-command join uses `--auto` and reports what it actually installed at reg
 
 ### Switching a device that is already installed
 
-A device keeps the way in it was set up with until someone changes it. The tunnel's owner and Admins do that on the **How it connects** tab of the tunnel details. Three ways lead there: the tab itself, **How it connects** in the tunnel's ⋯ menu, and **Change how it connects** in the popover of the SSH / SSH over WSS badge on the tunnel list. The device has to be online.
+A device keeps the way in it was set up with until someone changes it. The tunnel's owner and Admins do that on the **How it connects** tab of the tunnel's page (click the tunnel's name in the list). Other ways there: **How it connects** in the tunnel's ⋯ menu, and **Change how it connects** in the popover of the SSH / SSH over WSS badge on the tunnel list. The device has to be online.
 
 The tab shows the way it was set up with, how it is connected right now and the two-lane diagram lit by that: an automatic device that is on the web port at the moment gets its SSH lane drawn blocked. Everyone who can see the tunnel sees this part; only owners and Admins get the switch and the "On the device" section below it.
 
@@ -261,7 +261,7 @@ Every time the backend connects to a device, it checks the host key the device's
 
 - **First connection**: the key is recorded (trust on first use). Usually that is the backend's own check login right after the device joins.
 - **A different key later**: the handshake is refused, the new key is kept as pending, and the owner and sharees are notified.
-- **What to do**: the owner or an ADMIN opens the tunnel details, goes to "Keys & identity" → "Device identity", compares the fingerprint with the device and clicks "Trust this key". "Forget" clears the pin, so the next connection records the key afresh.
+- **What to do**: the owner or an ADMIN opens the tunnel's page, goes to "Keys & identity" → "Device identity", compares the fingerprint with the device and clicks "Trust this key". "Forget" clears the pin, so the next connection records the key afresh.
 
 Why bother: whoever holds a tunnel key can point its `-R` at their own sshd and pose as the device. They would catch terminal input, uploaded files and remote-desktop passwords. With the pin, the impostor is stopped at the handshake, and the service-key login is never sent.
 
@@ -304,7 +304,7 @@ Pinning keeps out someone else's machine; per-tunnel keys pull out the root of t
 
 - Each tunnel generates its own ed25519 key pair the first time it needs one.
 - The private key is sealed with a key derived from `SECRET_KEY` and stored in the database.
-- The public key (`… telepy-tunnel-<id>`) goes to the wizard, the one-command join, the Docker scripts and the tunnel details. The device authorises only that one.
+- The public key (`… telepy-tunnel-<id>`) goes to the wizard, the one-command join, the Docker scripts and the tunnel's page. The device authorises only that one.
 
 How it plays out:
 
@@ -430,7 +430,7 @@ The result is stored and refreshed:
 
 - after a verified one-command join;
 - in the daily device check, when the device was never surveyed or the last survey is older than 7 days;
-- when you click "Check again" under "On the device" on the tunnel details' How it connects tab.
+- when you click "Check again" under "On the device" on the tunnel page's How it connects tab.
 
 On Windows the script only removes things; the survey isn't done yet and returns just the platform.
 

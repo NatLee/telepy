@@ -32,7 +32,7 @@ Paste the line on the device and the page lights up each step of the script as i
 
 ### Device facts
 
-Find it: a tunnel's menu → **Details & description → Device → How these are collected**.
+Find it: a tunnel's page → **Device → How these are collected**.
 
 Once a day Telepy logs in to each connected device with a read-only script and reads the OS, uptime, memory, disk, load and whether a reboot is pending. The dialog shows the path, the last and next run, the exact commands, and the thresholds behind each warning.
 

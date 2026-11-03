@@ -12,6 +12,8 @@
  * held only a few rows. Chips are kept only for the rare, must-see flag.
  */
 import React from "react";
+import Link from "next/link";
+import { tunnelPageUrl } from "@/lib/tunnelPage";
 import { Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
@@ -56,8 +58,10 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     </div>
                     <div className="min-w-0 max-w-[18rem]">
                         <div className={cn(LINE, "gap-1")}>
-                            <p className="truncate text-sm text-foreground" title={tunnel.host_friendly_name}>
-                                {tunnel.host_friendly_name}
+                            <p className="min-w-0 truncate text-sm text-foreground" title={tunnel.host_friendly_name}>
+                                <Link href={tunnelPageUrl(tunnel.id)} prefetch={false} className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                                    {tunnel.host_friendly_name}
+                                </Link>
                             </p>
                             <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} className="size-5" />
                         </div>
@@ -94,7 +98,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
                     <DeviceWarningChip variant="text" endpoint={tunnel.endpoint} onOpen={openDevice} />
                     <DeviceNameChip variant="text" summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
-                    <SshNameChip variant="text" name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "general")} />
+                    <SshNameChip variant="text" name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "settings")} />
                 </div>
             </td>
             {/* 我的關係 + 分享 / 誰在用 / My relation + sharing / who is using it */}

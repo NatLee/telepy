@@ -367,7 +367,7 @@ Nothing has been registered yet, so fix the cause and run the same command again
 - **Compat mode**: a workaround, not a fix. The SSH heartbeat is off and drops are noticed slowly.
 - **OpenWrt without root**: when `/etc/dropbear/*_host_key` isn't readable and there is no `/etc/ssh/*.pub` and no ssh-keyscan, the host key has no source. The script stops and explains.
 - **`/etc/rc.local`**: a hand-written tunnel line there isn't renamed or switched automatically.
-- **No helper for the web port**: ARM routers (aarch64, armv7, armv6) get the prebuilt `telepy-carrier`. A router with another CPU (MIPS) and no python3 has no helper, so switching it to **Automatic** (the tunnel details' **How it connects** tab) installs a new service that uses only the SSH port, and says so (`no_carrier`).
+- **No helper for the web port**: ARM routers (aarch64, armv7, armv6) get the prebuilt `telepy-carrier`. A router with another CPU (MIPS) and no python3 has no helper, so switching it to **Automatic** (the tunnel page's **How it connects** tab) installs a new service that uses only the SSH port, and says so (`no_carrier`).
 - **Several addresses**: the script uses the SSH server's bind address as the tunnel's target. If the server is bound to several non-loopback addresses, it takes the first.
 
 ## 10. Where it has been tested
