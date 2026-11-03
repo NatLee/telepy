@@ -7,7 +7,7 @@
  * both themes so dark pixels (the penguin) stay visible.
  */
 import React, { useState } from "react";
-import { ArrowRightLeft, Globe, Info, KeyRound } from "lucide-react";
+import { ArrowRightLeft, Globe, Info, KeyRound, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n } from "@/lib/i18n";
@@ -99,7 +99,7 @@ const STATE_TEXT: Record<WayInState, TranslationKey> = { live: "platforms.via.st
  * Telepy is on http). Solid while connected; dashed when offline (the last way) or not connected yet (how it was set
  * up). A ⇄ marks a device that came in another way than it was set up for.
  */
-export function TransportBadge({ tunnel, variant = "chip", className }: { tunnel: Pick<Tunnel, "way_in" | "endpoint">; variant?: RowVariant; className?: string }) {
+export function TransportBadge({ tunnel, variant = "chip", className, onOpen, canManage = false }: { tunnel: Pick<Tunnel, "way_in" | "endpoint">; variant?: RowVariant; className?: string; /** 打開通道詳情的「連線方式」分頁。/ Opens the details' "How it connects" tab. */ onOpen?: () => void; /** 擁有者 / Admin：按鈕叫「改連線方式」。/ Owner / Admin: the button says "Change how it connects". */ canManage?: boolean }) {
     const { t } = useI18n();
     const https = useHttps();
     const [open, setOpen] = useState(false);
@@ -150,19 +150,34 @@ export function TransportBadge({ tunnel, variant = "chip", className }: { tunnel
                         {l}
                     </p>
                 ))}
-                <button
-                    type="button"
-                    onClick={() => {
-                        setOpen(false);
-                        setCompare(true);
-                    }}
-                    className="inline-flex items-center gap-1 pt-0.5 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                    <Info size={13} aria-hidden /> {t("wayIn.compareButton")}
-                </button>
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5">
+                    {/* 到「連線方式」分頁（擁有者 / Admin 在那裡換）。/ To the "How it connects" tab (owners / Admins switch there). */}
+                    {onOpen && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setOpen(false);
+                                onOpen();
+                            }}
+                            className="inline-flex items-center gap-1 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        >
+                            <Route size={13} aria-hidden /> {t(canManage ? "deviceInstall.switch.button" : "wayIn.openTab")}
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setOpen(false);
+                            setCompare(true);
+                        }}
+                        className="inline-flex items-center gap-1 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                        <Info size={13} aria-hidden /> {t("wayIn.compareButton")}
+                    </button>
+                </span>
             </PopoverContent>
         </Popover>
-        {compare && <WayInInfoDialog isOpen onClose={() => setCompare(false)} current={tunnel.way_in?.setup ?? null} whereHint />}
+        {compare && <WayInInfoDialog isOpen onClose={() => setCompare(false)} current={tunnel.way_in?.setup ?? null} whereHint={!onOpen} />}
         </>
     );
 }

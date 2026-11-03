@@ -79,7 +79,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                 </div>
                 <div className={cn(QUIET_LINE, "gap-x-2")}>
                     {health === "offline" && <TunnelLastSeen at={tunnel.last_seen_at} />}
-                    <TransportBadge variant="text" tunnel={tunnel} />
+                    <TransportBadge variant="text" tunnel={tunnel} canManage={!!tunnel.can_share} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
                 </div>
             </td>
             {/* 埠 + 作業系統 / 外網 + 內網 + 要注意的事 / Port + OS / public + LAN IP + what needs attention */}
@@ -93,7 +93,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     <TunnelLanChip variant="text" endpoint={tunnel.endpoint} />
                     <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
                     <DeviceWarningChip variant="text" endpoint={tunnel.endpoint} onOpen={openDevice} />
-                    <DeviceNameChip variant="text" summary={tunnel.device_install} onOpen={openDevice} />
+                    <DeviceNameChip variant="text" summary={tunnel.device_install} onOpen={() => actions.onDetails(tunnel.id, "connection")} />
                     <SshNameChip variant="text" name={tunnel.host_friendly_name} onOpen={() => actions.onDetails(tunnel.id, "general")} />
                 </div>
             </td>

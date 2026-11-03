@@ -25,12 +25,11 @@ import { useFeatures } from "@/hooks/useFeatures";
 import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
 import { ShellHistorySetting } from "@/components/tunnels/ShellHistorySetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
-import { DeviceInstallSection } from "@/components/tunnels/DeviceInstall";
+import { ConnectionTab } from "@/components/tunnels/ConnectionTab";
 import { TransportBadge } from "@/components/tunnels/DevicePlatform";
-import { liveTransport } from "@/lib/devicePlatforms";
 import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { sshSafeName, suggestTunnelName } from "@/lib/tunnelName";
-import { Activity, Cpu, Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag, UserCheck } from "lucide-react";
+import { Activity, Cpu, Save, Server, Loader2, KeyRound, Pencil, Hash, Network, Route, ShieldCheck, Tag, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -138,6 +137,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
     const basicsError = !!(errors.host_friendly_name || errors.description || errors.labels);
     const tabs = [
         { value: "general" as const, label: <NavTabLabel label={t("tunnelDetails.tabGeneral")} mark={basicsError ? "error" : basicsDirty ? "dirty" : null} />, hint: t("tunnelDetails.tabGeneralHint"), icon: <Pencil /> },
+        // 裝置怎麼連 Telepy（SSH / SSH over WSS）+ 裝置上跑它的服務：每個看得到通道的人都有，換只有擁有者 / Admin。
+        // How the device reaches Telepy + the service running it: everyone who sees the tunnel; switching is owner / Admin.
+        { value: "connection" as const, label: t("tunnelDetails.tabConnection"), hint: t("tunnelDetails.tabConnectionHint"), icon: <Route /> },
         ...(showDevice ? [{ value: "device" as const, label: t("tunnelDetails.tabDevice"), hint: t("tunnelDetails.tabDeviceHint"), icon: <Cpu /> }] : []),
         { value: "identity" as const, label: <NavTabLabel label={t("tunnelDetails.tabIdentity")} mark={errors.key || hostKeyAlert ? "error" : keyChanged ? "dirty" : null} />, hint: t("tunnelDetails.tabIdentityHint"), icon: <KeyRound /> },
         { value: "sessions" as const, label: t("tunnelDetails.tabSessions"), hint: t("tunnelDetails.tabSessionsHint"), icon: <UserCheck /> },
@@ -164,7 +166,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     <span className="flex flex-wrap items-center gap-1.5">
                         <Chip mono><Hash /> {details.id}</Chip>
                         <Chip tone="primary" mono><Network /> :{details.reverse_port}</Chip>
-                        <TransportBadge tunnel={details} />
+                        <TransportBadge tunnel={details} canManage={manager} onOpen={() => setTab("connection")} />
                         <Chip tone={role === "view" ? "neutral" : "success"}><ShieldCheck /> {t(ROLE_LABEL[role] ?? "keys.role.view")}</Chip>
                     </span>
                 ) : undefined
@@ -254,10 +256,13 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     {showDevice && (
                         <div role="tabpanel" hidden={activeTab !== "device"} className="space-y-6">
                             <DeviceFactsSection tunnelId={details.id} isOpen={isOpen} endpoint={details.endpoint} deviceName={details.host_friendly_name} canRefresh={manager} />
-                            {/* 裝置上跑它的是什麼、叫什麼名字（擁有者 / ADMIN）。/ What runs it on the device and its names (managers). */}
-                            {manager && <DeviceInstallSection tunnelId={details.id} isOpen={isOpen && activeTab === "device"} deviceName={details.host_friendly_name} live={liveTransport(details)} onChanged={onUpdate} />}
                         </div>
                     )}
+
+                    {/* 連線方式：怎麼連 Telepy、換方式、裝置上的安裝。/ How it connects: the way in, switching, the install. */}
+                    <div role="tabpanel" hidden={activeTab !== "connection"}>
+                        <ConnectionTab tunnel={details} active={isOpen && activeTab === "connection"} manager={manager} onChanged={onUpdate} />
+                    </div>
 
                     {/* 裝置公鑰 + 裝置身分（host key 釘選）/ Device public key + device identity (pinned host key) */}
                     <div role="tabpanel" hidden={activeTab !== "identity"} className="space-y-6">

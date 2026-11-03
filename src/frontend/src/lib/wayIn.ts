@@ -101,3 +101,65 @@ export function doneKeys(transport: WayInSetup | undefined, noCarrier: boolean):
     if (transport === "websocket") return { title: "deviceInstall.switch.doneWeb", body: "deviceInstall.switch.doneWebBody", toast: "deviceInstall.switch.doneToastWeb" };
     return { title: "deviceInstall.switch.done", body: "deviceInstall.switch.doneBody", toast: "deviceInstall.switch.doneToast" };
 }
+
+/** `lib/devicePlatforms.wayInOf` 的結果裡這裡用到的部分。/ The part of `wayInOf`'s result used here. */
+export interface WayInSeen {
+    via: "ssh" | "wss" | "ws";
+    state: "live" | "last" | "setup";
+}
+
+export interface WayPicture {
+    /** 圖要畫哪一種。/ Which way to draw. */
+    way: WayInSetup;
+    /** 從實際連線推得的封鎖（自動卻走網頁 port = SSH port 這陣子連不上）。/ Blocks implied by the live connection. */
+    blocked: Blocked;
+    /** 圖上面那一句。/ The status line above the diagram. */
+    status: TranslationKey;
+    /** 實際走的跟設定的不同（例如在裝置上手動改過）。/ The way it came in differs from how it was set up. */
+    differs: boolean;
+}
+
+/**
+ * 「連線方式」分頁那張圖要畫什麼：設定的方式，加上實際連線告訴我們的事。自動卻正走網頁的 port，代表 SSH 的 port 這陣子
+ * 連不上，就把那條畫成被擋；設定一種、實際走另一種，就畫實際的那種並說明。都不知道 = null。
+ * What the "How it connects" tab draws: the way it was set up plus what the live connection says. Automatic but on the
+ * web port means the SSH port did not answer lately, so that lane is drawn blocked; set up one way but in another, the
+ * actual one is drawn with a note. Nothing known = null.
+ */
+export function wayPicture(setup: WayInSetup | null | undefined, seen: WayInSeen | null): WayPicture | null {
+    const lane = seen && seen.state !== "setup" ? (seen.via === "ssh" ? "ssh" : "web") : null;
+    const live = seen?.state === "live";
+    const status = (fallback: boolean): TranslationKey => (!seen || seen.state === "setup" ? "wayIn.now.never" : !live ? "wayIn.now.offline" : fallback ? "wayIn.now.liveFallback" : "wayIn.now.live");
+    if (setup === "auto") {
+        const fellBack = live && lane === "web";
+        return { way: "auto", blocked: fellBack ? { ssh: true, web: false } : NOTHING_BLOCKED, status: status(fellBack), differs: false };
+    }
+    if (setup === "ssh" || setup === "websocket") {
+        const setupLane = setup === "ssh" ? "ssh" : "web";
+        if (lane && lane !== setupLane) return { way: lane === "ssh" ? "ssh" : "websocket", blocked: NOTHING_BLOCKED, status: status(false), differs: true };
+        return { way: setup, blocked: NOTHING_BLOCKED, status: status(false), differs: false };
+    }
+    if (!lane) return null;
+    return { way: lane === "ssh" ? "ssh" : "websocket", blocked: NOTHING_BLOCKED, status: status(false), differs: false };
+}
+
+/**
+ * 不能在這裡換的原因（盤點的 blocker 代碼，用換連線方式的說法；改名的說法在 `deviceInstall.block.*`）。
+ * Why switching is not possible here, worded for switching (the rename's wording is `deviceInstall.block.*`).
+ */
+export const SWITCH_BLOCK_KEY: Record<string, TranslationKey> = {
+    not_surveyed: "wayIn.block.not_surveyed",
+    windows: "wayIn.block.windows",
+    no_process: "wayIn.block.no_process",
+    nothing_to_rename: "wayIn.block.no_process",
+    unparsed: "wayIn.block.unparsed",
+    needs_root: "wayIn.block.needs_root",
+    unknown_owner: "wayIn.block.unknown_owner",
+    odd_command: "wayIn.block.odd_command",
+    unsupported: "wayIn.block.unsupported",
+    extra: "wayIn.block.extra",
+};
+
+export function switchBlockKey(code: string | null | undefined): TranslationKey {
+    return (code && SWITCH_BLOCK_KEY[code]) || "wayIn.block.other";
+}

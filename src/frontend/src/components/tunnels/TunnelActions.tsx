@@ -33,6 +33,7 @@ import {
     LogOut,
     MoreHorizontal,
     Rocket,
+    Route,
     ScreenShare,
     ScrollText,
     Share2,
@@ -235,6 +236,12 @@ export function TunnelActions({
                     <>
                         <DropdownMenuSeparator />
                         <GroupLabel>{t("tunnelActions.groupDevice")}</GroupLabel>
+                        <ActionItem
+                            icon={Route}
+                            label={t("tunnelActions.connection")}
+                            hint={t("tunnelActions.connectionHint")}
+                            onSelect={() => onDetails(tunnel.id, "connection")}
+                        />
                         <ActionItem
                             icon={Rocket}
                             label={t("tunnelActions.installScript")}

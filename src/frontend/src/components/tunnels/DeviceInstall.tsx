@@ -17,11 +17,11 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
 import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowPath, StateLine } from "@/components/flow/PathFlow";
-import { useDeviceInstall } from "@/hooks/useDeviceInstall";
+import type { DeviceInstallState } from "@/hooks/useDeviceInstall";
 import { useNow } from "@/hooks/useNow";
-import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, TIDY_STEPS, WAY_IN_KEY, canSwitch, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type RenameStep, type ReportedStep, type WayInSetup } from "@/lib/deviceInstall";
-import { WAY_NEEDS, doneKeys, initialChoice, isReinstall } from "@/lib/wayIn";
-import { WayChoiceCards, WayInInfoDialog, WayInLanes } from "@/components/tunnels/WayIn";
+import { BLOCKER_KEY, METHOD_KEY, RENAME_STEPS, TIDY_STEPS, WAY_IN_KEY, failureKey, groupParts, lanes, mapRows, needsAttention, noteOf, rootCommands, stepStates, untouched, type DeviceInstallSummary, type DeviceInstallView, type InstallPart, type MapRow, type RenameReport, type RenameStep, type ReportedStep, type WayInSetup } from "@/lib/deviceInstall";
+import { WAY_NEEDS, doneKeys, isReinstall } from "@/lib/wayIn";
+import { WayChoiceCards, WayInLanes } from "@/components/tunnels/WayIn";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { compatNoServerAlive, factChips } from "@/lib/joinScript";
 import { useI18n } from "@/lib/i18n";
@@ -299,7 +299,7 @@ function RenameDialog({ isOpen, onClose, view, steps, running, report, onStart, 
  * diagram follows the pick, then what to know, the rename's make-before-break diagram with its seven steps and the
  * result. Once started the cards give way to "now → after".
  */
-function SwitchDialog({ isOpen, onClose, view, live, steps, running, report, choice, onChoose, onStart, onCompare, deviceName }: { isOpen: boolean; onClose: () => void; view: DeviceInstallView; live: LiveTransport; steps: ReportedStep[]; running: boolean; report: RenameReport | null; choice: WayInSetup | null; onChoose: (w: WayInSetup) => void; onStart: (w: WayInSetup) => void; onCompare: () => void; deviceName: string }) {
+export function SwitchDialog({ isOpen, onClose, view, live, steps, running, report, choice, onChoose, onStart, onCompare, deviceName }: { isOpen: boolean; onClose: () => void; view: DeviceInstallView; live: LiveTransport; steps: ReportedStep[]; running: boolean; report: RenameReport | null; choice: WayInSetup | null; onChoose: (w: WayInSetup) => void; onStart: (w: WayInSetup) => void; onCompare: () => void; deviceName: string }) {
     const { t } = useI18n();
     const started = running || report !== null;
     const now = view.switch?.way_in;
@@ -546,15 +546,18 @@ function InfoDialog({ isOpen, onClose, view }: { isOpen: boolean; onClose: () =>
     );
 }
 
-export function DeviceInstallSection({ tunnelId, isOpen, deviceName, live = null, onChanged }: { tunnelId: number | null; isOpen: boolean; deviceName: string; live?: LiveTransport; onChanged?: () => void }) {
+/**
+ * 「裝置上的安裝」那一區（「連線方式」分頁的下半）：盤點到的服務、名稱、改名、拿掉多出來的那份。資料由分頁的
+ * `useDeviceInstall` 提供（上半的換連線方式用同一份，不會盤點兩次）。
+ * The "On the device" section (the lower half of the "How it connects" tab): what the survey found, the names, rename
+ * and removing an extra copy. The tab's `useDeviceInstall` feeds it, shared with the switch above, so the device is
+ * surveyed once.
+ */
+export function DeviceInstallSection({ d, tunnelId, deviceName }: { d: DeviceInstallState; tunnelId: number | null; deviceName: string }) {
     const { t, locale } = useI18n();
     const now = useNow(30_000);
-    const d = useDeviceInstall(tunnelId, isOpen, true, onChanged);
     const [renameOpen, setRenameOpen] = useState(false);
     const [tidyOpen, setTidyOpen] = useState(false);
-    const [switchOpen, setSwitchOpen] = useState(false);
-    const [choice, setChoice] = useState<WayInSetup | null>(null);
-    const [compareOpen, setCompareOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     const v = d.view;
     if (!v) {
@@ -636,35 +639,6 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, live = null
                         <CopyButton value={v.install_id} />
                     </span>
                 </Property>
-                {/* 怎麼連 Telepy：三種方式之間都能換（換回來、重裝同一種也行），旁邊是「差在哪」的說明圖。
-                    How it connects: any of the three ways, back again included, with the "how they differ" diagram beside. */}
-                {v.switch && (
-                    <Property label={t("deviceInstall.switch.label")}>
-                        {/* 按鈕可以換行：手機上放大到 130% 時日文 / 英文的按鈕字會比欄位寬。/ Buttons may wrap: at 130 % on a phone their labels are wider than the column. */}
-                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-                            <span>{v.switch.way_in ? t(WAY_IN_KEY[v.switch.way_in]) : t("deviceInstall.switch.wayUnknown")}</span>
-                            {canSwitch(v) && (
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-auto min-h-8 max-w-full py-1 text-left whitespace-normal"
-                                    onClick={() => {
-                                        setChoice(initialChoice(v.switch?.way_in));
-                                        setSwitchOpen(true);
-                                    }}
-                                    disabled={!v.online || d.renaming}
-                                    title={v.online ? undefined : t("deviceInstall.offline")}
-                                >
-                                    <Route size={14} /> {t("deviceInstall.switch.button")}
-                                </Button>
-                            )}
-                            <Button type="button" size="sm" variant="ghost" className="h-auto min-h-8 max-w-full py-1 text-left whitespace-normal" onClick={() => setCompareOpen(true)}>
-                                <Info size={14} /> {t("wayIn.compareButton")}
-                            </Button>
-                        </span>
-                    </Property>
-                )}
                 {v.renamed_at && v.renamed_from.length > 0 && (
                     <Property label={t("deviceInstall.renamedLabel")}>
                         {t("deviceInstall.renamedValue", { old: v.renamed_from.join(", "), time: formatRelativeTime(v.renamed_at, locale, now) })}
@@ -743,41 +717,6 @@ export function DeviceInstallSection({ tunnelId, isOpen, deviceName, live = null
                 onStart={() => void d.tidy()}
                 deviceName={deviceName}
             />
-            <SwitchDialog
-                isOpen={switchOpen}
-                onClose={() => {
-                    setSwitchOpen(false);
-                    d.resetRename();
-                }}
-                view={v}
-                live={live}
-                steps={d.steps}
-                running={d.renaming}
-                report={d.report}
-                choice={choice}
-                onChoose={setChoice}
-                onStart={(w) => void d.switchTransport(w)}
-                onCompare={() => setCompareOpen(true)}
-                deviceName={deviceName}
-            />
-            {compareOpen && (
-                <WayInInfoDialog
-                    isOpen
-                    onClose={() => setCompareOpen(false)}
-                    current={v.switch?.way_in}
-                    sshPort={v.server_port}
-                    deviceName={deviceName}
-                    onPick={
-                        canSwitch(v) && v.online && !d.renaming
-                            ? (w) => {
-                                  setChoice(w);
-                                  setCompareOpen(false);
-                                  setSwitchOpen(true);
-                              }
-                            : undefined
-                    }
-                />
-            )}
             <InfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} view={v} />
         </Section>
     );

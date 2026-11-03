@@ -232,4 +232,4 @@ export interface TunnelActionHandlers {
 }
 
 /** 通道詳細資訊對話框的分頁。/ Tabs of the tunnel details dialog. */
-export type TunnelDetailsTab = "general" | "device" | "identity" | "sessions" | "connections";
+export type TunnelDetailsTab = "general" | "connection" | "device" | "identity" | "sessions" | "connections";
