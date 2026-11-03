@@ -37,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { NavTabs, type NavTab } from "@/components/ui/nav-tabs";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Chip, SectionHeading } from "@/components/ui/section";
+import { Chip, SectionHeading, SectionPanels } from "@/components/ui/section";
 import { useToast } from "@/components/ui/Toast";
 import { useReauth } from "@/hooks/useReauth";
 import { useServerHealth, type AckOutcome } from "@/hooks/useServerHealth";
@@ -488,9 +488,12 @@ function Overview({
                 </section>
             )}
 
-            <LiveNumbers state={stats} />
-            <StoragePanel state={stats} onOpen={onOpen} />
-            <ActivityPanel state={stats} />
+            {/* 跟上面兩張一樣是卡片：每一塊分得開。/ Cards like the two above, so every block reads apart. */}
+            <SectionPanels>
+                <LiveNumbers state={stats} />
+                <StoragePanel state={stats} onOpen={onOpen} />
+                <ActivityPanel state={stats} />
+            </SectionPanels>
         </>
     );
 }

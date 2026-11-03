@@ -56,16 +56,20 @@ export function TerminalDetachSetting({ tunnelId, policy, canManage, onChanged }
             action={value === "never" ? <Chip tone="warning">{t("detach.tunnel.chipNever")}</Chip> : <Chip>{t("detach.tunnel.chipUser")}</Chip>}
         >
             {canManage ? (
-                <Segmented
-                    size="sm"
-                    aria-label={t("detach.tunnel.title")}
-                    value={value}
-                    onChange={(v) => void change(v)}
-                    options={[
-                        { value: "user" as const, label: t("detach.tunnel.user") },
-                        { value: "never" as const, label: t("detach.tunnel.never") },
-                    ]}
-                />
+                // 窄的時候標籤換行，不把卡片撐寬。/ Labels wrap when narrow instead of widening the card.
+                <div className="max-w-md">
+                    <Segmented
+                        size="sm"
+                        fullWidth
+                        aria-label={t("detach.tunnel.title")}
+                        value={value}
+                        onChange={(v) => void change(v)}
+                        options={[
+                            { value: "user" as const, label: t("detach.tunnel.user") },
+                            { value: "never" as const, label: t("detach.tunnel.never") },
+                        ]}
+                    />
+                </div>
             ) : (
                 <p className="text-sm text-foreground">{value === "never" ? t("detach.tunnel.neverReadOnly") : t("detach.tunnel.userReadOnly")}</p>
             )}

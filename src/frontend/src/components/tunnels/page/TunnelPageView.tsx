@@ -11,11 +11,11 @@
 import React, { useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Activity, ArrowLeft, Cpu, KeyRound, LayoutDashboard, Loader2, Rocket, Route, Server, Settings, Users, UserCheck } from "lucide-react";
+import { Activity, ArrowLeft, Cpu, History, KeyRound, LayoutDashboard, Loader2, Rocket, Route, Server, Settings, Users, UserCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { Section } from "@/components/ui/section";
+import { Section, SectionOutline, SectionOutlineProvider, SectionPanels } from "@/components/ui/section";
 import { NavTabLabel, NavTabs } from "@/components/ui/nav-tabs";
 import { TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
@@ -172,12 +172,17 @@ export function TunnelPageView() {
                 }
             />
 
+            <SectionOutlineProvider>
             <div className={cn("grid", wide ? "grid-cols-[15rem_minmax(0,1fr)] items-start gap-6" : "gap-4")}>
-                {/* 不夠寬是一列可橫捲的分頁，夠寬是黏在左側的一欄。/ A scrolling row when narrow, a sticky left rail when wide. */}
-                <div className={cn("min-w-0", wide ? "sticky top-20" : "-mx-1 overflow-x-auto px-1 pb-0.5")}>
+                {/* 不夠寬是一列可橫捲的分頁，夠寬是黏在左側的一欄；左欄下面列出這個分頁有哪幾塊，捲到哪塊標哪塊。
+                    A scrolling row when narrow, a sticky left rail when wide; under the rail, the blocks of this tab, the one in view marked. */}
+                <div className={cn("min-w-0", wide ? "sticky top-20 -mx-1 max-h-[calc(100dvh-6rem)] space-y-4 overflow-y-auto px-1 pb-1" : "-mx-1 overflow-x-auto px-1 pb-0.5")}>
                     <NavTabs tabs={tabs} value={active} onChange={setTab} aria-label={tunnel.host_friendly_name} className={wide ? "sm:flex-col" : "sm:min-w-max sm:flex-row [&_span]:whitespace-nowrap"} />
+                    {wide && <SectionOutline key={active} label={t("tunnelPage.outline")} />}
                 </div>
 
+                {/* 每一塊是一張卡片（標題列 + 細線 + 內容），一頁有幾塊一眼看得出來。/ Every block is a card, so a tab's blocks read apart. */}
+                <SectionPanels>
                 <div role="tabpanel" className="min-w-0">
                     {active === "overview" && (
                         <OverviewPanel
@@ -197,7 +202,7 @@ export function TunnelPageView() {
                             {manager && (
                                 <Section icon={<Rocket />} title={t("tunnelActions.installScript")} description={t("tunnelPage.scriptHint")}>
                                     <div>
-                                        <Button type="button" variant="outline" onClick={() => actions.onScript(tunnel.id)}>
+                                        <Button type="button" variant="outline" className="h-auto min-h-9 max-w-full py-1.5 whitespace-normal" onClick={() => actions.onScript(tunnel.id)}>
                                             <Rocket size={15} /> {t("tunnelPage.scriptOpen")}
                                         </Button>
                                     </div>
@@ -229,6 +234,7 @@ export function TunnelPageView() {
                     {active === "history" && (
                         <div className="space-y-6">
                             <TunnelConnectionsSection data={connections.data} failed={connections.failed} />
+                            <Section icon={<History />} title={t("tunnelPage.historyMore")} description={t("tunnelPage.historyMoreHint")}>
                             <div className="flex flex-wrap gap-2">
                                 <Button asChild variant="outline">
                                     <Link href={`/tunnels/logs?tunnel=${tunnel.id}`} prefetch={false}>{t("tunnelActions.logs")}</Link>
@@ -247,13 +253,16 @@ export function TunnelPageView() {
                                     </Button>
                                 )}
                             </div>
+                            </Section>
                         </div>
                     )}
                     {active === "settings" && (
                         <SettingsPanel tunnel={tunnel} form={form} onSave={() => void save()} onLeave={() => actions.onLeave(tunnel.id, tunnel.host_friendly_name)} onDelete={() => actions.onDelete(tunnel.id, tunnel.host_friendly_name)} />
                     )}
                 </div>
+                </SectionPanels>
             </div>
+            </SectionOutlineProvider>
 
             <TunnelModals modals={modals} tunnels={[tunnel]} fetchData={reload} onDeleted={() => router.push("/tunnels")} handleLeaveTunnel={(tid, name) => void leave(tid, name)} />
             {form.state.reauthDialog}

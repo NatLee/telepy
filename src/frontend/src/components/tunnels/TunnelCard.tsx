@@ -1,14 +1,15 @@
 /**
- * 隧道卡片：狀態（圓點 + 文字 + 延遲）、名稱 / 埠 / 存取關係、三顆「開啟」按鈕，底部是埠轉發捷徑與「更多」選單。
- * 平的卡片：髮絲線邊框、hover 只加深邊框，沒有色條、光暈或位移。
- * Tunnel card: status (dot + text + latency), name / port / access, three labelled "open" buttons, and a footer
- * with the port-forwarding shortcut plus the grouped "More" menu. Flat: hairline border, hover only firms the
- * border — no accent bar, glow or lift.
+ * 隧道卡片：上半是這條通道（狀態、名稱 / 埠 / 存取關係、說明），整塊點了就進通道頁面；下半是一條細線隔開的按鈕列
+ * （開啟按鈕、埠轉發、「更多」選單），點這裡不會換頁。平的卡片：髮絲線邊框、hover 只加深邊框與名稱底線，沒有色條、
+ * 光暈或位移。
+ * Tunnel card: the upper part is the tunnel (status, name / port / access, description) and a click anywhere on it opens
+ * the tunnel's page; below a hairline sits the button tray (open buttons, port forwarding, "More"), which never
+ * navigates. Flat: hairline border, hover only firms the border and underlines the name — no accent bar, glow or lift.
  */
 import React from "react";
 import Link from "next/link";
 import { tunnelPageUrl } from "@/lib/tunnelPage";
-import { ArrowLeftRight, Server } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
@@ -24,6 +25,7 @@ import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { Button } from "@/components/ui/button";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
+import { useRowLink } from "@/hooks/useRowLink";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
@@ -37,11 +39,16 @@ interface TunnelCardProps extends TunnelActionHandlers {
 export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelCardProps) {
     const { t } = useI18n();
     const health = liveHealth(tunnel, isActive);
+    const href = tunnelPageUrl(tunnel.id);
+    const open = useRowLink(href);
     return (
         <article
             data-refresh-item
-            className="group relative flex flex-col h-full overflow-hidden rounded-xl border border-border bg-card shadow-card transition-[border-color] duration-150 hover:border-foreground/25"
+            {...open}
+            className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-xl border border-border bg-card shadow-card transition-[border-color] duration-150 hover:border-foreground/25"
         >
+            {/* 上半：整塊都能點（名稱仍是真的連結，給鍵盤與右鍵）。/ Upper part: all of it opens the page (the name stays a real link). */}
+            <div className="group/open flex flex-1 flex-col transition-colors hover:bg-surface/50">
             <div className="flex items-start gap-3 p-4 pb-3">
                 <div
                     className={cn(
@@ -55,10 +62,11 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-1">
                         {/* 名稱 = 通道頁面的連結（Ctrl / ⌘ 點開新分頁）。/ The name links to the tunnel's page. */}
-                        <h3 className="min-w-0 truncate text-[1.125rem] leading-tight text-foreground" title={tunnel.host_friendly_name}>
-                            <Link href={tunnelPageUrl(tunnel.id)} prefetch={false} className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                        <h3 className="flex min-w-0 items-center text-[1.125rem] leading-tight text-foreground" title={tunnel.host_friendly_name}>
+                            <Link href={href} prefetch={false} className="min-w-0 truncate rounded-sm underline-offset-4 group-hover/open:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
                                 {tunnel.host_friendly_name}
                             </Link>
+                            <ChevronRight size={16} className="shrink-0 text-muted-foreground/60 transition-colors group-hover/open:text-foreground" aria-hidden />
                         </h3>
                         <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} />
                     </div>
@@ -86,7 +94,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                 </div>
             </div>
 
-            <div className="flex-1 px-4">
+            <div className="flex-1 px-4 pb-3">
                 {tunnel.description ? (
                     <p className="text-xs leading-relaxed text-muted-foreground line-clamp-2 break-words" title={tunnel.description}>
                         {tunnel.description}
@@ -95,8 +103,10 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                     <p className="text-xs text-muted-foreground/50 italic">{t("tunnels.noDescription")}</p>
                 )}
             </div>
+            </div>
 
-            <div className="p-4 pt-3 space-y-2">
+            {/* 下半：按鈕列，點空白處也不換頁。/ Lower part: the button tray; a click on its gaps never navigates. */}
+            <div data-row-ignore className="cursor-auto space-y-2 border-t border-border/70 p-4 pt-3">
                 <TunnelOpenButtons tunnel={tunnel} online={isActive} degraded={health === "degraded"} />
                 <div className="flex items-center gap-2">
                     <Button

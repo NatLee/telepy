@@ -117,8 +117,9 @@ export function SettingsPanel({ tunnel, form: f, onSave, onLeave, onDelete }: Pr
             </Section>
 
             {(tunnel.can_delete || !tunnel.is_owner) && (
-                <Section icon={<TriangleAlert />} title={t("tunnelPage.danger")}>
-                    <div className="space-y-3 rounded-lg border border-destructive/40 p-3">
+                // 卡片本身是紅框：裡面不再框一層。/ The card itself carries the red border: no second box inside.
+                <Section icon={<TriangleAlert />} title={t("tunnelPage.danger")} tone="danger">
+                    <div className="divide-y divide-border [&>*]:py-3 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
                         {!tunnel.is_owner && (
                             <div className="flex flex-wrap items-center justify-between gap-3">
                                 <span className="min-w-0 text-sm text-muted-foreground">{t("tunnelActions.leaveHint")}</span>
