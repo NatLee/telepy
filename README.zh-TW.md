@@ -253,6 +253,12 @@ docker compose exec backend telepy-server <指令>
 - [後端怎麼連到裝置](./docs/device-connections.zh-TW.md)
 - 版本說明：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
+## 贊助
+
+Telepy 是利用下班時間寫的，以 AGPL 免費提供。如果它幫你省下一趟跑機房的路，或是一通「機房鑰匙在誰那裡？」的電話，歡迎贊助一點。Ko-fi 是單次贊助，Liberapay 是小額定期贊助。
+
+<p><a href="https://ko-fi.com/natlee_"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="在 Ko-fi 贊助 Telepy" height="30"></a> <a href="https://liberapay.com/natlee/donate"><img src="https://liberapay.com/assets/widgets/donate.svg" alt="在 Liberapay 贊助 Telepy" height="30"></a></p>
+
 ## 貢獻者
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->

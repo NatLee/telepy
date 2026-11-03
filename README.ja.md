@@ -253,6 +253,12 @@ docker compose exec backend telepy-server <コマンド>
 - [バックエンドがデバイスに接続する仕組み](./docs/device-connections.ja.md)
 - リリースノート：[GitHub Releases](https://github.com/NatLee/telepy/releases)
 
+## 支援
+
+Telepy は空き時間に書かれ、AGPL で無償公開されています。サーバールームまで足を運ぶ手間や、鍵を持っている人を探す電話が一本でも減ったなら、支援していただけるとうれしいです。Ko-fi は 1 回きりの投げ銭、Liberapay は少額の定期的な寄付です。
+
+<p><a href="https://ko-fi.com/natlee_"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi で Telepy を支援する" height="30"></a> <a href="https://liberapay.com/natlee/donate"><img src="https://liberapay.com/assets/widgets/donate.svg" alt="Liberapay で Telepy に寄付する" height="30"></a></p>
+
 ## コントリビューター
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
