@@ -192,6 +192,7 @@ pub const ROUTES: &[RouteRule] = {
         // 定時重掃與「檢查這台」都是掃描。/ Scheduled rescans and single-host checks are scans.
         rule("PUT|DELETE", "/api/reverse/server/{t}/lan/schedule", SCAN, Path),
         rule("POST", "/api/reverse/server/{t}/lan/hosts/*/check", SCAN, Path),
+        rule("POST", "/api/reverse/server/{t}/lan/hosts/*/os", SCAN, Path),
         // 瀏覽器：REST 版的 MCP browser_*（session 只屬於開它的那把，隧道在開的時候檢查）。/ Scripted browsers.
         rule("GET|POST", "/api/browser/sessions", BROWSER, Handler),
         rule("DELETE", "/api/browser/sessions/*", BROWSER, Handler),

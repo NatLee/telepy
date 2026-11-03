@@ -48,9 +48,38 @@ export interface LanHost {
     notes?: string | null;
     /** 標籤（跟通道標籤同規則）。/ Labels (the tunnel label rules). */
     labels?: string[];
+    /** 「這台跑什麼系統」最後一次的結果（有人按了才有）。/ The last OS check (only after someone asked). */
+    os_check?: LanOsCheck | null;
     first_seen: string | null;
     last_seen: string | null;
     created_at: string;
+}
+
+/** 一條作業系統線索。/ One OS clue. */
+export interface LanOsEvidence {
+    /** ttl / http / vendor / ssh / smb / nmap */
+    source: string;
+    text: string;
+    family?: string | null;
+    name?: string | null;
+    /** 0 = 只是說明。/ 0 = a note only. */
+    weight: number;
+    /** 組句子用的原始值（ttl / port / server / build…）。/ Raw values for the localized sentence. */
+    data?: Record<string, string | number | boolean | null> | null;
+}
+
+/** `lan::os::OsCheck`。/ The backend's OS check. */
+export interface LanOsCheck {
+    /** windows / linux / macos / bsd / network / unix */
+    family?: string | null;
+    name?: string | null;
+    confidence: "high" | "medium" | "low" | "none";
+    evidence: LanOsEvidence[];
+    conflict?: string[];
+    /** ran / absent / unprivileged / windows */
+    nmap: string;
+    at: string;
+    by: string;
 }
 
 /** connecting | networks | discovery | ports | identify | names | self | done | failed */

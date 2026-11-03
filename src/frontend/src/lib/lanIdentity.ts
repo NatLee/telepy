@@ -57,9 +57,10 @@ export function identityLine(h: HostLike): string | null {
 }
 
 /** 搜尋：`type:router`、產品名稱與標題都找得到。/ Search: `type:` plus product names and page titles. */
-export function identityText(h: HostLike & { services?: HostService[] | null }): string {
+export function identityText(h: HostLike & { services?: HostService[] | null; os_check?: { name?: string | null; family?: string | null } | null }): string {
     const parts: string[] = [];
     if (h.identity) parts.push(h.identity.kind, h.identity.product ?? "", h.identity.os ?? "");
+    if (h.os_check) parts.push(h.os_check.name ?? "", h.os_check.family ?? "");
     for (const s of h.services ?? []) parts.push(s.title ?? "", s.server ?? "", s.banner ?? "", s.cert?.subject ?? "");
     return parts.filter(Boolean).join(" ").toLowerCase();
 }

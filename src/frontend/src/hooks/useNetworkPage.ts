@@ -28,6 +28,16 @@ const WAKE_ERRORS: Record<string, TranslationKey> = {
     device_offline: "network.deviceOffline",
 };
 
+/** 「這台跑什麼系統」的錯誤碼。/ The OS check's error codes. */
+const OS_ERRORS: Record<string, TranslationKey> = {
+    lan_check_address: "network.os.blockAddress",
+    lan_scan_forbidden: "network.os.blockPermission",
+    lan_scan_disabled: "network.scanError.disabled",
+    device_offline: "network.deviceOffline",
+    lan_os_running: "network.os.errRunning",
+    lan_os_failed: "network.os.errFailed",
+};
+
 /** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
 const SCAN_ERRORS: Record<string, TranslationKey> = {
     lan_scan_disabled: "network.scanError.disabled",
@@ -331,6 +341,26 @@ export function useNetworkPage() {
         [t]
     );
 
+    /** 問這台跑什麼系統（對這一台，使用者按了才做）。/ Ask which OS this host runs (this host, on request). */
+    const identifyOs = useCallback(
+        async (h: LanHost): Promise<{ ok: true } | { ok: false; error: string }> => {
+            try {
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/os`, { method: "POST", body: JSON.stringify({}) });
+                const data = await readJson<{ os_check?: unknown; error?: string; code?: string }>(res);
+                if (res.ok && data?.os_check) {
+                    await fetchTopology();
+                    return { ok: true };
+                }
+                const key = data?.code ? OS_ERRORS[data.code] : undefined;
+                const said = data?.error ?? t("api.unexpectedError");
+                return { ok: false, error: key ? (data?.code === "lan_os_failed" ? `${t(key)} (${said})` : t(key)) : said };
+            } catch {
+                return { ok: false, error: t("api.unexpectedError") };
+            }
+        },
+        [t, fetchTopology]
+    );
+
     /** 注意 / 不再注意這台。/ Watch or stop watching a host. */
     const setWatch = useCallback(
         async (h: LanHost, on: boolean): Promise<boolean> => {
@@ -471,6 +501,6 @@ export function useNetworkPage() {
 
     return {
         state: { tunnels: visible, allTunnels: tunnels, loading, query, stats, focusTunnel },
-        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, saveSchedule, checkHost, setWatch, wakeHost, addHost, updateHost, deleteHost, loadConnectTarget },
+        actions: { setQuery, refresh: fetchTopology, isOnline, startScan, saveSchedule, checkHost, setWatch, wakeHost, identifyOs, addHost, updateHost, deleteHost, loadConnectTarget },
     };
 }

@@ -92,7 +92,7 @@ MCP client ── POST /mcp ─────────────────�
 | `tunnels:read` | 查看你的通道 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
 | `ssh:exec` | 在你的裝置上執行指令 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
 | `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
-| `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`（只限你擁有或身為 ADMIN 的通道） |
+| `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`、`lan_os`（只限你擁有或身為 ADMIN 的通道） |
 | `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 `ssh:exec`、`ssh:files` 與 `browser:use` 在核准頁上會標「可以變更內容」，另外兩個標「唯讀」。
@@ -158,6 +158,7 @@ shell 的行為細節請看 [互動 shell](#互動-shell)。
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | 經裝置的 sshd 掃描區網，把找到的主機存進主機清單。`identify`（預設開）會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看憑證），讓 `lan_hosts` 說得出每台是什麼 |
 | `lan_check(tunnel_id, host, ports?, username?)` | 現在再檢查一台區網主機（用 id、位址或標籤指定）：它開過的 port 加上預設的，只探這個位址，幾秒鐘。規則跟 `lan_scan` 一樣。回傳它現在的樣子（沒回應時 `missing` 為 true）與變了什麼 |
+| `lan_os(tunnel_id, host, username?, smb_port?)` | 一台區網主機跑什麼作業系統，只在針對那一台要求時才做（掃描從來不做）：裝置 ping 它一次（看 TTL），Telepy 讀它的 SSH 問候（發行版會寫出版本），SMB 開著時再讀它的 SMB 伺服器在登入前送出的 Windows 組建號與電腦名稱（不會嘗試登入）；裝置上有 nmap 而且能以 root 或免密碼 sudo 執行時也跑 `nmap -O`。回傳猜測（系列、名稱、信心）與每條線索和它的分量，並存在主機上。規則跟 `lan_scan` 一樣 |
 | `lan_wake(tunnel_id, host, username?)` | 從裝置對一台區網主機送網路喚醒封包（裝置上跑 wakeonlan、etherwake 或 python3；Windows 用 PowerShell）。需要 `ssh:exec`、你在裝置上能用的帳號，以及之前掃描讀到的 MAC；機器通常要 10–60 秒開機，之後用 `lan_check` 確認 |
 
 - 只掃私有網段，最多 1024 個位址，一次大約一分鐘。
@@ -255,7 +256,7 @@ agent 拿到的權限，跟你在網頁上拿到的完全一樣：
 | --- | --- |
 | `ssh:exec` 的工具 | 網頁終端機 |
 | `ssh:files` 的工具 | 檔案管理 |
-| `lan_hosts`、`lan_scan`、`lan_check`（`lan_files` 另外還要檔案管理） | 區網探索 |
+| `lan_hosts`、`lan_scan`、`lan_check`、`lan_os`（`lan_files` 另外還要檔案管理） | 區網探索 |
 | `browser:use` 的工具 | 遠端瀏覽器 |
 
 如果只是 app 沒拿到某個 scope，錯誤訊息會請 agent 告訴你重新連接並核准那個 scope。

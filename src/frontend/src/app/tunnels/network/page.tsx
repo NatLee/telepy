@@ -268,6 +268,7 @@ function NetworkInner() {
                             onCheck={actions.checkHost}
                             onWatch={actions.setWatch}
                             onWake={actions.wakeHost}
+                            onIdentifyOs={actions.identifyOs}
                             onSearch={actions.setQuery}
                             deleteHost={actions.deleteHost}
                         />

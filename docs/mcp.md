@@ -92,7 +92,7 @@ MCP client ── POST /mcp ─────────────────�
 | `tunnels:read` | See your tunnels | `list_tunnels`, `tunnel_status`, `lan_hosts` |
 | `ssh:exec` | Run commands on your devices | `ssh_session_open`, `ssh_exec`, `shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`, `lan_wake` |
 | `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write`, `lan_files` |
-| `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check` (only on tunnels you own or are ADMIN on) |
+| `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check`, `lan_os` (only on tunnels you own or are ADMIN on) |
 | `browser:use` | Browse the web as your devices | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 `ssh:exec`, `ssh:files` and `browser:use` carry a **Can make changes** tag on the approval page. The other two are marked **Read only**.
@@ -158,6 +158,7 @@ These also work inside a session, opened with `ssh_session_open`.
 | --- | --- |
 | `lan_scan(tunnel_id, username?, subnets?, ports?, identify?)` | Scans the LAN through the device's sshd and saves what it finds to the host list. With `identify` (the default) each open web port gets one `GET /` (HTTPS ones also show their certificate), so `lan_hosts` can say what each machine is |
 | `lan_check(tunnel_id, host, ports?, username?)` | Checks one LAN host again now (by id, address or label): the ports it had open plus the defaults, on that address only, in a few seconds. Same rules as `lan_scan`. Returns the host as it is now (`missing` when it didn't answer) and what changed |
+| `lan_os(tunnel_id, host, username?, smb_port?)` | Which operating system one LAN host runs, only on request for that host (never in a scan): the device pings it once (the TTL), Telepy reads its SSH greeting (distributions tag their release) and, when SMB is open, the Windows build and computer name its SMB server sends before any login (no login is tried); `nmap -O` runs too when the device has nmap with root or passwordless sudo. Returns the guess (family, name, confidence) with every clue and its weight, and stores it on the host. Same rules as `lan_scan` |
 | `lan_wake(tunnel_id, host, username?)` | Sends a Wake-on-LAN packet to a LAN host from its device (the device runs wakeonlan, etherwake or python3; PowerShell on Windows). Needs `ssh:exec`, an account you may use on the device and a MAC from an earlier scan; the machine usually needs 10–60 s, then `lan_check` it |
 
 - Private ranges only, up to 1024 addresses. A scan takes about a minute.
@@ -255,7 +256,7 @@ An agent gets exactly what you would get in the web app:
 | --- | --- |
 | `ssh:exec` tools | Web terminal |
 | `ssh:files` tools | File manager |
-| `lan_hosts`, `lan_scan`, `lan_check` (and `lan_files`, which also needs the file manager) | LAN discovery |
+| `lan_hosts`, `lan_scan`, `lan_check`, `lan_os` (and `lan_files`, which also needs the file manager) | LAN discovery |
 | `browser:use` tools | Remote browser |
 
 If the app simply wasn't given a scope, the error tells the agent to ask you to reconnect and approve it.

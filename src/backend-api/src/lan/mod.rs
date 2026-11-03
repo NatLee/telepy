@@ -14,6 +14,8 @@ pub mod device_self;
 pub mod files;
 pub mod fingerprint;
 pub mod identify;
+pub mod os;
+pub mod os_probe;
 pub mod scan;
 pub mod schedule;
 pub mod tls;

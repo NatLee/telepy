@@ -699,3 +699,162 @@ async fn lan_hop_logs_in_with_the_chosen_key() {
     let other = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "127.0.0.2", "username": "admin", "ssh_port": nas.port})).await.json["id"].as_i64().unwrap();
     assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": other, "lan_auth": "credential", "lan_credential_id": cid})).await.err(), Some(4010));
 }
+
+/// 照 MS-NLMP 手工組一個 NTLM CHALLENGE（Windows 會這樣回）。/ A hand-built NTLM CHALLENGE as Windows sends it.
+fn ntlm_challenge(major: u8, minor: u8, build: u16, names: &[(u16, &str)]) -> Vec<u8> {
+    let mut av = Vec::new();
+    for (id, s) in names {
+        let v: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        av.extend_from_slice(&id.to_le_bytes());
+        av.extend_from_slice(&(v.len() as u16).to_le_bytes());
+        av.extend_from_slice(&v);
+    }
+    av.extend_from_slice(&[0, 0, 0, 0]);
+    let mut m = Vec::new();
+    m.extend_from_slice(b"NTLMSSP\0");
+    m.extend_from_slice(&2u32.to_le_bytes());
+    m.extend_from_slice(&[0u8; 8]);
+    m.extend_from_slice(&0x0281_8215u32.to_le_bytes());
+    m.extend_from_slice(&[7u8; 8]);
+    m.extend_from_slice(&[0u8; 8]);
+    m.extend_from_slice(&(av.len() as u16).to_le_bytes());
+    m.extend_from_slice(&(av.len() as u16).to_le_bytes());
+    m.extend_from_slice(&56u32.to_le_bytes());
+    m.extend_from_slice(&[major, minor]);
+    m.extend_from_slice(&build.to_le_bytes());
+    m.extend_from_slice(&[0, 0, 0, 15]);
+    m.extend_from_slice(&av);
+    m
+}
+
+/// 一台假的 SMB 伺服器：回 NEGOTIATE，SESSION_SETUP 回 MORE_PROCESSING + NTLM CHALLENGE；記下收到幾則。
+/// A fake SMB server: answers NEGOTIATE, then SESSION_SETUP with MORE_PROCESSING + the NTLM CHALLENGE; counts messages.
+async fn smb_server(challenge: Vec<u8>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let (challenge, count) = (challenge.clone(), count.clone());
+            tokio::spawn(async move {
+                for step in 0..2 {
+                    let mut head = [0u8; 4];
+                    if s.read_exact(&mut head).await.is_err() {
+                        return;
+                    }
+                    let n = (usize::from(head[1]) << 16) | (usize::from(head[2]) << 8) | usize::from(head[3]);
+                    let mut msg = vec![0u8; n];
+                    if s.read_exact(&mut msg).await.is_err() {
+                        return;
+                    }
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let mut reply = msg[..64].to_vec();
+                    let status: u32 = if step == 0 { 0 } else { 0xc000_0016 };
+                    reply[8..12].copy_from_slice(&status.to_le_bytes());
+                    reply.extend_from_slice(b"spnego...");
+                    if step == 1 {
+                        reply.extend_from_slice(&challenge);
+                    }
+                    let len = reply.len() as u32;
+                    let mut out = vec![0, (len >> 16) as u8, (len >> 8) as u8, len as u8];
+                    out.extend_from_slice(&reply);
+                    let _ = s.write_all(&out).await;
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// 只說一行 SSH 問候的假伺服器。/ A fake server that only sends an SSH greeting.
+async fn greeting_server(line: &'static str) -> u16 {
+    use tokio::io::AsyncWriteExt;
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let _ = s.write_all(line.as_bytes()).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn identifying_one_hosts_os_on_request() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine_with("box", &[("ubuntu", &[&lab.service])], MachineOpts { allow_jump: true, shell: true, ..Default::default() }).await;
+    // 裝置上的 ping / nmap / sudo 都是假的：測試絕不對這台開發機的網路 ping 或跑真的 nmap。
+    // Stub ping / nmap / sudo on the device: a test never pings this computer's network or runs a real nmap.
+    let bin = boxm.account_home("ubuntu").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    write_exec(&bin.join("ping"), "#!/bin/sh\necho '64 bytes from 127.0.0.1: icmp_seq=0 ttl=128 time=0.1 ms'\n");
+    write_exec(&bin.join("nmap"), "#!/bin/sh\necho 'Running: Microsoft Windows 11'\necho 'OS details: Microsoft Windows 11 21H2 - 23H2'\n");
+    write_exec(&bin.join("sudo"), "#!/bin/sh\nexit 1\n");
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let id = dev.tunnel_id;
+    let ssh_port = greeting_server("SSH-2.0-OpenSSH_for_Windows_9.5\r\n").await;
+    let (smb_port, smb_seen) = smb_server(ntlm_challenge(10, 0, 22631, &[(1, "DESKTOP-7Q"), (2, "WORKGROUP"), (3, "desktop-7q")])).await;
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "127.0.0.1", "label": "pc", "ssh_port": ssh_port})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let hid = r.json["id"].as_i64().unwrap();
+    let os = format!("/api/reverse/server/{id}/lan/hosts/{hid}/os");
+
+    // 只有 owner / ADMIN（跟掃描一樣）。/ Owner / ADMIN only, like a scan.
+    let r = app.post(&os, Some(&bob.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("lan_scan_forbidden")), "{}", r.text);
+
+    // TTL 128 + OpenSSH for Windows + SMB 的 Windows 11 23H2：高信心；nmap 不能用（沒有 root、sudo 不行）。
+    // TTL 128 + OpenSSH for Windows + SMB's Windows 11 23H2: high; nmap unprivileged.
+    let r = app.post(&os, Some(&alice.token), json!({"smb_port": smb_port})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let c = &r.json["os_check"];
+    assert_eq!((c["family"].as_str(), c["name"].as_str(), c["confidence"].as_str()), (Some("windows"), Some("Windows 11 23H2 (build 22631)"), Some("high")), "{c}");
+    assert_eq!(c["nmap"], "unprivileged");
+    assert_eq!(c["by"], "alice");
+    let sources: Vec<&str> = c["evidence"].as_array().unwrap().iter().map(|e| e["source"].as_str().unwrap()).collect();
+    assert_eq!(sources, vec!["ttl", "ssh", "smb"], "{c}");
+    assert!(c["evidence"][2]["text"].as_str().unwrap().contains("named desktop-7q in WORKGROUP"), "{c}");
+    assert!(c["at"].as_str().unwrap().contains('T'), "ISO time");
+    assert_eq!(smb_seen.load(std::sync::atomic::Ordering::SeqCst), 2, "negotiate + session setup, nothing more");
+    // 存在主機上；列表看得到。/ Stored on the host; the list carries it.
+    let r = app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&bob.token)).await;
+    let h = r.json["hosts"].as_array().unwrap().iter().find(|h| h["id"] == hid).unwrap().clone();
+    assert_eq!(h["os_check"]["name"], "Windows 11 23H2 (build 22631)");
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await.json;
+    assert!(events.as_array().unwrap().iter().any(|e| e["event"] == "lan_os" && e["message"].as_str().unwrap().contains("Windows 11 23H2")), "{events}");
+
+    // 能 sudo 時也跑 nmap；它的線索最重。/ With sudo, nmap runs too and weighs most.
+    write_exec(&bin.join("sudo"), "#!/bin/sh\n[ \"$1\" = -n ] && shift\n[ \"$1\" = true ] && exit 0\nexec \"$@\"\n");
+    let r = app.post(&os, Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let c = &r.json["os_check"];
+    assert_eq!(c["nmap"], "ran", "{c}");
+    assert!(c["evidence"].as_array().unwrap().iter().any(|e| e["source"] == "nmap" && e["weight"] == 5), "{c}");
+    assert_eq!(c["family"], "windows");
+    assert!(!c["evidence"].as_array().unwrap().iter().any(|e| e["source"] == "smb"), "no smb_port and 445 not open: SMB not asked");
+
+    // 名字當位址的主機不行。/ A host by name can't be checked.
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "nas.local"})).await;
+    let named = r.json["id"].as_i64().unwrap();
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts/{named}/os"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.json["code"], "lan_check_address", "{}", r.text);
+
+    // MCP：lan_os（network:scan）。/ MCP's lan_os.
+    let reader = mcp_token(app, &alice.token, "tunnels:read").await;
+    let (err, v) = call(app, &reader, "lan_os", json!({"tunnel_id": id, "host": "pc"})).await;
+    assert!(err && v.as_str().unwrap().contains("network:scan"), "{v}");
+    let scanner = mcp_token(app, &alice.token, "tunnels:read network:scan").await;
+    let (err, v) = call(app, &scanner, "lan_os", json!({"tunnel_id": id, "host": "pc", "smb_port": smb_port})).await;
+    assert!(!err, "{v}");
+    assert_eq!(v["os"]["family"], "windows", "{v}");
+}

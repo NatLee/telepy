@@ -35,6 +35,8 @@ pub struct LanHost {
     pub notes: Option<String>,
     /// JSON 陣列：標籤（`tunnel_tags::normalize_labels` 的規則）。/ JSON array of labels (the tunnel label rules).
     pub labels: String,
+    /// JSON `lan::os::OsCheck`：「這台跑什麼系統」最後一次的結果。/ The last OS check (JSON).
+    pub os_check: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -102,7 +104,7 @@ pub async fn save_meta(db: &Db, m: &LanMeta) -> sqlx::Result<()> {
 }
 
 const T: &str = "telepy_lan_host";
-const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, checked_at, notes, labels, created_at, updated_at";
+const COLS: &str = "id, tunnel_id, address, hostname, mac, open_ports, ssh_banner, services, label, username, ssh_port, source, first_seen, last_seen, checked_at, notes, labels, os_check, created_at, updated_at";
 
 pub async fn hosts_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<LanHost>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM {T} WHERE tunnel_id = ? ORDER BY id")).bind(tunnel_id).fetch_all(&db.read).await
@@ -236,6 +238,12 @@ pub async fn upsert_scanned(db: &Db, tunnel_id: i64, hosts: &[Found], now: &str)
 }
 
 /// 這些主機被這次掃描探過了（找到或沒找到都算）。/ These hosts were covered by this scan, found or not.
+/// 存「這台跑什麼系統」的結果。/ Store an OS check's result.
+pub async fn save_os_check(db: &Db, id: i64, json: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET os_check = ?, updated_at = ? WHERE id = ?")).bind(json).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
 pub async fn mark_checked(db: &Db, ids: &[i64], at: &str) -> sqlx::Result<()> {
     if ids.is_empty() {
         return Ok(());

@@ -36,6 +36,7 @@ import { HostServices } from "@/components/network/HostServices";
 import { HostChangeNote } from "@/components/network/ScanChanges";
 import { CheckRow, LanAlertsInfoDialog, WatchButton } from "@/components/network/HostAlerts";
 import { WakeRow } from "@/components/network/HostWake";
+import { OsSection, type OsResult } from "@/components/network/HostOs";
 import { LanFilesDialog } from "@/components/network/LanFilesDialog";
 import { useFeatures } from "@/hooks/useFeatures";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,11 +91,13 @@ interface Props {
     onWatch: (h: LanHost, on: boolean) => Promise<boolean>;
     /** 送 Wake-on-LAN。/ Send Wake-on-LAN. */
     onWake: (h: LanHost) => Promise<WakeResult>;
+    /** 問這台跑什麼系統。/ Ask which OS this host runs. */
+    onIdentifyOs: (h: LanHost) => Promise<OsResult>;
     /** 點標籤 = 在頁面搜尋它。/ A label click searches the page for it. */
     onSearch?: (query: string) => void;
 }
 
-export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost, onCheck, onWatch, onWake, onSearch }: Props) {
+export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onOpenWeb, onShowSession, loadConnectTarget, updateHost, deleteHost, onCheck, onWatch, onWake, onIdentifyOs, onSearch }: Props) {
     const { t, locale } = useI18n();
     const [tab, setTab] = useState<HostPanelTab>(initialTab);
     // 同一台主機上再從列表要求別的分頁。/ Another tab requested for the same host from a list row.
@@ -317,6 +320,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
 
                 {tab === "details" && (
                     <div className="space-y-6">
+                    <OsSection host={host} tunnel={tunnel} online={online} onIdentify={onIdentifyOs} />
                     <dl className="divide-y divide-border">
                         <Row label={t("network.field.address")}><span className="font-mono">{host.address}</span></Row>
                         {host.hostname && <Row label={t("network.field.hostname")}><span className="font-mono">{host.hostname}</span></Row>}
