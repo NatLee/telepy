@@ -8,6 +8,9 @@
  * resolution change, `draw` every frame, `plop` = the little surprise on a background click (or a poke).
  */
 import {
+    BED_LAYERS,
+    CLOUD_LAYERS,
+    CLOUD_PERIOD,
     GLYPHS,
     PEARL_LAYERS,
     PEARL_PALETTE,
@@ -18,14 +21,18 @@ import {
     STAMP_CHECK,
     STAMP_OK,
     STAMP_SLOTS,
+    cloudTops,
     glyphAt,
+    groundDepth,
     makePearls,
     makePlanes,
     pearlAt,
+    pearlBed,
     pearlCount,
     planeAt,
     planeCount,
     stampAt,
+    statusLine,
     type TapiScene,
 } from "@/lib/tapiStage";
 
@@ -95,6 +102,10 @@ function teaPainter(): Painter {
     let pearls = makePearls(0);
     let push = new Float32Array(0);
     let images: HTMLCanvasElement[] = [];
+    // 杯底沉著的粉圓（後、前兩層）。/ The pearls settled at the bottom (back and front).
+    let bed: { x: number; y: number }[][] = [[], []];
+    let bedPush = new Float32Array(0);
+    let bedImages: HTMLCanvasElement[] = [];
     let counted = "";
     const bursts: Burst[] = [];
     return {
@@ -102,18 +113,41 @@ function teaPainter(): Painter {
             env = e;
             const palette = PEARL_PALETTE[e.dark ? "dark" : "light"];
             images = PEARL_LAYERS.map((l) => sprite(e.doc, PEARL_SPRITE, l.unit, e.ratio, palette));
+            bedImages = BED_LAYERS.map((l) => sprite(e.doc, PEARL_SPRITE, l.unit, e.ratio, palette));
             const size = `${e.width}x${e.height}`;
             if (size !== counted) {
                 counted = size;
                 pearls = makePearls(pearlCount(e.width, e.height));
                 push = new Float32Array(pearls.length * 2);
+                bed = [pearlBed(e.width, e.height, 0), pearlBed(e.width, e.height, 1)];
+                bedPush = new Float32Array(bed[1].length * 2);
             }
         },
         draw(ctx, t, dt, local, now) {
             if (!env) return false;
             const { width, height, ratio } = env;
             const ease = 1 - Math.exp(-dt / 0.25);
+            const settled = (layer: 0 | 1) => {
+                const l = BED_LAYERS[layer];
+                ctx.globalAlpha = l.alpha;
+                bed[layer].forEach((p, i) => {
+                    // 前面那層：滑鼠撥得動（像攪一下）。/ The front layer can be stirred with the mouse.
+                    let ox = 0;
+                    let oy = 0;
+                    if (layer === 1) {
+                        const [gx, gy] = pushFrom(local, p.x + l.unit * 4, p.y + l.unit * 4, 110, 18);
+                        bedPush[i * 2] += (gx - bedPush[i * 2]) * ease;
+                        bedPush[i * 2 + 1] += (Math.min(0, gy) - bedPush[i * 2 + 1]) * ease;
+                        ox = bedPush[i * 2];
+                        oy = bedPush[i * 2 + 1];
+                    }
+                    ctx.drawImage(bedImages[layer], Math.round(snapTo(p.x + ox, l.unit) * ratio), Math.round(snapTo(p.y + oy, l.unit) * ratio));
+                });
+            };
+            settled(0);
             for (const layer of [0, 1, 2] as const) {
+                // 浮起來的大顆從前面那堆後面冒出來。/ The big rising pearls come out from behind the front pile.
+                if (layer === 2) settled(1);
                 const l = PEARL_LAYERS[layer];
                 ctx.globalAlpha = l.alpha;
                 pearls.forEach((p, i) => {
@@ -155,11 +189,48 @@ function teaPainter(): Painter {
 
 /* ── 紙飛機 / Paper planes ───────────────────────────────────── */
 
+/** 雲的顏色：淺色 = 白雲配淡淡的邊，深色 = 夜裡的雲。/ Cloud colours: white with a soft edge by day, dim ones at night. */
+const CLOUD_COLORS = {
+    light: [
+        { fill: "#f7faf9", edge: "#f7faf9" },
+        { fill: "#fdfefe", edge: "#cfdcd9" },
+    ],
+    dark: [
+        { fill: "#1c2425", edge: "#1c2425" },
+        { fill: "#252f30", edge: "#34413f" },
+    ],
+} as const;
+
+/**
+ * 一圈雲先畫在一張小 canvas 上（一個像素一格，外圍多一格當邊），之後每幀貼兩三次就好。
+ * One loop of clouds pre-drawn on a small canvas (one cell per pixel, a one-cell edge around it), pasted a few times
+ * per frame.
+ */
+function cloudBand(doc: Document, tops: number[], unit: number, ratio: number, fill: string, edge: string): HTMLCanvasElement {
+    const c = doc.createElement("canvas");
+    const px = Math.max(1, Math.round(unit * ratio));
+    const tall = Math.max(...tops) + 1;
+    c.width = Math.max(1, tops.length * px);
+    c.height = Math.max(1, tall * px);
+    const g = c.getContext("2d")!;
+    const at = (i: number) => tops[(i + tops.length) % tops.length];
+    g.fillStyle = edge;
+    tops.forEach((_, i) => {
+        const h = Math.max(at(i - 1), at(i), at(i + 1)) + 1;
+        g.fillRect(i * px, (tall - h) * px, px, h * px);
+    });
+    g.fillStyle = fill;
+    tops.forEach((h, i) => g.fillRect(i * px, (tall - h) * px, px, h * px));
+    return c;
+}
+
 function mailPainter(): Painter {
     let env: SceneEnv | null = null;
     let planes = makePlanes(0);
     let push = new Float32Array(0);
     let images: HTMLCanvasElement[] = [];
+    // 底下的兩層雲。/ The two cloud layers at the bottom.
+    let clouds: HTMLCanvasElement[] = [];
     let ink = "#4a2026";
     let counted = "";
     const launched: Burst[] = [];
@@ -169,6 +240,11 @@ function mailPainter(): Painter {
             const palette = PLANE_PALETTE[e.dark ? "dark" : "light"];
             ink = e.dark ? "#f6efe3" : "#4a2026";
             images = PLANE_LAYERS.map((l) => sprite(e.doc, PLANE_SPRITE, l.unit, e.ratio, palette));
+            const depth = groundDepth(e.width, e.height);
+            clouds = CLOUD_LAYERS.map((l, layer) => {
+                const c = CLOUD_COLORS[e.dark ? "dark" : "light"][layer];
+                return cloudBand(e.doc, cloudTops(depth, layer as 0 | 1), l.unit, e.ratio, c.fill, c.edge);
+            });
             const size = `${e.width}x${e.height}`;
             if (size !== counted) {
                 counted = size;
@@ -180,8 +256,26 @@ function mailPainter(): Painter {
             if (!env) return false;
             const { width, height, ratio } = env;
             const ease = 1 - Math.exp(-dt / 0.3);
+            // 雲往左飄，一圈接一圈貼滿整個寬度。/ Clouds drift left, one loop after another across the width.
+            const cloudLayer = (layer: 0 | 1) => {
+                const l = CLOUD_LAYERS[layer];
+                const band = clouds[layer];
+                if (!band) return;
+                // 照格子數移動，接縫正好落在圖的寬度上。/ Moves by whole cells, so the wrap lands exactly on the image's width.
+                const period = band.width;
+                const cols = Math.round(CLOUD_PERIOD / l.unit);
+                const shift = (Math.floor((Math.max(0, t) * l.speed) / l.unit) % cols) * (period / cols);
+                ctx.globalAlpha = l.alpha;
+                for (let x = -shift; x < width * ratio; x += period) ctx.drawImage(band, x, Math.round(height * ratio) - band.height);
+            };
+            cloudLayer(0);
             ctx.fillStyle = ink;
             for (const layer of [0, 1, 2] as const) {
+                // 最大的那幾架飛在前面那層雲的前面。/ The biggest planes fly in front of the front clouds.
+                if (layer === 2) {
+                    cloudLayer(1);
+                    ctx.fillStyle = ink;
+                }
                 const l = PLANE_LAYERS[layer];
                 planes.forEach((p, i) => {
                     if (p.layer !== layer) return;
@@ -266,6 +360,22 @@ function terminalPainter(): Painter {
                 ctx.fillStyle = TERM_COLORS[i % 3 === 0 ? 1 : p.layer === 2 ? 2 : 0];
                 ctx.fillText(glyphAt(i, t), Math.round(snapTo(at.x + push[i * 2], 2) * ratio), Math.round(snapTo(at.y + push[i * 2 + 1], 2) * ratio));
             });
+            // tmux 的狀態列：字從它後面冒上來。/ tmux's status bar: the characters rise from behind it.
+            const bar = width < 640 ? 22 : 26;
+            const line = statusLine(new Date());
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = TERM_COLORS[0];
+            ctx.fillRect(0, Math.round((height - bar) * ratio), Math.round(width * ratio), Math.round(bar * ratio));
+            ctx.font = font((width < 640 ? 12 : 13) * ratio);
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = "#15110f";
+            const mid = Math.round((height - bar / 2) * ratio);
+            const pad = 12 * ratio;
+            ctx.fillText(line.left, pad, mid);
+            const full = `${line.title} ${line.clock}`;
+            const right = ctx.measureText(line.left).width + ctx.measureText(full).width + pad * 4 < width * ratio ? full : line.clock;
+            ctx.fillText(right, width * ratio - pad - ctx.measureText(right).width, mid);
+            ctx.textBaseline = "top";
             for (let i = bursts.length - 1; i >= 0; i--) {
                 const b = bursts[i];
                 const age = (now - b.born) / 1000;
