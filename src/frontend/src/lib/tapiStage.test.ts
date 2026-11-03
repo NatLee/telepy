@@ -212,3 +212,57 @@ test("stamps: appear, settle, fade, at most one per slot", async () => {
     const next = stampAt(0, 1 + STAMP_ROUND)!;
     assert.notDeepEqual([a.x, a.y], [next.x, next.y]);
 });
+
+test("a ground under each scene: about a tenth of the height, less on phones", async () => {
+    const { groundDepth } = await import("./tapiStage.ts");
+    assert.equal(groundDepth(1440, 900), 86);
+    assert.equal(groundDepth(1280, 300), 44);
+    assert.equal(groundDepth(2560, 1440), 128);
+    assert.ok(groundDepth(390, 844) < groundDepth(1440, 844));
+});
+
+test("settled pearls: a ragged pile at the bottom, upper rows drawn first", async () => {
+    const { pearlBed, bedHeight, BED_LAYERS, groundDepth } = await import("./tapiStage.ts");
+    assert.deepEqual(pearlBed(1200, 800, 1), pearlBed(1200, 800, 1));
+    for (const layer of [0, 1] as const) {
+        const l = BED_LAYERS[layer];
+        const size = 8 * l.unit;
+        const depth = groundDepth(1200, 800) * l.rise;
+        const bed = pearlBed(1200, 800, layer);
+        assert.ok(bed.length > 20, `${bed.length}`);
+        for (const p of bed) {
+            assert.equal(Math.abs(p.x % l.unit), 0);
+            assert.equal(Math.abs(p.y % l.unit), 0);
+            assert.ok(p.x >= -size && p.x <= 1200 + size, `${p.x}`);
+            // 在地面裡：不超過那裡的高度，也不會整顆掉到畫面外。/ Inside the ground: never above the pile, never fully below the edge.
+            assert.ok(p.y < 800 && p.y >= 800 - depth - size, `${p.y}`);
+        }
+        // 最下面那排埋一點在底下。/ The bottom row sinks partly below the edge.
+        assert.ok(bed.some((p) => p.y + size > 800));
+        // 上面的先、下面的後（畫在前面）。/ Upper rows first, lower ones later (in front).
+        assert.ok(bed[0].y < bed[bed.length - 1].y);
+    }
+    // 起伏：有高的地方也有低的地方，最低也有一點。/ Mounds and dips, never nothing.
+    const heights = Array.from({ length: 200 }, (_, i) => bedHeight(i * 10, 100));
+    assert.ok(Math.max(...heights) > 90 && Math.min(...heights) < 40);
+    assert.ok(Math.min(...heights) >= 16);
+});
+
+test("clouds: one seamless loop of puffs, never empty", async () => {
+    const { cloudTops, CLOUD_LAYERS, CLOUD_PERIOD } = await import("./tapiStage.ts");
+    for (const layer of [0, 1] as const) {
+        const tops = cloudTops(90, layer);
+        const unit = CLOUD_LAYERS[layer].unit;
+        assert.equal(tops.length, Math.round(CLOUD_PERIOD / unit));
+        assert.ok(tops.every((h) => h >= Math.round((90 * 0.42 * CLOUD_LAYERS[layer].rise) / unit) && Number.isInteger(h)));
+        assert.ok(Math.max(...tops) > Math.min(...tops) * 1.6);
+        // 頭尾接得起來：最後一欄和第一欄差不多高。/ The ends meet: the last column is close to the first.
+        assert.ok(Math.abs(tops[0] - tops[tops.length - 1]) <= 2, `${tops[0]} ${tops[tops.length - 1]}`);
+    }
+});
+
+test("terminal status bar in tmux's shape", async () => {
+    const { statusLine } = await import("./tapiStage.ts");
+    assert.deepEqual(statusLine(new Date(2026, 10, 3, 9, 5)), { left: "[telepy] 0:login*", title: '"tapi@telepy"', clock: "09:05 03-Nov-26" });
+    assert.equal(statusLine(new Date(2027, 0, 31, 23, 59)).clock, "23:59 31-Jan-27");
+});

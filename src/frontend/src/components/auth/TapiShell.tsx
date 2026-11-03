@@ -6,7 +6,8 @@
  * - 應用程式連接（mail）= 紙飛機把應用程式的請求送進來，Tapi 拿著信；
  * - CLI 登入與登入完成頁（terminal）= 終端機，字元往上飄，對話框是一行提示字元；
  * - 授權（desk）= 格子紙上的審核櫃台，印章一個個蓋下來，Tapi 戴著墨鏡。
- * 背景是一張 canvas（畫法在 tapiScenes.ts）：滑鼠靠近會把東西推開，點背景（或戳 Tapi）有小驚喜。Tapi 頭上的對話框輪流打出
+ * 背景是一張 canvas（畫法在 tapiScenes.ts）：滑鼠靠近會把東西推開，點背景（或戳 Tapi）有小驚喜；每個場景的下緣有自己的地面
+ * （杯底的粉圓、雲、tmux 狀態列），上面有頁首、下面空著會頭重腳輕。Tapi 頭上的對話框輪流打出
  * 句子（管理員寫的，沒寫就是這個場景自己的三句），下面是像素字標。Tapi 跟著頁面反應：登入表單（盯著帳號、打密碼時轉身、
  * 顯示密碼嚇一跳、失敗驚訝、成功開心）；授權頁（勾到會改東西的權限時提醒、按允許就蓋章、按拒絕就揮手）；滑鼠停在身上揮手、
  * 戳它會笑、太久沒人理會睡著。CLI 登入完成頁給固定的心情（`fixedMood`）。登入頁、OAuth / CLI 登入頁、授權頁、CLI 完成頁
@@ -16,7 +17,8 @@
  * bringing the app's request, Tapi holding the letter; CLI sign-in and its done page (terminal) = a terminal with
  * characters drifting up and a prompt line for a speech bubble; approval (desk) = a counter on grid paper where stamps
  * land and Tapi wears sunglasses. The background is one canvas (painters in tapiScenes.ts): a mouse pushes things
- * aside and a click on the background (or a poke) brings a small surprise. The bubble types the lines (the admin's,
+ * aside and a click on the background (or a poke) brings a small surprise; each scene has a ground along its lower edge
+ * (settled pearls, clouds, a tmux status bar), since a header on top and nothing below read top-heavy. The bubble types the lines (the admin's,
  * else the scene's own three) and a pixel wordmark sits below. Tapi reacts to the page: the sign-in form (watching the
  * username, turned around for the password, startled when it is shown, surprised on a failure, happy on success) and
  * the approval page (a warning when a scope that can change things is ticked, a stamp on approve, a wave on deny); it
