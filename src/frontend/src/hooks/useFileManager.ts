@@ -68,8 +68,8 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                 setLink((prev) => {
                     if (p.state === "open") return "open";
                     if (p.state === "connecting") return prev === "offline" || prev === "stepup" ? prev : "connecting";
-                    // 離線 / 要 step-up 的時候，重試或停止都維持那個說明。/ Keep offline / step-up while retrying or stopped.
-                    if (prev === "offline" || prev === "stepup") return prev;
+                    // 離線 / 要 step-up / 區網 session 關了的時候，重試或停止都維持那個說明。/ Keep that story while retrying or stopped.
+                    if (prev === "offline" || prev === "stepup" || prev === "lanGone") return prev;
                     return p.state === "retrying" ? "retrying" : "stopped";
                 });
             },

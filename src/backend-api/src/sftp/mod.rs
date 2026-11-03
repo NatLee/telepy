@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 pub mod links;
 pub mod ops;
+pub mod target;
 pub mod zipstream;
 
 #[derive(Debug, Clone)]

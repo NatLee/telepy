@@ -48,7 +48,8 @@ shell_open, type with shell_send (control characters such as \\u0003 for Ctrl+C 
 read with shell_read, which returns the new output and the current screen as text. With the browser:use permission, \
 browser_open starts a real Chromium that browses through the device (so it reaches the device's LAN and localhost); \
 drive it with browser_navigate / browser_read / browser_click / browser_type / browser_screenshot and close it with \
-browser_close.";
+browser_close. Machines behind a device are in lan_hosts; lan_files lists, reads and writes their files (the device's \
+sshd opens the hop, no session needed).";
 
 // ---------------------------------------------------------------- HTTP wiring
 
@@ -204,6 +205,34 @@ pub struct LanWakeArgs {
     pub host: String,
     /// Device account to run the command as; omit for the tunnel's default
     pub username: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LanFilesArgs {
+    /// Tunnel id from list_tunnels
+    pub tunnel_id: i64,
+    /// The host's id, address or label (from lan_hosts)
+    pub host: String,
+    /// "list" (a folder), "read" (part of a file) or "write" (replace or append to a file)
+    pub action: String,
+    /// Path on the LAN host; `~` (the default for list) is its home folder, `~/x` is relative to it
+    pub path: Option<String>,
+    /// write: the content, as text or base64 depending on `encoding`
+    pub content: Option<String>,
+    /// write: "utf-8" (default) or "base64"
+    pub encoding: Option<String>,
+    /// write: append instead of replacing the file (default false)
+    pub append: Option<bool>,
+    /// read: byte offset to start at (default 0)
+    pub offset: Option<u64>,
+    /// read: maximum bytes to return (default 65536, max 1048576)
+    pub max_bytes: Option<usize>,
+    /// The account on the LAN host; omit for the host's saved login
+    pub login: Option<String>,
+    /// The device account the hop goes through; omit for the tunnel's default
+    pub username: Option<String>,
+    /// A saved ssh login of the user's for this host (its id), instead of Telepy's key
+    pub credential_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -860,6 +889,120 @@ impl TelepyMcp {
         match out {
             Ok(v) => Ok(CallToolResult::structured(json!({ "sent": true, "tool": v["tool"], "broadcast": v["broadcast"], "mac": v["mac"], "hint": "The machine usually needs 10–60 s to start. Check it with lan_check." }))),
             Err(_) => Ok(fail(error.unwrap_or_else(|| "The wake-up packet could not be sent.".to_string()))),
+        }
+    }
+
+    #[tool(description = "Files on a LAN host behind a tunnel's device, over SFTP: list a folder, read part of a file or write one. The device's sshd opens the hop (nothing is installed on either machine) and Telepy logs in to the host with its key (the tunnel's service key, then the shared one) or with a saved ssh login the user picks (credential_id); the login is reused for 10 minutes. Needs scope ssh:files and an account you may use on the device. If the host refuses Telepy's key, ask the user to add Telepy's key to that host or to save a login for it in Telepy.", annotations(title = "LAN host files", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
+    async fn lan_files(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<LanFilesArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if let Some(r) = refused(&p, "ssh:files") {
+            return Ok(r);
+        }
+        if p.feature_denied(crate::features::Feature::Network) {
+            return Ok(feature_off(crate::features::Feature::Network));
+        }
+        let db = &self.state.db;
+        let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
+        if !p.tunnel_allowed(args.tunnel_id) {
+            return Ok(not_found());
+        }
+        let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
+        if permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten().is_none() {
+            return Ok(not_found());
+        }
+        if tunnel.require_step_up {
+            return Ok(fail(STEP_UP_REFUSAL.to_string()));
+        }
+        let hosts = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default();
+        let raw = args.host.trim();
+        let Some(h) = hosts.iter().find(|h| h.id.to_string() == raw).or_else(|| hosts.iter().find(|h| h.address == raw)).or_else(|| hosts.iter().find(|h| h.label.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(raw)))).cloned() else {
+            return Ok(fail(format!("No host '{raw}' behind this tunnel. Call lan_hosts to see them.")));
+        };
+        let action = args.action.trim().to_ascii_lowercase();
+        if !matches!(action.as_str(), "list" | "read" | "write") {
+            return Ok(fail(format!("unknown action '{action}' (use list, read or write)")));
+        }
+        // 同一個憑證、同一個目標的登入就重用；不然經裝置登入一次。/ Reuse this credential's login to the same target, else log in.
+        let allowed = permissions::allowed_usernames(db, p.user.id, &tunnel).await.unwrap_or_default();
+        let account = match permissions::choose_username(&allowed, tunnel.default_username_id, args.username.as_deref(), &tunnel.host_friendly_name) {
+            Ok(a) => a,
+            Err(e) => return Ok(fail(e)),
+        };
+        let login = args.login.clone().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).or_else(|| h.username.clone()).unwrap_or_default();
+        let opener = format!("mcp:{:?}", p.credential);
+        let files = match self.state.lan_files.find(p.user.id, &opener, h.id, &login, &account) {
+            Some(f) => f,
+            None => {
+                let mut body = json!({ "account": account, "login": login });
+                if let Some(cid) = args.credential_id {
+                    body["auth"] = json!("credential");
+                    body["credential_id"] = json!(cid);
+                }
+                match crate::api::lan_files::open_for(&self.state, &p.user, &tunnel, &h, &body, &opener).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let msg = e.body.get("error").and_then(Value::as_str).unwrap_or("The LAN host's files could not be opened.").to_string();
+                        self.audit(&p, "lan_files", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(format!("open {}", h.address)), error: Some(msg.clone()), ..Default::default() }).await;
+                        return Ok(fail(msg));
+                    }
+                }
+            }
+        };
+        let sftp = files.shared();
+        let home = crate::sftp::home(sftp).await;
+        let where_ = format!("{}@{}", files.login, files.address);
+        let (detail, out): (String, anyhow::Result<Value>) = match action.as_str() {
+            "list" => {
+                let path = args.path.clone().unwrap_or_else(|| "~".to_string());
+                let r = ai::list_on(sftp, &home, &path).await.map(|l| {
+                    let entries: Vec<Value> = l
+                        .entries
+                        .iter()
+                        .map(|e| json!({ "name": e.name, "type": if e.is_dir { "directory" } else if e.is_symlink { "symlink" } else { "file" }, "size": e.size, "mode": crate::sftp::mode_string(e.mode, e.is_dir, e.is_symlink), "mtime": e.mtime }))
+                        .collect();
+                    json!({ "host": where_, "path": l.path, "entries": entries, "truncated": l.truncated })
+                });
+                (format!("list {where_}:{path}"), r)
+            }
+            "read" => {
+                let Some(path) = args.path.clone() else { return Ok(fail("read needs a path".to_string())) };
+                let max = args.max_bytes.unwrap_or(ai::DEFAULT_MAX_OUTPUT).clamp(1, ai::MAX_READ);
+                let r = ai::read_on(sftp, &home, &path, args.offset.unwrap_or(0), max).await.map(|r| {
+                    let n = r.data.len();
+                    let (encoding, content) = match String::from_utf8(r.data) {
+                        Ok(text) => ("utf-8", text),
+                        Err(e) => ("base64", STANDARD.encode(e.into_bytes())),
+                    };
+                    json!({ "host": where_, "path": r.path, "size": r.size, "offset": r.offset, "bytes": n, "eof": r.eof, "encoding": encoding, "content": content })
+                });
+                (format!("read {where_}:{path}"), r)
+            }
+            _ => {
+                let (Some(path), Some(content)) = (args.path.clone(), args.content.clone()) else { return Ok(fail("write needs a path and content".to_string())) };
+                let data = match args.encoding.as_deref().unwrap_or("utf-8").to_ascii_lowercase().as_str() {
+                    "utf-8" | "utf8" | "text" => content.into_bytes(),
+                    "base64" => match STANDARD.decode(content.trim()) {
+                        Ok(d) => d,
+                        Err(e) => return Ok(fail(format!("content is not valid base64: {e}"))),
+                    },
+                    other => return Ok(fail(format!("unsupported encoding '{other}' (use utf-8 or base64)"))),
+                };
+                let append = args.append.unwrap_or(false);
+                let r = ai::write_on(sftp, &home, &path, &data, append).await.map(|(path, n)| json!({ "host": where_, "path": path, "bytes_written": n, "appended": append }));
+                (format!("write {where_}:{path} ({} bytes)", data.len()), r)
+            }
+        };
+        match out {
+            Ok(v) => {
+                self.audit(&p, "lan_files", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), ..Default::default() }).await;
+                Ok(CallToolResult::structured(v))
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                self.audit(&p, "lan_files", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), error: Some(msg.clone()), ..Default::default() }).await;
+                Ok(fail(msg))
+            }
         }
     }
 

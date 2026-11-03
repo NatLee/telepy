@@ -33,7 +33,7 @@ import {
 } from "@/lib/fileManager";
 import { ChmodDialog, DeleteDialog, DestinationDialog, DetailsDialog, NameDialog, type NameKind } from "@/components/files/FileDialogs";
 import { FileViewerDialog, type ViewerTarget } from "@/components/files/FileViewerDialog";
-import { FileFlowDialog } from "@/components/files/FileFlowDialog";
+import { FileFlowDialog, type LanFlowContext } from "@/components/files/FileFlowDialog";
 import { readDropped } from "@/lib/droppedFiles";
 import { hideKnownParts, hoursLeft, uploadClashes, type LocalItem, type UnfinishedUpload } from "@/lib/uploadParts";
 
@@ -44,6 +44,11 @@ interface FileManagerPanelProps {
     initialPath?: string;
     /** 隧道名稱（info 圖用）。/ The tunnel name, for the info diagram. */
     deviceName?: string;
+    /**
+     * 區網主機的檔案（`username` 是 `~<代號>`）：顯示 `login@主機`、session 關了時的「重新打開」、info 圖多一跳。
+     * A LAN host's files (`username` is the `~<id>` session): shows `login@host`, "Open again" once it ended, one more hop.
+     */
+    lan?: LanFlowContext & { onReopen: () => void };
 }
 
 /** 列拖曳時帶的資料型別。/ The drag payload type for rows. */
@@ -75,7 +80,7 @@ function FileIcon({ item }: { item: FileItem }) {
     return <File className="text-muted-foreground" size={16} />;
 }
 
-export function FileManagerPanel({ serverId, username, accessToken, initialPath, deviceName }: FileManagerPanelProps) {
+export function FileManagerPanel({ serverId, username, accessToken, initialPath, deviceName, lan }: FileManagerPanelProps) {
     const { t, locale } = useI18n();
     const { showError } = useToast();
     const { state, actions, reconnect } = useFileManager(serverId, username, accessToken, initialPath);
@@ -126,6 +131,8 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
     const setCursor = useCallback((c: string | null) => setSelBox((b) => ({ path: listedPath, sel: b.path === listedPath ? b.sel : EMPTY_SELECTION, cursor: c })), [listedPath]);
 
     const enabled = connected && link === "open";
+    // 畫面上的帳號：裝置帳號，或區網主機上的 `login@主機`。/ The account as shown: the device's, or `login@host`.
+    const shownAccount = lan ? `${lan.login}@${lan.address}` : username;
     const selected = sel.names;
     const pathOf = useCallback((name: string) => joinPath(listedPath, name), [listedPath]);
 
@@ -286,7 +293,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="min-w-0 text-sm flex flex-wrap items-center gap-x-2 gap-y-0.5">
                         <span className="inline-flex items-center gap-2"><Folder size={16} className="shrink-0 text-primary" />{t("files.title")}</span>
-                        <span className="min-w-0 break-all font-mono text-xs text-muted-foreground" title={t("files.asAccount", { account: username })}>{username}</span>
+                        <span className="min-w-0 break-all font-mono text-xs text-muted-foreground" title={t("files.asAccount", { account: shownAccount })}>{shownAccount}</span>
                     </h2>
                     <div className="flex shrink-0 items-center gap-1">
                         <div className={cn("w-2 h-2 rounded-full mx-1", connecting || link === "connecting" ? "bg-warning animate-pulse" : enabled ? "bg-success" : "bg-destructive")} title={enabled ? t("common.connected") : t("common.disconnected")} />
@@ -499,12 +506,18 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                         <div className="p-3 rounded-full bg-destructive/10">
                             <WifiOff size={24} className="text-destructive" />
                         </div>
-                        <p className="text-sm text-foreground">{link === "offline" ? t("files.offline") : link === "stepup" ? t("files.stepUp") : t("files.connectionLost")}</p>
-                        <p className="text-xs text-muted-foreground text-center">{link === "offline" ? t("files.offlineHint") : link === "stepup" ? t("files.stepUpHint") : t("files.unableToConnect")}</p>
+                        <p className="text-sm text-foreground">{link === "offline" ? t("files.offline") : link === "stepup" ? t("files.stepUp") : link === "lanGone" ? t("files.lanGone") : t("files.connectionLost")}</p>
+                        <p className="text-xs text-muted-foreground text-center">{link === "offline" ? t("files.offlineHint") : link === "stepup" ? t("files.stepUpHint") : link === "lanGone" ? t("files.lanGoneHint") : t("files.unableToConnect")}</p>
                         <div className="flex gap-2">
-                            <Button variant="outline" size="sm" onClick={reconnect} className="gap-1.5 text-xs mt-1">
-                                <RefreshCw size={13} /> {t("common.reconnect")}
-                            </Button>
+                            {link === "lanGone" && lan ? (
+                                <Button variant="outline" size="sm" onClick={lan.onReopen} className="gap-1.5 text-xs mt-1">
+                                    <RefreshCw size={13} /> {t("files.lanReopen")}
+                                </Button>
+                            ) : (
+                                <Button variant="outline" size="sm" onClick={reconnect} className="gap-1.5 text-xs mt-1">
+                                    <RefreshCw size={13} /> {t("common.reconnect")}
+                                </Button>
+                            )}
                             <Button variant="ghost" size="sm" onClick={() => setFlowOpen(true)} className="gap-1.5 text-xs mt-1">
                                 <Info size={13} /> {t("files.flow.button")}
                             </Button>
@@ -633,7 +646,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                     <div className="flex flex-col items-center gap-2 px-4 text-center text-sm text-foreground">
                         <Upload size={22} className="text-primary" />
                         {t("files.drop.here")}
-                        <span className="max-w-full truncate font-mono text-xs text-muted-foreground">{username}:{listedPath}</span>
+                        <span className="max-w-full truncate font-mono text-xs text-muted-foreground">{shownAccount}:{listedPath}</span>
                     </div>
                 </div>
             )}
@@ -669,12 +682,12 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                 onClose={() => setChmodNames(null)}
                 onSubmit={(mode, recursive) => ops.chmod(chmodNames ?? [], mode, recursive)}
             />
-            <DetailsDialog name={detailsName} account={username} load={ops.stat} onClose={() => setDetailsName(null)} />
+            <DetailsDialog name={detailsName} account={shownAccount} load={ops.stat} onClose={() => setDetailsName(null)} />
             <FileViewerDialog target={viewer} ops={ops} onClose={() => setViewer(null)} onSaved={refresh} />
             <FileFlowDialog
                 isOpen={flowOpen}
                 onClose={() => setFlowOpen(false)}
-                ctx={{ link, busy: ops.busy ?? (loading ? { kind: "listing" } : null), account: username, deviceName: deviceName || t("files.flow.device"), path: listedPath, shell: shellType }}
+                ctx={{ link, busy: ops.busy ?? (loading ? { kind: "listing" } : null), account: lan ? lan.account : username, deviceName: deviceName || t("files.flow.device"), path: listedPath, shell: shellType, lan }}
             />
             <ConfirmDialog
                 isOpen={!!replace}

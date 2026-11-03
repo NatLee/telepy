@@ -65,6 +65,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::address_sources::router())
         .merge(api::ssh_host::router())
         .merge(api::lan::router())
+        .merge(api::lan_files::router())
         .merge(api::join::router())
         .merge(api::terminal_profile::router())
         .merge(api::shell_history::router())

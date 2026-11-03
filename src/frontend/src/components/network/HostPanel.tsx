@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Trash2, Save, Loader2, X, ScreenShare, ChevronRight, Cpu } from "lucide-react";
+import { Trash2, Save, Loader2, X, ScreenShare, ChevronRight, Cpu, FolderOpen } from "lucide-react";
 import { Section } from "@/components/ui/section";
 import { SplitOpen, defaultDeviceUser, lanTerminalUrl } from "@/components/network/HostOpen";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -36,6 +36,8 @@ import { HostServices } from "@/components/network/HostServices";
 import { HostChangeNote } from "@/components/network/ScanChanges";
 import { CheckRow, LanAlertsInfoDialog, WatchButton } from "@/components/network/HostAlerts";
 import { WakeRow } from "@/components/network/HostWake";
+import { LanFilesDialog } from "@/components/network/LanFilesDialog";
+import { useFeatures } from "@/hooks/useFeatures";
 import { Textarea } from "@/components/ui/textarea";
 import { parseLabels } from "@/lib/tunnelLabels";
 import type { WakeResult } from "@/hooks/useNetworkPage";
@@ -112,6 +114,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [limitHit, setLimitHit] = useState(false);
     const [alertsInfo, setAlertsInfo] = useState(false);
+    const [filesOpen, setFilesOpen] = useState(false);
+    const { has } = useFeatures();
 
     useEffect(() => {
         let cancelled = false;
@@ -230,6 +234,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                                 reason: blocked,
                                 newTab: sessions.some((x) => x.status !== "closed"),
                                 onNavigate,
+                                onFiles: has("files") ? () => setFilesOpen(true) : undefined,
                             }}
                             onOpenWeb={(url) => deviceUser && onOpenWeb({ tunnel, host, url, deviceUser })}
                             onNavigate={onNavigate}
@@ -263,6 +268,11 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                                 onNavigate={onNavigate}
                                 openShells={sessions.filter((s) => s.status !== "closed").length}
                             />
+                            {has("files") && (
+                                <Button variant="secondary" onClick={() => setFilesOpen(true)} disabled={!!blocked} title={blocked ?? t("lanFiles.openHint")}>
+                                    <FolderOpen size={16} /> {t("lanFiles.open")}
+                                </Button>
+                            )}
                             <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "ghost"} asChild>
                                 <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>
                                     <ScreenShare size={16} /> {t("network.openDesktop")}
@@ -396,6 +406,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             </div>
 
             <LanAlertsInfoDialog isOpen={alertsInfo} onClose={() => setAlertsInfo(false)} host={host} tunnel={tunnel} onWatch={onWatch} />
+            <LanFilesDialog isOpen={filesOpen} onClose={() => setFilesOpen(false)} tunnel={tunnel} host={host} name={name} login={cleanLogin} deviceUser={deviceUser} auth={auth} />
             <ConfirmDialog
                 isOpen={confirmDelete}
                 onClose={() => setConfirmDelete(false)}

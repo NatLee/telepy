@@ -11,6 +11,7 @@
 //! LAN discovery behind a tunnel's device, done entirely by the device's own sshd (no agent).
 
 pub mod device_self;
+pub mod files;
 pub mod fingerprint;
 pub mod identify;
 pub mod scan;

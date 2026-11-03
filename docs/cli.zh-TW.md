@@ -318,9 +318,10 @@ telepy exec box --wait-approval -- sudo reboot   # 指令規則把它攔下等�
 ```sh
 telepy cp box@pi:/var/log/syslog ./syslog
 telepy cp ./config.yml box@pi:/etc/app/
+telepy cp box/admin@nas:/srv/backup/db.tgz .   # 裝置後面的機器
 ```
 
-`cp` 透過 Telepy 的 API 走 SFTP 複製，需要 `ssh:files` scope。`scp` 則是 OpenSSH 的做法，需要你的個人 SSH 金鑰。
+`cp` 透過 Telepy 的 API 走 SFTP 複製，需要 `ssh:files` scope。要碰裝置後面的機器，就在斜線後面寫它：`<tunnel>[@account]/[login@]<host>:<path>`，主機用 `lan ls` 列出的標籤、位址或 id 都可以。由裝置的 sshd 開出這一跳，Telepy 用自己的金鑰登入那台；要改用密碼就設定 `TELEPY_LAN_PASSWORD`（只用這一次，不會存起來）。兩台機器都不用裝任何東西。`scp` 則是 OpenSSH 的做法，需要你的個人 SSH 金鑰。
 
 下載直接寫進磁碟（裝置上的資料夾會變成一個 zip）。上傳每 8 MiB 送一段，所以就算 Telepy 前面的代理限制了請求大小（Cloudflare 是 100 MB），大檔案也傳得過去，哪一段斷了就重送那一段。
 
@@ -416,7 +417,7 @@ telepy browse close "$ID"
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |
 | `telepy exec <targets> -- <command>` | 在一台或多台裝置上執行指令；`--label`、`--group`、`-u`、`--timeout`（預設 60，最多 600）、`--wait-approval`、`--json` | `ssh:exec` |
-| `telepy cp <from> <to>` | 經 SFTP 在裝置與本機之間複製檔案 | `ssh:files` |
+| `telepy cp <from> <to>` | 經 SFTP 在裝置（或它後面的機器：`<tunnel>/[login@]<host>:<path>`）與本機之間複製檔案 | `ssh:files` |
 | `telepy sessions` | 你的通道上的即時連線 | `tunnels:read` |
 | `telepy sessions end <id>` | 結束一條即時連線 | `tunnels:manage` |
 | `telepy recordings ls` | 列出錄影，新的在前；`--tunnel` | `ssh:exec` |

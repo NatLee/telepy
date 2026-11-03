@@ -3034,6 +3034,53 @@ pub struct LanScanRequest {
 }
 
 #[derive(ToSchema)]
+pub struct LanFilesOpen {
+    /// The device account to go through (default: the tunnel's default, else your only one)
+    pub account: Option<String>,
+    /// The account on the LAN host (default: the host's saved login)
+    pub login: Option<String>,
+    /// `telepy` (default: the tunnel's service key, then Telepy's shared key) | `password` | `credential`
+    #[schema(example = "telepy")]
+    pub auth: Option<String>,
+    /// With `auth: password`; used to log in, never stored
+    pub password: Option<String>,
+    /// With `auth: credential`: a saved ssh login of yours bound to this host
+    pub credential_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct LanFilesSession {
+    /// Goes where the account goes in the file manager's routes
+    #[schema(example = "~0f3a9c…")]
+    pub session: String,
+    pub tunnel_id: i64,
+    pub host_id: i64,
+    pub address: String,
+    pub ssh_port: i64,
+    pub login: String,
+    /// The device account it goes through
+    pub account: String,
+    /// How it logged in (`Telepy's key`, `a password`, `saved login '…'`)
+    pub auth: String,
+    /// The host key the LAN host showed (SHA256; not pinned, like the LAN terminal's hop)
+    pub fingerprint: String,
+    pub idle_secs: i64,
+    pub closes_after_secs: i64,
+}
+
+#[derive(ToSchema)]
+pub struct LanFilesList {
+    pub sessions: Vec<LanFilesSession>,
+    pub closes_after_secs: i64,
+    pub per_person: i64,
+}
+
+#[derive(ToSchema)]
+pub struct LanFilesClosed {
+    pub closed: bool,
+}
+
+#[derive(ToSchema)]
 pub struct LanError {
     pub error: String,
     #[schema(example = "lan_scan_running")]

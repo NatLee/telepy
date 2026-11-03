@@ -42,6 +42,28 @@ pub fn parse_remote(raw: &str) -> Option<(String, String)> {
     Some((host.to_string(), path.to_string()))
 }
 
+/// 經裝置到的區網主機：`[login@]host`。/ A LAN host behind the device: `[login@]host`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanSide {
+    pub login: Option<String>,
+    pub host: String,
+}
+
+/// `box/nas`、`box@ubuntu/admin@nas` → (裝置那段, 區網主機)；沒有 `/` = 裝置本身。隧道名稱與帳號都不會有 `/`。
+/// Split a target at its first `/`: the device part, then the LAN host (`[login@]host`). Tunnel names and accounts
+/// never contain `/`, so a `/` always starts the LAN host.
+pub fn split_lan(raw: &str) -> (String, Option<LanSide>) {
+    let Some((device, rest)) = raw.split_once('/') else { return (raw.to_string(), None) };
+    if device.is_empty() || rest.is_empty() {
+        return (raw.to_string(), None);
+    }
+    let side = match rest.split_once('@') {
+        Some((login, host)) if !login.is_empty() && !host.is_empty() => LanSide { login: Some(login.to_string()), host: host.to_string() },
+        _ => LanSide { login: None, host: rest.to_string() },
+    };
+    (device.to_string(), Some(side))
+}
+
 /// `--label env=prod` 對隧道標籤：`k` 對 `k` 或 `k=任何值`，`k=v` 要完全一樣。/ Label filter matching.
 pub fn label_matches(labels: &[String], want: &str) -> bool {
     labels.iter().any(|l| l == want || (!want.contains('=') && l.split_once('=').is_some_and(|(k, _)| k == want)))
@@ -50,6 +72,16 @@ pub fn label_matches(labels: &[String], want: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_hosts_follow_a_slash() {
+        assert_eq!(split_lan("box"), ("box".into(), None));
+        assert_eq!(split_lan("box/nas"), ("box".into(), Some(LanSide { login: None, host: "nas".into() })));
+        assert_eq!(split_lan("box@ubuntu/admin@192.168.1.20"), ("box@ubuntu".into(), Some(LanSide { login: Some("admin".into()), host: "192.168.1.20".into() })));
+        assert_eq!(split_lan("/x"), ("/x".into(), None));
+        assert_eq!(split_lan("box/"), ("box/".into(), None));
+        assert_eq!(parse_remote("box/nas:/etc/hosts"), Some(("box/nas".into(), "/etc/hosts".into())));
+    }
 
     #[test]
     fn targets() {

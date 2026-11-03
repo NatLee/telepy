@@ -109,6 +109,15 @@ pub async fn reap_once(state: &AppState, now: DateTime<Utc>) -> usize {
     let Ok(rows) = upload_parts::idle_since(&state.db, &before, 200).await else { return 0 };
     let mut removed = 0;
     for row in rows {
+        // 區網主機的檔案 session 的上傳：那台主機不在這裡清（session 關掉時就刪了）；留下來的（重啟前的）只忘掉帳本那筆。
+        // A LAN file session's upload: never cleaned through the device (closing the session removes it); a leftover
+        // from before a restart only leaves the ledger.
+        if crate::lan::files::is_session_id(&row.username) {
+            if state.lan_files.all().iter().all(|s| s.id != row.username) {
+                let _ = upload_parts::remove(&state.db, row.id).await;
+            }
+            continue;
+        }
         let Ok(Some(t)) = crate::db::tunnels::by_id(&state.db, row.tunnel_id).await else {
             let _ = upload_parts::remove(&state.db, row.id).await;
             continue;
@@ -146,6 +155,9 @@ pub async fn reap_once(state: &AppState, now: DateTime<Utc>) -> usize {
 pub async fn remove_part_file(state: &AppState, reverse_port: i64, row: &PartRow) -> bool {
     use russh_sftp::client::error::Error as E;
     use russh_sftp::protocol::StatusCode;
+    if crate::lan::files::is_session_id(&row.username) {
+        return false;
+    }
     let Ok(sftp) = state.pool.sftp(state, reverse_port, &row.username).await else { return false };
     let deleted = match sftp.symlink_metadata(row.part_path.as_str()).await {
         Ok(m) if !m.is_dir() && !m.is_symlink() => sftp.remove_file(row.part_path.as_str()).await.is_ok(),

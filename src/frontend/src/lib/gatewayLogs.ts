@@ -53,6 +53,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     terminal_close: { key: "logs.event.terminal_close", tone: "secondary", category: "session" },
     files_open: { key: "logs.event.files_open", tone: "default", category: "session" },
     files_close: { key: "logs.event.files_close", tone: "secondary", category: "session" },
+    lan_files: { key: "logs.event.lan_files", tone: "default", category: "session" },
+    lan_files_close: { key: "logs.event.lan_files_close", tone: "secondary", category: "session" },
     files_delete: { key: "logs.event.files_delete", tone: "warning", category: "change" },
     files_edit: { key: "logs.event.files_edit", tone: "outline", category: "change" },
     files_upload_cleaned: { key: "logs.event.files_upload_cleaned", tone: "outline", category: "change" },

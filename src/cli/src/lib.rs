@@ -113,7 +113,7 @@ pub enum Cmd {
     Config(ConfigArgs),
     /// Run a command on one or many devices through Telepy (command rules apply)
     Exec(ExecArgs),
-    /// Copy a file to or from a device over SFTP; write the remote side as <tunnel>[@account]:<path>
+    /// Copy a file to or from a device over SFTP; write the remote side as <tunnel>[@account]:<path>, or a LAN host behind it as <tunnel>/[login@]<host>:<path>
     Cp(CpArgs),
     /// Live sessions on your tunnels; `sessions end <id>` ends one
     Sessions(SessionsArgs),
@@ -1746,15 +1746,72 @@ fn print_outcome(o: &Outcome, single: bool, style: anstyle::Style) {
 
 // ---------------------------------------------------------------- cp
 
+/// 區網主機那一邊的檔案 session（`<tunnel>/<host>:path`）：用完關掉（沒傳完的暫存檔一起刪）。
+/// A LAN host's file session for `cp` (`<tunnel>/<host>:path`), closed when done.
+struct LanFiles<'a> {
+    api: &'a Api,
+    tunnel_id: i64,
+    session: String,
+}
+
+impl Drop for LanFiles<'_> {
+    fn drop(&mut self) {
+        let _ = self.api.send(Method::DELETE, &format!("/api/reverse/server/{}/lan/files/{}", self.tunnel_id, urlencoding::encode(&self.session)), None, Some(Duration::from_secs(10)));
+    }
+}
+
+/// 經裝置登入那台主機：Telepy 的金鑰，或 `TELEPY_LAN_PASSWORD` 的密碼（只拿來登入）。
+/// Log in to the LAN host through the device: Telepy's key, or the password in `TELEPY_LAN_PASSWORD`.
+fn open_lan_files<'a>(api: &'a Api, t: &Value, device_account: &str, side: &target::LanSide) -> Result<LanFiles<'a>> {
+    let id = t["id"].as_i64().unwrap_or_default();
+    let hosts = api.get(&format!("/api/reverse/server/{id}/lan/hosts"))?["hosts"].as_array().cloned().unwrap_or_default();
+    let h = find_host(&hosts, &side.host).ok_or_else(|| anyhow!("No LAN host '{}' behind {}. `telepy lan ls {}` lists them (by label, address or id).", side.host, name_of(t), name_of(t)))?;
+    let mut body = json!({ "account": device_account, "auth": "telepy" });
+    if let Some(login) = &side.login {
+        body["login"] = json!(login);
+    }
+    if let Ok(pw) = std::env::var("TELEPY_LAN_PASSWORD") {
+        if !pw.is_empty() {
+            body["auth"] = json!("password");
+            body["password"] = json!(pw);
+        }
+    }
+    let res = api.send(Method::POST, &format!("/api/reverse/server/{id}/lan/hosts/{}/files", h["id"]), Some(&body), Some(Duration::from_secs(60)))?;
+    match api::read(res) {
+        Ok(v) => {
+            eprintln!("{}", color::err(color::DIM, &format!("{}@{} through {}@{} ({})", s(&v, "login"), s(&v, "address"), device_account, name_of(t), s(&v, "auth"))));
+            Ok(LanFiles { api, tunnel_id: id, session: s(&v, "session").to_string() })
+        }
+        Err(e) => {
+            let code = e.downcast_ref::<api::HttpError>().and_then(|h| h.body["code"].as_str().map(str::to_string)).unwrap_or_default();
+            let hint = match code.as_str() {
+                "lan_files_login" if body["auth"] == "telepy" => "\nSet TELEPY_LAN_PASSWORD to log in with a password instead (it's used once and not stored).",
+                "lan_login_required" => "\nWrite the login as <tunnel>/<login>@<host>:<path>.",
+                _ => "",
+            };
+            Err(anyhow!("{e}{hint}"))
+        }
+    }
+}
+
 fn cp(api: &Api, a: &CpArgs) -> Result<()> {
     let from = target::parse_remote(&a.from);
     let to = target::parse_remote(&a.to);
     let d = dashboard(api)?;
     match (from, to) {
         (Some((tgt, path)), None) => {
-            let (t, acc) = resolve(&d.tunnels, &tgt)?;
-            let (_, user) = account(api, &t, acc.as_deref())?;
+            let (device, lan) = target::split_lan(&tgt);
+            let (t, acc) = resolve(&d.tunnels, &device)?;
+            let (_, mut user) = account(api, &t, acc.as_deref())?;
             let id = t["id"].as_i64().unwrap_or_default();
+            let _lan = match &lan {
+                Some(side) => {
+                    let f = open_lan_files(api, &t, &user, side)?;
+                    user = f.session.clone();
+                    Some(f)
+                }
+                None => None,
+            };
             let url = format!("/api/sftp/download/{id}/{}?path={}", urlencoding::encode(&user), urlencoding::encode(&path));
             // 沒有整體時限：大檔 / 大資料夾要多久就多久（資料一直在流）。/ No overall limit: big downloads take as long as they take.
             let mut res = api.request(Method::GET, &url)?.timeout(Duration::from_secs(24 * 3600)).send().with_context(|| format!("download {}", a.from))?;
@@ -1780,9 +1837,18 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
             eprintln!("{} → {} ({} bytes{})", a.from, dest.display(), written, if zip { ", zipped directory" } else { "" });
         }
         (None, Some((tgt, path))) => {
-            let (t, acc) = resolve(&d.tunnels, &tgt)?;
-            let (_, user) = account(api, &t, acc.as_deref())?;
+            let (device, lan) = target::split_lan(&tgt);
+            let (t, acc) = resolve(&d.tunnels, &device)?;
+            let (_, mut user) = account(api, &t, acc.as_deref())?;
             let id = t["id"].as_i64().unwrap_or_default();
+            let _lan = match &lan {
+                Some(side) => {
+                    let f = open_lan_files(api, &t, &user, side)?;
+                    user = f.session.clone();
+                    Some(f)
+                }
+                None => None,
+            };
             let src = Path::new(&a.from);
             if src.is_dir() {
                 bail!("{} is a directory; telepy cp copies files (use `telepy scp -r` for directories).", src.display());
@@ -1801,7 +1867,7 @@ fn cp(api: &Api, a: &CpArgs) -> Result<()> {
             eprintln!("{} → {} {}", a.from, tgt, v.get("path").and_then(Value::as_str).unwrap_or(&path));
         }
         (Some(_), Some(_)) => bail!("Copy between a device and this computer; device-to-device isn't supported."),
-        (None, None) => bail!("Write the device side as <tunnel>[@account]:<path>."),
+        (None, None) => bail!("Write the device side as <tunnel>[@account]:<path>, or a LAN host behind it as <tunnel>[@account]/[login@]<host>:<path>."),
     }
     Ok(())
 }

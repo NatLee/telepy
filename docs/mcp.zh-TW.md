@@ -91,7 +91,7 @@ MCP client ── POST /mcp ─────────────────�
 | --- | --- | --- |
 | `tunnels:read` | 查看你的通道 | `list_tunnels`、`tunnel_status`、`lan_hosts` |
 | `ssh:exec` | 在你的裝置上執行指令 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
-| `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
+| `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`（只限你擁有或身為 ADMIN 的通道） |
 | `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
@@ -150,6 +150,7 @@ shell 的行為細節請看 [互動 shell](#互動-shell)。
 | `sftp_list(session_id, path?)` | 列出目錄（`~` = 家目錄） |
 | `sftp_read(session_id, path, offset?, max_bytes?)` | 讀檔：文字回 UTF-8，其他回 base64。可以分段讀 |
 | `sftp_write(session_id, path, content, encoding?, append?)` | 寫檔或附加（`encoding`：`utf-8` / `base64`） |
+| `lan_files(tunnel_id, host, action, path?, content?, encoding?, append?, offset?, max_bytes?, login?, username?, credential_id?)` | 同樣的事，對象換成裝置後面的區網主機，不用開 session：`action` = `list` / `read` / `write`。由裝置的 sshd 開出這一跳，Telepy 用自己的金鑰（這條通道的服務金鑰，再來是共用的）或使用者存的 ssh 登入（`credential_id`）登入那台主機；登入保留 10 分鐘，期間重複使用。那台主機不收 Telepy 的金鑰時，工具會說清楚：請使用者把金鑰加到那台，或存一組登入 |
 
 ### 掃描區網（`network:scan`）
 
@@ -254,7 +255,7 @@ agent 拿到的權限，跟你在網頁上拿到的完全一樣：
 | --- | --- |
 | `ssh:exec` 的工具 | 網頁終端機 |
 | `ssh:files` 的工具 | 檔案管理 |
-| `lan_hosts`、`lan_scan`、`lan_check` | 區網探索 |
+| `lan_hosts`、`lan_scan`、`lan_check`（`lan_files` 另外還要檔案管理） | 區網探索 |
 | `browser:use` 的工具 | 遠端瀏覽器 |
 
 如果只是 app 沒拿到某個 scope，錯誤訊息會請 agent 告訴你重新連接並核准那個 scope。

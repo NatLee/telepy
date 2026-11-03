@@ -10,14 +10,29 @@
  * these are and why some are read-only. Horizontal when wide, stacked when narrow.
  */
 import React from "react";
-import { Info, Laptop, UserRound } from "lucide-react";
+import { Info, Laptop, Router, Server, UserRound } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Chip } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowNow, FlowPath } from "@/components/flow/PathFlow";
 import { useI18n } from "@/lib/i18n";
-import { fileSpotStates, flowNow, type Busy, type FileLink, type FileSpot, type SpotState } from "@/lib/fileManager";
+import { authLabel } from "@/lib/lanFiles";
+import { fileSpotStates, flowNow, lanSpotStates, type Busy, type FileLink, type FileSpot, type SpotState } from "@/lib/fileManager";
+
+/** 區網主機那一跳（`lan::files`）。/ The LAN host hop. */
+export interface LanFlowContext {
+    /** 那台主機上的帳號。/ The account on the LAN host. */
+    login: string;
+    address: string;
+    port: number;
+    /** 經過的裝置帳號（跳板）。/ The device account it goes through. */
+    account: string;
+    /** 怎麼登入的（後端的說法，原文顯示）。/ How it logged in (the backend's words). */
+    auth: string;
+    /** 那台主機出示的 host key。/ The host key it showed. */
+    fingerprint: string;
+}
 
 export interface FileFlowContext {
     link: FileLink;
@@ -29,10 +44,56 @@ export interface FileFlowContext {
     /** 目前的資料夾。/ The current folder. */
     path: string;
     shell: "unix" | "powershell";
+    lan?: LanFlowContext;
+}
+
+/** 區網主機的檔案：多一跳（裝置的 sshd 開往那台）。/ A LAN host's files: one more hop. */
+function LanFileFlow({ ctx, lan }: { ctx: FileFlowContext; lan: LanFlowContext }) {
+    const { t, tn } = useI18n();
+    const s = lanSpotStates(ctx.link, ctx.busy);
+    const now = flowNow(ctx.link, ctx.busy);
+    const failed = ctx.link !== "open" && ctx.link !== "connecting";
+    const where = lan.port === 22 ? lan.address : `${lan.address}:${lan.port}`;
+    const label = authLabel(lan.auth);
+    const authText = label ? t(label.key, label.vars) : lan.auth;
+    return (
+        <div className="space-y-5">
+            <FlowNow failed={failed}>{t(now.key, now.vars)}</FlowNow>
+
+            <FlowPath>
+                <FlowNode icon={Laptop} title={t("files.flow.you")} sub={t("files.flow.youSub")} state={s.browser} />
+                <FlowLink label={t("files.flow.linkWeb")} state={s.web} />
+                <FlowNode brand title="Telepy" sub={t("files.lanFlow.telepySub")} state={s.telepy} />
+                <FlowLink label={t("files.lanFlow.linkTunnel")} state={s.tunnel} />
+                <FlowNode icon={Router} title={<span className="font-mono">{`${lan.account}@${ctx.deviceName}`}</span>} sub={t("files.lanFlow.deviceSub")} state={s.device} />
+                <FlowLink label={t("files.lanFlow.linkHop")} state={s.hop} />
+                <FlowNode icon={Server} title={<span className="font-mono">{`${lan.login}@${where}`}</span>} sub={t("files.lanFlow.hostSub")} state={s.host} />
+            </FlowPath>
+
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                {t("files.flow.here")}
+                <Chip mono>{`${lan.login}@${lan.address}`}</Chip>
+                <code className="min-w-0 rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground break-all">{ctx.path}</code>
+            </div>
+
+            {ctx.link === "lanGone" && <Callout tone="warning">{t("files.lanFlow.goneNote")}</Callout>}
+            {ctx.link === "offline" && <Callout tone="warning">{t("files.flow.offlineNote")}</Callout>}
+
+            <ul className="space-y-1.5 border-t border-border pt-4 text-sm text-muted-foreground">
+                <li>{tn("files.lanFlow.noteLogin", { login: <code className="font-mono text-foreground">{lan.login}</code>, auth: authText })}</li>
+                <li>{tn("files.lanFlow.noteHop", { account: <code className="font-mono text-foreground">{lan.account}</code>, device: ctx.deviceName })}</li>
+                <li>{tn("files.lanFlow.noteHostKey", { fingerprint: <code className="font-mono text-foreground break-all">{lan.fingerprint || "—"}</code> })}</li>
+                <li>{t("files.lanFlow.noteIdle")}</li>
+                <li>{t("files.lanFlow.noteUploads")}</li>
+                <li>{t("files.flow.noteLogged")}</li>
+            </ul>
+        </div>
+    );
 }
 
 export function FileFlow({ ctx }: { ctx: FileFlowContext }) {
     const { t, tn } = useI18n();
+    if (ctx.lan) return <LanFileFlow ctx={ctx} lan={ctx.lan} />;
     const s: Record<FileSpot, SpotState> = fileSpotStates(ctx.link, ctx.busy);
     const now = flowNow(ctx.link, ctx.busy);
     const failed = ctx.link === "offline" || ctx.link === "stepup" || ctx.link === "stopped" || ctx.link === "retrying";

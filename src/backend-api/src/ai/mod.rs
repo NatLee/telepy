@@ -622,8 +622,13 @@ pub struct Listing {
 pub async fn sftp_list(s: &AiSession, path: &str) -> anyhow::Result<Listing> {
     let _busy = s.begin();
     let (session, home) = s.sftp().await?;
-    let path = sftp::resolve_path(path, &home);
-    let mut entries = sftp::list_dir(&session, &path).await.with_context(|| format!("list {path}"))?;
+    list_on(&session, &home, path).await
+}
+
+/// 列目錄（任何一條 SFTP：agent session 的，或區網主機的 `lan::files`）。/ List a folder on any SFTP session.
+pub async fn list_on(session: &SftpSession, home: &str, path: &str) -> anyhow::Result<Listing> {
+    let path = sftp::resolve_path(path, home);
+    let mut entries = sftp::list_dir(session, &path).await.with_context(|| format!("list {path}"))?;
     let truncated = entries.len() > MAX_LIST_ENTRIES;
     entries.truncate(MAX_LIST_ENTRIES);
     Ok(Listing { path, entries, truncated })
@@ -641,7 +646,12 @@ pub struct ReadResult {
 pub async fn sftp_read(s: &AiSession, path: &str, offset: u64, max_bytes: usize) -> anyhow::Result<ReadResult> {
     let _busy = s.begin();
     let (session, home) = s.sftp().await?;
-    let path = sftp::resolve_path(path, &home);
+    read_on(&session, &home, path, offset, max_bytes).await
+}
+
+/// 讀檔的一段（任何一條 SFTP）。/ Read part of a file on any SFTP session.
+pub async fn read_on(session: &SftpSession, home: &str, path: &str, offset: u64, max_bytes: usize) -> anyhow::Result<ReadResult> {
+    let path = sftp::resolve_path(path, home);
     let meta = session.metadata(&path).await.with_context(|| format!("stat {path}"))?;
     if meta.is_dir() {
         bail!("{path} is a directory; use sftp_list");
@@ -668,7 +678,12 @@ pub async fn sftp_read(s: &AiSession, path: &str, offset: u64, max_bytes: usize)
 pub async fn sftp_write(s: &AiSession, path: &str, data: &[u8], append: bool) -> anyhow::Result<(String, u64)> {
     let _busy = s.begin();
     let (session, home) = s.sftp().await?;
-    let path = sftp::resolve_path(path, &home);
+    write_on(&session, &home, path, data, append).await
+}
+
+/// 寫檔（任何一條 SFTP）。/ Write a file on any SFTP session.
+pub async fn write_on(session: &SftpSession, home: &str, path: &str, data: &[u8], append: bool) -> anyhow::Result<(String, u64)> {
+    let path = sftp::resolve_path(path, home);
     let flags = OpenFlags::WRITE | OpenFlags::CREATE | if append { OpenFlags::APPEND } else { OpenFlags::TRUNCATE };
     let mut f = session.open_with_flags(&path, flags).await.with_context(|| format!("open {path} for writing"))?;
     if append {

@@ -184,6 +184,10 @@ pub const ROUTES: &[RouteRule] = {
         rule("GET", "/api/recordings/*/cast", EXEC, Handler),
         // 檔案：SFTP 的每個操作。/ Files: every SFTP operation.
         rule("*", "/api/sftp/*/{t}/*", FILES, Path),
+        // 區網主機的檔案 session（之後的操作照樣走 /api/sftp，帳號位置放 `~<代號>`）。/ LAN host file sessions.
+        rule("POST", "/api/reverse/server/{t}/lan/hosts/*/files", FILES, Path),
+        rule("GET", "/api/reverse/server/{t}/lan/files", FILES, Path),
+        rule("DELETE", "/api/reverse/server/{t}/lan/files/*", FILES, Path),
         rule("GET|POST", "/api/reverse/server/{t}/lan/scan", SCAN, Path),
         // 定時重掃與「檢查這台」都是掃描。/ Scheduled rescans and single-host checks are scans.
         rule("PUT|DELETE", "/api/reverse/server/{t}/lan/schedule", SCAN, Path),
@@ -366,6 +370,9 @@ mod tests {
             ("POST", "/api/ai/sessions/ais_x/exec", rule("ssh:exec", Handler)),
             ("GET", "/api/recordings/3/cast", rule("ssh:exec", Handler)),
             ("GET", "/api/sftp/download/4/root", rule("ssh:files", Path(4))),
+            ("POST", "/api/reverse/server/4/lan/hosts/9/files", rule("ssh:files", Path(4))),
+            ("DELETE", "/api/reverse/server/4/lan/files/~abc", rule("ssh:files", Path(4))),
+            ("GET", "/api/sftp/list/4/~abc", rule("ssh:files", Path(4))),
             ("POST", "/api/sftp/upload/4/root", rule("ssh:files", Path(4))),
             ("POST", "/api/reverse/server/4/lan/scan", rule("network:scan", Path(4))),
             ("GET", "/api/reverse/lan/topology", rule("tunnels:read", None)),
