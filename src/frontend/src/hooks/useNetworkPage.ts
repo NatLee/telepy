@@ -26,6 +26,7 @@ const WAKE_ERRORS: Record<string, TranslationKey> = {
     lan_wake_mac: "network.wake.errMac",
     no_account: "network.noDeviceUser",
     device_offline: "network.deviceOffline",
+    username: "network.accountGone",
 };
 
 /** 「這台跑什麼系統」的錯誤碼。/ The OS check's error codes. */
@@ -36,15 +37,23 @@ const OS_ERRORS: Record<string, TranslationKey> = {
     device_offline: "network.deviceOffline",
     lan_os_running: "network.os.errRunning",
     lan_os_failed: "network.os.errFailed",
+    username: "network.accountGone",
 };
 
-/** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
+/** 掃描錯誤碼 → 翻譯；其餘（subnet / ports）附上後端的說明。/ Scan error codes → messages. */
 const SCAN_ERRORS: Record<string, TranslationKey> = {
     lan_scan_disabled: "network.scanError.disabled",
     lan_scan_forbidden: "network.scanError.forbidden",
     lan_scan_running: "network.scanError.running",
     device_offline: "network.scanError.offline",
+    // 帳號一定是從清單選的；還是被拒 = 期間被拿掉了。/ The account comes from the list; refused = removed meanwhile.
+    username: "network.accountGone",
 };
+
+/** 檢查 / 喚醒 / 辨識系統經哪個裝置帳號（面板選的那個）。/ The device account a check / wake / OS check goes through. */
+function accountBody(username: string | null | undefined): string {
+    return JSON.stringify(username ? { username } : {});
+}
 
 export interface ScanOptions {
     username?: string | null;
@@ -304,9 +313,9 @@ export function useNetworkPage() {
 
     /** 現在檢查這台（它的 port，不掃整個網段）。/ Check this host now (its ports, no network sweep). */
     const checkHost = useCallback(
-        async (h: LanHost): Promise<string | null> => {
+        async (h: LanHost, username?: string | null): Promise<string | null> => {
             try {
-                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/check`, { method: "POST", body: JSON.stringify({}) });
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/check`, { method: "POST", body: accountBody(username) });
                 const data = await readJson<LanScan & { error?: string; code?: string; scan?: LanScan }>(res);
                 if (res.ok && data?.scan_id) {
                     const scan: LanScan = data;
@@ -327,9 +336,9 @@ export function useNetworkPage() {
 
     /** 送 Wake-on-LAN 封包（裝置上跑）。/ Send a Wake-on-LAN packet (run on the device). */
     const wakeHost = useCallback(
-        async (h: LanHost): Promise<WakeResult> => {
+        async (h: LanHost, username?: string | null): Promise<WakeResult> => {
             try {
-                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/wake`, { method: "POST", body: JSON.stringify({}) });
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/wake`, { method: "POST", body: accountBody(username) });
                 const data = await readJson<{ tool?: string; broadcast?: string | null; error?: string; code?: string }>(res);
                 if (res.ok && data?.tool) return { ok: true, tool: data.tool, broadcast: data.broadcast ?? null };
                 const key = data?.code ? WAKE_ERRORS[data.code] : undefined;
@@ -343,9 +352,9 @@ export function useNetworkPage() {
 
     /** 問這台跑什麼系統（對這一台，使用者按了才做）。/ Ask which OS this host runs (this host, on request). */
     const identifyOs = useCallback(
-        async (h: LanHost): Promise<{ ok: true } | { ok: false; error: string }> => {
+        async (h: LanHost, username?: string | null): Promise<{ ok: true } | { ok: false; error: string }> => {
             try {
-                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/os`, { method: "POST", body: JSON.stringify({}) });
+                const res = await apiFetch(`/api/reverse/server/${h.tunnel_id}/lan/hosts/${h.id}/os`, { method: "POST", body: accountBody(username) });
                 const data = await readJson<{ os_check?: unknown; error?: string; code?: string }>(res);
                 if (res.ok && data?.os_check) {
                     await fetchTopology();

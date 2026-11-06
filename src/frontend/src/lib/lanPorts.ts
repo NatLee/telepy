@@ -55,7 +55,8 @@ export function portRows(h: HostLike, serviceName: (port: number) => string | nu
 }
 
 /** 遠端桌面頁的網址，帶協定與 port；`hostId` 是 null = 裝置自己。/ The remote desktop page URL with protocol and port; a null `hostId` = the device itself. */
-export function desktopUrl(tunnelId: number, hostId: number | null, protocol: DesktopProtocol, port: number): string {
+export function desktopUrl(tunnelId: number, hostId: number | null, protocol: DesktopProtocol, port: number, account?: string | null): string {
     const host = hostId === null ? "" : `&lanHost=${hostId}`;
-    return `/tunnels/desktop?tunnel=${tunnelId}${host}&protocol=${protocol}&port=${port}`;
+    const via = account ? `&account=${encodeURIComponent(account)}` : "";
+    return `/tunnels/desktop?tunnel=${tunnelId}${host}&protocol=${protocol}&port=${port}${via}`;
 }

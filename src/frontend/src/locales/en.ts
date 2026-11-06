@@ -4443,6 +4443,8 @@ export const en = {
     "network.loginAs": "Log in as",
     "network.loginHint": "Enter the account on that machine (letters, digits, '.', '_' or '-').",
     "network.jumpAccount": "Through device account",
+    "network.jumpAccountAll": "Terminals, files, pages, desktops, checks, the OS check and Wake-on-LAN here all go through it.",
+    "network.accountGone": "That device account can no longer be used here. Pick another one at the top of the panel.",
     "network.openDesktop": "Remote desktop",
     "network.deviceOffline": "The device is offline.",
     "network.tab.terminal": "Connect",

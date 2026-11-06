@@ -85,14 +85,14 @@ interface Props {
     loadConnectTarget: (tn: TopologyTunnel, deviceUser: string | null) => Promise<ConnectTarget>;
     updateHost: (h: LanHost, input: HostInput) => Promise<FormErrors | null>;
     deleteHost: (h: LanHost) => Promise<boolean>;
-    /** 現在檢查這台（回錯誤訊息或 null）。/ Check this host now (an error message or null). */
-    onCheck: (h: LanHost) => Promise<string | null>;
+    /** 現在檢查這台，經面板選的裝置帳號（回錯誤訊息或 null）。/ Check this host now through the panel's device account. */
+    onCheck: (h: LanHost, deviceUser: string | null) => Promise<string | null>;
     /** 注意 / 不再注意。/ Watch or stop watching. */
     onWatch: (h: LanHost, on: boolean) => Promise<boolean>;
-    /** 送 Wake-on-LAN。/ Send Wake-on-LAN. */
-    onWake: (h: LanHost) => Promise<WakeResult>;
-    /** 問這台跑什麼系統。/ Ask which OS this host runs. */
-    onIdentifyOs: (h: LanHost) => Promise<OsResult>;
+    /** 送 Wake-on-LAN（在裝置上以這個帳號跑）。/ Send Wake-on-LAN (run on the device as this account). */
+    onWake: (h: LanHost, deviceUser: string | null) => Promise<WakeResult>;
+    /** 問這台跑什麼系統（經這個帳號）。/ Ask which OS this host runs (through this account). */
+    onIdentifyOs: (h: LanHost, deviceUser: string | null) => Promise<OsResult>;
     /** 點標籤 = 在頁面搜尋它。/ A label click searches the page for it. */
     onSearch?: (query: string) => void;
 }
@@ -183,15 +183,6 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                 <Input id="lan-login" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="admin" autoComplete="off" spellCheck={false} className="font-mono" />
                 {!loginOk && <p className="text-xs text-muted-foreground">{t("network.loginHint")}</p>}
             </div>
-            {tunnel.usernames.length > 1 && (
-                <div className="min-w-0 space-y-1.5">
-                    <Label htmlFor="lan-jump">{t("network.jumpAccount")}</Label>
-                    {/* 帳號多或名字長時分段鈕會撐破面板，用下拉。/ A select: segments overflow with many or long account names. */}
-                    <NativeSelect id="lan-jump" value={deviceUser ?? tunnel.usernames[0]} onChange={(e) => setDeviceUser(e.target.value)} className="font-mono">
-                        {tunnel.usernames.map((u) => <option key={u} value={u}>{u}</option>)}
-                    </NativeSelect>
-                </div>
-            )}
         </div>
     );
 
@@ -216,6 +207,19 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
             <div className="border-b border-border px-4 py-2">
                 <Segmented options={tabs} value={tab} onChange={setTab} kind="tabs" fullWidth size="sm" aria-label={name} />
             </div>
+            {/* 經哪個裝置帳號：整個面板一個（終端機、檔案、網頁、桌面、指令、檢查、喚醒、辨識系統都經它）。
+                帳號多或名字長時分段鈕會撐破面板，用下拉。
+                The device account, once for the whole panel (terminal, files, pages, desktop, commands, check, wake,
+                OS check all go through it). A select: segments overflow with many or long account names. */}
+            {tunnel.usernames.length > 1 && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2">
+                    <Label htmlFor="lan-jump" className="text-sm font-normal text-muted-foreground">{t("network.jumpAccount")}</Label>
+                    <NativeSelect id="lan-jump" value={deviceUser ?? tunnel.usernames[0]} onChange={(e) => setDeviceUser(e.target.value)} className="min-w-0 max-w-full font-mono [&_select]:h-8">
+                        {tunnel.usernames.map((u) => <option key={u} value={u}>{u}</option>)}
+                    </NativeSelect>
+                    <span className="basis-full text-xs text-muted-foreground @md:basis-auto">{t("network.jumpAccountAll")}</span>
+                </div>
+            )}
             </div>
 
             <div className="p-4">
@@ -223,8 +227,8 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                     <div className="space-y-4">
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         <HostChangeNote host={host} />
-                        <CheckRow host={host} tunnel={tunnel} online={online} onCheck={onCheck} onInfo={() => setAlertsInfo(true)} />
-                        <WakeRow host={host} tunnel={tunnel} online={online} onWake={onWake} />
+                        <CheckRow host={host} tunnel={tunnel} online={online} onCheck={(h) => onCheck(h, deviceUser)} onInfo={() => setAlertsInfo(true)} />
+                        <WakeRow host={host} tunnel={tunnel} online={online} onWake={(h) => onWake(h, deviceUser)} />
                         {/* 這台機器上的服務：每個 port 一個最直接的用法。/ The services on this machine: each port's most direct use. */}
                         <HostPorts
                             host={host}
@@ -277,7 +281,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                                 </Button>
                             )}
                             <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "ghost"} asChild>
-                                <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>
+                                <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}${deviceUser ? `&account=${encodeURIComponent(deviceUser)}` : ""}`} prefetch={false}>
                                     <ScreenShare size={16} /> {t("network.openDesktop")}
                                 </Link>
                             </Button>
@@ -320,7 +324,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
 
                 {tab === "details" && (
                     <div className="space-y-6">
-                    <OsSection host={host} tunnel={tunnel} online={online} onIdentify={onIdentifyOs} />
+                    <OsSection host={host} tunnel={tunnel} online={online} onIdentify={(h) => onIdentifyOs(h, deviceUser)} />
                     <dl className="divide-y divide-border">
                         <Row label={t("network.field.address")}><span className="font-mono">{host.address}</span></Row>
                         {host.hostname && <Row label={t("network.field.hostname")}><span className="font-mono">{host.hostname}</span></Row>}

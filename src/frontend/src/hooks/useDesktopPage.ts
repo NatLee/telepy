@@ -108,6 +108,8 @@ export function useDesktopPage() {
     // 網路頁的服務清單帶來的協定與 port（換主機 / 裝置時清掉）。/ Protocol and port from the network page's services list (cleared on another host / device).
     const protocolParam = searchParams.get("protocol");
     const portParam = searchParams.get("port");
+    // 網路頁面板選的裝置帳號（換裝置時清掉）。/ The device account picked in the network page's panel (cleared on another device).
+    const accountParam = searchParams.get("account");
     const { t } = useI18n();
     const { showError } = useToast();
 
@@ -225,8 +227,9 @@ export function useDesktopPage() {
     // New device → its default account; new host → protocol and port from the desktop services it was seen with.
     useEffect(() => {
         if (!tunnel) return;
-        setForm((f) => ({ ...f, account: tunnel.usernames.includes(f.account) ? f.account : tunnel.default_username && tunnel.usernames.includes(tunnel.default_username) ? tunnel.default_username : tunnel.usernames[0] ?? "" }));
-    }, [tunnel]);
+        const allowed = (u: string | null | undefined): u is string => !!u && tunnel.usernames.includes(u);
+        setForm((f) => ({ ...f, account: allowed(f.account) ? f.account : allowed(accountParam) ? accountParam : allowed(tunnel.default_username) ? tunnel.default_username : tunnel.usernames[0] ?? "" }));
+    }, [tunnel, accountParam]);
     useEffect(() => {
         const wanted = protocolParam === "rdp" || protocolParam === "vnc" || protocolParam === "rustdesk" ? protocolParam : null;
         if (host && wanted) {
@@ -237,7 +240,7 @@ export function useDesktopPage() {
         if (seen.length > 0) setForm((f) => ({ ...f, protocol: seen[0].protocol, port: String(seen[0].port) }));
     }, [host, protocolParam, portParam]);
 
-    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null, protocol: null, port: null }), [replaceQuery]);
+    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null, protocol: null, port: null, account: null }), [replaceQuery]);
     const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id), protocol: null, port: null }), [replaceQuery]);
     const update = useCallback((patch: Partial<DesktopForm>) => setForm((f) => ({ ...f, ...patch })), []);
     const setProtocol = useCallback((protocol: DesktopMode) => {

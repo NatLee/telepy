@@ -164,7 +164,7 @@ export function HostPorts({ host, tunnel, online, deviceUser, terminal, onOpenWe
             case "desktop":
                 return has("remote_desktop") ? (
                     <Button size="sm" variant="outline" asChild>
-                        <Link href={desktopUrl(tunnel.id, own ? null : host.id, r.action.protocol, r.port)} prefetch={false} onClick={onNavigate} title={t("network.ports.desktopHint")}>
+                        <Link href={desktopUrl(tunnel.id, own ? null : host.id, r.action.protocol, r.port, deviceUser)} prefetch={false} onClick={onNavigate} title={t("network.ports.desktopHint")}>
                             <ScreenShare size={15} /> {t("network.ports.desktop")}
                         </Link>
                     </Button>

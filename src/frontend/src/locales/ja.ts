@@ -4425,6 +4425,8 @@ export const ja: Record<TranslationKey, string> = {
     "network.loginAs": "ログインするユーザー",
     "network.loginHint": "そのマシンのアカウントを入力してください（英数字、'.'、'_'、'-'）。",
     "network.jumpAccount": "経由するデバイスのアカウント",
+    "network.jumpAccountAll": "ここのターミナル、ファイル、ページ、デスクトップ、チェック、OS の判定、Wake-on-LAN はすべてこのアカウントを経由します。",
+    "network.accountGone": "このデバイスアカウントはここでは使えなくなりました。パネル上部で別のアカウントを選んでください。",
     "network.openDesktop": "リモートデスクトップ",
     "network.deviceOffline": "デバイスはオフラインです。",
     "network.tab.terminal": "接続",
