@@ -432,6 +432,27 @@
   --sidebar-accent-foreground: oklch(0.2 0.01 60);
   --sidebar-border: oklch(0.905 0.005 75);
   --sidebar-ring: oklch(0.57 0.155 43);
+  /* 指令上色（`lib/shellHighlight`）：在 surface 上都過 4.5:1；深色主題與終端機框（`.code-terminal`）用亮的一組。
+     Command highlighting (`lib/shellHighlight`): each ≥ 4.5:1 on the surface; the dark theme and terminal frames use the light set. */
+  --code-telepy: oklch(0.53 0.15 43);
+  --code-cmd: oklch(0.47 0.12 155);
+  --code-sub: oklch(0.46 0.09 205);
+  --code-flag: oklch(0.49 0.15 255);
+  --code-placeholder: oklch(0.49 0.17 305);
+  --code-string: oklch(0.49 0.11 65);
+  --code-var: oklch(0.49 0.15 345);
+  --code-muted: oklch(0.5 0.012 60);
+}
+
+.dark, .code-terminal {
+  --code-telepy: oklch(0.76 0.15 52);
+  --code-cmd: oklch(0.8 0.13 155);
+  --code-sub: oklch(0.8 0.09 205);
+  --code-flag: oklch(0.78 0.11 250);
+  --code-placeholder: oklch(0.8 0.12 305);
+  --code-string: oklch(0.83 0.11 75);
+  --code-var: oklch(0.8 0.12 345);
+  --code-muted: oklch(0.72 0.01 70);
 }
 
 .dark {

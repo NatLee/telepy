@@ -10,26 +10,44 @@
  * the list; it only shows up when you search for `dig`.
  */
 import React, { useState } from "react";
-import { Keyboard, Search, Stethoscope } from "lucide-react";
+import { ChevronRight, Keyboard, Search, Stethoscope } from "lucide-react";
 import { Tapi } from "@/components/brand/Tapi";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { CliTerminal, CommandLine, CommandText, NeedChips } from "@/components/cli/CliBlocks";
+import { FlagText } from "@/components/ui/flag-text";
 import { useI18n } from "@/lib/i18n";
-import { CLI_COMMANDS, CLI_ENV, COMPLETION_SETUP, HIDDEN_COMMAND, defaultShell, doctorSample, filterCommands, revealsHidden, type CliCommand, type CliOs, type CompletionShell } from "@/lib/cliGuide";
+import { CLI_COMMANDS, CLI_ENV, COMPLETION_SETUP, HIDDEN_COMMAND, defaultShell, doctorSample, examplesForCommand, filterCommands, revealsHidden, type CliCommand, type CliContext, type CliOs, type CompletionShell } from "@/lib/cliGuide";
 import type { TranslationKey } from "@/locales/en";
 
-export function CliCommands() {
+export function CliCommands({ context }: { context: CliContext }) {
     const { t, tn } = useI18n();
     const [query, setQuery] = useState("");
-    const describe = (c: CliCommand) => t(`cli.cmd.${c.key}` as TranslationKey);
+    // 展開的指令（看它的範例）。/ Commands opened to show their examples.
+    const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+    const toggle = (key: string) => setOpen((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+    });
+    // 搜尋也看範例（「SOCKS」找得到 ssh）；只因為範例才符合的指令直接展開。
+    // The search reads the examples too ("SOCKS" finds ssh); a command that matches only through them opens.
+    const exampleText = (c: CliCommand) => examplesForCommand(c.key, context).map((e) => `${t(e.title)} ${t(e.note)} ${e.command.value}`).join(" ");
+    const describe = (c: CliCommand) => `${t(`cli.cmd.${c.key}` as TranslationKey)} ${exampleText(c)}`;
     const shown = filterCommands(CLI_COMMANDS, query, describe);
+    const byExampleOnly = new Set(query.trim() ? shown.filter((c) => filterCommands([c], query, (x) => t(`cli.cmd.${x.key}` as TranslationKey)).length === 0).map((c) => c.key) : []);
     const egg = revealsHidden(query);
     return (
         <div className="space-y-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm leading-relaxed text-muted-foreground">{tn("cli.cmds.help", { help: <code className="font-mono text-foreground [overflow-wrap:anywhere]">telepy &lt;command&gt; --help</code> })}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                    {tn("cli.cmds.help", {
+                        help: <code className="font-mono text-foreground [overflow-wrap:anywhere]">telepy &lt;command&gt; --help</code>,
+                        examples: <code className="font-mono text-foreground [overflow-wrap:anywhere]">telepy examples</code>,
+                    })}
+                </p>
                 <div className="relative sm:w-64 sm:shrink-0">
                     <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
                     <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("cli.cmds.search")} aria-label={t("cli.cmds.search")} className="pl-8" />
@@ -48,16 +66,50 @@ export function CliCommands() {
                     <p className="px-4 py-6 text-center text-sm text-muted-foreground">{t("cli.cmds.none")}</p>
                 ) : (
                     <ul className="divide-y divide-border">
-                        {shown.map((c) => (
-                            <li key={c.key} className="grid min-w-0 gap-x-4 gap-y-1 px-4 py-2.5 md:grid-cols-[minmax(0,25rem)_minmax(0,1fr)_auto] md:items-center">
-                                {/* 只在空白處換行，不把 `[--follow]` 切成兩半。/ Wrap at spaces only, never inside a flag. */}
-                                <code className="min-w-0 font-mono text-sm text-foreground">
-                                    <CommandText value={`telepy ${c.usage}`} />
-                                </code>
-                                <span className="min-w-0 text-sm leading-relaxed text-muted-foreground">{t(`cli.cmd.${c.key}` as TranslationKey)}</span>
-                                <NeedChips needs={c.needs} />
-                            </li>
-                        ))}
+                        {shown.map((c) => {
+                            const examples = examplesForCommand(c.key, context);
+                            const isOpen = open.has(c.key) !== byExampleOnly.has(c.key);
+                            const panel = `cli-cmd-ex-${c.key}`;
+                            return (
+                                <li key={c.key} className="min-w-0 px-4 py-2.5">
+                                    <div className="grid min-w-0 gap-x-4 gap-y-1 md:grid-cols-[minmax(0,25rem)_minmax(0,1fr)_auto] md:items-center">
+                                        {/* 只在空白處換行，不把 `[--follow]` 切成兩半。/ Wrap at spaces only, never inside a flag. */}
+                                        <code className="min-w-0 font-mono text-sm text-foreground">
+                                            <CommandText value={`telepy ${c.usage}`} synopsis />
+                                        </code>
+                                        <span className="min-w-0 text-sm leading-relaxed text-muted-foreground">{t(`cli.cmd.${c.key}` as TranslationKey)}</span>
+                                        <span className="flex flex-wrap items-center gap-2 md:justify-end">
+                                            <NeedChips needs={c.needs} />
+                                            {examples.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggle(c.key)}
+                                                    aria-expanded={isOpen}
+                                                    aria-controls={panel}
+                                                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-sm text-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20"
+                                                >
+                                                    <ChevronRight size={14} className={isOpen ? "rotate-90 transition-transform" : "transition-transform"} aria-hidden />
+                                                    {isOpen ? t("cli.cmds.hideExamples") : t("cli.cmds.showExamples", { count: examples.length })}
+                                                </button>
+                                            )}
+                                        </span>
+                                    </div>
+                                    {isOpen && (
+                                        <ul id={panel} className="mt-2.5 space-y-3 border-l-2 border-border pl-3 md:ml-1">
+                                            {examples.map((ex) => (
+                                                <li key={ex.id} className="min-w-0 space-y-1.5">
+                                                    <p className="text-sm text-foreground">
+                                                        {t(ex.title)}
+                                                        <span className="text-muted-foreground"> · <FlagText text={t(ex.note)} /></span>
+                                                    </p>
+                                                    <CommandLine value={ex.command.value} />
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </li>
+                            );
+                        })}
                     </ul>
                 )}
             </div>

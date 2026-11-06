@@ -186,7 +186,7 @@ Tapi only haunts terminals: piped output never gets a ghost. `NO_COLOR` draws it
 
 ![How the CLI reaches your devices](images/en/cli-flow.png)
 
-A target is a tunnel, optionally with a device account: `box` uses the tunnel's default account, `box@pi` uses `pi` (`pi@box` works too). `telepy <command> --help` lists every option of a command.
+A target is a tunnel, optionally with a device account: `box` uses the tunnel's default account, `box@pi` uses `pi` (`pi@box` works too). `telepy <command> --help` lists every option of a command and ends with its examples; `telepy examples` prints them by topic (`telepy examples forward`) or by command (`telepy examples lan wake`).
 
 ### Find your tunnels
 
@@ -202,7 +202,7 @@ telepy status box                          # health, uptime, device facts and wa
 ```sh
 telepy ssh box                             # the tunnel's default account
 telepy ssh box@pi -- uname -a              # <tunnel>@<account> (pi@box works too)
-telepy ssh box -L 8080:localhost:80        # forward a port; -D 1080 for SOCKS
+telepy ssh box -N -L 8080:localhost:80     # forward a port, no shell (see Port forwarding)
 telepy ssh box -i ~/.ssh/id_work           # a specific key for both hops
 telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # any other ssh option (repeatable; scp / sftp take it too)
 telepy scp ./build.tar.gz box@pi:/tmp/
@@ -365,13 +365,25 @@ A **scheduled rescan** (`lan schedule`, or Repeat in the web app's scan dialog) 
 
 **Waking a machine**: a Wake-on-LAN packet only travels inside the device's own network, so `lan wake` (or Wake in the web app's host panel) has the device send it: it tries `wakeonlan`, `etherwake` / `ether-wake` (also with `sudo -n`) and `python3`, or PowerShell on a Windows device, and broadcasts to the host's network on UDP 9. The machine needs Wake-on-LAN turned on and its MAC address known (a scan reads it from the device's neighbour table while the machine is on). Anyone who can see the tunnel and has an account they may use there can wake its machines; each wake goes into the tunnel's Logs. **Labels and notes** (`lan edit`, or the host panel's Details tab) are yours to write; scans never change them, and the web app's search finds them (`label:rack-2`, or any word of a note).
 
-### A LAN web page in your own browser
+### Port forwarding
 
 ```sh
-telepy forward box 192.168.1.20:8080 --open   # forwards the port to localhost, then opens your browser
+telepy forward box 192.168.1.20:8080 --open   # a LAN web page: forwards the port to localhost, then opens your browser
 telepy forward box@pi nas --open              # a host from `telepy lan ls`, by label; its first web port
 telepy forward box localhost:3000 -l 13000    # the device's own port 3000 on localhost:13000
+telepy ssh box -N -L 8080:localhost:80 -L 15432:localhost:5432   # several ports at once
+telepy ssh box -N -D 1080                     # a SOCKS proxy: every address as the device sees it
+telepy ssh box -N -R 9000:localhost:3000      # the other way: the device's localhost:9000 reaches your port 3000
 ```
+
+| You want | Use | The connection goes |
+| --- | --- | --- |
+| One port of the device, or of a machine behind it | `telepy forward` | your computer → device → host |
+| Several ports, or a shell as well | `telepy ssh -L` (`-N` = no shell) | your computer → device → host |
+| Every address as the device sees it | `telepy ssh -D`, then your browser's SOCKS proxy | your computer → device → anywhere |
+| The device calling something on your computer | `telepy ssh -R` | device → your computer |
+
+`-L`, `-R` and `-D` take what ssh takes; Telepy only adds the route through the tunnel. With `-L`, `-D` and `forward` the device makes the connection to the host, so only the device has to reach it. `-R` listens on the device's localhost unless its sshd allows more (`GatewayPorts`). `telepy examples forward` prints these in the terminal, and the web's Command sheet builds them with your own ports.
 
 `forward` writes the same ssh config as `telepy ssh`, runs `ssh -N -L 127.0.0.1:<local>:<host>:<port>` through the device, waits until the local port answers, prints the address and keeps forwarding until Ctrl+C. The local port is the same number (plus 10000 below 1024) or the next free one; `--local` picks it. Only this computer can use it: it listens on 127.0.0.1. It needs `tunnels:read` and your personal SSH key, like `telepy ssh`. In the web app, the Network page opens the same pages in Telepy's remote browser instead.
 
@@ -410,7 +422,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy whoami` | Who you are, with which token or app, scopes, tunnels and expiry | — |
 | `telepy ls` | Tunnels with health, latency, accounts, labels and group; `--label`, `--group`, `--online`, `--json` | `tunnels:read` |
 | `telepy status <tunnel>` | One tunnel: health, uptime, device facts and warnings | `tunnels:read` |
-| `telepy ssh <target>` | SSH into the device; `-L`, `-D`, `-i`, `--ssh-opt`, `--via`, `--fallback`, a command after `--` | `tunnels:read` + your SSH key |
+| `telepy ssh <target>` | SSH into the device; `-N`, `-L`, `-R`, `-D`, `-i`, `--ssh-opt`, `--via`, `--fallback`, a command after `--` | `tunnels:read` + your SSH key |
 | `telepy scp [-r] <from>… <to>` | Copy with scp; the remote side is `<tunnel>[@account]:<path>` | `tunnels:read` + your SSH key |
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
 | `telepy forward <target> <host>[:port]` | Bring a port behind the device to this computer (`ssh -L`); `--open`, `--local`, `--https` | `tunnels:read` + your SSH key |
@@ -447,6 +459,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy doctor` | Check the server, the sign-in, scopes, expiry, the local ssh tools and the version | — |
 | `telepy update` | Update telepy; `--check`, `--to <version>` | — |
 | `telepy completions [shell]` | Print the Tab completion script for bash, zsh, fish, powershell or elvish; without a shell, which line to add where | — |
+| `telepy examples [topic\|command]` | Examples by topic (`forward`, `network`…) or by command (`lan wake`); without one, the topics. No sign-in needed | — |
 
 </details>
 

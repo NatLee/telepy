@@ -11,6 +11,10 @@
 import type { TranslationKey } from "../locales/en.ts";
 import type { SpotState } from "./flow.ts";
 import type { StepState } from "./stepTabs.ts";
+import type { SubcommandTree } from "./shellHighlight.ts";
+import { CLI_EXAMPLES, CLI_EXAMPLE_TOPICS, type CliTopicId } from "./cliExamples.gen.ts";
+
+export type { CliTopicId };
 
 export const CLI_REPO = "https://github.com/NatLee/telepy";
 export const CLI_RELEASES_URL = `${CLI_REPO}/releases`;
@@ -165,8 +169,13 @@ export type CliNeed = "tunnels:read" | "ssh:exec" | "ssh:files" | "network:scan"
 /** 瀏覽器登入預設要的 scope（`DEFAULT_SCOPE`）；其他的要 `--scope`，`tunnels:manage` 只有 token 有。 */
 export const LOGIN_SCOPES: readonly CliNeed[] = ["tunnels:read", "ssh:exec", "ssh:files"];
 
-export type CliTopicId = "everyday" | "many" | "files" | "sessions" | "toolbox" | "network" | "ci";
-export const CLI_TOPICS: readonly CliTopicId[] = ["everyday", "many", "files", "sessions", "toolbox", "network", "ci"];
+/** 主題順序（`examples.rs` 的 `TOPICS`）。/ The topic order (`TOPICS` in examples.rs). */
+export const CLI_TOPICS: readonly CliTopicId[] = CLI_EXAMPLE_TOPICS.map((t) => t.id);
+
+/** 有開頭一句的主題（`cli.topic.<id>Intro`）。/ Topics with an opening sentence. */
+export function topicIntro(topic: CliTopicId): TranslationKey | null {
+    return CLI_EXAMPLE_TOPICS.find((t) => t.id === topic)?.intro ? (`cli.topic.${topic}Intro` as TranslationKey) : null;
+}
 
 export interface CliRecipe {
     id: string;
@@ -175,7 +184,7 @@ export interface CliRecipe {
     note: TranslationKey;
     command: Snippet;
     needs: CliNeed[];
-    /** 範例裡用了佔位字（沒有真的隧道 / 標籤…）。/ The example uses a placeholder. */
+    /** 範例裡還有佔位字（沒有真的隧道 / 標籤…）。/ The example still has a placeholder. */
     placeholder: boolean;
 }
 
@@ -183,88 +192,62 @@ function sh(value: string): Snippet {
     return { language: "bash", value };
 }
 
-/** 一個主題的範例。名字都用 `shq` 包過，所以複製下來就能跑。/ A topic's examples, names shell-quoted. */
-export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
-    const T = c.tunnel ? shq(c.tunnel) : PLACEHOLDER.tunnel;
-    const TA = c.tunnel && c.account ? shq(`${c.tunnel}@${c.account}`) : c.tunnel ? T : `${PLACEHOLDER.tunnel}@${PLACEHOLDER.account}`;
-    const T2 = c.other ? shq(c.other) : PLACEHOLDER.other;
-    const L = c.label ? shq(c.label) : PLACEHOLDER.label;
-    const G = c.group ? shq(c.group) : PLACEHOLDER.group;
-    const noTunnel = !c.tunnel;
-    const r = (id: string, value: string | Snippet, needs: CliNeed[], placeholder = noTunnel): CliRecipe => ({
+/**
+ * 範例裡的佔位字換成這個人自己的（`shq` 包過，複製下來就能跑）；沒有的留著 `<…>`。片段有變數就在那行後面補 `--var`。
+ * Fills an example's placeholders with the person's own (shell-quoted, so it runs as copied); missing ones stay
+ * `<…>`. A snippet's variables become `--var` on its line.
+ */
+export function fillExample(lines: readonly string[], c: CliContext): string[] {
+    const T = c.tunnel ? shq(c.tunnel) : null;
+    const TA = c.tunnel ? (c.account ? shq(`${c.tunnel}@${c.account}`) : T) : null;
+    const vars = (c.snippet?.vars ?? []).map((v) => ` --var ${shq(v)}=…`).join("");
+    return lines.map((line) => {
+        let out = line;
+        if (TA) out = out.replaceAll(`${PLACEHOLDER.tunnel}@${PLACEHOLDER.account}`, TA);
+        if (T) out = out.replaceAll(PLACEHOLDER.tunnel, T);
+        if (c.other) out = out.replaceAll(PLACEHOLDER.other, shq(c.other));
+        if (c.label) out = out.replaceAll(PLACEHOLDER.label, shq(c.label));
+        if (c.group) out = out.replaceAll(PLACEHOLDER.group, shq(c.group));
+        if (c.base) out = out.replaceAll("<url>", c.base);
+        if (c.snippet && out.includes(PLACEHOLDER.snippet)) out = out.replaceAll(PLACEHOLDER.snippet, shq(c.snippet.name)) + vars;
+        return out;
+    });
+}
+
+const PLACEHOLDER_LEFT = /<[a-z0-9]+>/;
+
+function recipe(id: string, lines: readonly string[], needs: readonly string[], c: CliContext): CliRecipe {
+    const filled = fillExample(lines, c);
+    return {
         id,
         title: `cli.ex.${id}` as TranslationKey,
         note: `cli.ex.${id}Note` as TranslationKey,
-        command: typeof value === "string" ? sh(value) : value,
-        needs,
-        placeholder,
-    });
-    switch (topic) {
-        case "everyday":
-            return [
-                r("ls", "telepy ls", ["tunnels:read"], false),
-                r("lsJson", "telepy ls --online --json", ["tunnels:read"], false),
-                r("status", `telepy status ${T}`, ["tunnels:read"]),
-                r("ssh", `telepy ssh ${T}`, ["tunnels:read", "ssh-key"]),
-                r("sshAccount", `telepy ssh ${TA} -- uname -a`, ["tunnels:read", "ssh-key"], noTunnel || !c.account),
-                r("forward", `telepy ssh ${T} -L 8080:localhost:80`, ["tunnels:read", "ssh-key"]),
-                r("keysAdd", "telepy keys add", [], false),
-                r("keysCheck", `telepy keys check ${TA} --yes`, ["tunnels:read", "ssh:exec"], noTunnel || !c.account),
-                r("configInstall", "telepy config install --all", ["tunnels:read", "ssh-key"], false),
-                r("configTidy", "telepy config tidy", [], false),
-            ];
-        case "many":
-            return [
-                r("exec", `telepy exec ${T} -- uptime`, ["ssh:exec"]),
-                r("execTwo", `telepy exec ${T} ${T2} -- df -h /`, ["ssh:exec"], noTunnel || !c.other),
-                r("execLabel", `telepy exec --label ${L} -- systemctl is-active nginx`, ["ssh:exec"], !c.label),
-                r("execGroup", `telepy exec --group ${G} -- free -h`, ["ssh:exec"], !c.group),
-                r("execJson", `telepy exec --label ${L} --json -- hostname`, ["ssh:exec"], !c.label),
-                r("execApproval", `telepy exec ${T} --wait-approval -- sudo systemctl restart nginx`, ["ssh:exec"]),
-            ];
-        case "files":
-            return [
-                r("cpUp", `telepy cp ./backup.tar.gz ${T}:/tmp/`, ["ssh:files"]),
-                r("cpDown", `telepy cp ${T}:/var/log/syslog ./syslog`, ["ssh:files"]),
-                r("scp", `telepy scp -r ./site ${T}:~/site`, ["tunnels:read", "ssh-key"]),
-                r("sftp", `telepy sftp ${T}`, ["tunnels:read", "ssh-key"]),
-            ];
-        case "sessions":
-            return [
-                r("sessions", "telepy sessions", ["tunnels:read"], false),
-                r("sessionsEnd", "telepy sessions end 42", ["tunnels:manage"], false),
-                r("recordings", `telepy recordings ls --tunnel ${T}`, ["ssh:exec"]),
-                r("play", "telepy recordings play 17 --speed 2", ["ssh:exec"], false),
-            ];
-        case "toolbox": {
-            const name = c.snippet ? shq(c.snippet.name) : PLACEHOLDER.snippet;
-            const vars = (c.snippet?.vars ?? []).map((v) => ` --var ${shq(v)}=…`).join("");
-            return [
-                r("snippets", `telepy snippets ls --tunnel ${T}`, ["ssh:exec"]),
-                r("run", `telepy run ${name} ${T}${vars}`, ["ssh:exec"], noTunnel || !c.snippet),
-                r("update", "telepy update --check\ntelepy update", [], false),
-            ];
-        }
-        case "network":
-            return [
-                r("lanLs", `telepy lan ls ${T}\ntelepy lan map ${T}`, ["tunnels:read"]),
-                r("lanScan", `telepy lan scan ${T}\ntelepy lan show ${T} 192.168.1.20`, ["network:scan"]),
-                r("lanWatch", `telepy lan schedule ${T} --every 6h\ntelepy lan watch ${T} 192.168.1.20\ntelepy lan check ${T} 192.168.1.20`, ["network:scan"]),
-                r("lanWake", `telepy lan wake ${T} 192.168.1.20\ntelepy lan check ${T} 192.168.1.20`, ["ssh:exec"]),
-                r("lanOs", `telepy lan os ${T} 192.168.1.20\ntelepy lan show ${T} 192.168.1.20`, ["network:scan"]),
-                r("lanCp", `telepy cp ${T}/admin@192.168.1.20:/etc/hosts ./hosts\nTELEPY_LAN_PASSWORD=… telepy cp ./backup.tgz ${T}/nas:/srv/backup/`, ["ssh:files"]),
-                r("lanAdd", `telepy lan add ${T} 192.168.1.20 --label nas --user admin\ntelepy lan edit ${T} nas --labels rack-2,prod --note "top shelf, UPS on the left"`, ["tunnels:manage"]),
-                r("lanWeb", `telepy forward ${TA} 192.168.1.20:8080 --open`, ["tunnels:read", "ssh-key"]),
-                r("browse", `ID=$(telepy browse ${T} http://192.168.1.1/)\ntelepy browse text "$ID" --selector main\ntelepy browse shot "$ID" -o router.png\ntelepy browse close "$ID"`, ["browser:use"]),
-                r("browseLogin", `telepy login ${c.base || "<url>"} --scope "tunnels:read ssh:exec ssh:files browser:use"`, ["browser:use"], false),
-            ];
-        case "ci":
-            return [
-                r("ciEnv", `export TELEPY_URL=${c.base || "<url>"}\nexport TELEPY_TOKEN=tpt_…\ntelepy exec --label ${L} -- uptime`, ["ssh:exec"], !c.label),
-                r("ciActions", { language: "yaml", value: githubActions(c.base, L) }, ["ssh:exec"], !c.label),
-                r("activity", "telepy api activity --since 1h --follow", [], false),
-            ];
+        command: sh(filled.join("\n")),
+        needs: needs as CliNeed[],
+        placeholder: filled.some((l) => PLACEHOLDER_LEFT.test(l)),
+    };
+}
+
+/**
+ * 一個主題的範例（`examples.rs` 那一份，填好這個人的名字）；「腳本與 CI」後面再加一個 GitHub Actions 的 job（檔案範本，不在 CLI 裡）。
+ * A topic's examples (the ones in examples.rs, filled in); "Scripts & CI" adds a GitHub Actions job (a file template the CLI doesn't carry).
+ */
+export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
+    const out = CLI_EXAMPLES.filter((e) => e.topic === topic).map((e) => recipe(e.id, e.lines, e.needs, c));
+    if (topic === "ci") {
+        out.push({ ...recipe("ciActions", [], ["ssh:exec"], c), command: { language: "yaml", value: githubActions(c.base, c.label ? shq(c.label) : PLACEHOLDER.label) }, placeholder: !c.label });
     }
+    return out;
+}
+
+/** 一行裡呼叫的 telepy 子指令（第一層）。/ The telepy subcommands a line calls (first level). */
+export function invokedCommands(line: string): string[] {
+    return [...line.matchAll(/(?:^|[\s(])telepy\s+([a-z][a-z-]*)/g)].map((m) => m[1]);
+}
+
+/** 用到某個指令的範例（指令表展開時看的）。/ The examples that use a command (the command list's expanded rows). */
+export function examplesForCommand(key: string, c: CliContext): CliRecipe[] {
+    return CLI_EXAMPLES.filter((e) => e.lines.some((l) => invokedCommands(l).includes(key))).map((e) => recipe(e.id, e.lines, e.needs, c));
 }
 
 /** GitHub Actions 的範例 job：裝 CLI、用 secret 的 token、在有標籤的裝置上部署。/ A GitHub Actions job. */
@@ -305,7 +288,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "whoami", key: "whoami", needs: [] },
     { usage: "ls [--label k=v] [--group <g>] [--online]", key: "ls", needs: ["tunnels:read"] },
     { usage: "status <tunnel>", key: "status", needs: ["tunnels:read"] },
-    { usage: "ssh <tunnel>[@account] [-L …] [-D …] [--via web|ssh] [-- cmd]", key: "ssh", needs: ["tunnels:read", "ssh-key"] },
+    { usage: "ssh <tunnel>[@account] [-N] [-L …] [-R …] [-D …] [--via web|ssh] [-- cmd]", key: "ssh", needs: ["tunnels:read", "ssh-key"] },
     { usage: "scp [-r] <from>… <to>", key: "scp", needs: ["tunnels:read", "ssh-key"] },
     { usage: "sftp <tunnel>[@account]", key: "sftp", needs: ["tunnels:read", "ssh-key"] },
     { usage: "forward <tunnel>[@account] <host>[:port] [--local N] [--open]", key: "forward", needs: ["tunnels:read", "ssh-key"] },
@@ -323,7 +306,20 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "doctor", key: "doctor", needs: [] },
     { usage: "update [--check] [--to <version>]", key: "update", needs: [] },
     { usage: "completions [bash|zsh|fish|powershell|elvish]", key: "completions", needs: [] },
+    { usage: "examples [<topic>|<command>]", key: "examples", needs: [] },
 ];
+
+/**
+ * 子指令樹（上色用）：從總表的用法讀出來——`lan ls | map | …` 的第二層是每段的第一個字。
+ * The subcommand tree for highlighting, read from the list's usages: `lan ls | map | …` → the first word of each part.
+ */
+export const CLI_SUBCOMMANDS: SubcommandTree = Object.fromEntries(
+    CLI_COMMANDS.map((c) => {
+        const parts = c.usage.split(" | ");
+        const words = parts.map((p, i) => (i === 0 ? p.split(" ")[1] ?? "" : p.split(" ")[0])).map((w) => w.replace(/^\[|\]$/g, ""));
+        return [c.key, words.filter((w) => /^[a-z]+$/.test(w))];
+    })
+);
 
 /**
  * 彩蛋：`telepy dig` 不在 `--help` 裡（clap `hide = true`），總表也不列；只有在搜尋框打它的名字才現身。

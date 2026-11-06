@@ -15,6 +15,7 @@ pub mod cast;
 pub mod color;
 pub mod complete;
 pub mod creds;
+pub mod examples;
 pub mod forward;
 pub mod keycheck;
 pub mod keys;
@@ -84,9 +85,10 @@ pub struct Cli {
     pub command: Cmd,
 }
 
-/// `telepy` 的 clap 指令（Tab 補完與 `main` 用）。/ telepy's clap command (for Tab completion and `main`).
+/// `telepy` 的 clap 指令（Tab 補完與 `main` 用），每個子指令的說明結尾帶著它的範例（`examples.rs`）。
+/// telepy's clap command (for Tab completion and `main`), each subcommand's help ending with its examples.
 pub fn command() -> clap::Command {
-    Cli::command()
+    examples::attach(Cli::command())
 }
 
 #[derive(Subcommand, Debug)]
@@ -137,6 +139,8 @@ pub enum Cmd {
     Update(UpdateArgs),
     /// Tab completion for your shell, tunnel names included: `eval "$(telepy completions zsh)"`; without a shell it says what to add where
     Completions(CompletionsArgs),
+    /// Examples by topic or by command: `telepy examples forward`, `telepy examples lan wake`; without one, the topics
+    Examples(ExamplesArgs),
     #[command(hide = true)]
     Dig,
     /// The ProxyCommand `telepy ssh` writes for the hop to Telepy (SSH inside a WebSocket on the web port)
@@ -158,6 +162,12 @@ pub struct CarrierArgs {
     /// The Telepy server (where an "always" answer is saved)
     #[arg(long)]
     pub server: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ExamplesArgs {
+    /// A topic (everyday, forward, many, files, sessions, toolbox, network, ci, setup) or a command (lan, lan wake…)
+    pub query: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -250,12 +260,18 @@ pub struct SshArgs {
     pub target: String,
     #[command(flatten)]
     pub opts: SshOpts,
-    /// Forward a local port: -L 8080:localhost:80
+    /// Forward a local port to the device's side: -L 8080:localhost:80 (repeatable)
     #[arg(short = 'L')]
     pub local: Vec<String>,
+    /// The other way round, a port on the device to this computer: -R 9000:localhost:3000 (repeatable)
+    #[arg(short = 'R')]
+    pub remote: Vec<String>,
     /// Dynamic SOCKS proxy: -D 1080
     #[arg(short = 'D')]
     pub dynamic: Option<String>,
+    /// Only forward ports, no shell (like ssh -N); Ctrl+C stops it
+    #[arg(short = 'N')]
+    pub no_shell: bool,
     /// Command to run instead of a shell (after --)
     #[arg(last = true)]
     pub command: Vec<String>,
@@ -789,7 +805,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         update::clean_leftovers(&exe);
     }
     // `completions` 在每個 shell 開啟時跑（設定檔裡的那行），不該順便查新版。/ `completions` runs at every shell start; no update check there.
-    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_)) { None } else { update::start() };
+    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_) | Cmd::Examples(_)) { None } else { update::start() };
     let result = run_command(cli);
     if matches!(result, Ok(0)) {
         update::finish(check);
@@ -811,6 +827,8 @@ fn run_command(cli: Cli) -> Result<i32> {
         Cmd::Update(a) => update_cmd(a),
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
         Cmd::Completions(a) => complete::run(a.shell.as_deref()),
+        // 範例在 binary 裡，不用登入。/ The examples are built in: no sign-in needed.
+        Cmd::Examples(a) => examples::run(&a.query, &command()),
         // ssh 執行的 ProxyCommand：不用登入（網址與退回的設定都在參數裡）。/ Run by ssh; everything it needs is in its arguments.
         Cmd::Carrier(a) => carrier::run(&a.url, a.tcp.as_deref(), prefs::Fallback::parse(&a.fallback).unwrap_or_default(), &a.server),
         // 只讀寫本機的檔，不用登入。/ Only touches a local file: no sign-in needed.
@@ -836,7 +854,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
                 Cmd::Keys(a) => keys_cmd(&api, a),
-                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_) => unreachable!(),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig | Cmd::Carrier(_) | Cmd::Completions(_) | Cmd::Examples(_) => unreachable!(),
             }
         }
     }
@@ -1262,15 +1280,26 @@ fn hand_over(mut cmd: Command) -> Result<i32> {
 fn ssh(api: &Api, a: &SshArgs) -> Result<i32> {
     let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
     let mut cmd = Command::new("ssh");
-    cmd.arg("-F").arg(&file);
-    for l in &a.local {
-        cmd.arg("-L").arg(l);
-    }
-    if let Some(dd) = &a.dynamic {
-        cmd.arg("-D").arg(dd);
-    }
-    cmd.args(extra_opts(&a.opts)).arg(&alias).args(&a.command);
+    cmd.arg("-F").arg(&file).args(forward_args(a)).args(extra_opts(&a.opts)).arg(&alias).args(&a.command);
     hand_over(cmd)
+}
+
+/// `telepy ssh` 的轉發旗標，照 ssh 的寫法傳下去。/ `telepy ssh`'s forwarding flags, passed on as ssh spells them.
+pub fn forward_args(a: &SshArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    if a.no_shell {
+        out.push("-N".to_string());
+    }
+    for l in &a.local {
+        out.extend(["-L".to_string(), l.clone()]);
+    }
+    for r in &a.remote {
+        out.extend(["-R".to_string(), r.clone()]);
+    }
+    if let Some(d) = &a.dynamic {
+        out.extend(["-D".to_string(), d.clone()]);
+    }
+    out
 }
 
 /// `telepy forward`：寫好 ssh config，`ssh -N -L 127.0.0.1:<本機>:<主機>:<port>` 經裝置，等本機 port 接得通再印網址
@@ -3252,6 +3281,16 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_passes_every_kind_of_forward_on() {
+        let c = Cli::try_parse_from(["telepy", "ssh", "box@pi", "-N", "-L", "8080:localhost:80", "-L", "15432:localhost:5432", "-R", "9000:localhost:3000", "-D", "1080"]).unwrap();
+        let Cmd::Ssh(a) = c.command else { panic!("not ssh") };
+        assert_eq!(forward_args(&a), ["-N", "-L", "8080:localhost:80", "-L", "15432:localhost:5432", "-R", "9000:localhost:3000", "-D", "1080"]);
+        let c = Cli::try_parse_from(["telepy", "ssh", "box", "--", "uptime"]).unwrap();
+        let Cmd::Ssh(a) = c.command else { panic!("not ssh") };
+        assert!(forward_args(&a).is_empty(), "a plain shell or command forwards nothing");
+    }
 
     #[test]
     fn os_lines_put_the_guess_first_and_the_heaviest_clues_next() {
