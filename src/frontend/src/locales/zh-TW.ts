@@ -4425,6 +4425,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "network.loginAs": "登入帳號",
     "network.loginHint": "輸入那台機器上的帳號（英數字、'.'、'_' 或 '-'）。",
     "network.jumpAccount": "經由的裝置帳號",
+    "network.jumpAccountAll": "這裡的終端機、檔案、網頁、桌面、檢查、辨識作業系統和網路喚醒都經過它。",
+    "network.accountGone": "這個裝置帳號在這裡已經不能用了，請在面板上方換一個。",
     "network.openDesktop": "遠端桌面",
     "network.deviceOffline": "裝置離線中。",
     "network.tab.terminal": "連線",
