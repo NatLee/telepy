@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fillSummary, sheetOpenStep, sheetStates, type SheetProgress } from "./sheetSteps.ts";
 
-const base: SheetProgress = { setupDone: 4, setupTotal: 4, setupLoading: false, picked: false, filled: false, invalid: false, copied: false };
+const base: SheetProgress = { setupDone: 4, setupTotal: 4, setupLoading: false, picked: false, invalid: false, copied: false };
 
 test("setup decides the device step: loading, unfinished, done", () => {
     assert.equal(sheetStates({ ...base, setupLoading: true, setupDone: 0 }).device, "todo");
@@ -10,20 +10,19 @@ test("setup decides the device step: loading, unfinished, done", () => {
     assert.equal(sheetStates(base).device, "done");
 });
 
-test("task, fill and run are ticked as they are done", () => {
-    assert.deepEqual(sheetStates(base), { device: "done", task: "todo", fill: "todo", run: "todo" });
-    // 看過填空但還沒選任務：不算填好。/ Seeing fill-in without a task does not count.
-    assert.equal(sheetStates({ ...base, filled: true }).fill, "todo");
-    assert.deepEqual(sheetStates({ ...base, picked: true, filled: true, copied: true }), { device: "done", task: "done", fill: "done", run: "done" });
+test("the task and the command are ticked as they are done", () => {
+    assert.deepEqual(sheetStates(base), { device: "done", task: "todo", command: "todo" });
+    // 指令那一步：複製了才打勾。/ The command step is ticked once copied.
+    assert.deepEqual(sheetStates({ ...base, picked: true, copied: true }), { device: "done", task: "done", command: "done" });
 });
 
-test("an invalid value puts fill-in on attention", () => {
-    assert.equal(sheetStates({ ...base, picked: true, filled: true, invalid: true }).fill, "attention");
-    assert.equal(sheetStates({ ...base, invalid: true }).fill, "attention");
+test("an invalid value puts the command step on attention", () => {
+    assert.equal(sheetStates({ ...base, picked: true, invalid: true }).command, "attention");
+    assert.equal(sheetStates({ ...base, invalid: true, copied: true }).command, "attention");
 });
 
-test("the page opens on fill-in for deep links, else device until set up, else task", () => {
-    assert.equal(sheetOpenStep({ deepLinked: true, setupComplete: false }), "fill");
+test("the page opens on the command for deep links, else device until set up, else task", () => {
+    assert.equal(sheetOpenStep({ deepLinked: true, setupComplete: false }), "command");
     assert.equal(sheetOpenStep({ deepLinked: false, setupComplete: false }), "device");
     assert.equal(sheetOpenStep({ deepLinked: false, setupComplete: true }), "task");
 });

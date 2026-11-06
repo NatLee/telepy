@@ -82,7 +82,7 @@ export function CliExamples({ context, tunnels, selected, setTunnel, online }: P
                         <ForwardKinds />
                         <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-muted-foreground">
                             {t("cli.ex.sheet")}
-                            <Link href={selected ? `/tunnels/cheatsheet?tunnel=${selected.id}` : "/tunnels/cheatsheet"} className="text-primary hover:underline">
+                            <Link href={selected ? `/tunnels/cheatsheet?tunnel=${selected.id}&way=telepy` : "/tunnels/cheatsheet?way=telepy"} className="text-primary hover:underline">
                                 {t("cli.ex.sheetLink")} →
                             </Link>
                         </p>

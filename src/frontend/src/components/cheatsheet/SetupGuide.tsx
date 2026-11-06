@@ -13,13 +13,14 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, CircleAlert, CircleCheck, Clock3, KeyRound, Loader2 } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, CircleCheck, Clock3, KeyRound, Loader2, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { TargetChip } from "@/components/keys/TargetChips";
 import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import type { ConnectMode } from "@/lib/forwardRecipes";
 import { parseStanzas, type ConfigStanza } from "@/lib/sshConfig";
 import type { SetupChecklist, SetupStepId, SetupStepState } from "@/hooks/useSetupChecklist";
@@ -142,6 +143,9 @@ interface SetupGuideProps {
 
 export function SetupGuide({ openRequest, tunnelId, alias, username, online, mode, setMode, configText, knownHosts, legacyAlias, checklist }: SetupGuideProps) {
     const { t, tn } = useI18n();
+    // `telepy login` 的網址 = RFC 9728 的 resource 去掉 /mcp（跟 CLI 頁一樣，反映 PUBLIC_URL）。/ The sign-in URL, like the CLI page's.
+    const mcpUrl = useMcpServerUrl();
+    const base = mcpUrl ? mcpUrl.replace(/\/mcp\/?$/, "") : "";
     const { steps, current } = checklist;
     const allDone = current === null;
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
@@ -178,7 +182,7 @@ export function SetupGuide({ openRequest, tunnelId, alias, username, online, mod
         key: t("sheet.setup.keyTitle"),
         online: t("sheet.setup.deviceTitle"),
         deviceKey: t("sheet.setup.deviceKeyTitle"),
-        config: tn("sheet.setup.configTitle", { alias: code(alias) }),
+        config: mode === "telepy" ? t("sheet.setup.cliTitle") : tn("sheet.setup.configTitle", { alias: code(alias) }),
     };
 
     const keyStep = () => {
@@ -289,7 +293,46 @@ export function SetupGuide({ openRequest, tunnelId, alias, username, online, mod
         return { summary, body };
     };
 
+    // telepy 跑法：你這台電腦要的是裝好 telepy 並登入一次（它自己寫 ssh config）。/ The telepy way: install telepy and sign in once.
+    const cliStep = () => {
+        const isDone = stateOf("config") === "done";
+        const hosts = checklist.cliSignIns.filter(Boolean).join(", ");
+        return {
+            summary: checklist.cliSeen ? t("sheet.setup.cliSeenSummary", { hosts: hosts || "telepy" }) : isDone ? t("sheet.setup.cliTickedSummary") : t("sheet.setup.cliTodoSummary"),
+            body: (
+                <>
+                    <p>{tn("sheet.setup.cliWhy", { path: code("~/.ssh/config") })}</p>
+                    {checklist.cliSeen ? (
+                        <p>{t("sheet.setup.cliSeen", { hosts: hosts || "telepy" })}</p>
+                    ) : (
+                        <>
+                            <Button asChild size="sm" variant={isDone ? "outline" : "default"}>
+                                <Link href="/tunnels/cli" prefetch={false}><SquareTerminal size={15} />{t("sheet.setup.cliInstall")}</Link>
+                            </Button>
+                            <p className="text-xs">{t("sheet.setup.cliLogin")}</p>
+                            <MiniCommand command={`telepy login ${base || "<url>"}`} />
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/70 pt-3">
+                                {isDone ? (
+                                    <Button size="sm" variant="outline" onClick={() => checklist.markConfig(false)}>{t("sheet.setup.configUnmark")}</Button>
+                                ) : (
+                                    <Button size="sm" variant="outline" onClick={() => checklist.markConfig(true)}><Check size={15} />{t("sheet.setup.cliMark")}</Button>
+                                )}
+                                <span className="text-xs">{t("sheet.setup.cliCantSee")}</span>
+                            </div>
+                        </>
+                    )}
+                    <p className="flex flex-wrap items-center gap-2 text-xs">
+                        {t("sheet.setup.cliRather")}
+                        <Button size="xs" variant="outline" onClick={() => setMode("alias")}>{t("sheet.modeAlias")}</Button>
+                        <Button size="xs" variant="outline" onClick={() => setMode("direct")}>{t("sheet.modeDirect")}</Button>
+                    </p>
+                </>
+            ),
+        };
+    };
+
     const configStep = () => {
+        if (mode === "telepy") return cliStep();
         const isDone = stateOf("config") === "done";
         const stanzas = configText ? parseStanzas(configText) : [];
         if (mode === "direct") {

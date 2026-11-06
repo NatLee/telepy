@@ -289,7 +289,7 @@ pub const EXAMPLES: &[Example] = &[
         topic: "files",
         title: "Copy a folder with scp",
         note: "Through your system's OpenSSH, so -r and every scp option work.",
-        lines: &["telepy scp -r ./site <tunnel>:~/site"],
+        lines: &["telepy scp -r ./project <tunnel>@<account>:~/"],
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {
@@ -390,6 +390,14 @@ pub const EXAMPLES: &[Example] = &[
         note: "Only for the machine you name: the device pings it, Telepy reads its SSH greeting and asks its SMB server (no login); nmap -O runs too when the device has nmap and root. lan show prints the stored result.",
         lines: &["telepy lan os <tunnel> 192.168.1.20", "telepy lan show <tunnel> 192.168.1.20"],
         needs: &["network:scan"],
+    },
+    Example {
+        id: "lanShell",
+        topic: "network",
+        title: "A shell on a machine behind the device",
+        note: "The device's own ssh logs in to that machine, with the device's keys or a password prompt; --ssh-opt -t gives it a terminal.",
+        lines: &["telepy ssh <tunnel>@<account> --ssh-opt -t -- ssh ubuntu@192.168.1.20"],
+        needs: &["tunnels:read", "ssh-key"],
     },
     Example {
         id: "lanCp",

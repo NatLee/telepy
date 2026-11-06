@@ -6,7 +6,11 @@ import { useI18n } from "@/lib/i18n";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
 import { TargetUser, Tunnel } from "@/types/tunnel";
-import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
+import { CONNECT_MODES, type ConnectMode, type ConnectTarget } from "@/lib/forwardRecipes";
+import { grantHost } from "@/lib/cliSignIns";
+import { useAuth } from "@/lib/auth";
+import { hasFeature } from "@/lib/features";
+import type { OAuthGrant } from "@/types/oauth";
 
 /** `/tunnels/server/config/{id}` 的回應（含指令速查用的結構化欄位）。/ Config endpoint response. */
 export interface TunnelConfigData {
@@ -32,6 +36,12 @@ export interface TunnelConfigData {
 
 const MODE_STORAGE_KEY = "telepy.cheatsheetMode";
 
+/** `?way=` 的值 → 跑法（CLI 頁的連結帶 `way=telepy`）。/ `?way=` → the mode (the CLI page links with `way=telepy`). */
+function wayParam(v: string | null): ConnectMode | null {
+    if (v === "ssh") return "alias";
+    return v && (CONNECT_MODES as readonly string[]).includes(v) ? (v as ConnectMode) : null;
+}
+
 /** 與後端 sanitize_host_alias 相同（沒有目標使用者、config 裡沒有裝置區塊時才用到）。/ Mirrors the backend alias sanitizer. */
 function sanitizeAlias(value: string): string {
     const v = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -49,7 +59,10 @@ export function useCheatsheetPage() {
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const tunnelParam = searchParams.get("tunnel");
+    const wayFromUrl = wayParam(searchParams.get("way"));
     const { t } = useI18n();
+    const { user } = useAuth();
+    const browserSignIn = hasFeature(user, "mcp.connect");
     const { showError } = useToast();
 
     const [tunnels, setTunnels] = useState<Tunnel[]>([]);
@@ -60,14 +73,19 @@ export function useCheatsheetPage() {
     const [loadingConfig, setLoadingConfig] = useState(false);
     // 使用者在「目標使用者」下拉選的值；只對選它時的那條隧道有效。/ The user's pick, valid only for the tunnel it was made on.
     const [userChoice, setUserChoice] = useState<{ tunnelId: number; usernameId: number } | null>(null);
-    const [mode, setModeState] = useState<ConnectMode>("alias");
+    // 跑法：網址的 `?way=` → 存過的選擇 → 有 CLI 登入就用 telepy，否則 ~/.ssh/config。
+    // The mode: `?way=` → the saved choice → telepy when the CLI is signed in somewhere, else ~/.ssh/config.
+    const [chosenMode, setModeState] = useState<ConnectMode | null>(wayFromUrl);
+    // 這個人 `telepy login` 過幾台電腦（null = 還在讀；看不到瀏覽器登入時是 0）。/ Computers the CLI signed in from.
+    const [cliSignIns, setCliSignIns] = useState<string[] | null>(null);
 
     useEffect(() => {
+        if (wayFromUrl) return;
         try {
             const saved = localStorage.getItem(MODE_STORAGE_KEY);
-            if (saved === "alias" || saved === "direct") setModeState(saved);
+            if (saved && (CONNECT_MODES as readonly string[]).includes(saved)) setModeState(saved as ConnectMode);
         } catch { /* localStorage 不可用時用預設值 / fall back to the default */ }
-    }, []);
+    }, [wayFromUrl]);
 
     const setMode = useCallback((m: ConnectMode) => {
         setModeState(m);
@@ -78,9 +96,10 @@ export function useCheatsheetPage() {
         let cancelled = false;
         (async () => {
             try {
-                const [dash, keys] = await Promise.all([
+                const [dash, keys, grants] = await Promise.all([
                     apiFetch("/api/reverse/server/dashboard"),
                     apiFetch("/api/reverse/user/keys"),
+                    browserSignIn ? apiFetch("/api/oauth/grants").catch(() => null) : Promise.resolve(null),
                 ]);
                 if (cancelled) return;
                 if (dash.ok) {
@@ -94,14 +113,21 @@ export function useCheatsheetPage() {
                     const list = await readJson<unknown[]>(keys);
                     setKeyCount(Array.isArray(list) ? list.length : 0);
                 }
+                const list = grants?.ok ? await readJson<OAuthGrant[]>(grants) : null;
+                setCliSignIns((Array.isArray(list) ? list : []).map(grantHost).filter((h): h is string => h !== null));
             } catch (e: unknown) {
                 if (!cancelled) showError(e instanceof Error ? e.message : t("tunnels.fetchFailed"));
             } finally {
-                if (!cancelled) setLoadingTunnels(false);
+                if (!cancelled) {
+                    setLoadingTunnels(false);
+                    setCliSignIns((x) => x ?? []);
+                }
             }
         })();
         return () => { cancelled = true; };
-    }, [showError, t]);
+    }, [showError, t, browserSignIn]);
+
+    const mode: ConnectMode = chosenMode ?? (cliSignIns && cliSignIns.length > 0 ? "telepy" : "alias");
 
     useNotificationHandlers({
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS_DATA]: (msg) => {
@@ -181,6 +207,7 @@ export function useCheatsheetPage() {
 
     const target: ConnectTarget | null = selected
         ? {
+            tunnel: selected.host_friendly_name,
             alias: host?.alias ?? sanitizeAlias(selected.host_friendly_name),
             username: host?.username ?? "USER",
             serverHost: currentConfig?.server?.host || (typeof window !== "undefined" ? window.location.hostname : "telepy"),
@@ -204,6 +231,7 @@ export function useCheatsheetPage() {
             hasTargetUser: (currentConfig?.usernames?.length ?? 0) > 0,
             target,
             mode,
+            cliSignIns,
         },
         actions: { setTunnel, setUsernameId, setMode },
     };

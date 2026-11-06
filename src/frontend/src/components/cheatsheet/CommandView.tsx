@@ -11,11 +11,14 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { SHORT_LABEL, segmentsToString, type Segment, type TokenKind } from "@/lib/forwardRecipes";
 
+/** 跟 CLI 頁同一組指令顏色（`--code-*`，深色框用 `.code-terminal` 的亮色那組）。/ The same command colours as the CLI page. */
 const TOKEN_CLASS: Record<TokenKind, string> = {
-    cmd: "text-success font-semibold",
-    flag: "text-sky-400",
-    value: "text-warning",
-    target: "text-violet-300",
+    telepy: "text-(--code-telepy)",
+    cmd: "text-(--code-cmd)",
+    sub: "text-(--code-sub)",
+    flag: "text-(--code-flag)",
+    value: "text-(--code-string)",
+    target: "text-(--code-placeholder)",
     arg: "text-slate-200",
 };
 
@@ -91,7 +94,7 @@ function Tokens({ segments, wrap = false }: { segments: Segment[]; wrap?: boolea
 export function CommandBar({ segments, onCopy }: { segments: Segment[]; onCopy?: () => void }) {
     const text = segmentsToString(segments);
     return (
-        <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
+        <div className="code-terminal flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
             <pre className="min-w-0 flex-1 whitespace-pre-wrap py-1 font-mono text-[1rem] leading-relaxed text-slate-200 [overflow-wrap:anywhere]">
                 <span className="select-none text-slate-500">$ </span>
                 <Tokens segments={segments} wrap />
@@ -104,7 +107,7 @@ export function CommandBar({ segments, onCopy }: { segments: Segment[]; onCopy?:
 /** 單行小指令（測試 / 停止用）。/ Small one-line copyable command (tests / stopping). */
 export function MiniCommand({ command }: { command: string }) {
     return (
-        <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
+        <div className="code-terminal flex items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
             <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-slate-200">
                 <span className="select-none text-slate-500">$ </span>{command}
             </code>
@@ -116,7 +119,7 @@ export function MiniCommand({ command }: { command: string }) {
 /** 速查表的一列：彩色、可橫向捲動。/ A quick-reference row: coloured, scrolls sideways. */
 export function InlineCommand({ segments }: { segments: Segment[] }) {
     return (
-        <div className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
+        <div className="code-terminal flex min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
             <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs">
                 <span className="select-none text-slate-500">$ </span>
                 <Tokens segments={segments} />
@@ -127,12 +130,12 @@ export function InlineCommand({ segments }: { segments: Segment[] }) {
 }
 
 const PART_COLORS = [
-    { text: "text-success", bar: "bg-success" },
-    { text: "text-sky-400", bar: "bg-sky-400" },
-    { text: "text-warning", bar: "bg-warning" },
-    { text: "text-violet-300", bar: "bg-violet-300" },
-    { text: "text-pink-300", bar: "bg-pink-300" },
-    { text: "text-teal-300", bar: "bg-teal-300" },
+    { text: "text-(--code-cmd)", bar: "bg-(--code-cmd)" },
+    { text: "text-(--code-flag)", bar: "bg-(--code-flag)" },
+    { text: "text-(--code-string)", bar: "bg-(--code-string)" },
+    { text: "text-(--code-placeholder)", bar: "bg-(--code-placeholder)" },
+    { text: "text-(--code-var)", bar: "bg-(--code-var)" },
+    { text: "text-(--code-sub)", bar: "bg-(--code-sub)" },
 ];
 
 /**
@@ -145,7 +148,7 @@ const PART_COLORS = [
 export function AnnotatedCommand({ segments }: { segments: Segment[] }) {
     const { t } = useI18n();
     return (
-        <div className="min-w-0 rounded-xl border border-slate-800 bg-[#0b1020] p-4 sm:p-5">
+        <div className="code-terminal min-w-0 rounded-xl border border-slate-800 bg-[#0b1020] p-4 sm:p-5">
             <div className="flex flex-wrap items-start gap-x-4 gap-y-5">
                 {segments.map((seg, i) => {
                     const color = PART_COLORS[i % PART_COLORS.length];

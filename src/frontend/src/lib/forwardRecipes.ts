@@ -14,10 +14,19 @@ import type { TranslationKey } from "@/locales/en";
 
 export type RecipeId = "local" | "lan" | "socks" | "remote" | "jump" | "copy" | "rustdesk";
 
-/** alias：用 ~/.ssh/config 的 Host 別名；direct：不需要 config 的單行指令（-J 經 Telepy）。 */
-export type ConnectMode = "alias" | "direct";
+/**
+ * 怎麼跑：telepy = Telepy 的 CLI（`telepy forward` / `telepy ssh`，自己寫 ssh config，不碰 ~/.ssh/config）；
+ * alias = 用 ~/.ssh/config 的 Host 別名；direct = 不需要 config 的單行指令（-J 經 Telepy）。
+ * How it runs: telepy = Telepy's CLI (`telepy forward` / `telepy ssh`, writes its own ssh config, never touches
+ * ~/.ssh/config); alias = the Host alias in ~/.ssh/config; direct = a one-line command needing no config (-J via Telepy).
+ */
+export type ConnectMode = "telepy" | "alias" | "direct";
+
+export const CONNECT_MODES: readonly ConnectMode[] = ["telepy", "alias", "direct"];
 
 export interface ConnectTarget {
+    /** 通道名稱（`telepy` 的目標）。/ The tunnel's name (telepy's target). */
+    tunnel: string;
     /** ~/.ssh/config 裡裝置的 Host 別名（後端 sanitize 過）。/ The device's Host alias in ~/.ssh/config. */
     alias: string;
     /** 裝置上的 OS 使用者（目標主機使用者）。/ OS user on the device (target server user). */
@@ -37,7 +46,7 @@ export interface ForwardOptions {
     exitOnFailure: boolean;
 }
 
-export type TokenKind = "cmd" | "flag" | "value" | "target" | "arg";
+export type TokenKind = "telepy" | "cmd" | "sub" | "flag" | "value" | "target" | "arg";
 
 export interface Token {
     text: string;
@@ -63,8 +72,14 @@ export interface FieldDef {
     choices?: { value: string; label: TranslationKey }[];
 }
 
+/** 速查頁把任務分兩組：埠轉發，與連進去 / 搬檔案。/ The sheet groups tasks: port forwarding, and getting in / moving files. */
+export type RecipeGroup = "forward" | "reach";
+
 export interface RecipeDef {
     id: RecipeId;
+    group: RecipeGroup;
+    /** 轉發的方向（`ForwardKinds` 的哪一條）。/ Which way it forwards (the `ForwardKinds` lane). */
+    direction?: "local" | "remote" | "socks";
     /** 情境卡片上的旗標徽章（-L / -D …）。/ Flag badge shown on the recipe tile. */
     flag: string;
     title: TranslationKey;
@@ -77,6 +92,8 @@ export interface RecipeDef {
 export const RECIPES: RecipeDef[] = [
     {
         id: "local",
+        group: "forward",
+        direction: "local",
         flag: "-L",
         title: "sheet.recipe.local.title",
         fields: [
@@ -88,6 +105,8 @@ export const RECIPES: RecipeDef[] = [
     },
     {
         id: "lan",
+        group: "forward",
+        direction: "local",
         flag: "-L",
         title: "sheet.recipe.lan.title",
         fields: [
@@ -100,6 +119,8 @@ export const RECIPES: RecipeDef[] = [
     },
     {
         id: "socks",
+        group: "forward",
+        direction: "socks",
         flag: "-D",
         title: "sheet.recipe.socks.title",
         fields: [{ key: "localPort", label: "sheet.field.proxyPort", kind: "port" }],
@@ -108,6 +129,8 @@ export const RECIPES: RecipeDef[] = [
     },
     {
         id: "remote",
+        group: "forward",
+        direction: "remote",
         flag: "-R",
         title: "sheet.recipe.remote.title",
         fields: [
@@ -119,6 +142,7 @@ export const RECIPES: RecipeDef[] = [
     },
     {
         id: "jump",
+        group: "reach",
         flag: "-J",
         title: "sheet.recipe.jump.title",
         fields: [
@@ -131,6 +155,7 @@ export const RECIPES: RecipeDef[] = [
     },
     {
         id: "copy",
+        group: "reach",
         flag: "scp",
         title: "sheet.recipe.copy.title",
         fields: [
@@ -162,6 +187,8 @@ export const RECIPES: RecipeDef[] = [
         // RustDesk 的 Direct IP Access（21118）經隧道轉到本機，用 RustDesk 原生 client 連 127.0.0.1。
         // 主機 `localhost` = 裝置自己；區網主機填它的位址。/ RustDesk's Direct IP port forwarded for the native client.
         id: "rustdesk",
+        group: "forward",
+        direction: "local",
         flag: "-L",
         title: "sheet.recipe.rustdesk.title",
         fields: [
@@ -293,7 +320,99 @@ export function forwardSpec(id: RecipeId, params: RecipeParams): string | null {
     }
 }
 
+/**
+ * `telepy` 的目標：`<通道>@<帳號>`（shell 引號包過）。/ telepy's target: `<tunnel>@<account>`, shell-quoted.
+ */
+export function cliTarget(target: ConnectTarget): string {
+    return shq(`${target.tunnel}@${target.username}`);
+}
+
+/** 用預設值時，`telepy` 跑法產生的就是這個 CLI 範例（`src/cli/src/examples.rs`；測試比對）。/ The CLI example the telepy way equals with the defaults (tested). */
+export const TELEPY_EXAMPLE: Partial<Record<RecipeId, string>> = {
+    local: "forward",
+    lan: "forwardLan",
+    socks: "forwardSocks",
+    remote: "forwardRemote",
+    rustdesk: "forwardRustdesk",
+    jump: "lanShell",
+    copy: "scp",
+};
+
+const TELEPY: Segment = { tokens: [tok("telepy", "telepy")], explain: { key: "sheet.explain.telepy" } };
+
+function telepyTarget(target: ConnectTarget): Segment {
+    return { tokens: [tok(cliTarget(target), "target")], explain: { key: "sheet.explain.telepyTarget", vars: { tunnel: target.tunnel, user: target.username } } };
+}
+
+/** `telepy forward <目標> <主機>:<埠> --local <本機埠>`。/ `telepy forward <target> <host>:<port> --local <local port>`. */
+function telepyForward(target: ConnectTarget, host: string, port: string, local: string): Segment[] {
+    return [
+        TELEPY,
+        { tokens: [tok("forward", "sub")], explain: { key: "sheet.explain.telepyForward" } },
+        telepyTarget(target),
+        { tokens: [tok(`${host}:${port}`, "value")], explain: { key: "sheet.explain.telepyTo", vars: { host, port } } },
+        { tokens: [tok("--local", "flag"), tok(local, "value")], explain: { key: "sheet.explain.telepyLocal", vars: { port: local } } },
+    ];
+}
+
+function telepySsh(target: ConnectTarget): Segment[] {
+    return [TELEPY, { tokens: [tok("ssh", "sub")], explain: { key: "sheet.explain.telepySsh" } }, telepyTarget(target)];
+}
+
+/**
+ * telepy 跑法：一個埠用 `telepy forward`（等到接得通、印出網址），SOCKS / 反向用 `telepy ssh -N`，跳到區網主機用裝置自己的
+ * ssh（`--ssh-opt -t` 給它一個終端機），搬檔案用 `telepy scp`（沒有 rsync）。轉發的選項（-f、keep-alive）在這裡不用：CLI 自己處理。
+ * The telepy way: one port = `telepy forward` (waits until it answers, prints the address), SOCKS / reverse =
+ * `telepy ssh -N`, a LAN host = the device's own ssh (`--ssh-opt -t` gives it a terminal), files = `telepy scp`
+ * (no rsync). The forwarding options (-f, keep-alive) don't apply: the CLI handles those itself.
+ */
+function telepySegments(id: RecipeId, params: RecipeParams, target: ConnectTarget): Segment[] {
+    const def = RECIPE_BY_ID[id];
+    switch (id) {
+        case "local":
+            return telepyForward(target, "localhost", port(params, "remotePort", def), port(params, "localPort", def));
+        case "lan":
+            return telepyForward(target, host(params, "lanHost", def), port(params, "lanPort", def), port(params, "localPort", def));
+        case "rustdesk":
+            return telepyForward(target, host(params, "lanHost", def), port(params, "remotePort", def), port(params, "localPort", def));
+        case "socks": {
+            const lp = port(params, "localPort", def);
+            return [...telepySsh(target), { tokens: [tok("-N", "flag")], explain: { key: "sheet.explain.noShell" } }, { tokens: [tok("-D", "flag"), tok(lp, "value")], explain: { key: "sheet.explain.dynamicForward", vars: { port: lp } } }];
+        }
+        case "remote": {
+            const lp = port(params, "localPort", def);
+            const dp = port(params, "devicePort", def);
+            return [
+                ...telepySsh(target),
+                { tokens: [tok("-N", "flag")], explain: { key: "sheet.explain.noShell" } },
+                { tokens: [tok("-R", "flag"), tok(`${dp}:localhost:${lp}`, "value")], explain: { key: "sheet.explain.remoteForward", vars: { devicePort: dp, localPort: lp } } },
+            ];
+        }
+        case "jump": {
+            const user = text(params, "lanUser", def);
+            const h = host(params, "lanHost", def);
+            const p = port(params, "lanPort", def);
+            const inner = [tok("ssh", "cmd"), ...(p !== "22" ? [tok("-p", "flag"), tok(p, "value")] : []), tok(`${shq(user)}@${h}`, "target")];
+            return [
+                ...telepySsh(target),
+                { tokens: [tok("--ssh-opt", "flag"), tok("-t", "value")], explain: { key: "sheet.explain.telepyTty" } },
+                { tokens: [tok("--", "arg"), ...inner], explain: { key: "sheet.explain.telepyHop", vars: { user, host: h } } },
+            ];
+        }
+        case "copy": {
+            const upload = (params.direction ?? def.defaults.direction) !== "download";
+            const localPath = text(params, "localPath", def);
+            const remotePath = text(params, "remotePath", def);
+            const local: Segment = { tokens: [tok(shq(localPath), "arg")], explain: { key: upload ? "sheet.explain.copyFromLocal" : "sheet.explain.copyToLocal", vars: { path: localPath } } };
+            const remote: Segment = { tokens: [tok(`${cliTarget(target)}:${shq(remotePath)}`, "target")], explain: { key: upload ? "sheet.explain.copyToDevice" : "sheet.explain.copyFromDevice", vars: { path: remotePath } } };
+            const [src, dst] = upload ? [local, remote] : [remote, local];
+            return [TELEPY, { tokens: [tok("scp", "sub"), tok("-r", "flag")], explain: { key: "sheet.explain.telepyScp" } }, src, dst];
+        }
+    }
+}
+
 export function buildSegments(id: RecipeId, params: RecipeParams, target: ConnectTarget, options: ForwardOptions): Segment[] {
+    if (target.mode === "telepy") return telepySegments(id, params, target);
     const def = RECIPE_BY_ID[id];
     switch (id) {
         case "local": {
@@ -423,6 +542,15 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.copyToLanHost": "sheet.part.copyToLanHost",
     "sheet.explain.copyFromLanHost": "sheet.part.copyFromLanHost",
     "sheet.explain.remoteCommand": "sheet.part.remoteCommand",
+    "sheet.explain.telepy": "sheet.part.telepy",
+    "sheet.explain.telepyForward": "sheet.part.telepyForward",
+    "sheet.explain.telepySsh": "sheet.part.telepySsh",
+    "sheet.explain.telepyScp": "sheet.part.telepyScp",
+    "sheet.explain.telepyTarget": "sheet.part.telepyTarget",
+    "sheet.explain.telepyTo": "sheet.part.telepyTo",
+    "sheet.explain.telepyLocal": "sheet.part.telepyLocal",
+    "sheet.explain.telepyTty": "sheet.part.telepyTty",
+    "sheet.explain.telepyHop": "sheet.part.telepyHop",
 };
 
 export function segmentsToString(segments: Segment[]): string {
@@ -431,6 +559,11 @@ export function segmentsToString(segments: Segment[]): string {
 
 /** 開 shell / 執行單一指令（速查表的額外兩列）。/ Open a shell / run one command (extra quick-reference rows). */
 export function shellSegments(target: ConnectTarget, command?: string): Segment[] {
+    if (target.mode === "telepy") {
+        const out = telepySsh(target);
+        if (command) out.push({ tokens: [tok("--", "arg"), tok(command, "arg")], explain: { key: "sheet.explain.remoteCommand" } });
+        return out;
+    }
     const out: Segment[] = [SSH, ...deviceTarget(target)];
     if (command) out.push({ tokens: [tok(shq(command), "arg")], explain: { key: "sheet.explain.remoteCommand" } });
     return out;
