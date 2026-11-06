@@ -630,6 +630,7 @@ export function useDesktopPage() {
     const configHost = currentConfig?.hosts?.find((h) => h.username === form.account) ?? currentConfig?.hosts?.[0] ?? null;
     const connectTarget: ConnectTarget | null = tunnel
         ? {
+            tunnel: tunnel.name,
             alias: configHost?.alias ?? sanitizeAlias(tunnel.name),
             username: form.account || configHost?.username || "USER",
             serverHost: currentConfig?.server?.host || (typeof window !== "undefined" ? window.location.hostname : "telepy"),

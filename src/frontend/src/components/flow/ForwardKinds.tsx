@@ -72,7 +72,8 @@ function Telepy() {
     );
 }
 
-export function ForwardKinds({ active, values = EXAMPLE_FORWARD_VALUES, only, className }: { active?: ForwardKind | null; values?: ForwardValues; only?: ForwardKind[]; className?: string }) {
+/** `titled`：自己帶標題（放在對話框裡時，標題已經是對話框的）。/ `titled`: its own caption (off inside a dialog that already says it). */
+export function ForwardKinds({ active, values = EXAMPLE_FORWARD_VALUES, only, titled = true, className }: { active?: ForwardKind | null; values?: ForwardValues; only?: ForwardKind[]; titled?: boolean; className?: string }) {
     const { t } = useI18n();
     const L = values.local;
     const R = values.remote;
@@ -127,7 +128,7 @@ export function ForwardKinds({ active, values = EXAMPLE_FORWARD_VALUES, only, cl
     ];
     return (
         <figure className={cn("@container min-w-0 rounded-xl border border-border bg-card text-card-foreground shadow-card", className)} aria-label={t("fwdKinds.title")}>
-            <figcaption className="border-b border-border px-4 py-2.5 text-sm text-foreground">{t("fwdKinds.title")}</figcaption>
+            {titled && <figcaption className="border-b border-border px-4 py-2.5 text-sm text-foreground">{t("fwdKinds.title")}</figcaption>}
             <ul className="divide-y divide-border">
                 {lanes.filter((l) => !only || only.includes(l.kind)).map((l) => (
                     <li key={l.kind} className={cn("min-w-0 space-y-2.5 px-4 py-3", active && active !== l.kind && "opacity-55", active === l.kind && "bg-surface")}>

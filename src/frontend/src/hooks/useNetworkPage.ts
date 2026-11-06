@@ -448,6 +448,7 @@ export function useNetworkPage() {
      */
     const loadConnectTarget = useCallback(async (tn: TopologyTunnel, deviceUser: string | null): Promise<ConnectTarget> => {
         const fallback: ConnectTarget = {
+            tunnel: tn.name,
             alias: sanitizeAlias(tn.name),
             username: deviceUser ?? "USER",
             serverHost: typeof window !== "undefined" ? window.location.hostname : "telepy",

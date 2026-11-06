@@ -59,7 +59,7 @@ export function ReadinessPath({ checklist, alias, username, online, mode, onOpen
     const { t } = useI18n();
     const state = (id: SetupStepId) => checklist.steps.find((s) => s.id === id)!.state;
     const count = (ids: SetupStepId[]) => `${ids.filter((id) => state(id) === "done").length} / ${ids.length}`;
-    const mine: SetupStepId[] = ["key", "config"];
+    const mine: SetupStepId[] = mode === "telepy" ? ["config", "key"] : ["key", "config"];
     const device: SetupStepId[] = ["online", "deviceKey"];
     return (
         <FlowPath stretch>
@@ -70,8 +70,18 @@ export function ReadinessPath({ checklist, alias, username, online, mode, onOpen
                 stateText={count(mine)}
                 control={
                     <div className="-mx-2 space-y-0.5">
-                        <Item state={state("key")} label={t("sheet.ready.key")} onClick={() => onOpen("key")} />
-                        <Item state={state("config")} label={mode === "direct" ? t("sheet.ready.direct") : <span className="font-mono">~/.ssh/config</span>} onClick={() => onOpen("config")} />
+                        {mine.map((id) =>
+                            id === "key" ? (
+                                <Item key={id} state={state("key")} label={t("sheet.ready.key")} onClick={() => onOpen("key")} />
+                            ) : (
+                                <Item
+                                    key={id}
+                                    state={state("config")}
+                                    label={mode === "direct" ? t("sheet.ready.direct") : <span className="font-mono">{mode === "telepy" ? "telepy" : "~/.ssh/config"}</span>}
+                                    onClick={() => onOpen("config")}
+                                />
+                            )
+                        )}
                     </div>
                 }
             />
