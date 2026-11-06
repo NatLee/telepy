@@ -9,7 +9,10 @@
  * (your tunnel, account, label, group, snippet) and what it needs. Built by `cliRecipes` (tested).
  */
 import React, { useState } from "react";
-import { Info } from "lucide-react";
+import Link from "next/link";
+import { Info, SquareTerminal } from "lucide-react";
+import { ForwardKinds } from "@/components/flow/ForwardKinds";
+import { FlagText } from "@/components/ui/flag-text";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Field } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -17,19 +20,11 @@ import { NavTabs } from "@/components/ui/nav-tabs";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { CommandLine, NeedChips } from "@/components/cli/CliBlocks";
 import { useI18n } from "@/lib/i18n";
-import { CLI_TOPICS, cliRecipes, type CliContext, type CliTopicId } from "@/lib/cliGuide";
+import { CLI_TOPICS, cliRecipes, topicIntro, type CliContext, type CliTopicId } from "@/lib/cliGuide";
 import type { TranslationKey } from "@/locales/en";
 import type { Tunnel } from "@/types/tunnel";
 
-const TOPIC_LABEL: Record<CliTopicId, TranslationKey> = {
-    everyday: "cli.topic.everyday",
-    many: "cli.topic.many",
-    files: "cli.topic.files",
-    sessions: "cli.topic.sessions",
-    toolbox: "cli.topic.toolbox",
-    network: "cli.topic.network",
-    ci: "cli.topic.ci",
-};
+const topicLabel = (id: CliTopicId) => `cli.topic.${id}` as TranslationKey;
 
 interface Props {
     context: CliContext;
@@ -40,12 +35,13 @@ interface Props {
 }
 
 export function CliExamples({ context, tunnels, selected, setTunnel, online }: Props) {
-    const { t } = useI18n();
+    const { t, tn } = useI18n();
     const [topic, setTopic] = useState<CliTopicId>("everyday");
     // 窄螢幕沒有左欄：主題換成下拉。/ No left column on narrow screens: the topics become a select.
     const narrow = useMediaQuery("(max-width: 1023.98px)") === true;
     const recipes = cliRecipes(topic, context);
     const anyPlaceholder = recipes.some((r) => r.placeholder);
+    const intro = topicIntro(topic);
 
     return (
         <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start lg:gap-6">
@@ -66,7 +62,7 @@ export function CliExamples({ context, tunnels, selected, setTunnel, online }: P
                         <NativeSelect value={topic} onChange={(e) => setTopic(e.target.value as CliTopicId)}>
                             {CLI_TOPICS.map((id) => (
                                 <option key={id} value={id}>
-                                    {t(TOPIC_LABEL[id])}
+                                    {t(topicLabel(id))}
                                 </option>
                             ))}
                         </NativeSelect>
@@ -74,24 +70,41 @@ export function CliExamples({ context, tunnels, selected, setTunnel, online }: P
                 ) : (
                     <div className="min-w-0 space-y-1.5">
                         <span className="block text-sm text-foreground">{t("cli.ex.topic")}</span>
-                        <NavTabs aria-label={t("cli.ex.topic")} value={topic} onChange={setTopic} tabs={CLI_TOPICS.map((id) => ({ value: id, label: t(TOPIC_LABEL[id]) }))} />
+                        <NavTabs aria-label={t("cli.ex.topic")} value={topic} onChange={setTopic} tabs={CLI_TOPICS.map((id) => ({ value: id, label: t(topicLabel(id)) }))} />
                     </div>
                 )}
             </div>
             <div className="min-w-0 space-y-4">
+                {intro && <p className="text-sm leading-relaxed text-foreground"><FlagText text={t(intro)} /></p>}
+                {/* 埠轉發：先看方向，再看指令；自己的埠到指令速查填。/ Forwarding: the directions first, then the commands; own ports on the command sheet. */}
+                {topic === "forward" && (
+                    <>
+                        <ForwardKinds />
+                        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                            {t("cli.ex.sheet")}
+                            <Link href={selected ? `/tunnels/cheatsheet?tunnel=${selected.id}` : "/tunnels/cheatsheet"} className="text-primary hover:underline">
+                                {t("cli.ex.sheetLink")} →
+                            </Link>
+                        </p>
+                    </>
+                )}
                 {anyPlaceholder && (
                     <p className="flex items-start gap-2 text-sm text-muted-foreground">
                         <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
                         {t("cli.ex.placeholder")}
                     </p>
                 )}
+                <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                    <SquareTerminal size={15} className="mt-0.5 shrink-0" aria-hidden />
+                    <span>{tn("cli.ex.inTerminal", { cmd: <code className="font-mono text-foreground">telepy examples {topic}</code> })}</span>
+                </p>
                 <ul className="divide-y divide-border rounded-xl border border-border bg-card text-card-foreground shadow-card">
                     {recipes.map((r) => (
                         <li key={r.id} className="min-w-0 space-y-2 px-4 py-3.5">
                             <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
                                 <div className="min-w-0 flex-1 basis-64">
                                     <h4 className="text-sm text-foreground">{t(r.title)}</h4>
-                                    <p className="text-sm leading-relaxed text-muted-foreground">{t(r.note)}</p>
+                                    <p className="text-sm leading-relaxed text-muted-foreground"><FlagText text={t(r.note)} /></p>
                                 </div>
                                 <NeedChips needs={r.needs} />
                             </div>

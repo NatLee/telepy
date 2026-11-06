@@ -12,6 +12,10 @@ import {
     cliHost,
     cliLanes,
     cliRecipes,
+    examplesForCommand,
+    invokedCommands,
+    topicIntro,
+    CLI_SUBCOMMANDS,
     cliTarget,
     detectPlatform,
     downloadUrl,
@@ -135,10 +139,10 @@ test("without data the examples show placeholders and say so", () => {
     assert.equal(everyday.find((r) => r.id === "sshAccount")!.command.value, "telepy ssh <tunnel>@<account> -- uname -a");
     assert.equal(everyday.find((r) => r.id === "ssh")!.placeholder, true);
     assert.equal(everyday.find((r) => r.id === "ls")!.placeholder, false, "ls needs nothing of yours");
-    // 只有一個帳號：寫隧道名就好，但那個例子要說明 @account 是佔位。/ One account: just the tunnel name.
+    // 只有一個帳號：寫隧道名就好（就是預設帳號）。/ One account: just the tunnel name (it is the default).
     const oneAccount = cliRecipes("everyday", { ...FULL, account: null });
     assert.equal(oneAccount.find((r) => r.id === "sshAccount")!.command.value, "telepy ssh box -- uname -a");
-    assert.equal(oneAccount.find((r) => r.id === "sshAccount")!.placeholder, true);
+    assert.equal(oneAccount.find((r) => r.id === "sshAccount")!.placeholder, false);
     assert.equal(cliRecipes("toolbox", { ...FULL, snippet: { name: "df", vars: [] } })[1].command.value, "telepy run df box");
 });
 
@@ -148,6 +152,30 @@ test("what each example needs", () => {
     assert.deepEqual(needs("files", "cpUp"), ["ssh:files"]);
     assert.deepEqual(needs("sessions", "sessionsEnd"), ["tunnels:manage"], "only an API token has tunnels:manage");
     assert.deepEqual(needs("network", "browse"), ["browser:use"]);
+});
+
+test("forwarding has its own topic, and every command lists the examples that use it", () => {
+    assert.ok(CLI_TOPICS.includes("forward") && CLI_TOPICS.includes("setup"));
+    const fwd = cliRecipes("forward", FULL).map((r) => r.command.value);
+    assert.ok(fwd.includes("telepy forward box@pi localhost:80 --local 8080"));
+    assert.ok(fwd.includes("telepy ssh box@pi -N -R 9000:localhost:3000"));
+    assert.ok(topicIntro("forward") === "cli.topic.forwardIntro" && topicIntro("files") === null);
+    const ssh = examplesForCommand("ssh", FULL).map((r) => r.id);
+    assert.ok(ssh.includes("ssh") && ssh.includes("forwardSocks"), "ssh's examples include the forwarding ones");
+    assert.ok(!ssh.includes("forward"), "telepy forward is its own command");
+    // `$(telepy …)` 與 `X=… telepy` 裡的也算。/ Inside `$(…)` and after an assignment too.
+    assert.ok(examplesForCommand("browse", FULL).some((r) => r.id === "browse"));
+    assert.ok(examplesForCommand("cp", FULL).some((r) => r.id === "lanCp"));
+    for (const c of CLI_COMMANDS) assert.ok(examplesForCommand(c.key, FULL).length > 0, `${c.key} has an example`);
+    assert.deepEqual(invokedCommands('ID=$(telepy browse box x) && telepy lan ls box'), ["browse", "lan"]);
+});
+
+test("the subcommand tree comes from the usages", () => {
+    assert.deepEqual([...CLI_SUBCOMMANDS.lan].sort(), ["add", "check", "edit", "ls", "map", "os", "rm", "scan", "schedule", "show", "wake", "watch"]);
+    assert.deepEqual(CLI_SUBCOMMANDS.keys, ["ls", "add", "check"]);
+    assert.deepEqual(CLI_SUBCOMMANDS.sessions, ["end"]);
+    assert.deepEqual(CLI_SUBCOMMANDS.forward, []);
+    assert.deepEqual(CLI_SUBCOMMANDS.examples, []);
 });
 
 test("the GitHub Actions example keeps the expression for the secret", () => {

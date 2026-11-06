@@ -186,7 +186,7 @@ CLI 會存下一組 access token 與 refresh token：
 
 ![CLI 怎麼連到你的裝置](images/zh-TW/cli-flow.png)
 
-目標就是一條通道，也可以加上裝置帳號：`box` 用這條通道的預設帳號，`box@pi` 用 `pi`（寫成 `pi@box` 也行）。`telepy <指令> --help` 會列出該指令的所有選項。
+目標就是一條通道，也可以加上裝置帳號：`box` 用這條通道的預設帳號，`box@pi` 用 `pi`（寫成 `pi@box` 也行）。`telepy <指令> --help` 會列出該指令的所有選項，最後附上它的範例；`telepy examples` 依主題（`telepy examples forward`）或依指令（`telepy examples lan wake`）列出範例。
 
 ### 找出你的通道
 
@@ -202,7 +202,7 @@ telepy status box                          # 健康狀態、上線時間、裝�
 ```sh
 telepy ssh box                             # 用這條通道的預設帳號
 telepy ssh box@pi -- uname -a              # <通道>@<帳號>（寫成 pi@box 也行）
-telepy ssh box -L 8080:localhost:80        # 轉發一個連接埠；SOCKS 用 -D 1080
+telepy ssh box -N -L 8080:localhost:80     # 轉發一個連接埠、不開 shell（見「連接埠轉發」）
 telepy ssh box -i ~/.ssh/id_work           # 兩段連線都用指定的金鑰
 telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # 其他任何 ssh 選項（可重複；scp / sftp 也適用）
 telepy scp ./build.tar.gz box@pi:/tmp/
@@ -365,13 +365,25 @@ telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # 標籤與備
 
 **喚醒機器**：網路喚醒封包只在裝置自己的網路裡傳得到，所以 `lan wake`（或網頁主機面板的「喚醒」）由裝置送出：依序試 `wakeonlan`、`etherwake` / `ether-wake`（也用 `sudo -n` 試）與 `python3`，Windows 裝置用 PowerShell，廣播到那台主機的網段，UDP 9。那台機器要開啟 Wake-on-LAN，Telepy 也要知道它的 MAC 位址（機器開著時掃描一次，會從裝置的鄰居表讀到）。看得到這條通道、而且在那裡有能用帳號的人都能喚醒它的機器；每次喚醒都記在通道的日誌裡。**標籤與備註**（`lan edit`，或主機面板的「細節」分頁）由你自己寫，掃描不會動，網頁的搜尋也找得到（`label:rack-2`，或備註裡的任何一個字）。
 
-### 用自己的瀏覽器開區網的網頁
+### 連接埠轉發
 
 ```sh
-telepy forward box 192.168.1.20:8080 --open   # 把 port 轉到 localhost，再打開你的瀏覽器
+telepy forward box 192.168.1.20:8080 --open   # 區網的網頁：把 port 轉到 localhost，再打開你的瀏覽器
 telepy forward box@pi nas --open              # 用 `telepy lan ls` 裡的標籤指定主機；用它第一個網頁 port
 telepy forward box localhost:3000 -l 13000    # 裝置自己的 3000 port，開在 localhost:13000
+telepy ssh box -N -L 8080:localhost:80 -L 15432:localhost:5432   # 一次轉好幾個
+telepy ssh box -N -D 1080                     # SOCKS 代理：每個網址都照裝置看到的連
+telepy ssh box -N -R 9000:localhost:3000      # 反方向：裝置的 localhost:9000 連到你的 3000
 ```
+
+| 你想要 | 用 | 連線方向 |
+| --- | --- | --- |
+| 裝置或它後面那台機器的一個連接埠 | `telepy forward` | 你的電腦 → 裝置 → 主機 |
+| 好幾個連接埠，或同時要一個 shell | `telepy ssh -L`（`-N` = 不開 shell） | 你的電腦 → 裝置 → 主機 |
+| 每個網址都照裝置看到的連 | `telepy ssh -D`，再設定瀏覽器的 SOCKS 代理 | 你的電腦 → 裝置 → 任何地方 |
+| 讓裝置呼叫你電腦上的東西 | `telepy ssh -R` | 裝置 → 你的電腦 |
+
+`-L`、`-R`、`-D` 的寫法跟 ssh 一樣，Telepy 只負責經通道的那段路。用 `-L`、`-D` 和 `forward` 時，連到目標主機的是裝置，所以只有裝置需要連得到它。`-R` 預設只開在裝置的 localhost，除非它的 sshd 允許更多（`GatewayPorts`）。`telepy examples forward` 在終端機印出這些範例，網頁的「指令速查」會用你自己的連接埠組好指令。
 
 `forward` 寫好跟 `telepy ssh` 一樣的 ssh config，經裝置跑 `ssh -N -L 127.0.0.1:<本機>:<主機>:<port>`，等本機 port 接得通就印出網址，然後一直轉到按 Ctrl+C。本機 port 用同一個號碼（1024 以下加 10000），被佔用就往後找空的；`--local` 可以自己指定。它只聽 127.0.0.1，只有這台電腦能用。需要 `tunnels:read` 與你的個人 SSH 金鑰，跟 `telepy ssh` 一樣。在網頁上，網路拓撲頁則是用 Telepy 的遠端瀏覽器開同樣的網頁。
 
@@ -410,7 +422,7 @@ telepy browse close "$ID"
 | `telepy whoami` | 你是誰、用哪個 token 或 app、scope、通道與到期日 | — |
 | `telepy ls` | 列出通道與健康狀態、延遲、帳號、標籤和群組；`--label`、`--group`、`--online`、`--json` | `tunnels:read` |
 | `telepy status <tunnel>` | 單一通道：健康狀態、上線時間、裝置資訊與警告 | `tunnels:read` |
-| `telepy ssh <target>` | SSH 進裝置；`-L`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`，`--` 後面接指令 | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy ssh <target>` | SSH 進裝置；`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`，`--` 後面接指令 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy scp [-r] <from>… <to>` | 用 scp 複製；遠端寫成 `<tunnel>[@account]:<path>` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
@@ -447,6 +459,7 @@ telepy browse close "$ID"
 | `telepy doctor` | 檢查伺服器、登入、scope、到期日、本機的 ssh 工具與版本 | — |
 | `telepy update` | 更新 telepy；`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | 印出 bash、zsh、fish、powershell 或 elvish 的 Tab 補完腳本；不給 shell 就告訴你該加哪一行、加在哪 | — |
+| `telepy examples [topic\|command]` | 依主題（`forward`、`network`…）或依指令（`lan wake`）列出範例；不給就列出主題。不用登入 | — |
 
 </details>
 

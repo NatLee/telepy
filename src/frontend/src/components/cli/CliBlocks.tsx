@@ -6,36 +6,21 @@
  * Small blocks of the CLI page: one command (mono + copy), the chips saying what an example needs, and what a
  * terminal prints (art on the left: the real CLI draws Tapi beside `login` / `doctor`).
  */
-import React from "react";
+import type React from "react";
 import { KeyRound, Ticket } from "lucide-react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { LOGIN_SCOPES, type CliNeed, type OutputLine } from "@/lib/cliGuide";
+import { ShellText } from "@/components/ui/shell-text";
+import { CLI_SUBCOMMANDS, LOGIN_SCOPES, type CliNeed, type OutputLine } from "@/lib/cliGuide";
 
 /**
- * 指令的字：在空白處換行；每個片段是一個 inline-block，所以 `--online`、`[--group` 不會從連字號切開，
- * 只有比一行還寬的片段（網址、放大顯示時）才在裡面換行。
- * 選取 / 複製到的字跟原本一樣（只是包了 span）。
- * A command's text: wraps at spaces; each token is an inline-block, so `--online` / `[--group` never break at their
- * hyphens, and only a token wider than the line (a URL, a large display size) wraps inside. Selecting / copying gives the original text (spans only).
+ * 指令的字：上色、在空白處換行（`ShellText`，子指令照 `telepy` 的指令樹）。
+ * A command's text: coloured and wrapping at spaces (`ShellText`, subcommands from telepy's command tree).
  */
-export function CommandText({ value }: { value: string }) {
-    return (
-        <>
-            {value.split("\n").map((line, i) => (
-                <span key={i} className="block">
-                    {line.split(" ").map((tok, j) => (
-                        <React.Fragment key={j}>
-                            {j > 0 && " "}
-                            <span className="inline-block max-w-full [overflow-wrap:anywhere]">{tok}</span>
-                        </React.Fragment>
-                    ))}
-                </span>
-            ))}
-        </>
-    );
+export function CommandText({ value, synopsis = false }: { value: string; synopsis?: boolean }) {
+    return <ShellText value={value} tree={CLI_SUBCOMMANDS} synopsis={synopsis} />;
 }
 
 /** 一行（或幾行）指令：等寬、會換行、右邊複製。/ A command: mono, wrapping, copy on the right. */

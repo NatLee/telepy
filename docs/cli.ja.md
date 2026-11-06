@@ -186,7 +186,7 @@ CI では何も保存する必要がありません。[CI で](#ci-で)を見て
 
 ![CLI がデバイスに届く経路](images/ja/cli-flow.png)
 
-ターゲットはトンネルで、デバイスのアカウントを付けることもできます。`box` ならトンネルのデフォルトのアカウント、`box@pi` なら `pi` を使います（`pi@box` でも可）。`telepy <コマンド> --help` で、そのコマンドのすべてのオプションを表示できます。
+ターゲットはトンネルで、デバイスのアカウントを付けることもできます。`box` ならトンネルのデフォルトのアカウント、`box@pi` なら `pi` を使います（`pi@box` でも可）。`telepy <コマンド> --help` で、そのコマンドのすべてのオプションと、最後にその例を表示できます。`telepy examples` はトピック別（`telepy examples forward`）やコマンド別（`telepy examples lan wake`）に例を表示します。
 
 ### トンネルを探す
 
@@ -202,7 +202,7 @@ telepy status box                          # ヘルス、稼働時間、デバ�
 ```sh
 telepy ssh box                             # トンネルのデフォルトのアカウント
 telepy ssh box@pi -- uname -a              # <トンネル>@<アカウント>（pi@box でも可）
-telepy ssh box -L 8080:localhost:80        # ポートを転送する。SOCKS なら -D 1080
+telepy ssh box -N -L 8080:localhost:80     # シェルなしでポートを転送する（ポートフォワーディングを参照）
 telepy ssh box -i ~/.ssh/id_work           # 両方のホップで特定の鍵を使う
 telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # その他の ssh オプション（繰り返し可。scp / sftp でも使える）
 telepy scp ./build.tar.gz box@pi:/tmp/
@@ -365,13 +365,25 @@ telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # ラベルと
 
 **マシンの起動**：Wake-on-LAN パケットはデバイス自身のネットワークの中でしか届かないので、`lan wake`（または Web のホストパネルの「起動」）はデバイスに送らせます。`wakeonlan`、`etherwake` / `ether-wake`（`sudo -n` でも）、`python3` を順に試し、Windows デバイスでは PowerShell を使って、ホストのネットワークへ UDP 9 でブロードキャストします。マシン側で Wake-on-LAN を有効にし、MAC アドレスが分かっている必要があります（マシンが動いているときにスキャンすると、デバイスの近隣テーブルから読み取ります）。トンネルを見られて、そこで使えるアカウントがある人なら誰でもそのマシンを起動でき、起動のたびにトンネルのログに残ります。**ラベルとメモ**（`lan edit`、またはホストパネルの「詳細」タブ）はあなたが書くもので、スキャンでは変わりません。Web の検索でも見つかります（`label:rack-2`、またはメモ内の語）。
 
-### LAN の Web ページを自分のブラウザーで
+### ポートフォワーディング
 
 ```sh
-telepy forward box 192.168.1.20:8080 --open   # ポートを localhost に転送して、ブラウザーを開く
+telepy forward box 192.168.1.20:8080 --open   # LAN の Web ページ：ポートを localhost に転送して、ブラウザーを開く
 telepy forward box@pi nas --open              # `telepy lan ls` のラベルでホストを指定。最初の Web ポートを使う
 telepy forward box localhost:3000 -l 13000    # デバイス自身の 3000 番を localhost:13000 に
+telepy ssh box -N -L 8080:localhost:80 -L 15432:localhost:5432   # 複数のポートをまとめて
+telepy ssh box -N -D 1080                     # SOCKS プロキシ：どのアドレスもデバイスから見たとおりに
+telepy ssh box -N -R 9000:localhost:3000      # 逆方向：デバイスの localhost:9000 があなたの 3000 番につながる
 ```
+
+| したいこと | 使うもの | 接続の向き |
+| --- | --- | --- |
+| デバイス、またはその向こうのマシンのポートを 1 つ | `telepy forward` | あなたのコンピューター → デバイス → ホスト |
+| 複数のポート、またはシェルも一緒に | `telepy ssh -L`（`-N` = シェルなし） | あなたのコンピューター → デバイス → ホスト |
+| どのアドレスもデバイスから見たとおりに | `telepy ssh -D` とブラウザーの SOCKS プロキシ | あなたのコンピューター → デバイス → どこでも |
+| デバイスからあなたのコンピューター上のものを呼ぶ | `telepy ssh -R` | デバイス → あなたのコンピューター |
+
+`-L`、`-R`、`-D` の書き方は ssh と同じで、Telepy はトンネルを通る経路を足すだけです。`-L`、`-D`、`forward` ではホストに接続するのはデバイスなので、そこに届く必要があるのはデバイスだけです。`-R` は、デバイスの sshd が許可しない限り（`GatewayPorts`）デバイスの localhost でだけ待ち受けます。`telepy examples forward` でこれらの例をターミナルに表示でき、Web の「コマンド早見表」は自分のポートでコマンドを組み立てます。
 
 `forward` は `telepy ssh` と同じ ssh config を書き、デバイス経由で `ssh -N -L 127.0.0.1:<ローカル>:<ホスト>:<ポート>` を実行します。ローカルのポートが応答したらアドレスを表示し、Ctrl+C まで転送を続けます。ローカルのポートは同じ番号（1024 未満は 10000 を足す）で、使用中なら次の空き番号です。`--local` で指定できます。127.0.0.1 だけで待ち受けるので、使えるのはこのコンピューターだけです。`telepy ssh` と同じく `tunnels:read` と個人用 SSH 鍵が必要です。Web アプリのネットワークページでは、同じページを Telepy のリモートブラウザーで開きます。
 
@@ -410,7 +422,7 @@ telepy browse close "$ID"
 | `telepy whoami` | 誰として、どのトークンまたはアプリで、スコープ、トンネル、有効期限 | — |
 | `telepy ls` | トンネルとヘルス、遅延、アカウント、ラベル、グループ。`--label`、`--group`、`--online`、`--json` | `tunnels:read` |
 | `telepy status <tunnel>` | 1 つのトンネル：ヘルス、稼働時間、デバイス情報と警告 | `tunnels:read` |
-| `telepy ssh <target>` | デバイスに SSH。`-L`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`、`--` のあとにコマンド | `tunnels:read` + 自分の SSH 鍵 |
+| `telepy ssh <target>` | デバイスに SSH。`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`、`--` のあとにコマンド | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy scp [-r] <from>… <to>` | scp でコピー。リモート側は `<tunnel>[@account]:<path>` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
@@ -447,6 +459,7 @@ telepy browse close "$ID"
 | `telepy doctor` | サーバー、サインイン、スコープ、有効期限、手元の ssh ツール、バージョンを確認 | — |
 | `telepy update` | telepy を更新。`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | bash、zsh、fish、powershell、elvish の Tab 補完スクリプトを出力。シェルを省くと、どのファイルにどの行を追加するかを表示 | — |
+| `telepy examples [topic\|command]` | トピック別（`forward`、`network`…）またはコマンド別（`lan wake`）の例。省くとトピックの一覧。サインイン不要 | — |
 
 </details>
 

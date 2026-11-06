@@ -104,7 +104,7 @@ function CliPageInner() {
             )}
             {tab === "commands" && (
                 <section aria-label={labels.commands}>
-                    <CliCommands />
+                    <CliCommands context={page.context} />
                 </section>
             )}
             {tab === "help" && (
