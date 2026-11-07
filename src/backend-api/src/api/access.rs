@@ -58,6 +58,13 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
     let policy: std::sync::Arc<Policy> = state.features.policy().await?;
     let groups = db::features::groups(&state.db).await?;
     let memberships = db::features::memberships(&state.db).await?;
+    // 單一登入給的成員資格與管理員：頁面標出來（手動拿掉的話下次登入又會加回來）。
+    // Memberships and admin rights a sign-in provider gave: marked on the page (removing one by hand lasts until the next sign-in).
+    let mut sso_members: HashMap<i64, Vec<Value>> = HashMap::new();
+    for (g, u, provider) in db::oidc::granted_memberships(&state.db).await? {
+        sso_members.entry(g).or_default().push(json!({ "user_id": u, "provider": provider }));
+    }
+    let sso_admins: HashMap<i64, String> = db::oidc::granted_admins(&state.db).await?.into_iter().collect();
     let users = db::users::all_ordered(&state.db).await?;
     let mut members: HashMap<i64, Vec<i64>> = HashMap::new();
     for (g, u) in &memberships {
@@ -73,6 +80,7 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
             "description": g.description,
             "created_at": crate::util::db_to_iso(&g.created_at, tz),
             "members": members.get(&g.id).cloned().unwrap_or_default(),
+            "sso_members": sso_members.get(&g.id).cloned().unwrap_or_default(),
             "grants": grants_json(policy.groups.get(&g.id)),
         })).collect::<Vec<_>>(),
         "users": users.iter().map(|u| {
@@ -82,6 +90,7 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
                 "username": u.username,
                 "email": u.email,
                 "is_superuser": u.is_superuser,
+                "sso_admin": sso_admins.get(&u.id),
                 "is_active": u.is_active,
                 "groups": policy.member_of.get(&u.id).cloned().unwrap_or_default(),
                 "grants": grants_json(policy.users.get(&u.id)),
@@ -226,6 +235,8 @@ async fn delete_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     admin(&me)?;
     let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
     db::features::delete_group(&state.db, id).await?;
+    // 單一登入規則與紀錄指向它的一起走。/ Single sign-on rules and grant records pointing at it go too.
+    db::oidc::forget_user_group(&state.db, id).await?;
     after_write(&state, &me, "user_group", format!("{} deleted the group \"{}\"", me.username, group.name)).await;
     Ok(Json(policy_json(&state).await?))
 }

@@ -13,6 +13,7 @@
 
 pub mod client;
 pub mod flow;
+pub mod roles;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;

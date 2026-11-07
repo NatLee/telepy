@@ -218,6 +218,29 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // 身分提供者的群組 → Telepy 角色（管理員或功能權限的使用者群組）。/ Provider group → Telepy role rules.
+    (
+        "telepy_oidc_group_rule",
+        r#"CREATE TABLE "telepy_oidc_group_rule" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "provider_id" integer NOT NULL,
+            "idp_group" varchar(256) NOT NULL,
+            "target" varchar(16) NOT NULL,
+            "group_id" integer NULL
+        )"#,
+    ),
+    // 身分提供者給過誰什麼（之後只拿掉這裡記著的；手動給的不動）。/ What a provider granted (only these are ever taken away).
+    (
+        "telepy_oidc_grant",
+        r#"CREATE TABLE "telepy_oidc_grant" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "provider_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "target" varchar(16) NOT NULL,
+            "group_id" integer NULL,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：兩步驟驗證（TOTP secret 加密存放、passkey、復原碼只存雜湊）。/ Two-factor login.
     (
         "telepy_user_mfa",
@@ -1099,6 +1122,8 @@ const TABLES: &[(&str, &str)] = &[
 const INDEXES: &[&str] = &[
     // 用 (provider, sub) 找連結的帳號（不是 UNIQUE：舊資料可能有重複，唯一性在程式裡守）。/ Look a link up by (provider, sub).
     r#"CREATE INDEX IF NOT EXISTS "telepy_social_account_provider_uid" ON "social_account" ("provider", "unique_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_oidc_group_rule_provider" ON "telepy_oidc_group_rule" ("provider_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_oidc_grant_unique" ON "telepy_oidc_grant" ("provider_id", "user_id", "target", IFNULL("group_id", 0))"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_install_id" ON "telepy_device_install" ("install_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,
@@ -1169,6 +1194,9 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    // 單一登入：群組 claim 的路徑、「只有這些群組能登入」（JSON 陣列）。/ SSO: the groups claim path and required groups (JSON).
+    ("telepy_oidc_provider", "groups_claim", "varchar(128) NOT NULL DEFAULT 'groups'"),
+    ("telepy_oidc_provider", "required_groups", "text NOT NULL DEFAULT '[]'"),
     // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.

@@ -13,6 +13,7 @@ import React, { useMemo, useState } from "react";
 import {
     Ban,
     BookOpen,
+    Building2,
     Check,
     Clapperboard,
     FolderOpen,
@@ -315,7 +316,16 @@ function SubjectPanel({
 
     const title = subject.kind === "everyone" ? t("access.everyone") : group ? group.name : person?.username ?? "";
     const icon = subject.kind === "everyone" ? <Globe /> : group ? <Users /> : admin ? <Shield /> : <User />;
-    const description = subject.kind === "everyone" ? t("access.everyoneHint") : group ? group.description || t("access.groupHint") : admin ? t("access.adminAlways") : t("access.userHint");
+    const description =
+        subject.kind === "everyone"
+            ? t("access.everyoneHint")
+            : group
+              ? group.description || t("access.groupHint")
+              : admin
+                ? person?.sso_admin
+                    ? `${t("access.adminAlways")} ${t("access.adminViaSso", { provider: person.sso_admin })}`
+                    : t("access.adminAlways")
+                : t("access.userHint");
 
     return (
         <section className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 shadow-card sm:p-5">
@@ -448,15 +458,18 @@ function MembersEditor({ policy, group, saving, onChange }: { policy: AccessPoli
     const { t } = useI18n();
     const members = useMemo(() => policy.users.filter((u) => group.members.includes(u.id)), [policy.users, group.members]);
     const others = policy.users.filter((u) => !group.members.includes(u.id));
+    // 單一登入給的成員：標出來，手動拿掉只維持到他下次登入。/ Members from single sign-on: marked; removing one lasts until their next sign-in.
+    const sso = new Map((group.sso_members ?? []).map((m) => [m.user_id, m.provider] as const));
     return (
         <div className="space-y-2">
             <SectionHeading title={t("access.members")} description={t("access.membersHint")} />
             <div className="flex flex-wrap items-center gap-1.5">
                 {members.length === 0 && <span className="text-sm text-muted-foreground">{t("access.noMembers")}</span>}
                 {members.map((u) => (
-                    <Chip key={u.id} className="pr-0.5">
+                    <Chip key={u.id} className="pr-0.5" title={sso.has(u.id) ? t("access.viaSso", { provider: sso.get(u.id) ?? "" }) : undefined}>
                         {u.is_superuser ? <Shield aria-hidden /> : <User aria-hidden />}
                         {u.username}
+                        {sso.has(u.id) && <Building2 aria-label={t("access.viaSso", { provider: sso.get(u.id) ?? "" })} />}
                         <button
                             type="button"
                             disabled={saving}
@@ -470,6 +483,7 @@ function MembersEditor({ policy, group, saving, onChange }: { policy: AccessPoli
                     </Chip>
                 ))}
             </div>
+            {sso.size > 0 && <p className="text-xs text-muted-foreground">{t("access.ssoMembersHint")}</p>}
             {others.length > 0 && (
                 <NativeSelect
                     className="h-8 w-full sm:w-64"

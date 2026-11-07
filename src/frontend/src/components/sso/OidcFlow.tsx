@@ -17,6 +17,7 @@ import type { TranslationKey } from "@/locales/en";
 const STEPS: TranslationKey[] = ["sso.flow.step1", "sso.flow.step2", "sso.flow.step3", "sso.flow.step4", "sso.flow.step5"];
 const ACCOUNT: TranslationKey[] = ["sso.flow.account1", "sso.flow.account2", "sso.flow.account3", "sso.flow.account4"];
 const GUARDS: TranslationKey[] = ["sso.flow.guard1", "sso.flow.guard2", "sso.flow.guard3", "sso.flow.guard4"];
+const ROLES: TranslationKey[] = ["sso.flow.roles1", "sso.flow.roles2", "sso.flow.roles3", "sso.flow.roles4"];
 
 export function OidcFlowDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
     const { t } = useI18n();
@@ -41,6 +42,13 @@ export function OidcFlowDialog({ isOpen, onClose }: { isOpen: boolean; onClose: 
                     </ol>
                 </Section>
                 <div className="grid gap-5 md:grid-cols-2">
+                    <Section title={t("sso.flow.rolesTitle")}>
+                        <ul className="list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
+                            {ROLES.map((k) => (
+                                <li key={k}>{t(k)}</li>
+                            ))}
+                        </ul>
+                    </Section>
                     <Section title={t("sso.flow.accountTitle")}>
                         <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
                             {ACCOUNT.map((k) => (
