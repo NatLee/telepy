@@ -8,6 +8,7 @@
  */
 import { useSyncExternalStore } from "react";
 import { DEFAULT_LOOK, effectiveGoogleClientId, parseSignInLook, type SignInLook } from "@/lib/signinLook";
+import type { SsoButton } from "@/lib/sso";
 
 const STORAGE_KEY = "telepy.signinLook";
 const listeners = new Set<() => void>();
@@ -32,7 +33,8 @@ function publish(next: SignInLook) {
         current.cliStyle === next.cliStyle &&
         current.consentStyle === next.consentStyle &&
         current.message === next.message &&
-        current.googleClientId === next.googleClientId;
+        current.googleClientId === next.googleClientId &&
+        JSON.stringify(current.sso) === JSON.stringify(next.sso);
     current = next;
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -73,7 +75,7 @@ function subscribe(listener: () => void) {
 /** 網站設定存好後更新這個瀏覽器的快取（登出時馬上是新的樣子）。/ Refresh this browser's cache after a save. */
 export function rememberSignInLook(look: SignInLook) {
     // 網站設定頁組出來的樣子沒有 Google client ID：沿用已知的。/ The settings page's look has no client ID: keep the known one.
-    publish({ ...look, googleClientId: look.googleClientId ?? current?.googleClientId ?? null });
+    publish({ ...look, googleClientId: look.googleClientId ?? current?.googleClientId ?? null, sso: look.sso ?? current?.sso ?? null });
 }
 
 function snapshot(): SignInLook | null {
@@ -91,4 +93,18 @@ export function useSignInLook(): SignInLook | null {
  */
 export function useGoogleClientId(): string | undefined {
     return effectiveGoogleClientId(useSignInLook(), process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
+}
+
+const NO_BUTTONS: SsoButton[] = [];
+
+/** 登入頁的單一登入按鈕（同一支公開端點、同一份快取）；不知道 = 沒有。/ The sign-in page's SSO buttons; unknown = none. */
+export function useSsoButtons(): SsoButton[] {
+    return useSignInLook()?.sso ?? NO_BUTTONS;
+}
+
+/** 管理員改了身分提供者：這個瀏覽器的登入頁按鈕跟著換。/ After an admin's change, refresh this browser's SSO buttons. */
+export function rememberSsoButtons(sso: SsoButton[]) {
+    const base = current ?? readCache() ?? DEFAULT_LOOK;
+    if (JSON.stringify(base.sso) === JSON.stringify(sso)) return;
+    publish({ ...base, sso });
 }

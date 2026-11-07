@@ -7,6 +7,7 @@
  * page uses (the OAuth page uses the CLI one when the `telepy` CLI is asking), the lines' limits (same rules as the
  * backend) and the sunflower dot field.
  */
+import { parseSsoButtons, type SsoButton } from "./sso.ts";
 import { cliHost } from "./cliClient.ts";
 
 /** 一般 / 低調 / Tapi 版（Tapi 版每一頁有自己的場景，lib/tapiStage `sceneFor`）。/ Standard / discreet / Tapi (each page has its own Tapi scene, lib/tapiStage `sceneFor`). */
@@ -38,10 +39,12 @@ export interface SignInLook {
     webHost: string | null;
     sshHost: string | null;
     publicUrl: string | null;
+    /** 單一登入按鈕（啟用的 OIDC 身分提供者）；null = 後端沒說（舊後端、網站設定頁組出來的）。/ SSO buttons; null = unknown. */
+    sso: SsoButton[] | null;
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet", "tapi"];
-export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null, webHost: null, sshHost: null, publicUrl: null };
+export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "", googleClientId: null, webHost: null, sshHost: null, publicUrl: null, sso: null };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
 export const LINE_MAX = 80;
@@ -75,6 +78,7 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
         webHost: str(o.web_host ?? o.webHost),
         sshHost: str(o.ssh_host ?? o.sshHost),
         publicUrl: str(o.public_url ?? o.publicUrl),
+        sso: parseSsoButtons(o.sso),
     };
 }
 

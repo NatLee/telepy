@@ -32,6 +32,7 @@ import { useSettingsPage } from "@/hooks/useSettingsPage";
 import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import type { TranslationKey } from "@/locales/en";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
+import { OidcProvidersPanel } from "@/components/settings/OidcProviders";
 import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
 import { APP_NAME_KEYS, AppNamePanel } from "@/components/settings/AppNamePanel";
 import { SettingRow } from "@/components/settings/SettingRow";
@@ -191,6 +192,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
             {tab === "general" && !loading && <RegisterDomainsPanel values={settingsObj} onSave={handleUpdate} />}
             {tab === "app" && !loading && <AppNamePanel values={settingsObj} env={state.env} onSaved={applyValues} />}
+            {tab === "signin" && !loading && <OidcProvidersPanel />}
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
             {/* 位址檢查搬到管理區的「伺服器狀態」頁（那是診斷，不是設定）；這裡只留一個指路。
                 The address check lives on the admin "Server health" page now (a diagnostic, not a setting); only a pointer here. */}

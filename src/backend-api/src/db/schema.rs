@@ -195,6 +195,29 @@ const TABLES: &[(&str, &str)] = &[
             "revoked_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：OIDC 單一登入的身分提供者（client secret 用 vault 封存，AAD `telepy-oidc-provider:<id>`）。
+    // 連結存在 social_account：provider = `oidc:<id>`（用 id 不用代號，改代號不會斷）、unique_id = sub。
+    // OIDC sign-in providers (client secret sealed, AAD `telepy-oidc-provider:<id>`). Links live in social_account as
+    // provider `oidc:<id>` (the id, so renaming the slug keeps them) and unique_id = sub.
+    (
+        "telepy_oidc_provider",
+        r#"CREATE TABLE "telepy_oidc_provider" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "slug" varchar(32) NOT NULL UNIQUE,
+            "name" varchar(64) NOT NULL,
+            "issuer" varchar(512) NOT NULL,
+            "client_id" varchar(256) NOT NULL,
+            "client_secret" text NOT NULL DEFAULT '',
+            "scopes" varchar(256) NOT NULL DEFAULT 'openid email profile',
+            "username_from" varchar(32) NOT NULL DEFAULT 'email',
+            "allowed_domains" varchar(1024) NOT NULL DEFAULT '',
+            "create_users" bool NOT NULL DEFAULT 1,
+            "link_by_email" bool NOT NULL DEFAULT 0,
+            "enabled" bool NOT NULL DEFAULT 1,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：兩步驟驗證（TOTP secret 加密存放、passkey、復原碼只存雜湊）。/ Two-factor login.
     (
         "telepy_user_mfa",
@@ -1074,6 +1097,8 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    // 用 (provider, sub) 找連結的帳號（不是 UNIQUE：舊資料可能有重複，唯一性在程式裡守）。/ Look a link up by (provider, sub).
+    r#"CREATE INDEX IF NOT EXISTS "telepy_social_account_provider_uid" ON "social_account" ("provider", "unique_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_install_id" ON "telepy_device_install" ("install_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,

@@ -65,6 +65,10 @@ pub struct Inner {
     pub sessions: crate::auth::sessions::SessionGuard,
     /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
     pub mfa: MfaStores,
+    /// OIDC 單一登入：discovery / JWKS 快取，與進行中的登入、票券（只在記憶體）。
+    /// OIDC sign-in: discovery / JWKS caches and pending sign-ins / tickets (memory only).
+    pub oidc: crate::oidc::client::OidcClient,
+    pub oidc_flows: crate::oidc::flow::Flows,
     /// 區網掃描的進度 / 最近結果（每條隧道一筆）。/ LAN scan status per tunnel.
     pub lan_scans: LanScans,
     /// 區網主機的檔案 session（`lan::files`）。/ LAN host file sessions.
@@ -124,6 +128,12 @@ impl AppState {
             .build()
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key);
+        // 身分提供者不跟隨轉址（token 端點的轉址可能把 code 帶去別處）。/ No redirects towards identity providers.
+        let oidc_http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("reqwest client");
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         let desktop = Arc::new(Desktop::new(&config));
         let rustdesk = Arc::new(crate::rustdesk::RustDesk::new());
@@ -158,6 +168,8 @@ impl AppState {
             ai: AiSessions::default(),
             sessions: Default::default(),
             mfa: MfaStores::new(&config.secret_key),
+            oidc: crate::oidc::client::OidcClient::new(oidc_http),
+            oidc_flows: Default::default(),
             lan_scans: LanScans::default(),
             lan_files: Default::default(),
             device_keys: DeviceKeys::default(),

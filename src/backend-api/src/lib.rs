@@ -39,6 +39,7 @@ pub mod push;
 pub mod monitor;
 pub mod oui;
 pub mod oauth;
+pub mod oidc;
 pub mod permissions;
 pub mod presence;
 pub mod recording;

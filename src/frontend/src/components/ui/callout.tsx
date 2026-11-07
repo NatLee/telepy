@@ -5,7 +5,7 @@
  */
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { CircleAlert, Info, Lightbulb, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleCheck, Info, Lightbulb, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const calloutVariants = cva(
@@ -17,13 +17,14 @@ const calloutVariants = cva(
                 tip: "bg-primary/7 text-foreground/85 ring-primary/20 [&_code]:bg-primary/12 [&>svg]:text-primary",
                 warning: "bg-warning/10 text-foreground/85 ring-warning/30 [&_code]:bg-warning/15 [&>svg]:text-warning",
                 danger: "bg-destructive/8 text-foreground/85 ring-destructive/20 [&_code]:bg-destructive/12 [&>svg]:text-destructive",
+                success: "bg-success/8 text-foreground/85 ring-success/20 [&_code]:bg-success/12 [&>svg]:text-success",
             },
         },
         defaultVariants: { tone: "info" },
     },
 );
 
-const ICONS = { info: Info, tip: Lightbulb, warning: TriangleAlert, danger: CircleAlert } as const;
+const ICONS = { info: Info, tip: Lightbulb, warning: TriangleAlert, danger: CircleAlert, success: CircleCheck } as const;
 
 function Callout({
     className,

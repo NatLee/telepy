@@ -1,10 +1,10 @@
 /**
- * 登入頁邏輯：表單狀態、setup 檢查、Google 回調、帳密登入、兩步驟驗證的第二步、passkey 登入（按鈕與自動填入）與導向。
+ * 登入頁邏輯：表單狀態、setup 檢查、Google 回調、單一登入的票券兌換、帳密登入、兩步驟驗證的第二步、passkey 登入（按鈕與自動填入）與導向。
  * Login page logic: form state, setup check, Google callback, credentials login, the two-factor step,
  * passkey sign-in (button and autofill) and redirect.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useGoogleClientId } from "@/hooks/useSignInLook";
+import { useGoogleClientId, useSsoButtons } from "@/hooks/useSignInLook";
 import { useRouter } from "next/navigation";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -16,6 +16,10 @@ import { loginErrorMessage } from "@/lib/loginErrors";
 import { isSafePath } from "@/lib/oauthFlow";
 import { conditionalMediationAvailable, getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
 import { announceSignIn } from "@/lib/signInSignal";
+import { providerName, readSsoReturn, ssoErrorKey, withoutSsoParams } from "@/lib/sso";
+
+/** 已經兌換過的票券（React 開發模式會把 effect 跑兩次；票券只能用一次）。/ Tickets already redeemed (effects may run twice). */
+const handledSso = new Set<string>();
 
 /**
  * 登入後要回去的路徑（?next=）：只接受站內路徑，避免 open redirect。OAuth 同意頁沒登入時會經 /oauth/login 帶著自己的 URL 過來。
@@ -74,6 +78,9 @@ export function useLoginPage() {
 
     // 執行時從公開端點拿（.env > 網站設定）。/ Read at runtime from the public endpoint (.env > site setting).
     const googleClientId = useGoogleClientId();
+    const sso = useSsoButtons();
+    /** 按了哪個單一登入按鈕、正要離開這頁。/ The SSO button pressed; the page is about to leave. */
+    const [ssoLeaving, setSsoLeaving] = useState<string | null>(null);
 
     const stopAutofill = useCallback(() => {
         conditional.current?.abort();
@@ -202,6 +209,47 @@ export function useLoginPage() {
         };
     }, [handleFirstFactor, showError, t]);
 
+    // 按了單一登入又按「上一頁」回來（bfcache）：按鈕別一直轉。/ Back from the provider via bfcache: stop the spinner.
+    useEffect(() => {
+        const reset = (e: PageTransitionEvent) => {
+            if (e.persisted) setSsoLeaving(null);
+        };
+        window.addEventListener("pageshow", reset);
+        return () => window.removeEventListener("pageshow", reset);
+    }, []);
+
+    // 從身分提供者回來：`?sso=<票券>` 在這個瀏覽器兌換（跟帳密登入一樣：token 或第二步）；`?sso_error=` 說原因。
+    // Back from the provider: redeem `?sso=<ticket>` in this browser (tokens or the second step, as a password
+    // sign-in); `?sso_error=` says why it failed.
+    const ssoNames = useRef(sso);
+    ssoNames.current = sso;
+    useEffect(() => {
+        if (isAuthenticated) return;
+        const back = readSsoReturn(window.location.search);
+        if (!back.ticket && !back.error) return;
+        const key = back.ticket ?? `error:${back.error}`;
+        if (handledSso.has(key)) return;
+        handledSso.add(key);
+        window.history.replaceState(window.history.state, "", withoutSsoParams(window.location.pathname + window.location.search));
+        if (back.error) {
+            showError(t(ssoErrorKey(back.error), { name: providerName(ssoNames.current, back.provider) }));
+            return;
+        }
+        setIsSubmitting(true);
+        (async () => {
+            try {
+                const res = await apiFetch("/api/auth/oidc/redeem", { method: "POST", body: JSON.stringify({ ticket: back.ticket }) });
+                const data = await readJson<LoginResult>(res);
+                if (!res.ok && data?.code) showError(t(ssoErrorKey(data.code), { name: "" }));
+                else handleFirstFactor(res, data, "login.ssoSuccess", "sso.err.failed");
+            } catch (err: unknown) {
+                showError(err instanceof Error ? err.message : t("sso.err.failed", { name: "" }));
+            } finally {
+                setIsSubmitting(false);
+            }
+        })();
+    }, [isAuthenticated, handleFirstFactor, showError, t]);
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSubmitting(true);
@@ -282,7 +330,7 @@ export function useLoginPage() {
     };
 
     return {
-        state: { username, setUsername, password, setPassword, isSubmitting, googleClientId, passkeyAvailable, mfa, mfaMethod, setMfaMethod, mfaCode, setMfaCode },
+        state: { username, setUsername, password, setPassword, isSubmitting, googleClientId, sso, ssoLeaving, setSsoLeaving, passkeyAvailable, mfa, mfaMethod, setMfaMethod, mfaCode, setMfaCode },
         actions: { handleSubmit, signInWithPasskey, submitMfaCode, verifyWithPasskey, cancelMfa: () => setMfa(null) },
     };
 }

@@ -30,6 +30,7 @@ export const NO_REFRESH_PATHS = [
     "/api/auth/logout",
     "/api/auth/register",
     "/api/auth/google/token",
+    "/api/auth/oidc/redeem",
     "/api/auth/mfa/verify",
     "/api/auth/passkey/options",
     "/api/auth/passkey/login",

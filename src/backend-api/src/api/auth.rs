@@ -61,6 +61,8 @@ async fn sign_in_page(State(state): State<AppState>) -> ApiResult<Json<Value>> {
         "web_host": crate::ssh_host::web_host(state.config.public_base().as_deref()),
         "ssh_host": state.config.ssh_host(),
         "public_url": state.config.public_base(),
+        // 單一登入按鈕（只有代號與名字）。/ Single sign-on buttons (slug and name only).
+        "sso": super::oidc::buttons(&state).await,
     })))
 }
 
