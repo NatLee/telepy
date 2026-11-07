@@ -18,7 +18,7 @@
 | [コマンドラインと API トークン](./cli.ja.md) | インストール、サインイン、全コマンド、トークンにできること |
 | [MCP](./mcp.ja.md) | MCP クライアントの接続と承認、エージェントにできること・できないこと |
 | [Webhook](./webhooks.ja.md) | 個人用とサイト全体の Webhook：イベント、形式、署名、再試行 |
-| [シングルサインオン（OIDC）](./sso.ja.md) | Okta、Entra ID、Google Workspace、Keycloak などでのサインイン：設定、誰が入れるか、グループとロール、プロバイダーによるアカウント作成（SCIM）、アカウント連携 |
+| [シングルサインオン（OIDC）](./sso.ja.md) | Okta、Entra ID、Google Workspace、Keycloak などでのサインイン：設定、誰が入れるか、グループとロール、トンネルのグループ共有、プロバイダーによるアカウント作成（SCIM）、アカウント連携 |
 
 ## 内部のしくみ
 

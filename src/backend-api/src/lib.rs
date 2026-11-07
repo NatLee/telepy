@@ -26,6 +26,7 @@ pub mod expiry;
 pub mod features;
 pub mod gateway;
 pub mod geoip;
+pub mod group_shares;
 pub mod hub;
 pub mod import_keys;
 pub mod join;

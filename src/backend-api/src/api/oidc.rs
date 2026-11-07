@@ -461,6 +461,8 @@ async fn apply_roles(state: &AppState, p: &Provider, user: &User, claims: &Claim
         db::oidc::forget(&state.db, p.id, user.id, *t).await?;
     }
     state.features.invalidate();
+    // 分享給這些群組的通道跟著走。/ Tunnels shared with these groups follow.
+    crate::group_shares::kick(state);
     let names = group_names(state).await?;
     let quoted = |ids: &[i64]| ids.iter().map(|id| format!("\"{}\"", names.get(id).cloned().unwrap_or_else(|| format!("#{id}")))).collect::<Vec<_>>().join(", ");
     let mut parts = Vec::new();

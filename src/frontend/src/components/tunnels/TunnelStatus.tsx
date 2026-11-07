@@ -5,7 +5,7 @@
  * offline solid grey, never connected a dashed ring; owner / shared-with-you / share-count are small chips.
  */
 import React from "react";
-import { CircleDot, Clock, Crown, Hourglass, Share2, ShieldCheck } from "lucide-react";
+import { CircleDot, Clock, Crown, Hourglass, Share2, ShieldCheck, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
@@ -127,6 +127,12 @@ export function TunnelAccessBadges({
                     onManage={onShare}
                     className={neutral}
                 />
+            )}
+            {/* 經由使用者群組分享給我。/ Shared with me through a user group. */}
+            {!tunnel.is_owner && tunnel.share_group && (
+                <span className={neutral} title={t("share.group.viaHintMine", { name: tunnel.share_group })}>
+                    <Users /> {t("share.group.via", { name: tunnel.share_group })}
+                </span>
             )}
             {/* 限時分享：還剩多久（一天內琥珀色）。/ Timed share: how long is left (amber within a day). */}
             {!tunnel.is_owner && tunnel.share_expires_at && (

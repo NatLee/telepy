@@ -55,6 +55,11 @@ export function AccessPanel({ tunnel, role, manager, onShare, onUsers, onRequest
                             <ShareExpiryText expiresAt={tunnel.share_expires_at} showNone />
                         </Property>
                     )}
+                    {!tunnel.is_owner && tunnel.share_group && (
+                        <Property label={t("share.group.through")}>
+                            <span title={t("share.group.viaHintMine", { name: tunnel.share_group })}>{tunnel.share_group}</span>
+                        </Property>
+                    )}
                 </PropertyList>
                 {!tunnel.is_owner && !manager && (
                     <div className="flex flex-wrap items-center gap-3">

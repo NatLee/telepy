@@ -238,13 +238,32 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
         }
         Kind::ShareReceived => {
             let perm = s(d, "permission").to_uppercase();
-            tri(lang, format!("{by} shared {t} with you ({perm})"), format!("{by} 把 {t} 分享給你（{perm}）"), format!("{by} が {t} をあなたと共有しました（{perm}）"))
+            let group = s(d, "group");
+            if group.is_empty() {
+                tri(lang, format!("{by} shared {t} with you ({perm})"), format!("{by} 把 {t} 分享給你（{perm}）"), format!("{by} が {t} をあなたと共有しました（{perm}）"))
+            } else {
+                tri(
+                    lang,
+                    format!("You can use {t} through the group {group} ({perm})"),
+                    format!("你透過群組 {group} 可以用 {t}（{perm}）"),
+                    format!("グループ {group} を通じて {t} を使えるようになりました（{perm}）"),
+                )
+            }
         }
         Kind::ShareEnded => {
             let user = s(d, "user");
             match s(d, "reason") {
                 "left" => tri(lang, format!("{user} left {t}"), format!("{user} 離開了 {t}"), format!("{user} が {t} の共有から抜けました")),
                 "expired" => tri(lang, format!("{user}'s access to {t} expired"), format!("{user} 對 {t} 的分享到期了"), format!("{user} の {t} への共有が期限切れになりました")),
+                "group" => {
+                    let group = s(d, "group");
+                    tri(
+                        lang,
+                        format!("{user}'s access to {t} through the group {group} ended"),
+                        format!("{user} 透過群組 {group} 對 {t} 的存取結束了"),
+                        format!("{user} のグループ {group} を通じた {t} へのアクセスが終了しました"),
+                    )
+                }
                 _ => tri(lang, format!("{by} revoked {user}'s access to {t}"), format!("{by} 撤銷了 {user} 對 {t} 的存取"), format!("{by} が {user} の {t} へのアクセスを取り消しました")),
             }
         }

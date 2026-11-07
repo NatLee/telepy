@@ -258,6 +258,8 @@ pub struct Tunnel {
     /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
     /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
     pub share_expires_at: Option<String>,
+    /// 經由哪個使用者群組分享給我（null = 直接分享）。/ The user group it is shared with me through (null = directly).
+    pub share_group: Option<String>,
     /// 只有列表帶：owner / ADMIN 看得到還在等的存取申請數；其他人 0。/ List only: pending access requests (owner / ADMIN; else 0).
     pub access_requests: Option<i64>,
     /// 只有列表帶：分享給誰（分享的先後順序，權限是現在有效的那個）；只給 owner / ADMIN（能管分享的人），其他人 null。
@@ -1360,6 +1362,61 @@ pub struct SharedUser {
     pub permission_until: Option<String>,
     pub base_permission: Option<String>,
     pub allowed_target_usernames: Vec<AllowedUsername>,
+    /// 經由哪個群組（null = 直接分享給他）。/ The group it comes through (null = shared directly).
+    pub via_group: Option<ViaGroup>,
+}
+
+#[derive(ToSchema)]
+pub struct ViaGroup {
+    pub group_share_id: i64,
+    pub group_id: i64,
+    pub name: String,
+}
+
+/// 分享給使用者群組的請求（建立；修改時每個欄位都可省略）。/ Share with a user group (create; every field optional on change).
+#[derive(ToSchema)]
+pub struct GroupShareRequest {
+    pub group_id: Option<i64>,
+    #[schema(example = "view")]
+    pub permission_type: Option<String>,
+    pub allowed_target_username_ids: Option<Vec<i64>>,
+    /// 到什麼時候（RFC 3339 / `YYYY-MM-DD`）；null = 一直有效。/ When it ends; null = never.
+    pub expires_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct GroupShare {
+    pub id: i64,
+    pub group_id: i64,
+    pub name: String,
+    /// 群組有幾個人。/ How many people the group has.
+    pub members: i64,
+    /// 成員名稱（只給能管分享的人）。/ Members by name (only for those who manage sharing).
+    pub member_names: Option<Vec<String>>,
+    /// 經由這筆拿到存取的人數；另有直接分享的人照自己的。/ Members holding access through it; ones with a direct share keep theirs.
+    pub through: i64,
+    pub direct: i64,
+    pub permission_type: String,
+    pub expires_at: Option<String>,
+    pub shared_by: Option<String>,
+    pub created_at: String,
+    pub allowed_target_usernames: Vec<AllowedUsername>,
+}
+
+#[derive(ToSchema)]
+pub struct GroupChoice {
+    pub id: i64,
+    pub name: String,
+    pub members: i64,
+    pub shared: bool,
+}
+
+#[derive(ToSchema)]
+pub struct GroupShares {
+    pub can_manage: bool,
+    pub shares: Vec<GroupShare>,
+    /// 可以分享給的使用者群組（只給能管分享的人）。/ User groups to share with (only for those who manage sharing).
+    pub groups: Vec<GroupChoice>,
 }
 
 #[derive(ToSchema)]

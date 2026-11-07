@@ -256,6 +256,30 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // 分享給使用者群組：權限、期限；成員各自拿到一筆「經由群組」的分享（`tunnels_tunnelsharing.group_share_id`）。
+    // A tunnel shared with a user group: permission, end; each member gets a share row marked with this id.
+    (
+        "telepy_group_share",
+        r#"CREATE TABLE "telepy_group_share" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "group_id" integer NOT NULL,
+            "shared_by_id" integer NULL,
+            "permission_type" varchar(10) NOT NULL,
+            "expires_at" datetime NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // 群組分享可以用的登入帳號（`authorized_keys_reverseserverusernames` 的 id）。/ The accounts a group share allows.
+    (
+        "telepy_group_share_username",
+        r#"CREATE TABLE "telepy_group_share_username" (
+            "group_share_id" integer NOT NULL,
+            "username_id" integer NOT NULL,
+            PRIMARY KEY ("group_share_id", "username_id")
+        )"#,
+    ),
     // SCIM 群組 → 功能權限的使用者群組。/ SCIM groups → Feature-permissions user groups.
     (
         "telepy_scim_group",
@@ -1064,8 +1088,8 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("key_id", "stage")
         )"#,
     ),
-    // Rust 自有：功能權限的群組（誰可以用哪些 Telepy 功能；跟隧道分享無關）。
-    // Feature-permission groups (who may use which Telepy features; unrelated to tunnel sharing).
+    // Rust 自有：使用者群組（誰可以用哪些 Telepy 功能；通道也可以分享給群組，見 `telepy_group_share`）。
+    // User groups (who may use which Telepy features; tunnels can be shared with them too, see `telepy_group_share`).
     (
         "telepy_user_group",
         r#"CREATE TABLE "telepy_user_group" (
@@ -1164,6 +1188,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_oidc_group_rule_provider" ON "telepy_oidc_group_rule" ("provider_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_scim_user_provider_user" ON "telepy_scim_user" ("provider_id", "user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_scim_group_provider_group" ON "telepy_scim_group" ("provider_id", "group_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_group_share_tunnel_group" ON "telepy_group_share" ("tunnel_id", "group_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_group_share_group" ON "telepy_group_share" ("group_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_oidc_grant_unique" ON "telepy_oidc_grant" ("provider_id", "user_id", "target", IFNULL("group_id", 0))"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_install_id" ON "telepy_device_install" ("install_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
@@ -1456,6 +1482,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "notify_push_per_hour", "integer NOT NULL DEFAULT 20"),
     // 這個人要等多久才推「離線」（秒，`push::STATUS_DELAYS` 之一；站台上限會再收窄）。/ How long this person waits before an offline push.
     ("user_management_usersettings", "push_status_delay", "integer NOT NULL DEFAULT 60"),
+    // 這筆分享是群組分享替成員建的（NULL = 直接分享給這個人）。/ This share comes from a group share (NULL = shared with the person).
+    ("tunnels_tunnelsharing", "group_share_id", "integer NULL"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

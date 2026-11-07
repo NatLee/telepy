@@ -12,6 +12,7 @@ pub mod credentials;
 pub mod device_install;
 pub mod device_keys;
 pub mod features;
+pub mod group_shares;
 pub mod groups;
 pub mod health_acks;
 pub mod host_keys;

@@ -263,6 +263,8 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query(&format!("DELETE FROM tunnels_tunnelsharingallowedusername WHERE reverse_server_username_id IN (SELECT id FROM {U} WHERE reverse_server_id = ?)"))
         .bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM tunnels_tunnelsharing WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_group_share_username WHERE group_share_id IN (SELECT id FROM telepy_group_share WHERE tunnel_id = ?)").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_group_share WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {U} WHERE reverse_server_id = ?")).bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_lan_watch WHERE host_id IN (SELECT id FROM telepy_lan_host WHERE tunnel_id = ?)").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_lan_host WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
@@ -379,6 +381,7 @@ pub async fn username_update(db: &Db, id: i64, username: Option<&str>) -> sqlx::
 pub async fn username_delete(db: &Db, id: i64) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;
     sqlx::query("DELETE FROM tunnels_tunnelsharingallowedusername WHERE reverse_server_username_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_group_share_username WHERE username_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("UPDATE {T} SET default_username_id = NULL WHERE default_username_id = ?")).bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {U} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

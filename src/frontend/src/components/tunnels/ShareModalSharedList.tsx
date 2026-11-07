@@ -3,7 +3,7 @@
  * Currently shared-with list and actions inside share modal.
  */
 import React from "react";
-import { Share2, Pencil, X, UserCog } from "lucide-react";
+import { Share2, Pencil, X, UserCog, Users, UserRoundCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReverseServerUsername } from "@/types/tunnel";
@@ -23,6 +23,8 @@ export interface SharedUserRow {
     base_permission?: string | null;
     /** 分享到期時間（UTC ISO）；null = 一直有效。/ When the share ends (UTC ISO); null = never. */
     expires_at?: string | null;
+    /** 經由哪個使用者群組（null = 直接分享給他）。/ The user group it comes through (null = shared directly). */
+    via_group?: { group_share_id: number; group_id: number; name: string } | null;
 }
 
 export interface ShareModalSharedListProps {
@@ -36,6 +38,10 @@ export interface ShareModalSharedListProps {
     onUpdatePermission: (userId: number, value: string) => void;
     onUpdateExpiry: (userId: number, expiresAt: string | null) => Promise<boolean>;
     onUnshare: (payload: { userId: number; username: string }) => void;
+    /** 把經由群組的分享改成他自己的（之後照這裡的設定）。/ Turn a share through a group into their own. */
+    onOwnShare?: (row: SharedUserRow) => void;
+    /** 到「群組」分頁。/ Go to the Groups tab. */
+    onGroups?: () => void;
 }
 
 export function ShareModalSharedList({
@@ -48,6 +54,8 @@ export function ShareModalSharedList({
     onUpdatePermission,
     onUpdateExpiry,
     onUnshare,
+    onOwnShare,
+    onGroups,
 }: ShareModalSharedListProps) {
     const { t } = useI18n();
     if (loading) return null;
@@ -71,7 +79,9 @@ export function ShareModalSharedList({
             <ul className="divide-y divide-border/70 overflow-hidden rounded-xl ring-1 ring-inset ring-border/80">
                 {sharedUsers.map((sharedUser) => {
                     const allowedCount = sharedUser.allowed_target_usernames?.length ?? 0;
-                    const canEditTargets = !readOnly && !locked && tunnelUsernames.length > 0;
+                    // 經由群組的分享：在群組分頁改，或改成他自己的。/ Through a group: changed on the Groups tab, or made their own.
+                    const via = sharedUser.via_group ?? null;
+                    const canEditTargets = !readOnly && !locked && tunnelUsernames.length > 0 && !via;
                     return (
                         <li key={sharedUser.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3 transition-colors hover:bg-surface">
                             <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -80,9 +90,19 @@ export function ShareModalSharedList({
                                 </span>
                                 <span className="flex min-w-0 flex-col items-start">
                                     <span className="max-w-full truncate text-sm text-foreground">{sharedUser.username}</span>
+                                    {via && (
+                                        <button
+                                            type="button"
+                                            onClick={onGroups}
+                                            className="inline-flex items-center gap-1 text-xs text-info hover:underline"
+                                            title={t("share.group.viaHint", { name: via.name })}
+                                        >
+                                            <Users size={12} aria-hidden /> {t("share.group.via", { name: via.name })}
+                                        </button>
+                                    )}
                                     <ShareExpiryControl
                                         expiresAt={sharedUser.expires_at}
-                                        editable={!readOnly && !locked}
+                                        editable={!readOnly && !locked && !via}
                                         onChange={(value) => onUpdateExpiry(sharedUser.id, value)}
                                     />
                                     <TemporaryGrantText
@@ -114,7 +134,7 @@ export function ShareModalSharedList({
                                 <Select
                                     value={sharedUser.permission_type || (sharedUser.can_admin_tunnel ? "admin" : sharedUser.can_edit_tunnel ? "edit" : "view")}
                                     onValueChange={(val) => onUpdatePermission(sharedUser.id, val)}
-                                    disabled={readOnly || locked}
+                                    disabled={readOnly || locked || !!via}
                                 >
                                     <SelectTrigger size="sm" className="w-[104px] text-xs" aria-label={t("share.thPermission")}>
                                         <SelectValue />
@@ -125,7 +145,19 @@ export function ShareModalSharedList({
                                         <SelectItem value="admin">{t("share.permAdmin")}</SelectItem>
                                     </SelectContent>
                                 </Select>
-                                {!readOnly && (
+                                {!readOnly && via && !locked && onOwnShare && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => onOwnShare(sharedUser)}
+                                        className="text-muted-foreground"
+                                        title={t("share.group.own")}
+                                        aria-label={t("share.group.own")}
+                                    >
+                                        <UserRoundCog />
+                                    </Button>
+                                )}
+                                {!readOnly && !via && (
                                     <Button
                                         variant="ghost"
                                         size="icon-sm"

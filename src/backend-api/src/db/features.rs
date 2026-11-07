@@ -69,6 +69,9 @@ pub async fn delete_group(db: &Db, id: i64) -> sqlx::Result<bool> {
     let mut tx = db.write.begin().await?;
     sqlx::query(&format!("DELETE FROM {MEMBER} WHERE group_id = ?")).bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {GRANT} WHERE subject_kind = 'group' AND subject_id = ?")).bind(id).execute(&mut *tx).await?;
+    // 分享給這個群組的通道也收回（成員那幾筆分享由 `group_shares::reconcile` 收掉）。/ Its tunnel shares go too.
+    sqlx::query("DELETE FROM telepy_group_share_username WHERE group_share_id IN (SELECT id FROM telepy_group_share WHERE group_id = ?)").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_group_share WHERE group_id = ?").bind(id).execute(&mut *tx).await?;
     let res = sqlx::query(&format!("DELETE FROM {GROUP} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(res.rows_affected() > 0)
