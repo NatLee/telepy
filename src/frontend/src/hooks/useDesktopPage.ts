@@ -378,14 +378,14 @@ export function useDesktopPage() {
                         : { login: form.login.trim(), password: form.password, domain: form.protocol === "rdp" ? form.domain.trim() : "" }),
                 }),
             });
-            const data = await readJson<DesktopStart & { code?: string; error?: string; credential_id?: string[] }>(res);
+            const data = await readJson<DesktopStart & { code?: string; error?: string; credential_id?: string[]; seen?: string | null; wsl?: boolean | null }>(res);
             if (!res.ok || !data?.ticket) {
                 if (data?.credential_id?.[0]) {
                     setFailure({ key: "desktop.err.savedLogin", vars: { message: data.credential_id[0] }, at: "telepy" });
                     setPhase("failed");
                     return;
                 }
-                setFailure(startFailure(data?.code, res.status, { account: form.account, address }));
+                setFailure(startFailure(data?.code, res.status, { account: form.account, address }, form.protocol === "vnc" ? "vnc" : "rdp", { seen: data?.seen, wsl: data?.wsl }));
                 setPhase("failed");
                 return;
             }

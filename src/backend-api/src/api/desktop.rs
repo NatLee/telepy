@@ -107,7 +107,7 @@ fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
     }
 }
 
-#[utoipa::path(post, path = "/api/reverse/server/{id}/desktop/start", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DesktopStartRequest, responses((status = 200, description = "Session created; open the WebSocket at ws_path with ?ticket= within expires_in seconds", body = super::schemas::DesktopSession), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | desktop_busy", body = super::schemas::DesktopError)))]
+#[utoipa::path(post, path = "/api/reverse/server/{id}/desktop/start", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DesktopStartRequest, responses((status = 200, description = "Session created; open the WebSocket at ws_path with ?ticket= within expires_in seconds", body = super::schemas::DesktopSession), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable | rdp_no_answer | rdp_silent | rdp_not_rdp (RDP pre-flight; with seen = ssh | http | text | binary and wsl)", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | desktop_busy", body = super::schemas::DesktopError)))]
 async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentSession(web_session): CurrentSession, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
     if !settings.desktop_enabled {
@@ -145,6 +145,13 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
     }
     let prepared = desktop::prepare(&state, tunnel.reverse_port, &hop_username, &target).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, e.code(), e.to_string()))?;
+    // RDP 預檢：先確定那裡真的是 RDP 伺服器，否則 guacd 只會說「wrong security type?」。/ Make sure an RDP server answers first.
+    let rdp = if protocol == Protocol::Rdp { Some(rdp_preflight(&state, &tunnel, &target, &prepared, &user.username).await?) } else { None };
+    let rdp_security = rdp.as_ref().map(|a| match a {
+        desktop::rdp_probe::Answer::Rdp { failure: Some(_), .. } => "security negotiation refused",
+        desktop::rdp_probe::Answer::Rdp { security, .. } => security.label(),
+        _ => "unknown",
+    });
     let (session, ticket) = state.desktop.create(NewSession {
         user_id: user.id,
         user_name: user.username.clone(),
@@ -162,6 +169,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         prepared,
         saved_label,
         web_session,
+        rdp_security,
     });
     tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), audio, resize, "desktop: session created");
     Ok(Json(json!({
@@ -178,7 +186,45 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         "max_resolution": settings.desktop_max_resolution.clamp(desktop::MIN_DIMENSION as i64, 16384),
         "target": target_json(&session.target),
         "username": session.hop_username,
+        "rdp": rdp.as_ref().map(rdp_json),
     })))
+}
+
+/// RDP 預檢的結果（成功時隨 start 回去，資訊對話框顯示伺服器要的安全層）。/ The pre-flight's result, returned with start.
+fn rdp_json(a: &desktop::rdp_probe::Answer) -> Value {
+    match a {
+        desktop::rdp_probe::Answer::Rdp { security, failure } => json!({ "security": security.as_str(), "failure": failure.map(desktop::rdp_probe::failure_name) }),
+        _ => Value::Null,
+    }
+}
+
+/// 裝置是 Windows 裡的 WSL 嗎（看它最近一次回報的核心版本）。/ Is the device WSL inside Windows (by its last reported kernel)?
+async fn device_is_wsl(state: &AppState, tunnel_id: i64) -> bool {
+    let Ok(Some(last)) = db::tunnel_endpoints::of_tunnel(&state.db, tunnel_id).await else { return false };
+    let facts: Value = last.facts.as_deref().and_then(|f| serde_json::from_str(f).ok()).unwrap_or(Value::Null);
+    facts["kernel"].as_str().is_some_and(desktop::rdp_probe::is_wsl)
+}
+
+/// 經同一條裝置連線另開一條通道問目標是不是 RDP 伺服器；不是就擋下並說清楚是哪一種（沒有伺服器 / 不說話 / 別的服務），
+/// 目標是 WSL 裝置本身時附 `wsl: true` 讓網頁解釋 127.0.0.1 在 WSL 裡指的是什麼。
+/// Ask the target over another channel of the same device connection whether it is an RDP server; if not, stop and
+/// say which case it is (nothing / silent / another service), with `wsl: true` when the target is a WSL device itself
+/// so the page can explain what 127.0.0.1 means inside WSL.
+async fn rdp_preflight(state: &AppState, tunnel: &db::tunnels::Tunnel, target: &desktop::Target, prepared: &desktop::Prepared, user: &str) -> ApiResult<desktop::rdp_probe::Answer> {
+    let answer = desktop::rdp_probe::probe(&prepared.lease, &target.host, target.port).await;
+    let Some(code) = answer.error_code() else {
+        tracing::debug!(tunnel = tunnel.id, target = %format!("{}:{}", target.host, target.port), answer = ?answer, "desktop: RDP pre-flight passed");
+        return Ok(answer);
+    };
+    let address = if target.lan_host_id.is_some() { format!("{}:{}", target.host, target.port) } else { format!("{}:{}", tunnel.host_friendly_name, target.port) };
+    let wsl = target.lan_host_id.is_none() && device_is_wsl(state, tunnel.id).await;
+    let seen = match &answer {
+        desktop::rdp_probe::Answer::NotRdp(seen) => Some(seen.kind()),
+        _ => None,
+    };
+    let detail = answer.describe(&address);
+    tracing::info!(tunnel = tunnel.id, user, code, wsl, "desktop: RDP pre-flight stopped the start: {detail}");
+    Err(ApiError::new(StatusCode::BAD_GATEWAY, json!({ "error": detail, "code": code, "seen": seen, "wsl": wsl })))
 }
 
 /// 從裝置試連目標的一個埠（例如 RustDesk 的 Direct IP 21118）：和 start 同一道門、同一條路（連線池的 lease +

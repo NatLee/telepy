@@ -300,6 +300,13 @@ Telepy opens the path to the desktop before any picture starts, so most problems
 | Remote desktop is turned off on this server | An administrator switched it off. |
 | Telepy's desktop engine (guacd) is not running | Ask an administrator to start it. |
 | The desktop rejected the login | Check the user, password and domain. |
+| … took the connection and closed it without answering like a Remote Desktop server | Nothing that speaks RDP is on that port. Start the RDP server (xrdp on Linux; on Windows, Settings → System → Remote Desktop — Windows Home has none). |
+| … is an SSH server / a web server, not a Remote Desktop server | Wrong port: RDP is usually 3389. |
+| The Remote Desktop server answered Telepy's check, but the connection broke during sign-in | It is an RDP server; check the account, the password, and that it allows the security it asks for (NLA, TLS). |
+
+**Before guacd starts, Telepy checks the RDP port itself.** guacd answers "Server refused connection (wrong security type?)" whenever no RDP server answers properly — nothing on the port, a connection closed at once, another service — so the security type is rarely the problem. Telepy sends the first RDP message over the tunnel first and says which case it is, or notes the security the server asked for (NLA, TLS) in the Logs line.
+
+**WSL devices:** a device that is WSL inside Windows connects to `127.0.0.1` inside WSL. Only an RDP server running in WSL answers there, or — with WSL's mirrored networking — Windows' own Remote Desktop if it is turned on. For the Windows desktop, add Windows by its LAN address as a LAN host and connect to that; for a desktop inside WSL, run xrdp there on another port, such as 3390. The page says so when it sees a WSL kernel in the device's facts.
 
 ### The picture or the text is too small
 

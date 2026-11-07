@@ -2279,6 +2279,17 @@ pub struct DesktopSession {
     pub target: DesktopTarget,
     /// The device account used for the hop
     pub username: String,
+    /// RDP only: what the pre-flight saw — the server's security layer, or the negotiation failure it answered with
+    pub rdp: Option<DesktopRdp>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopRdp {
+    /// The security layer the server picked: rdp | tls | nla | nla_ex | rdstls | other
+    #[schema(example = "nla_ex")]
+    pub security: String,
+    /// The RDP_NEG_FAILURE the server answered, e.g. ssl_not_allowed_by_server; null when it picked a layer
+    pub failure: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -2378,6 +2389,10 @@ pub struct DesktopError {
     pub error: String,
     #[schema(example = "device_offline")]
     pub code: String,
+    /// rdp_not_rdp: what answered instead — ssh | http | text | binary
+    pub seen: Option<String>,
+    /// rdp_*: the target is the device itself and the device is WSL inside Windows
+    pub wsl: Option<bool>,
 }
 
 // ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)

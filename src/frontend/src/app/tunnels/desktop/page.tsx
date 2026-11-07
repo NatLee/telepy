@@ -64,7 +64,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, isWslKernel, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -742,6 +742,8 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
         { value: "sharp", label: t("desktop.quality.sharp") },
     ];
     const noAccounts = !!tunnel && tunnel.usernames.length === 0;
+    // 對 WSL 裝置本身開 RDP：先說 127.0.0.1 在 WSL 裡指的是什麼（不等到連線失敗）。/ RDP to a WSL device itself: explain 127.0.0.1 up front.
+    const wslRdp = form.protocol === "rdp" && !host && isWslKernel(tunnel?.endpoint?.facts?.kernel);
 
     return (
         <form
@@ -754,6 +756,7 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
             {failure && phase === "failed" && (
                 <Callout tone="danger">
                     <p>{t(failure.key, failure.vars)}</p>
+                    {failure.hint && <p className="mt-1.5">{t(failure.hint.key, failure.hint.vars)}</p>}
                     <button type="button" onClick={onInfo} className="mt-1 text-sm text-destructive underline underline-offset-2">
                         {t("desktop.showWhere")}
                     </button>
@@ -762,6 +765,12 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
 
             {/* 路徑圖就是表單的前半：裝置、帳號、目標、協定、埠都在對應的節點裡選。/ The path diagram holds the device, account, target, protocol and port. */}
             <DesktopPathPicker state={state} actions={actions} onCompare={onCompare} />
+
+            {wslRdp && !(failure && phase === "failed") && (
+                <Callout tone="info" title={t("desktop.wsl.title")}>
+                    {t("desktop.wsl.body")}
+                </Callout>
+            )}
 
             {/* 欄寬一定要 minmax(0,…)：RustDesk 的 ssh 指令很長，不然會把整張表單撐出手機畫面。/ minmax(0,…) keeps the long ssh command from widening the form past a phone screen. */}
             <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">

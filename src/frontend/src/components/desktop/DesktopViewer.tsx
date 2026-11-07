@@ -359,7 +359,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                     end(null);
                 }
             };
-            client.onerror = (status) => end(sessionFailure(status.code, status.message));
+            client.onerror = (status) => end(sessionFailure(status.code, status.message, start.rdp));
             tunnel.onerror = (status) => end(sessionFailure(status.code, status.message));
             tunnel.onstatechange = (state) => callbacks.current.onTunnelUnstable(state === G.Tunnel.State.UNSTABLE);
             // VNC 伺服器要我們沒給的欄位（例如密碼）：不在串流裡補，直接請使用者重新連。
