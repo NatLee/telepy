@@ -196,10 +196,11 @@ test("command search matches the command and its text", () => {
 test("every command the page lists is a real subcommand", () => {
     const lib = readFileSync(new URL("../../../cli/src/lib.rs", import.meta.url), "utf8");
     const block = lib.slice(lib.indexOf("pub enum Cmd {"), lib.indexOf("}", lib.indexOf("pub enum Cmd {")));
-    const variants = [...block.matchAll(/^\s{4}([A-Z][a-z]+)/gm)].map((m) => m[1].toLowerCase());
+    // 整個名稱（`VpnHelper` 不是 `vpn`）。/ The whole name (`VpnHelper` is not `vpn`).
+    const variants = [...block.matchAll(/^\s{4}([A-Z][A-Za-z]+)/gm)].map((m) => m[1].toLowerCase());
     const listed = CLI_COMMANDS.map((c) => c.usage.split(" ")[0]);
     // 隱藏的指令不列。/ Hidden commands are not listed.
-    const hidden = [...block.matchAll(/#\[command\(hide = true\)\]\s*\n\s*([A-Z][a-z]+)/g)].map((m) => m[1].toLowerCase());
+    const hidden = [...block.matchAll(/#\[command\(hide = true\)\]\s*\n\s*([A-Z][A-Za-z]+)/g)].map((m) => m[1].toLowerCase());
     assert.deepEqual(listed.sort(), variants.filter((v) => !hidden.includes(v)).sort());
 });
 

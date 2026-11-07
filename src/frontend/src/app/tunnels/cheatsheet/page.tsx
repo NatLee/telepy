@@ -271,6 +271,7 @@ function CheatsheetInner() {
             case "jump": return tn("sheet.sentence.jump", { device, lanUser: blank("lanUser"), lanHost: blank("lanHost"), lanPort: blank("lanPort") });
             case "copy": return tn(upload ? "sheet.sentence.copyUp" : "sheet.sentence.copyDown", { device, localPath: blank("localPath"), remotePath: blank("remotePath"), tool });
             case "rustdesk": return tn("sheet.sentence.rustdesk", { device, lanHost: blank("lanHost"), remotePort: blank("remotePort"), localPort: blank("localPort") });
+            case "vpn": return tn("sheet.sentence.vpn", { device, network: blank("network") });
         }
     })();
 
@@ -284,6 +285,7 @@ function CheatsheetInner() {
             case "jump": return tn("sheet.caption.jump", { target: code(`${resolved.lanUser}@${resolved.lanHost}`), alias: name });
             case "copy": return tn(upload ? "sheet.caption.copyUp" : "sheet.caption.copyDown", { from: code(upload ? resolved.localPath : resolved.remotePath), to: code(upload ? resolved.remotePath : resolved.localPath), alias: name });
             case "rustdesk": return tn("sheet.caption.rustdesk", { you: code(`127.0.0.1:${resolved.localPort}`), target: code(`${resolved.lanHost}:${resolved.remotePort}`), alias: name });
+            case "vpn": return tn("sheet.caption.vpn", { network: code(resolved.network), alias: name });
         }
     })();
 
@@ -327,6 +329,7 @@ function CheatsheetInner() {
             case "jump": return <p>{t(telepyWay ? "sheet.next.telepyJump" : "sheet.next.jump")}</p>;
             case "copy": return null;
             case "rustdesk": return <p>{tn("sheet.next.rustdesk", { addr: code(resolved.localPort === "21118" ? "127.0.0.1" : `127.0.0.1:${resolved.localPort}`) })}</p>;
+            case "vpn": return <p>{t(telepyWay ? "sheet.next.telepyVpn" : "sheet.next.vpn")}</p>;
         }
     })();
 

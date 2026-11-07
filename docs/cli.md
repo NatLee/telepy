@@ -390,6 +390,30 @@ telepy ssh box -N -R 9000:localhost:3000      # the other way: the device's loca
 
 `forward` writes the same ssh config as `telepy ssh`, runs `ssh -N -L 127.0.0.1:<local>:<host>:<port>` through the device, waits until the local port answers, prints the address and keeps forwarding until Ctrl+C. The local port is the same number (plus 10000 below 1024) or the next free one; `--local` picks it. Only this computer can use it: it listens on 127.0.0.1. It needs `tunnels:read` and your personal SSH key, like `telepy ssh`. In the web app, the Network page opens the same pages in Telepy's remote browser instead.
 
+### A whole network (VPN)
+
+```sh
+telepy vpn box 192.168.1.0/24                          # every machine on that network, by its own address
+telepy vpn box                                         # the device's own networks Telepy knows (yours left out)
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # names under corp.lan are looked up on the device
+telepy vpn box --engine sshuttle --dns                 # through sshuttle; every lookup through the device
+```
+
+`telepy vpn` makes the networks behind a device reachable from this computer until Ctrl+C: `ssh`, a browser, a database client or anything else that speaks TCP connects to `192.168.1.20` as if you were on that network. It changes this computer's routing, so it asks for your password through sudo.
+
+There are two engines, and `--engine auto` (the default) picks one:
+
+| | Built-in | sshuttle |
+| --- | --- | --- |
+| On this computer | macOS or Linux, nothing to install | `sshuttle` installed (Linux, macOS) |
+| On the device | nothing: any sshd that allows TCP forwarding, Dropbear on a router too | `python3` |
+| How | a network device on your computer; each connection goes through `ssh -D`, so the device's sshd opens it | sshuttle's firewall rules and its small Python helper on the device |
+| Names | `--dns-domain <domain>`: names under it are asked of the device's own DNS server (macOS: `/etc/resolver`; Linux: systemd-resolved) | `--dns`: every lookup goes through the device |
+
+`auto` uses sshuttle when this computer has it and the device has python3, otherwise the built-in engine. Without networks on the command line, `telepy vpn` takes the device's own networks Telepy learned from it, and leaves out any this computer is on too (routing your own LAN away would cut it); name one to route it anyway. A network that contains the Telepy server itself is refused: the VPN would route its own connection into itself.
+
+Only TCP goes through, plus DNS for the chosen names: SSH carries TCP. Ping, UDP services and other protocols stay local. Access follows the same rules as `telepy ssh`: you need `tunnels:read`, your personal SSH key and an account you may use on the device; the built-in engine also needs the device's sshd to allow TCP forwarding. Telepy shows you as an SSH session on the tunnel while it runs. sshuttle works without the CLI too: `sshuttle -r <Host alias> 192.168.1.0/24` with Telepy's blocks in `~/.ssh/config`; the web's Command sheet builds that line as well.
+
 ### A browser on the device's network
 
 ```sh
@@ -430,6 +454,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
 | `telepy rsync [rsync options…] <from>… <to>` | Sync with rsync over the same ssh; `--identity`, `--ssh-opt`, `--via`, `--fallback` go before rsync's options | `tunnels:read` + your SSH key |
 | `telepy forward <target> <host>[:port]` | Bring a port behind the device to this computer (`ssh -L`); `--open`, `--local`, `--https` | `tunnels:read` + your SSH key |
+| `telepy vpn <target> [<network>…]` | Reach whole networks behind the device until Ctrl+C (TCP, plus DNS with `--dns-domain` / `--dns`); `--engine auto\|builtin\|sshuttle`; asks for sudo | `tunnels:read` + your SSH key |
 | `telepy config install` | Put Telepy's blocks into `~/.ssh/config`; tunnels or `--all`, `--print`, `--file` | `tunnels:read` |
 | `telepy config fallback` | Show or set what to do when the web port can't be reached: `ask`, `always`, `never` | — |
 | `telepy config tidy` | Simplify an ssh config; `--check`, `--wildcards`, `--yes`, `--file`; no sign-in needed | — |

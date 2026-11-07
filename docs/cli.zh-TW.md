@@ -390,6 +390,30 @@ telepy ssh box -N -R 9000:localhost:3000      # 反方向：裝置的 localhost:
 
 `forward` 寫好跟 `telepy ssh` 一樣的 ssh config，經裝置跑 `ssh -N -L 127.0.0.1:<本機>:<主機>:<port>`，等本機 port 接得通就印出網址，然後一直轉到按 Ctrl+C。本機 port 用同一個號碼（1024 以下加 10000），被佔用就往後找空的；`--local` 可以自己指定。它只聽 127.0.0.1，只有這台電腦能用。需要 `tunnels:read` 與你的個人 SSH 金鑰，跟 `telepy ssh` 一樣。在網頁上，網路拓撲頁則是用 Telepy 的遠端瀏覽器開同樣的網頁。
 
+### 整個網段（VPN）
+
+```sh
+telepy vpn box 192.168.1.0/24                          # 那個網段上的每台機器，直接用它自己的位址連
+telepy vpn box                                         # Telepy 知道的裝置網段（跟你自己重疊的會略過）
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名稱到裝置上查
+telepy vpn box --engine sshuttle --dns                 # 改用 sshuttle，所有 DNS 查詢都經過裝置
+```
+
+`telepy vpn` 讓這台電腦連得到裝置後面的網段，直到按 Ctrl+C：`ssh`、瀏覽器、資料庫工具，任何走 TCP 的程式連 `192.168.1.20` 都像人在那個網路上一樣。它會改這台電腦的路由，所以會透過 sudo 問你的密碼。
+
+它有兩種引擎，預設的 `--engine auto` 會自己選：
+
+| | 內建 | sshuttle |
+| --- | --- | --- |
+| 這台電腦 | macOS 或 Linux，不用另外裝 | 要裝好 `sshuttle`（Linux、macOS） |
+| 裝置上 | 什麼都不用：只要 sshd 允許 TCP 轉送，路由器上的 Dropbear 也行 | `python3` |
+| 怎麼做 | 在你電腦上建一個網路裝置；每條連線都經過 `ssh -D`，由裝置的 sshd 開出去 | sshuttle 的防火牆規則，加上它放在裝置上的一小段 Python |
+| 名稱 | `--dns-domain <網域>`：這個網域底下的名稱去問裝置自己的 DNS 伺服器（macOS 用 `/etc/resolver`，Linux 用 systemd-resolved） | `--dns`：所有查詢都經過裝置 |
+
+`auto` 在這台電腦有 sshuttle、裝置也有 python3 時用 sshuttle，否則用內建引擎。指令裡沒給網段時，`telepy vpn` 會用 Telepy 從裝置學到的網段，並略過這台電腦自己也在的網段（把自己的區網導走會斷線）；真的要導就自己指定。含有 Telepy 伺服器本身的網段會被拒絕，因為 VPN 會把自己的連線導進自己。
+
+只有 TCP 會轉送，再加上指定名稱的 DNS，因為 SSH 只帶 TCP。ping、UDP 服務和其他協定都留在本機。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號；內建引擎另外需要裝置的 sshd 允許 TCP 轉送。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。不用 CLI 也能用 sshuttle：`~/.ssh/config` 裡有 Telepy 的設定區塊時，跑 `sshuttle -r <Host 別名> 192.168.1.0/24` 就行；網頁的指令速查也會幫你組好這一行。
+
 ### 裝置網路上的瀏覽器
 
 ```sh
@@ -430,6 +454,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy rsync [rsync 選項…] <from>… <to>` | 用同一個 ssh 跑 rsync 同步；`--identity`、`--ssh-opt`、`--via`、`--fallback` 放在 rsync 的選項前面 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP，加上 `--dns-domain` / `--dns` 的 DNS）；`--engine auto\|builtin\|sshuttle`；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |
