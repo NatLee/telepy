@@ -111,6 +111,8 @@ pub fn build(state: AppState) -> Router {
         .merge(rest)
         .merge(ws::router())
         .merge(crate::mcp::router(state.clone()))
+        // SCIM 帳號同步（自己的權杖、不在 OpenAPI 裡）。/ SCIM provisioning (its own tokens; not in the OpenAPI document).
+        .merge(crate::scim::api::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

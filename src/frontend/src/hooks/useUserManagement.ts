@@ -20,6 +20,8 @@ export interface ManagedUser {
     language: LanguagePreference | null;
     /** 有 passkey 或驗證器 App。/ Has a passkey or an authenticator app. */
     mfa_enabled?: boolean;
+    /** 用 SCIM 管理這個帳號的身分提供者（沒有 = null）。/ The provider managing this account over SCIM, if any. */
+    provisioned_by?: string | null;
 }
 
 export interface ManagedUserPatch {

@@ -223,7 +223,7 @@ impl UsernameFrom {
 
 /// Telepy 使用者名稱只收 Django 那套字元（字母、數字、`.@+-_`），其他換成 `-`，最長 150。
 /// A Telepy username keeps Django's characters (letters, digits, `.@+-_`); others become `-`; at most 150.
-fn clean_username(raw: &str) -> Option<String> {
+pub fn clean_username(raw: &str) -> Option<String> {
     let s: String = raw.trim().chars().map(|c| if c.is_alphanumeric() || ".@+-_".contains(c) { c } else { '-' }).collect();
     let s = s.trim_matches('-').chars().take(150).collect::<String>();
     (!s.is_empty()).then_some(s)

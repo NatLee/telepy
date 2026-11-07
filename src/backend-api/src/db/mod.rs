@@ -26,6 +26,7 @@ pub mod pool;
 pub mod recordings;
 pub mod retention;
 pub mod schema;
+pub mod scim;
 pub mod server_stats;
 pub mod settings;
 pub mod sharing;

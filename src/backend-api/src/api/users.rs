@@ -297,9 +297,15 @@ async fn list_users(State(state): State<AppState>, AuthUser(me): AuthUser) -> Ap
     let users = db::users::all_ordered(&state.db).await?;
     let langs = db::users::settings_language_map(&state.db).await?;
     let mfa = db::mfa::users_with_mfa(&state.db).await?;
+    let scim = db::scim::managers(&state.db).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(Json(json!({
-        "users": users.iter().map(|u| managed_user_json(u, langs.get(&u.id).and_then(|l| l.as_deref()), mfa.contains(&u.id), tz)).collect::<Vec<_>>()
+        // 由哪個身分提供者用 SCIM 管理（停用 / 啟用可能被它改回去）。/ Which provider manages it over SCIM.
+        "users": users.iter().map(|u| {
+            let mut v = managed_user_json(u, langs.get(&u.id).and_then(|l| l.as_deref()), mfa.contains(&u.id), tz);
+            v["provisioned_by"] = json!(scim.get(&u.id));
+            v
+        }).collect::<Vec<_>>()
     })))
 }
 

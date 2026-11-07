@@ -237,6 +237,7 @@ async fn delete_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     db::features::delete_group(&state.db, id).await?;
     // 單一登入規則與紀錄指向它的一起走。/ Single sign-on rules and grant records pointing at it go too.
     db::oidc::forget_user_group(&state.db, id).await?;
+    db::scim::forget_group(&state.db, id).await?;
     after_write(&state, &me, "user_group", format!("{} deleted the group \"{}\"", me.username, group.name)).await;
     Ok(Json(policy_json(&state).await?))
 }

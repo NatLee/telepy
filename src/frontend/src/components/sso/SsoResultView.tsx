@@ -39,6 +39,7 @@ function redeem(ticket: string) {
 const WOULD_KEYS: Record<string, TranslationKey> = {
     sign_in: "sso.test.wouldSignIn",
     link_by_email: "sso.test.wouldLink",
+    link_provisioned: "sso.test.wouldProvisioned",
     create: "sso.test.wouldCreate",
     refuse: "sso.test.wouldRefuse",
 };

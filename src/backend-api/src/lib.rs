@@ -45,6 +45,7 @@ pub mod presence;
 pub mod recording;
 pub mod release_key;
 pub mod remote_browser;
+pub mod scim;
 pub mod rustdesk;
 pub mod scripts;
 pub mod server_settings;

@@ -549,3 +549,123 @@ async fn signing_out_also_signs_out_at_the_provider_when_asked() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert!(logout_url(&app, &r.json).await.as_str().is_some_and(|u| u.contains("id_token_hint=")));
 }
+
+/// 帶 SCIM 權杖、`application/scim+json` 的請求。/ A request with the SCIM token and `application/scim+json`.
+async fn scim(app: &TestApp, method: Method, path: &str, token: &str, body: Option<Value>) -> Resp {
+    let mut req = Request::builder().method(method).uri(format!("/api/scim/v2{path}")).header(header::AUTHORIZATION, format!("Bearer {token}"));
+    let req = match body {
+        Some(b) => req.header(header::CONTENT_TYPE, "application/scim+json").body(Body::from(b.to_string())).unwrap(),
+        None => {
+            req = req.header(header::ACCEPT, "application/scim+json");
+            req.body(Body::empty()).unwrap()
+        }
+    };
+    app.send(req).await
+}
+
+#[tokio::test]
+async fn scim_provisions_accounts_and_groups_that_sso_then_signs_in_to() {
+    let app = common::spawn().await;
+    let idp = start_idp(Some("s3cret")).await;
+    let issuer = idp.lock().unwrap().issuer.clone();
+    let admin = app.login("admin", "pw").await;
+    let r = app.post("/api/site/oidc", Some(&admin), json!({"name": "Corp", "issuer": issuer, "client_id": "telepy", "client_secret": "s3cret", "create_users": false})).await;
+    let id = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(r.json["scim_base"], "http://localhost/api/scim/v2");
+    assert_eq!(r.json["providers"][0]["scim"]["active"], false);
+
+    // 權杖：只顯示一次；沒有或錯的權杖 = 401（SCIM 的錯誤格式）。/ The token is shown once; none or wrong = 401.
+    let r = app.post(&format!("/api/site/oidc/{id}/scim-token"), Some(&admin), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let token = r.json["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("tps_") && r.json["base_url"] == "http://localhost/api/scim/v2");
+    let r = scim(&app, Method::GET, "/Users", "tps_wrong", None).await;
+    assert_eq!((r.status, r.json["status"].as_str(), r.json["schemas"][0].as_str()), (StatusCode::UNAUTHORIZED, Some("401"), Some("urn:ietf:params:scim:api:messages:2.0:Error")));
+    assert_eq!(app.get("/api/scim/v2/Users", Some(&admin)).await.status, StatusCode::UNAUTHORIZED, "a web sign-in is not a SCIM token");
+    let r = scim(&app, Method::GET, "/ServiceProviderConfig", &token, None).await;
+    assert_eq!((r.status, r.json["patch"]["supported"].as_bool()), (StatusCode::OK, Some(true)));
+    assert_eq!(r.headers[header::CONTENT_TYPE], "application/scim+json");
+
+    // 建帳號（Okta 的樣子）。/ Create an account, Okta style.
+    let alice = json!({"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"], "userName": "alice@corp.example", "externalId": "00u1",
+        "name": {"givenName": "Alice", "familyName": "W"}, "emails": [{"value": "alice@corp.example", "primary": true, "type": "work"}], "active": true});
+    let r = scim(&app, Method::POST, "/Users", &token, Some(alice.clone())).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let uid: i64 = r.json["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!((r.json["userName"].as_str(), r.json["active"].as_bool()), (Some("alice@corp.example"), Some(true)), "userName echoed as sent");
+    assert_eq!(r.json["meta"]["location"], format!("http://localhost/api/scim/v2/Users/{uid}"));
+    let u = telepy_server::db::users::by_id(&app.state.db, uid).await.unwrap().unwrap();
+    assert_eq!((u.username.as_str(), u.first_name.as_str(), u.email.as_str(), u.is_active), ("alice", "Alice", "alice@corp.example", true));
+    assert_eq!(scim(&app, Method::POST, "/Users", &token, Some(alice.clone())).await.json["scimType"], "uniqueness");
+    let r = scim(&app, Method::POST, "/Users", &token, Some(json!({"userName": "admin@corp.example"}))).await;
+    assert_eq!((r.status, r.json["scimType"].as_str()), (StatusCode::CONFLICT, Some("uniqueness")), "an existing account is never taken over: {}", r.text);
+    let r = scim(&app, Method::GET, "/Users?filter=userName%20eq%20%22ALICE@corp.example%22", &token, None).await;
+    assert_eq!((r.json["totalResults"].as_u64(), r.json["Resources"][0]["id"].as_str()), (Some(1), Some(uid.to_string().as_str())));
+    assert_eq!(scim(&app, Method::GET, "/Users?filter=externalId%20eq%20%2200u1%22", &token, None).await.json["totalResults"], 1);
+    let admin_id = app.get("/api/auth/user/profile", Some(&admin)).await.json["id"].as_i64().unwrap();
+    assert_eq!(scim(&app, Method::GET, &format!("/Users/{admin_id}"), &token, None).await.status, StatusCode::NOT_FOUND, "only its own accounts");
+
+    // 第一次單一登入：接上預先建好的帳號（沒開建帳號也可以）。/ The first SSO sign-in takes the provisioned account.
+    let t = sign_in(&app, &idp, "corp", json!({"sub": "u-alice", "email": "alice@corp.example"})).await.unwrap();
+    assert_eq!(whoami(&app, &t).await, "alice");
+
+    // Entra 的停用：op 大寫、字串布林。帳號停用、登入撤銷。/ Entra's deactivation: the account is disabled, sign-ins revoked.
+    let r = scim(&app, Method::PATCH, &format!("/Users/{uid}"), &token, Some(json!({"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"], "Operations": [{"op": "Replace", "path": "active", "value": "False"}]}))).await;
+    assert_eq!((r.status, r.json["active"].as_bool()), (StatusCode::OK, Some(false)), "{}", r.text);
+    assert!(!telepy_server::db::users::by_id(&app.state.db, uid).await.unwrap().unwrap().is_active);
+    assert_eq!(app.get("/api/auth/user/profile", t["access_token"].as_str()).await.status, StatusCode::UNAUTHORIZED, "her open sign-in ended");
+    assert_eq!(sign_in(&app, &idp, "corp", json!({"sub": "u-alice", "email": "alice@corp.example"})).await.unwrap_err(), "account_disabled");
+    // Okta 的重新啟用 + 改名字：沒有 path 的物件。/ Okta's reactivation and rename: a path-less object.
+    let r = scim(&app, Method::PATCH, &format!("/Users/{uid}"), &token, Some(json!({"Operations": [{"op": "replace", "value": {"active": true, "name.givenName": "Ali"}}]}))).await;
+    assert_eq!((r.json["active"].as_bool(), r.json["name"]["givenName"].as_str()), (Some(true), Some("Ali")), "{}", r.text);
+    let r = scim(&app, Method::PUT, &format!("/Users/{uid}"), &token, Some(json!({"userName": "alice@corp.example", "name": {"givenName": "Alice", "familyName": "Wong"}, "emails": [{"value": "a.wong@corp.example"}], "active": true}))).await;
+    assert_eq!((r.json["name"]["familyName"].as_str(), r.json["emails"][0]["value"].as_str()), (Some("Wong"), Some("a.wong@corp.example")));
+    let bob = scim(&app, Method::POST, "/Users", &token, Some(json!({"userName": "bob@corp.example", "active": true}))).await;
+    let bob: i64 = bob.json["id"].as_str().unwrap().parse().unwrap();
+
+    // 群組 → 功能權限的使用者群組；管理員手動加的成員留著。/ Groups → user groups; members added by hand stay.
+    let r = scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "Ops", "members": [{"value": uid.to_string()}, {"value": admin_id.to_string()}]}))).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let gid: i64 = r.json["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(r.json["members"], json!([{"value": uid.to_string(), "display": "alice", "$ref": format!("http://localhost/api/scim/v2/Users/{uid}")}]), "only its own accounts become members");
+    let members = || async { telepy_server::db::features::groups_of(&app.state.db, uid).await.unwrap().contains(&gid) };
+    assert!(members().await);
+    app.patch(&format!("/api/access/groups/{gid}"), Some(&admin), json!({"members": [uid, admin_id]})).await;
+    let r = scim(&app, Method::PATCH, &format!("/Groups/{gid}"), &token, Some(json!({"Operations": [
+        {"op": "Add", "path": "members", "value": [{"value": bob.to_string()}]},
+        {"op": "remove", "path": format!("members[value eq \"{uid}\"]")}
+    ]}))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(!members().await);
+    let all: Vec<i64> = telepy_server::db::scim::members(&app.state.db, gid).await.unwrap().into_iter().map(|(id, _)| id).collect();
+    assert_eq!(all, vec![admin_id, bob], "the admin added by hand stays");
+    assert_eq!(scim(&app, Method::GET, "/Groups?filter=displayName%20eq%20%22ops%22&excludedAttributes=members", &token, None).await.json["Resources"][0].get("members"), None);
+    let r = scim(&app, Method::PATCH, &format!("/Groups/{gid}"), &token, Some(json!({"Operations": [{"op": "replace", "value": {"id": gid.to_string(), "displayName": "Operations"}}]}))).await;
+    assert_eq!(r.json["displayName"], "Operations");
+    assert_eq!(scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "Operations"}))).await.json["scimType"], "uniqueness");
+
+    // 管理頁看得到它管多少；使用者清單標出來。/ The admin page counts them; the user list marks them.
+    let r = app.get("/api/site/oidc", Some(&admin)).await;
+    assert_eq!((r.json["providers"][0]["scim"]["users"].as_i64(), r.json["providers"][0]["scim"]["groups"].as_i64()), (Some(2), Some(1)));
+    assert!(r.json["providers"][0]["scim"]["last_used_at"].is_string());
+    let users = app.get("/api/user/users", Some(&admin)).await;
+    let row = users.json["users"].as_array().unwrap().iter().find(|u| u["id"] == uid).unwrap().clone();
+    assert_eq!(row["provisioned_by"], "Corp");
+
+    // DELETE：帳號留著但停用，之後 GET 是 404；再建一次就接回來。/ DELETE keeps the account, deactivated; a new POST brings it back.
+    assert_eq!(scim(&app, Method::DELETE, &format!("/Users/{uid}"), &token, None).await.status, StatusCode::NO_CONTENT);
+    assert!(!telepy_server::db::users::by_id(&app.state.db, uid).await.unwrap().unwrap().is_active);
+    assert_eq!(scim(&app, Method::GET, &format!("/Users/{uid}"), &token, None).await.status, StatusCode::NOT_FOUND);
+    let r = scim(&app, Method::POST, "/Users", &token, Some(alice)).await;
+    assert_eq!((r.status, r.json["id"].as_str()), (StatusCode::CREATED, Some(uid.to_string().as_str())), "{}", r.text);
+    assert_eq!(scim(&app, Method::DELETE, &format!("/Groups/{gid}"), &token, None).await.status, StatusCode::NO_CONTENT);
+    assert!(telepy_server::db::features::group(&app.state.db, gid).await.unwrap().is_none());
+
+    // 拿掉權杖：馬上不能用。/ Removing the token stops it at once.
+    app.delete(&format!("/api/site/oidc/{id}/scim-token"), Some(&admin)).await;
+    assert_eq!(scim(&app, Method::GET, "/Users", &token, None).await.status, StatusCode::UNAUTHORIZED);
+    let r = app.get("/api/log/ssh/events?scope=all&limit=200", Some(&admin)).await;
+    for kind in ["scim_token", "scim_user", "scim_group"] {
+        assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == kind), "{kind}");
+    }
+}

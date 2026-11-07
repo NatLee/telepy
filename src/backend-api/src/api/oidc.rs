@@ -55,6 +55,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(admin_update, admin_delete))
         .routes(routes!(admin_discover))
         .routes(routes!(admin_test))
+        .routes(routes!(scim_token_create, scim_token_delete))
 }
 
 // ---------------------------------------------------------------- helpers
@@ -143,6 +144,8 @@ enum Plan {
     Linked(User),
     /// 依已驗證的 email 連到既有帳號（管理員開了才會）。/ Linked by a verified email (when the admin allowed it).
     ByEmail(User),
+    /// 這個提供者用 SCIM 預先建好的帳號（email 或使用者名稱相同）。/ An account this provider provisioned over SCIM.
+    Provisioned(User),
     /// 第一次登入，建新帳號。/ A first sign-in creates an account.
     Create { username: String },
     Refuse(&'static str),
@@ -160,6 +163,17 @@ async fn plan(state: &AppState, p: &Provider, claims: &Claims) -> ApiResult<Plan
             Some(u) => Plan::Linked(u),
             None => Plan::Refuse("sso_not_linked"),
         });
+    }
+    // SCIM 預先建好的帳號：同一個身分提供者建的，email 或使用者名稱對得上就接上。
+    // An account this provider provisioned over SCIM: matched by email or username.
+    let from = UsernameFrom::parse(&p.username_from).unwrap_or(UsernameFrom::Email);
+    let derived = proto::username_for(claims, from);
+    if let Some(uid) = db::scim::provisioned_for(&state.db, p.id, claims.email.as_deref(), derived.as_deref()).await? {
+        if db::oidc::sub_for(&state.db, p.id, uid).await?.is_none() {
+            if let Some(u) = db::users::by_id(&state.db, uid).await? {
+                return Ok(Plan::Provisioned(u));
+            }
+        }
     }
     if p.link_by_email && claims.email_verified == Some(true) {
         if let Some(email) = claims.email.as_deref().filter(|e| e.contains('@')) {
@@ -200,6 +214,11 @@ async fn sign_in(state: &AppState, p: &Provider, claims: &Claims, id_token: &str
         Plan::ByEmail(u) => {
             db::oidc::link(&state.db, p.id, u.id, &claims.sub).await.map_err(|e| fail(e.into()))?;
             state.gateway.event("sso_link", None, None, None, format!("{} was linked to {} sign-in by their verified email", u.username, p.name)).await;
+            u
+        }
+        Plan::Provisioned(u) => {
+            db::oidc::link(&state.db, p.id, u.id, &claims.sub).await.map_err(|e| fail(e.into()))?;
+            state.gateway.event("sso_link", None, None, None, format!("{} was linked to {} sign-in: the account it provisioned over SCIM", u.username, p.name)).await;
             u
         }
         Plan::Create { username } => {
@@ -334,6 +353,7 @@ async fn test_report(state: &AppState, p: &Provider, claims: &Claims) -> ApiResu
     let (mut would, user) = match plan(state, p, claims).await? {
         Plan::Linked(u) => (json!({ "action": "sign_in", "username": u.username }), Some(Some(u))),
         Plan::ByEmail(u) => (json!({ "action": "link_by_email", "username": u.username }), Some(Some(u))),
+        Plan::Provisioned(u) => (json!({ "action": "link_provisioned", "username": u.username }), Some(Some(u))),
         Plan::Create { username } => (json!({ "action": "create", "username": username }), Some(None)),
         Plan::Refuse(code) => (json!({ "action": "refuse", "code": code }), None),
     };
@@ -751,7 +771,7 @@ async fn unlink(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
 
 // ---------------------------------------------------------------- admin
 
-fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleRow], names: &std::collections::HashMap<i64, String>) -> Value {
+fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleRow], names: &std::collections::HashMap<i64, String>, scim_counts: (i64, i64)) -> Value {
     json!({
         "id": p.id,
         "slug": p.slug,
@@ -772,6 +792,15 @@ fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleR
         "groups_claim": p.groups_claim,
         "required_groups": p.required(),
         "end_session": p.end_session,
+        // SCIM 帳號同步：有沒有權杖、前幾碼、最後一次使用、管理幾個帳號與群組。/ SCIM provisioning state.
+        "scim": {
+            "active": !p.scim_token.is_empty(),
+            "prefix": p.scim_token_prefix,
+            "created_at": p.scim_token_created.as_deref().map(crate::util::db_to_iso_utc_z),
+            "last_used_at": p.scim_last_used.as_deref().map(crate::util::db_to_iso_utc_z),
+            "users": scim_counts.0,
+            "groups": scim_counts.1,
+        },
         // 要在身分提供者那邊登記的「登出後回來的網址」。/ The post-logout redirect URI to register at the provider.
         "post_logout_url": post_logout_url(base),
         // 規則；指向已刪掉的群組的 group_name = null。/ Rules; group_name null when the group is gone.
@@ -788,6 +817,7 @@ async fn admin_json(state: &AppState, headers: &HeaderMap) -> ApiResult<Value> {
     let base = base(state, headers);
     let counts = db::oidc::link_counts(&state.db).await?;
     let rules = db::oidc::all_rules(&state.db).await?;
+    let scim = db::scim::counts(&state.db).await?;
     let groups = db::features::groups(&state.db).await?;
     let names: std::collections::HashMap<i64, String> = groups.iter().map(|g| (g.id, g.name.clone())).collect();
     let providers: Vec<Value> = db::oidc::list(&state.db)
@@ -795,13 +825,15 @@ async fn admin_json(state: &AppState, headers: &HeaderMap) -> ApiResult<Value> {
         .iter()
         .map(|p| {
             let mine: Vec<&db::oidc::RuleRow> = rules.iter().filter(|r| r.provider_id == p.id).collect();
-            provider_json(p, &base, counts.get(&p.id).copied().unwrap_or(0), &mine, &names)
+            provider_json(p, &base, counts.get(&p.id).copied().unwrap_or(0), &mine, &names, scim.get(&p.id).copied().unwrap_or((0, 0)))
         })
         .collect();
     Ok(json!({
         "providers": providers,
         "callback_base": format!("{base}/api/auth/oidc/"),
         "public_url_set": state.config.public_base().is_some(),
+        // SCIM 的基底網址（填到身分提供者那邊）。/ The SCIM base URL to give the provider.
+        "scim_base": format!("{base}/api/scim/v2"),
         // 規則可以指向的使用者群組（功能權限的群組）。/ The user groups rules may point at (feature-access groups).
         "user_groups": groups.iter().map(|g| json!({ "id": g.id, "name": g.name })).collect::<Vec<_>>(),
     }))
@@ -1123,4 +1155,34 @@ pub async fn buttons(state: &AppState) -> Vec<Value> {
             vec![]
         }
     }
+}
+
+#[utoipa::path(post, path = "/api/site/oidc/{id}/scim-token", tag = "Site Settings", security(("bearer" = [])), params(("id" = i64, Path, description = "Provider id")), request_body = super::schemas::OidcReauth, responses(
+    (status = 200, description = "A new SCIM token, shown this once (`tps_…`); any earlier one stops working", body = super::schemas::ScimTokenCreated),
+    (status = 403, description = "admin_only / reauth_required", body = super::schemas::ErrorBody),
+    (status = 404, description = "No such provider", body = super::schemas::ErrorBody)
+))]
+async fn scim_token_create(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin_only(&me)?;
+    let p = db::oidc::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("No such sign-in provider."))?;
+    super::mfa::require_reauth(&state, &headers, &me, body.get("reauth")).await?;
+    let token = format!("tps_{}", proto::random_token(30));
+    let prefix: String = token.chars().take(10).collect();
+    db::oidc::set_scim_token(&state.db, p.id, &flow::hash(&token), &prefix).await?;
+    let replaced = if p.scim_token.is_empty() { "" } else { " (the earlier one stopped working)" };
+    state.gateway.event("scim_token", None, None, None, format!("{} made a SCIM token for {}{replaced}", me.username, p.name)).await;
+    Ok(Json(json!({ "token": token, "prefix": prefix, "base_url": format!("{}/api/scim/v2", base(&state, &headers)) })))
+}
+
+#[utoipa::path(delete, path = "/api/site/oidc/{id}/scim-token", tag = "Site Settings", security(("bearer" = [])), params(("id" = i64, Path, description = "Provider id")), responses(
+    (status = 200, description = "Provisioning off: the token stops working at once; the accounts it made stay", body = super::schemas::OidcProviderList),
+    (status = 403, description = "admin_only", body = super::schemas::ErrorBody),
+    (status = 404, description = "No such provider", body = super::schemas::ErrorBody)
+))]
+async fn scim_token_delete(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    admin_only(&me)?;
+    let p = db::oidc::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("No such sign-in provider."))?;
+    db::oidc::set_scim_token(&state.db, p.id, "", "").await?;
+    state.gateway.event("scim_token", None, None, None, format!("{} removed the SCIM token of {}", me.username, p.name)).await;
+    Ok(Json(admin_json(&state, &headers).await?))
 }
