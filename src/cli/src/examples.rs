@@ -293,6 +293,14 @@ pub const EXAMPLES: &[Example] = &[
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {
+        id: "rsync",
+        topic: "files",
+        title: "Sync a folder with rsync",
+        note: "rsync's own options as usual; only what changed travels. rsync has to be installed on the device too.",
+        lines: &["telepy rsync -avz --progress ./project <tunnel>@<account>:~/"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
         id: "sftp",
         topic: "files",
         title: "An sftp prompt",

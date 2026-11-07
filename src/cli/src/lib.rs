@@ -109,6 +109,8 @@ pub enum Cmd {
     Scp(ScpArgs),
     /// Open sftp to a device
     Sftp(SftpArgs),
+    /// Sync files with rsync through Telepy (rsync on both ends): rsync's options as usual, the remote side as <tunnel>[@account]:<path>; Telepy's own options (--identity, --ssh-opt, --via) go first
+    Rsync(RsyncArgs),
     /// Bring a port behind a device to your computer (ssh -L through Telepy): `forward <tunnel> <host>[:port] --open` opens a LAN web page in your own browser
     Forward(ForwardArgs),
     /// Install Telepy's ssh config blocks into ~/.ssh/config (like the web's SSH config dialog)
@@ -287,6 +289,28 @@ pub struct ScpArgs {
     /// Sources and destination; the remote one as <tunnel>[@account]:<path>
     #[arg(required = true, num_args = 2.., add = ArgValueCompleter::new(complete::remote_or_path))]
     pub paths: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct RsyncArgs {
+    /// Private key for both hops (long form only: rsync's own -i is --itemize-changes)
+    #[arg(long, value_hint = clap::ValueHint::FilePath)]
+    pub identity: Option<PathBuf>,
+    /// Extra option for ssh, e.g. --ssh-opt "-o ServerAliveInterval=30" (repeatable)
+    #[arg(long = "ssh-opt", allow_hyphen_values = true)]
+    pub ssh_opt: Vec<String>,
+    /// How to reach Telepy: web = its web port, so Telepy sees your real address (default); ssh = its SSH port
+    #[arg(long, value_parser = ["web", "ssh"], default_value = "web", env = "TELEPY_SSH_VIA")]
+    pub via: String,
+    /// When the web port can't be reached: ask, always or never fall back to the SSH port
+    #[arg(long, value_parser = ["ask", "always", "never"], env = "TELEPY_SSH_FALLBACK")]
+    pub fallback: Option<String>,
+    /// Skip Telepy's check that your SSH key gets in before connecting
+    #[arg(long)]
+    pub no_check: bool,
+    /// rsync's options, sources and destination, as you would give them to rsync; the remote side as <tunnel>[@account]:<path>
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true, add = ArgValueCompleter::new(complete::remote_or_path))]
+    pub args: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -841,6 +865,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Status(a) => status(&api, &a).map(|_| 0),
                 Cmd::Ssh(a) => ssh(&api, &a),
                 Cmd::Scp(a) => scp(&api, &a),
+                Cmd::Rsync(a) => rsync(&api, &a),
                 Cmd::Sftp(a) => sftp(&api, &a),
                 Cmd::Forward(a) => forward_cmd(&api, &a),
                 Cmd::Config(a) => config(&api, a).map(|_| 0),
@@ -1404,6 +1429,104 @@ fn scp(api: &Api, a: &ScpArgs) -> Result<i32> {
         };
     }
     hand_over(cmd)
+}
+
+/// rsync 的選項裡另外吃一個值的（`--exclude node_modules`、`-f '- *.log'`）：那個值不是路徑，不能當成遠端那一側。
+/// 寫成 `--exclude=x` 的本來就是一個字。/ rsync options taking their value as the next word; that word is no path.
+const RSYNC_VALUE_OPTS: &[&str] = &[
+    "--exclude", "--include", "--filter", "--exclude-from", "--include-from", "--files-from", "--rsync-path", "--chmod", "--chown",
+    "--log-file", "--log-file-format", "--temp-dir", "--compare-dest", "--copy-dest", "--link-dest", "--partial-dir", "--backup-dir",
+    "--suffix", "--max-size", "--min-size", "--max-delete", "--timeout", "--contimeout", "--block-size", "--port", "--remote-option",
+    "--usermap", "--groupmap", "--out-format", "--bwlimit", "--modify-window", "--info", "--debug", "--skip-compress",
+    "--compress-choice", "--zc", "--compress-level", "--checksum-choice", "--cc", "--sockopts", "--outbuf", "--iconv",
+    "--password-file", "--write-batch", "--only-write-batch", "--read-batch", "--protocol", "--address", "--max-alloc", "--copy-as",
+];
+/// 短選項裡吃值的（放在一串短選項最後時，下一個字是它的值）。/ Short options taking a value (the next word, when last in a cluster).
+const RSYNC_VALUE_SHORTS: &[char] = &['f', 'T', 'B', 'M'];
+
+/// rsync 的 `-e` 解析：空白分開，單引號保留空白，裡面的單引號寫兩次。/ rsync's `-e` parsing: spaces split, single quotes keep them.
+fn rsync_quote(word: &str) -> String {
+    if !word.is_empty() && !word.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"') {
+        return word.to_string();
+    }
+    format!("'{}'", word.replace('\'', "''"))
+}
+
+/// `telepy rsync` 的參數：檢查並找出遠端那一側（全部要在同一條隧道與帳號），回傳 (目標, 每個遠端參數的位置與路徑)。
+/// `-e` 由 Telepy 給（使用者給的要拒絕），`host::module` 與 `rsync://` 是 rsync daemon 不是 ssh，也拒絕。
+/// telepy rsync's arguments: checked, with the remote side found (all on one tunnel and account) → (target, the
+/// position and path of each remote argument). Telepy supplies `-e` (a user's is refused); `host::module` and
+/// `rsync://` are the rsync daemon, not ssh, and are refused too.
+pub fn rsync_remotes(args: &[String]) -> Result<(String, Vec<(usize, String)>)> {
+    let mut remotes: Vec<(usize, String, String)> = Vec::new();
+    let mut value_next = false;
+    let mut after_dashes = false;
+    for (i, a) in args.iter().enumerate() {
+        if value_next {
+            value_next = false;
+            continue;
+        }
+        if !after_dashes && a == "--" {
+            after_dashes = true;
+            continue;
+        }
+        if !after_dashes && a.starts_with("--") {
+            let name = a.split('=').next().unwrap_or(a);
+            if name == "--rsh" {
+                bail!("telepy rsync sets rsync's -e itself (its ssh through Telepy); put extra ssh options in --ssh-opt before rsync's options.");
+            }
+            value_next = !a.contains('=') && RSYNC_VALUE_OPTS.contains(&name);
+            continue;
+        }
+        if !after_dashes && a.starts_with('-') && a.len() > 1 {
+            let shorts: Vec<char> = a[1..].chars().collect();
+            if shorts.contains(&'e') {
+                bail!("telepy rsync sets rsync's -e itself (its ssh through Telepy); put extra ssh options in --ssh-opt before rsync's options.");
+            }
+            value_next = shorts.last().is_some_and(|c| RSYNC_VALUE_SHORTS.contains(c));
+            continue;
+        }
+        if a.starts_with("rsync://") {
+            bail!("{a} is an rsync daemon address; telepy rsync goes over ssh: write <tunnel>[@account]:<path>.");
+        }
+        if let Some((t, path)) = target::parse_remote(a) {
+            if path.starts_with(':') {
+                bail!("{a} is an rsync daemon module; telepy rsync goes over ssh: write <tunnel>[@account]:<path>.");
+            }
+            remotes.push((i, t, path));
+        }
+    }
+    let Some((_, tgt, _)) = remotes.first() else { bail!("Write the remote side as <tunnel>[@account]:<path>.") };
+    let tgt = tgt.clone();
+    if remotes.iter().any(|(_, t, _)| *t != tgt) {
+        bail!("All remote paths must be on the same tunnel and account.");
+    }
+    Ok((tgt, remotes.into_iter().map(|(i, _, p)| (i, p)).collect()))
+}
+
+/// rsync 的完整參數：先 `-e '<ssh 與產生的 config>'`，再照原樣，遠端那一側換成產生的別名。
+/// rsync's whole argument list: `-e '<ssh with the generated config>'` first, then as given, the remote side
+/// rewritten to the generated alias.
+pub fn rsync_argv(args: &[String], remotes: &[(usize, String)], file: &std::path::Path, alias: &str, extra_ssh: &[String]) -> Vec<String> {
+    let mut rsh = vec!["ssh".to_string(), "-F".to_string(), rsync_quote(&file.to_string_lossy())];
+    rsh.extend(extra_ssh.iter().map(|w| rsync_quote(w)));
+    let mut out = vec!["-e".to_string(), rsh.join(" ")];
+    for (i, a) in args.iter().enumerate() {
+        match remotes.iter().find(|(j, _)| *j == i) {
+            Some((_, path)) => out.push(format!("{alias}:{path}")),
+            None => out.push(a.clone()),
+        }
+    }
+    out
+}
+
+fn rsync(api: &Api, a: &RsyncArgs) -> Result<i32> {
+    let (tgt, remotes) = rsync_remotes(&a.args)?;
+    let opts = SshOpts { identity: a.identity.clone(), ssh_opt: a.ssh_opt.clone(), via: a.via.clone(), fallback: a.fallback.clone(), no_check: a.no_check };
+    let (file, alias) = prepare_ssh(api, &tgt, &opts)?;
+    let mut cmd = Command::new("rsync");
+    cmd.args(rsync_argv(&a.args, &remotes, &file, &alias, &extra_opts(&opts)));
+    hand_over(cmd).map_err(|e| if e.to_string().contains("is OpenSSH installed") { anyhow!("cannot run rsync: is it installed on this computer?") } else { e })
 }
 
 /// `telepy config fallback [ask|always|never]`：這台伺服器的網頁 port 連不到時要不要改走 SSH 的 port。
@@ -3281,6 +3404,38 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rsync_keeps_its_options_and_points_the_remote_side_at_the_generated_alias() {
+        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let args = words("-avz --progress --exclude node_modules:x -f - *.log ./site box@pi:~/site");
+        let (tgt, remotes) = rsync_remotes(&args).unwrap();
+        assert_eq!(tgt, "box@pi");
+        assert_eq!(remotes, [(8, "~/site".to_string())], "values of --exclude and -f are not paths");
+        let argv = rsync_argv(&args, &remotes, std::path::Path::new("/h/.ssh/telepy/box.conf"), "box", &words("-o BatchMode=yes"));
+        assert_eq!(argv[..2], ["-e".to_string(), "ssh -F /h/.ssh/telepy/box.conf -o BatchMode=yes".to_string()]);
+        assert_eq!(argv[2..], words("-avz --progress --exclude node_modules:x -f - *.log ./site box:~/site")[..]);
+        // 下載、好幾個來源、`--` 之後的路徑。/ A download, several sources, paths after `--`.
+        let (_, r) = rsync_remotes(&words("-a box:/var/log/a box:/var/log/b ./logs")).unwrap();
+        assert_eq!(r.len(), 2);
+        let (_, r) = rsync_remotes(&words("-a -- -odd-name box:dst/")).unwrap();
+        assert_eq!(r, [(3, "dst/".to_string())]);
+        // 空白的路徑照 rsync 的 -e 規則加單引號。/ A path with a space, quoted the way rsync's -e reads it.
+        let argv = rsync_argv(&words("a box:b"), &[(1, "b".into())], std::path::Path::new("/Users/J Doe/c'f.conf"), "box", &[]);
+        assert_eq!(argv[1], "ssh -F '/Users/J Doe/c''f.conf'");
+    }
+
+    #[test]
+    fn rsync_refuses_what_would_bypass_telepy() {
+        let refused = |s: &str| rsync_remotes(&s.split(' ').map(String::from).collect::<Vec<_>>()).unwrap_err().to_string();
+        assert!(refused("-a -e ssh ./x box:y").contains("sets rsync's -e itself"));
+        assert!(refused("-ave ssh ./x box:y").contains("sets rsync's -e itself"));
+        assert!(refused("--rsh=ssh ./x box:y").contains("sets rsync's -e itself"));
+        assert!(refused("./x box::module").contains("daemon module"));
+        assert!(refused("./x rsync://box/m").contains("daemon address"));
+        assert!(refused("-a ./x ./y").contains("remote side"));
+        assert!(refused("box:a nas:b").contains("same tunnel"));
+    }
 
     #[test]
     fn ssh_passes_every_kind_of_forward_on() {

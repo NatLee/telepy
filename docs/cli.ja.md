@@ -208,9 +208,12 @@ telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # その他の ssh オプ
 telepy scp ./build.tar.gz box@pi:/tmp/
 telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
+telepy rsync -avz --progress ./site box@pi:~/site   # rsync のオプションはいつもどおり。telepy のもの（--identity、--ssh-opt、--via）は先に
 ```
 
 これらはシステムの OpenSSH を実行し、**あなた自身の個人用 SSH 鍵**で、Telepy のゲートウェイとトンネルを通ってログインします。Web の **SSH 設定**ダイアログが用意するのと同じ経路です。
+
+`telepy rsync` は同じ ssh を `-e` としてシステムの rsync に渡すので、デバイス側にも rsync が必要です。rsync 自身の `-i`（`--itemize-changes`）はそのまま使えるよう、ここでの鍵のオプションは `--identity` です。自分で `-e` を渡すと Telepy を迂回してしまうので拒否します。
 
 実行のたびに `~/.ssh/telepy/` に 2 つのファイルを書き込みます（フォルダーは `TELEPY_SSH_DIR` で移せます）。
 
@@ -425,6 +428,7 @@ telepy browse close "$ID"
 | `telepy ssh <target>` | デバイスに SSH。`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`、`--` のあとにコマンド | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy scp [-r] <from>… <to>` | scp でコピー。リモート側は `<tunnel>[@account]:<path>` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
+| `telepy rsync [rsync のオプション…] <from>… <to>` | 同じ ssh で rsync 同期。`--identity`、`--ssh-opt`、`--via`、`--fallback` は rsync のオプションより前に | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy config install` | Telepy のブロックを `~/.ssh/config` に入れる。トンネル名か `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |

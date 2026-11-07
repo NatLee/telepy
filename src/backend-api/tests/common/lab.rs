@@ -207,6 +207,11 @@ pub struct MachineOpts {
     /// exec 用真的 `/bin/sh -c` 跑（HOME / TMPDIR / 工作目錄 = 帳號的 `<home>/<user>`，不會碰到開發者的家目錄）。
     /// Run exec requests with a real `/bin/sh -c`, HOME / TMPDIR / cwd pointed at the account's scratch home.
     pub shell: bool,
+    /// 跟 `shell` 一起用：exec 雙向串流（channel ⇄ stdin / stdout，stderr 當 extended data，結束時送 exit status），
+    /// 像真的 sshd；`rsync --server` 這種一邊讀一邊寫的程式才跑得動。/ With `shell`: exec streams both ways (channel ⇄
+    /// stdin / stdout, stderr as extended data, the exit status at the end), like a real sshd — needed by programs
+    /// that read and write at once, such as `rsync --server`.
+    pub stream_exec: bool,
     /// 沒有 `sftp` 子系統（像沒裝 sftp-server 的裝置）；exec 認不得的指令交給本機 `sh -c`，在機器的 home 跑。
     /// No sftp subsystem; unknown exec commands run under the local `sh -c` in the machine's home.
     pub shell_without_sftp: bool,
@@ -547,6 +552,7 @@ impl server::Handler for SshdHandler {
             let tmp = home.join("tmp");
             std::fs::create_dir_all(&tmp)?;
             let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
+            let stream = self.m.opts.stream_exec;
             tokio::spawn(async move {
                 let mut sh = Command::new("/bin/sh");
                 if let Some(login) = login_shell {
@@ -555,7 +561,7 @@ impl server::Handler for SshdHandler {
                 // `<home>/bin` 排在 PATH 最前面：測試在那裡放假的 crontab / ssh，不會碰到開發者的。
                 // `<home>/bin` goes first in PATH, so tests can stub crontab / ssh there instead of touching the developer's.
                 let path = format!("{}:{}", home.join("bin").display(), std::env::var("PATH").unwrap_or_default());
-                let out = sh
+                let sh = sh
                     .arg("-c")
                     .arg(&cmd)
                     .current_dir(&home)
@@ -563,7 +569,12 @@ impl server::Handler for SshdHandler {
                     .env("HOME", &home)
                     .env("TMPDIR", &tmp)
                     .env("USER", &user)
-                    .env("LOGNAME", &user)
+                    .env("LOGNAME", &user);
+                if stream {
+                    stream_exec(sh, ch).await;
+                    return;
+                }
+                let out = sh
                     .stdin(Stdio::null())
                     .output()
                     .await;
@@ -1468,4 +1479,46 @@ fn next_id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static N: AtomicUsize = AtomicUsize::new(0);
     N.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 串流的 exec：channel 的資料 → 程式的 stdin（EOF 就關），stdout → channel，stderr → extended data，程式結束後送
+/// exit status、EOF、close。stdin 那一頭不等它：用戶端常在看到 exit status 之後才送 EOF。
+/// A streaming exec: channel data → the program's stdin (closed on EOF), stdout → the channel, stderr → extended data;
+/// once the program exits, its exit status, EOF and close. The stdin side isn't awaited: clients often send EOF only
+/// after they see the exit status.
+async fn stream_exec(sh: &mut Command, ch: Channel<Msg>) {
+    let child = sh.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+    let (mut rd, wr) = ch.split();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = wr.extended_data_bytes(1, e.to_string().into_bytes()).await;
+            let _ = wr.exit_status(127).await;
+            let _ = wr.eof().await;
+            let _ = wr.close().await;
+            return;
+        }
+    };
+    let (mut stdin, mut stdout, mut stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let feed = tokio::spawn(async move {
+        let mut r = rd.make_reader();
+        let _ = tokio::io::copy(&mut r, &mut stdin).await;
+        drop(stdin);
+    });
+    let mut out_w = wr.make_writer();
+    let mut err_w = wr.make_writer_ext(Some(1));
+    let out = async {
+        let _ = tokio::io::copy(&mut stdout, &mut out_w).await;
+        let _ = out_w.flush().await;
+    };
+    let err = async {
+        let _ = tokio::io::copy(&mut stderr, &mut err_w).await;
+        let _ = err_w.flush().await;
+    };
+    tokio::join!(out, err);
+    let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(1) as u32;
+    feed.abort();
+    let _ = wr.exit_status(code).await;
+    let _ = wr.eof().await;
+    let _ = wr.close().await;
 }

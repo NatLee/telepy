@@ -208,9 +208,12 @@ telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # 其他任何 ssh 選項
 telepy scp ./build.tar.gz box@pi:/tmp/
 telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
+telepy rsync -avz --progress ./site box@pi:~/site   # rsync 的選項照常寫；telepy 自己的（--identity、--ssh-opt、--via）放前面
 ```
 
 這些指令執行的是你系統上的 OpenSSH，用**你的個人 SSH 金鑰**登入，經過 Telepy 的閘道和通道連到裝置。走的路就是網頁上 **SSH 設定**對話框幫你設好的那一條。
+
+`telepy rsync` 把同一個 ssh 當成 `-e` 交給你系統上的 rsync，所以裝置上也要裝 rsync。rsync 自己的 `-i`（`--itemize-changes`）照舊，所以這裡的金鑰選項寫成 `--identity`；你自己給的 `-e` 會被拒絕，因為那樣就繞過 Telepy 了。
 
 每次執行都會在 `~/.ssh/telepy/` 寫入兩個檔案（可以用 `TELEPY_SSH_DIR` 換資料夾）：
 
@@ -425,6 +428,7 @@ telepy browse close "$ID"
 | `telepy ssh <target>` | SSH 進裝置；`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`，`--` 後面接指令 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy scp [-r] <from>… <to>` | 用 scp 複製；遠端寫成 `<tunnel>[@account]:<path>` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy rsync [rsync 選項…] <from>… <to>` | 用同一個 ssh 跑 rsync 同步；`--identity`、`--ssh-opt`、`--via`、`--fallback` 放在 rsync 的選項前面 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |

@@ -43,6 +43,7 @@ export const CLI_EXAMPLES = [
     { id: "cpUp", topic: "files", lines: ["telepy cp ./backup.tar.gz <tunnel>:/tmp/"], needs: ["ssh:files"] },
     { id: "cpDown", topic: "files", lines: ["telepy cp <tunnel>:/var/log/syslog ./syslog"], needs: ["ssh:files"] },
     { id: "scp", topic: "files", lines: ["telepy scp -r ./project <tunnel>@<account>:~/"], needs: ["tunnels:read", "ssh-key"] },
+    { id: "rsync", topic: "files", lines: ["telepy rsync -avz --progress ./project <tunnel>@<account>:~/"], needs: ["tunnels:read", "ssh-key"] },
     { id: "sftp", topic: "files", lines: ["telepy sftp <tunnel>"], needs: ["tunnels:read", "ssh-key"] },
     { id: "sessions", topic: "sessions", lines: ["telepy sessions"], needs: ["tunnels:read"] },
     { id: "sessionsEnd", topic: "sessions", lines: ["telepy sessions end 42"], needs: ["tunnels:manage"] },
