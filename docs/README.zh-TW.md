@@ -18,7 +18,7 @@
 | [命令列與 API token](./cli.zh-TW.md) | 安裝、登入、所有指令，以及 token 能做什麼 |
 | [MCP](./mcp.zh-TW.md) | 連接 MCP 用戶端、核准流程，以及 agent 能做與不能做的事 |
 | [Webhook](./webhooks.zh-TW.md) | 個人與全站 webhook：事件、格式、簽章與重試 |
-| [單一登入（OIDC）](./sso.zh-TW.md) | 用 Okta、Entra ID、Google Workspace、Keycloak 等登入：設定、誰進得來、連結帳號 |
+| [單一登入（OIDC）](./sso.zh-TW.md) | 用 Okta、Entra ID、Google Workspace、Keycloak 等登入：設定、誰進得來、群組與角色、連結帳號 |
 
 ## 內部運作
 

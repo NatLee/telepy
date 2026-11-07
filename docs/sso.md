@@ -61,6 +61,34 @@ A provider's "create an account" switch does not depend on the Registration swit
 
 After the account is decided, the usual rules apply: a disabled account stays out, and an account with two-step sign-in is still asked for its passkey or code. Your provider's own MFA happens before that, at the provider. Yes, that can mean two MFA prompts; Telepy would rather ask twice than not at all.
 
+## Groups and roles
+
+Your provider already knows who is in which team. Telepy can use that, under **Groups and roles** in the provider's settings:
+
+- **Only these groups may sign in**: people outside every listed group are turned away at this provider's button. Empty = anyone the provider lets in.
+- **Group → Telepy role**: a provider group can make someone an **administrator**, or put them in a Telepy **user group** (the ones on Users & access → Feature permissions, which decide who may use the terminal, files, the remote desktop and so on). Several rules may point at the same role; a person gets the roles of every group they are in.
+
+The rules are applied every time someone signs in with that provider, and they follow a few rules of their own:
+
+- Group names are matched exactly, capital letters included.
+- Telepy only takes away what **this provider gave**. A membership or an admin right an administrator gave by hand stays, even when the person leaves the matching group at the provider.
+- If the ID token carries no groups claim at all, nothing changes. Telepy would rather keep a role it can't confirm than drop one by accident; an empty list is different, and means "in no group".
+- The last active administrator is never demoted, so the site can't end up with nobody in charge.
+- The person's own Telepy two-step sign-in still runs after the roles are applied.
+
+On Feature permissions, members and administrators that came from a provider are marked with a building icon. Removing one there lasts only until their next sign-in, so change the group at the provider instead. **Test sign-in** shows the groups the provider sent and what would change, before anything does.
+
+### Sending groups from each provider
+
+| Provider | Groups claim | What to set up |
+| --- | --- | --- |
+| Okta | `groups` | Add a groups claim to the app (or the authorization server) with a filter such as "starts with telepy-" |
+| Microsoft Entra ID | `groups` or `roles` | `groups` sends object IDs, not names; app roles (`roles`) are usually easier to read |
+| Google Workspace | | Google's ID token has no groups; use allowed email domains instead |
+| Keycloak | `groups` or `realm_access.roles` | Add a Group Membership mapper (claim name `groups`, full path off), or use realm roles |
+| Authentik | `groups` | Sent with the `profile` scope |
+| Dex | `groups` | Add `groups` to the scopes |
+
 ## Linking your existing account
 
 Anyone can link their own account in **Preferences → Security → Single sign-on**:
@@ -94,9 +122,11 @@ Every change to a provider and every link or unlink appears in the admin **Audit
 | Finish signing in in the same browser you started in | The cookie was lost: another browser, a private window that closed, or cookies blocked for this site |
 | Single sign-on didn't work | Most often the client secret, the redirect URI or the clock. The backend log says which (`[OIDC]` lines) |
 | The sign-in provider refused the request | The provider's settings for Telepy: the redirect URI, the allowed scopes, or the app isn't assigned to this person |
+| This sign-in option only lets in certain groups, and the provider didn't say which groups you're in | **Only these groups may sign in** is set, but the ID token has no groups claim. Check the claim name, or the provider's groups setup |
+| Your groups at the provider aren't allowed to sign in here | The person is in none of the listed groups |
 
 For anything else, run **Test sign-in** first. It shows exactly what the provider sent.
 
 ## Not yet
 
-Telepy reads who someone is, not what they belong to. Group-to-role mapping, signing out of the provider when you sign out of Telepy, and SCIM provisioning aren't there yet. Give people their tunnels and features the usual way.
+Signing out of the provider when you sign out of Telepy, and SCIM provisioning (accounts created or disabled ahead of a sign-in) aren't there yet. Groups give roles and feature groups, not tunnels: share tunnels the usual way.

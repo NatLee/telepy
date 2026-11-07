@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { badDomain, canUnlink, orderedClaims, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
+import { badDomain, canUnlink, fromRuleValue, grantsAdmin, groupLines, orderedClaims, ruleValue, tidyRules, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
 
 test("buttons come from the public endpoint; anything odd is dropped", () => {
     assert.deepEqual(parseSsoButtons([{ slug: "okta", name: "Okta" }, { slug: "Bad Slug", name: "x" }, { slug: "kc", name: " " }, 3, null]), [
@@ -53,4 +53,21 @@ test("the last way in can't be unlinked", () => {
     assert.equal(canUnlink({ ...links, passkeys: 1 }, 1), true, "a passkey signs in without a password");
     assert.equal(canUnlink({ ...links, has_password: true }, 1), true);
     assert.equal(canUnlink({ ...links, providers: links.providers.map((p) => ({ ...p, linked: true })) }, 1), true, "another provider");
+});
+
+test("group lists and rules are tidied before saving", () => {
+    assert.deepEqual(groupLines(" staff\n\nops \r\nstaff\n"), ["staff", "ops"]);
+    const rules = [
+        { idp_group: " ops ", target: "group" as const, group_id: 3 },
+        { idp_group: "ops", target: "group" as const, group_id: 3 },
+        { idp_group: "root", target: "admin" as const, group_id: 9 },
+    ];
+    assert.deepEqual(tidyRules(rules), { rules: [{ idp_group: "ops", target: "group", group_id: 3 }, { idp_group: "root", target: "admin", group_id: null }], problem: null });
+    assert.equal(tidyRules([{ idp_group: " ", target: "admin", group_id: null }]).problem, "group_name");
+    assert.equal(tidyRules([{ idp_group: "x", target: "group", group_id: null }]).problem, "target");
+    assert.equal(grantsAdmin(rules), true);
+    assert.equal(ruleValue({ target: "group", group_id: 3 }), "group:3");
+    assert.deepEqual(fromRuleValue("group:3"), { target: "group", group_id: 3 });
+    assert.deepEqual(fromRuleValue("admin"), { target: "admin", group_id: null });
+    assert.equal(ssoErrorKey("sso_group_not_allowed"), "sso.err.groupNotAllowed");
 });

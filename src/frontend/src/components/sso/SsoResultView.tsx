@@ -9,7 +9,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Building2, FlaskConical } from "lucide-react";
+import { Building2, FlaskConical, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { openPreferences } from "@/components/layout/UserPreferencesModal";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -113,6 +113,9 @@ export function SsoResultView() {
                             })}
                         </Callout>
                     </Section>
+                    <Section icon={<ShieldCheck />} title={t("sso.test.groupsTitle")} description={t("sso.test.groupsHint", { claim: test.groups_claim ?? "groups" })}>
+                        <RolesReport test={test} />
+                    </Section>
                     <Section icon={<Building2 />} title={t("sso.test.claims")} description={t("sso.test.claimsHint")}>
                         <dl className="divide-y divide-border/70 rounded-lg text-sm ring-1 ring-inset ring-border/80">
                             {orderedClaims(test.claims).map(([k, v, read]) => (
@@ -137,6 +140,51 @@ export function SsoResultView() {
                     </Link>
                 </p>
             )}
+        </div>
+    );
+}
+
+/** 讀到的群組與角色會怎麼變。/ The groups found and how roles would change. */
+function RolesReport({ test }: { test: SsoTestResult }) {
+    const { t } = useI18n();
+    const claim = test.groups_claim ?? "groups";
+    const roles = test.would.roles;
+    const lines: string[] = [];
+    if (roles) {
+        if (roles.join.length) lines.push(t("sso.test.join", { groups: roles.join.join(", ") }));
+        if (roles.leave.length) lines.push(t("sso.test.leave", { groups: roles.leave.join(", ") }));
+        if (roles.admin === "grant") lines.push(t("sso.test.adminGrant"));
+        if (roles.admin === "revoke") lines.push(t("sso.test.adminRevoke"));
+        if (roles.admin === "keep_last") lines.push(t("sso.test.adminKeepLast"));
+    }
+    return (
+        <div className="space-y-3 text-sm">
+            {test.groups == null ? (
+                <Callout tone="warning">{t("sso.test.noGroupsClaim", { claim })}</Callout>
+            ) : test.groups.length === 0 ? (
+                <p className="text-muted-foreground">{t("sso.test.noGroups")}</p>
+            ) : (
+                <div className="flex flex-wrap gap-1.5">
+                    {test.groups.map((g) => (
+                        <Chip key={g} mono>
+                            {g}
+                        </Chip>
+                    ))}
+                </div>
+            )}
+            {test.would.action !== "refuse" &&
+                test.groups != null &&
+                (!roles ? (
+                    <p className="text-muted-foreground">{t("sso.test.noRules")}</p>
+                ) : lines.length === 0 ? (
+                    <p className="text-muted-foreground">{t("sso.test.rolesSame")}</p>
+                ) : (
+                    <ul className="list-disc space-y-1 pl-5">
+                        {lines.map((l) => (
+                            <li key={l}>{l}</li>
+                        ))}
+                    </ul>
+                ))}
         </div>
     );
 }

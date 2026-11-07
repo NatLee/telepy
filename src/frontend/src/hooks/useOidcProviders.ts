@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { rememberSsoButtons } from "@/hooks/useSignInLook";
 import { useI18n } from "@/lib/i18n";
+import type { GroupRule } from "@/lib/sso";
 import { useToast } from "@/components/ui/Toast";
 
 export interface OidcProvider {
@@ -26,12 +27,17 @@ export interface OidcProvider {
     updated_at: string;
     callback_url: string;
     links: number;
+    groups_claim: string;
+    required_groups: string[];
+    group_rules: GroupRule[];
 }
 
 export interface OidcList {
     providers: OidcProvider[];
     callback_base: string;
     public_url_set: boolean;
+    /** 規則可以指向的使用者群組。/ The user groups rules may point at. */
+    user_groups?: { id: number; name: string }[];
 }
 
 export interface Discovery {
@@ -59,6 +65,9 @@ export interface ProviderDraft {
     create_users: boolean;
     link_by_email: boolean;
     enabled: boolean;
+    groups_claim: string;
+    required_groups: string[];
+    group_rules: GroupRule[];
 }
 
 /** 欄位錯誤（`{field: [msg]}`）。/ Field errors. */

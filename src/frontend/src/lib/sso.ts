@@ -76,6 +76,8 @@ export const SSO_ERROR_KEYS: Record<string, TranslationKey> = {
     sso_username_taken: "sso.err.usernameTaken",
     sso_linked_elsewhere: "sso.err.linkedElsewhere",
     sso_already_linked: "sso.err.alreadyLinked",
+    sso_no_groups: "sso.err.noGroups",
+    sso_group_not_allowed: "sso.err.groupNotAllowed",
     account_disabled: "login.accountDisabled",
 };
 
@@ -122,10 +124,68 @@ export function badDomain(domains: readonly string[]): string | null {
 /** 試登入時 Telepy 會怎麼做。/ What Telepy would do with a test sign-in. */
 export type WouldAction = "sign_in" | "link_by_email" | "create" | "refuse";
 
+/** 試登入時角色會怎麼變（沒規則就沒有）。/ How roles would change in a test (absent without rules). */
+export interface RoleChange {
+    join: string[];
+    leave: string[];
+    admin: "grant" | "revoke" | "keep_last" | null;
+}
+
 export interface SsoTestResult {
     provider: { id: number; slug: string; name: string };
     claims: Record<string, unknown>;
-    would: { action: WouldAction; username?: string; code?: string };
+    groups_claim?: string;
+    /** 從群組 claim 讀到的；null = id_token 沒有這個 claim。/ null = no such claim. */
+    groups?: string[] | null;
+    would: { action: WouldAction; username?: string; code?: string; roles?: RoleChange };
+}
+
+/** 身分提供者的群組 → Telepy 角色。/ A provider group → Telepy role. */
+export interface GroupRule {
+    idp_group: string;
+    target: "admin" | "group";
+    group_id: number | null;
+    /** 後端回的群組名；群組已刪 = null。/ From the backend; null when the group is gone. */
+    group_name?: string | null;
+}
+
+/** 一行一個群組（去空白、去重複、空行不算）。/ One group per line: trimmed, unique, blank lines dropped. */
+export function groupLines(text: string): string[] {
+    const out: string[] = [];
+    for (const line of text.split(/\r?\n/)) {
+        const g = line.trim();
+        if (g && !out.includes(g)) out.push(g);
+    }
+    return out;
+}
+
+/** 送出前整理規則：去空白，重複的拿掉；有問題回第一個問題。/ Tidy rules before saving, or the first problem. */
+export function tidyRules(rules: readonly GroupRule[]): { rules: GroupRule[]; problem: "group_name" | "target" | null } {
+    const out: GroupRule[] = [];
+    for (const r of rules) {
+        const idp = r.idp_group.trim();
+        if (!idp) return { rules: out, problem: "group_name" };
+        if (r.target === "group" && r.group_id == null) return { rules: out, problem: "target" };
+        const rule: GroupRule = { idp_group: idp, target: r.target, group_id: r.target === "group" ? r.group_id : null };
+        if (!out.some((x) => x.idp_group === rule.idp_group && x.target === rule.target && x.group_id === rule.group_id)) out.push(rule);
+    }
+    return { rules: out, problem: null };
+}
+
+/** 有沒有規則會給管理員。/ Whether any rule makes people administrators. */
+export function grantsAdmin(rules: readonly GroupRule[]): boolean {
+    return rules.some((r) => r.target === "admin");
+}
+
+/** 規則選單的值：`admin` 或 `group:<id>`。/ The rule select's value. */
+export function ruleValue(r: Pick<GroupRule, "target" | "group_id">): string {
+    return r.target === "admin" ? "admin" : r.group_id == null ? "" : `group:${r.group_id}`;
+}
+
+export function fromRuleValue(v: string): Pick<GroupRule, "target" | "group_id"> {
+    if (v === "admin") return { target: "admin", group_id: null };
+    const id = Number(v.replace(/^group:/, ""));
+    return { target: "group", group_id: Number.isFinite(id) && id > 0 ? id : null };
 }
 
 /** claim 依重要性排：先是 Telepy 會讀的，再照字母。/ Claims ordered: the ones Telepy reads first, then A–Z. */

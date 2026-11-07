@@ -5491,6 +5491,26 @@ pub struct OidcProvider {
     pub callback_url: String,
     /// 連了幾個帳號。/ How many accounts it links.
     pub links: i64,
+    /// 群組 claim 的路徑（`groups`、`roles`、`realm_access.roles`…）。/ The groups claim path.
+    #[schema(example = "groups")]
+    pub groups_claim: String,
+    /// 只有這些群組能登入（空 = 不限）。/ Only these groups may sign in (empty = anyone).
+    pub required_groups: Vec<String>,
+    pub group_rules: Vec<OidcGroupRule>,
+}
+
+/// 身分提供者的群組 → Telepy 角色。/ A provider group → Telepy role rule.
+#[derive(ToSchema)]
+pub struct OidcGroupRule {
+    /// 身分提供者那邊的群組（完全相同才算，含大小寫）。/ The provider's group, matched exactly.
+    #[schema(example = "telepy-admins")]
+    pub idp_group: String,
+    /// admin | group
+    pub target: String,
+    /// target = group 時的功能權限使用者群組。/ The feature-access user group when target = group.
+    pub group_id: Option<i64>,
+    /// 群組已刪掉 = null。/ Null when the group is gone.
+    pub group_name: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -5502,6 +5522,8 @@ pub struct OidcProviderList {
     pub public_url_set: bool,
     /// 只有新增時有。/ Only after a create.
     pub created_id: Option<i64>,
+    /// 規則可以指向的使用者群組。/ The user groups rules may point at.
+    pub user_groups: Vec<serde_json::Value>,
 }
 
 /// 新增 / 修改身分提供者；修改時沒給的欄位不變。/ Create / change a provider; missing fields keep their value on PATCH.
@@ -5522,6 +5544,11 @@ pub struct OidcProviderRequest {
     /// 依已驗證的 email 連到既有帳號（預設 false）。/ Link existing accounts by a verified email (default false).
     pub link_by_email: Option<bool>,
     pub enabled: Option<bool>,
+    /// 預設 `groups`。/ Default `groups`.
+    pub groups_claim: Option<String>,
+    pub required_groups: Option<Vec<String>>,
+    /// 沒給 = 不動；給了 = 換掉整組（`group_name` 不用給）。/ Omitted = keep; given = replace the set.
+    pub group_rules: Option<Vec<OidcGroupRule>>,
 }
 
 #[derive(ToSchema)]
@@ -5551,7 +5578,10 @@ pub struct OidcTestResult {
     pub provider: serde_json::Value,
     /// id_token 的 claim。/ The id_token's claims.
     pub claims: serde_json::Value,
-    /// `{action: sign_in | link_by_email | create | refuse, username?, code?}`
+    pub groups_claim: String,
+    /// 從群組 claim 讀到的；null = id_token 沒有這個 claim。/ The groups read from the claim; null = no such claim.
+    pub groups: Option<Vec<String>>,
+    /// `{action: sign_in | link_by_email | create | refuse, username?, code?, roles?: {join, leave, admin: grant|revoke|keep_last|null}}`
     pub would: serde_json::Value,
 }
 

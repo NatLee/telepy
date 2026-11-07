@@ -377,3 +377,113 @@ async fn linking_unlinking_and_test_sign_ins() {
         assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == kind), "{kind} event: {}", r.text);
     }
 }
+
+#[tokio::test]
+async fn provider_groups_become_admin_rights_and_user_groups() {
+    let app = common::spawn().await;
+    let idp = start_idp(Some("s3cret")).await;
+    let issuer = idp.lock().unwrap().issuer.clone();
+    let admin = app.login("admin", "pw").await;
+    let group = |name: &'static str| {
+        let (app, admin) = (&app, admin.clone());
+        async move {
+            let r = app.post("/api/access/groups", Some(&admin), json!({"name": name})).await;
+            assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+            r.json["created_id"].as_i64().unwrap()
+        }
+    };
+    let (ops, dev) = (group("Ops").await, group("Dev").await);
+
+    // 規則要指向存在的群組；claim 路徑要合規。/ Rules must point at existing groups; the claim path must be valid.
+    let base = json!({"name": "Corp", "issuer": issuer, "client_id": "telepy", "client_secret": "s3cret"});
+    let with = |extra: Value| {
+        let mut b = base.clone();
+        b.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        b
+    };
+    let r = app.post("/api/site/oidc", Some(&admin), with(json!({"group_rules": [{"idp_group": "x", "target": "group", "group_id": 9999}]}))).await;
+    assert!(r.json["group_rules"].is_array(), "{}", r.text);
+    let r = app.post("/api/site/oidc", Some(&admin), with(json!({"groups_claim": "a..b"}))).await;
+    assert!(r.json["groups_claim"].is_array(), "{}", r.text);
+    let r = app
+        .post(
+            "/api/site/oidc",
+            Some(&admin),
+            with(json!({"required_groups": ["staff", " staff "], "group_rules": [{"idp_group": "ops", "target": "group", "group_id": ops}, {"idp_group": "telepy-admins", "target": "admin"}]})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let p = &r.json["providers"][0];
+    assert_eq!(p["required_groups"], json!(["staff"]));
+    assert_eq!(p["group_rules"][0], json!({"idp_group": "ops", "target": "group", "group_id": ops, "group_name": "Ops"}));
+    assert_eq!(p["groups_claim"], "groups");
+    assert_eq!(r.json["user_groups"].as_array().map(Vec::len), Some(2));
+    let id = r.json["created_id"].as_i64().unwrap();
+
+    // 只有 staff 能登入；沒有群組 claim 也不行。/ Only staff may sign in; no groups claim = no.
+    assert_eq!(sign_in(&app, &idp, "corp", json!({"sub": "g-1", "email": "grace@corp.example", "groups": ["contractors"]})).await.unwrap_err(), "sso_group_not_allowed");
+    assert_eq!(sign_in(&app, &idp, "corp", json!({"sub": "g-1", "email": "grace@corp.example"})).await.unwrap_err(), "sso_no_groups");
+
+    let db = &app.state.db;
+    let grace = || async { telepy_server::db::users::by_username(db, "grace").await.unwrap().unwrap() };
+    let groups_of = |uid: i64| async move { telepy_server::db::features::groups_of(db, uid).await.unwrap() };
+
+    // 第一次登入：建帳號，進 Ops。/ First sign-in: the account is created and joins Ops.
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "email": "grace@corp.example", "groups": ["staff", "ops"]})).await.unwrap();
+    let g = grace().await;
+    assert_eq!((groups_of(g.id).await, g.is_superuser), (std::collections::BTreeSet::from([ops]), false));
+
+    // 管理員手動把她加進 Dev；下次登入 ops → telepy-admins：離開 Ops、成為管理員、Dev 不動。
+    // An admin adds her to Dev by hand; the next sign-in moves her from ops to telepy-admins.
+    let r = app.patch(&format!("/api/access/groups/{dev}"), Some(&admin), json!({"members": [g.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["staff", "telepy-admins"]})).await.unwrap();
+    let g = grace().await;
+    assert_eq!((groups_of(g.id).await, g.is_superuser), (std::collections::BTreeSet::from([dev]), true));
+    let policy = app.get("/api/access", Some(&admin)).await;
+    let me = policy.json["users"].as_array().unwrap().iter().find(|u| u["id"] == g.id).unwrap().clone();
+    assert_eq!(me["sso_admin"], "Corp", "the access page knows where the admin right came from");
+
+    // 不在 telepy-admins 了：管理員拿掉（還有別的管理員），手動給的 Dev 留著。
+    // Out of telepy-admins: the admin right goes (another admin remains), the hand-given Dev stays.
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["staff"]})).await.unwrap();
+    let g = grace().await;
+    assert_eq!((groups_of(g.id).await, g.is_superuser), (std::collections::BTreeSet::from([dev]), false));
+
+    // 手動加進 Ops：提供者沒給的，它就不拿走。/ Ops added by hand: the provider never takes away what it didn't give.
+    app.patch(&format!("/api/access/groups/{ops}"), Some(&admin), json!({"members": [g.id]})).await;
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["staff"]})).await.unwrap();
+    assert!(groups_of(g.id).await.contains(&ops));
+    let policy = app.get("/api/access", Some(&admin)).await;
+    let ops_json = policy.json["groups"].as_array().unwrap().iter().find(|x| x["id"] == ops).unwrap().clone();
+    assert_eq!(ops_json["sso_members"], json!([]), "a hand-given membership is not marked as the provider's");
+
+    // 沒有群組 claim（不再限定群組時）：什麼都不動。/ No groups claim (once nothing is required): nothing changes.
+    app.patch(&format!("/api/site/oidc/{id}"), Some(&admin), json!({"required_groups": []})).await;
+    app.patch(&format!("/api/access/groups/{ops}"), Some(&admin), json!({"members": []})).await;
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["ops"]})).await.unwrap();
+    assert!(groups_of(g.id).await.contains(&ops));
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1"})).await.unwrap();
+    assert!(groups_of(g.id).await.contains(&ops), "no claim = left as it is");
+    let policy = app.get("/api/access", Some(&admin)).await;
+    let ops_json = policy.json["groups"].as_array().unwrap().iter().find(|x| x["id"] == ops).unwrap().clone();
+    assert_eq!(ops_json["sso_members"], json!([{"user_id": g.id, "provider": "Corp"}]));
+
+    // 試登入：列出讀到的群組與會怎麼改。/ A test sign-in lists the groups and what would change.
+    let r = app.post(&format!("/api/site/oidc/{id}/test"), Some(&admin), json!({})).await;
+    let (r, _) = through(&app, &idp, r.json["url"].as_str().unwrap(), &set_cookies(&r), json!({"sub": "g-1", "groups": ["telepy-admins"]})).await;
+    let to = location(&r);
+    let ticket = to.trim_start_matches("/tunnels/sso?test=").split('&').next().unwrap().to_string();
+    let r = post_with(&app, Method::POST, "/api/auth/oidc/test-result", &set_cookies(&r), Some(&admin), json!({"ticket": ticket})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["groups"].clone(), r.json["groups_claim"].clone()), (json!(["telepy-admins"]), json!("groups")));
+    assert_eq!(r.json["would"]["roles"], json!({"join": [], "leave": ["Ops"], "admin": "grant"}));
+    assert!(!grace().await.is_superuser, "a test changes nothing");
+
+    // 刪掉 Ops：指向它的規則一起走。/ Deleting Ops removes the rules pointing at it.
+    app.delete(&format!("/api/access/groups/{ops}"), Some(&admin)).await;
+    let r = app.get("/api/site/oidc", Some(&admin)).await;
+    assert_eq!(r.json["providers"][0]["group_rules"], json!([{"idp_group": "telepy-admins", "target": "admin", "group_id": null, "group_name": null}]));
+    let r = app.get("/api/log/ssh/events?scope=all&limit=100", Some(&admin)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "sso_role" && e["message"].as_str().unwrap_or("").contains("became an administrator")), "{}", r.text);
+}

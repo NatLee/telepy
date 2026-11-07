@@ -79,6 +79,23 @@ pub async fn memberships(db: &Db) -> sqlx::Result<Vec<(i64, i64)>> {
     sqlx::query_as(&format!("SELECT group_id, user_id FROM {MEMBER} ORDER BY group_id, user_id")).fetch_all(&db.read).await
 }
 
+/// 這個人在哪些群組。/ The groups this person is in.
+pub async fn groups_of(db: &Db, user_id: i64) -> sqlx::Result<std::collections::BTreeSet<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(&format!("SELECT group_id FROM {MEMBER} WHERE user_id = ?")).bind(user_id).fetch_all(&db.read).await?;
+    Ok(ids.into_iter().collect())
+}
+
+/// 加進一個群組（已經在就不動）。/ Add to a group (no-op when already in).
+pub async fn add_member(db: &Db, group_id: i64, user_id: i64) -> sqlx::Result<()> {
+    sqlx::query(&format!("INSERT OR IGNORE INTO {MEMBER} (group_id, user_id) VALUES (?, ?)")).bind(group_id).bind(user_id).execute(&db.write).await?;
+    Ok(())
+}
+
+pub async fn remove_member(db: &Db, group_id: i64, user_id: i64) -> sqlx::Result<()> {
+    sqlx::query(&format!("DELETE FROM {MEMBER} WHERE group_id = ? AND user_id = ?")).bind(group_id).bind(user_id).execute(&db.write).await?;
+    Ok(())
+}
+
 /// 換掉群組的成員名單。/ Replaces a group's member list.
 pub async fn set_members(db: &Db, group_id: i64, users: &[i64]) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;

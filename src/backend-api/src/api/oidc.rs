@@ -32,6 +32,7 @@ use crate::db::users::{NewUser, User};
 use crate::db::{self};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::oidc::flow::{self, Outcome, Pending, Purpose};
+use crate::oidc::roles::{self, Current, Rule, SyncPlan, Target};
 use crate::oidc::{self as proto, AuthRequest, Claims, UsernameFrom};
 use crate::state::AppState;
 use crate::util::json_str;
@@ -151,6 +152,9 @@ async fn plan(state: &AppState, p: &Provider, claims: &Claims) -> ApiResult<Plan
     if let Some(code) = domain_problem(p, claims) {
         return Ok(Plan::Refuse(code));
     }
+    if let Err(code) = roles::allowed(&p.required(), claim_groups(p, claims).as_deref()) {
+        return Ok(Plan::Refuse(code));
+    }
     if let Some(uid) = db::oidc::user_for(&state.db, p.id, &claims.sub).await? {
         return Ok(match db::users::by_id(&state.db, uid).await? {
             Some(u) => Plan::Linked(u),
@@ -225,6 +229,8 @@ async fn sign_in(state: &AppState, p: &Provider, claims: &Claims, meta: &ClientM
         sign_ins::record(state, user.id, meta, Attempt::failed("sso", None, "inactive")).await;
         return Err("account_disabled");
     }
+    // 群組 → 角色：每次用這個提供者登入都對一次。/ Groups → roles, on every sign-in through this provider.
+    apply_roles(state, p, &user, claims).await.map_err(|e| fail(e.into()))?;
     let result = super::mfa::complete_login(state, &user, "sso", meta).await.map_err(fail)?;
     if result.get("mfa_required").is_none() {
         tracing::info!(username = user.username, provider = p.slug, "[OIDC] Login success");
@@ -257,6 +263,33 @@ async fn link(state: &AppState, p: &Provider, claims: &Claims, user_id: i64) -> 
 
 /// 試登入給管理員看的：原始 claim + Telepy 會怎麼做。/ What a test shows: the claims and what Telepy would do.
 async fn test_report(state: &AppState, p: &Provider, claims: &Claims) -> ApiResult<Value> {
+    let raw = full_claims(claims);
+    let groups = claim_groups(p, claims);
+    let (mut would, user) = match plan(state, p, claims).await? {
+        Plan::Linked(u) => (json!({ "action": "sign_in", "username": u.username }), Some(Some(u))),
+        Plan::ByEmail(u) => (json!({ "action": "link_by_email", "username": u.username }), Some(Some(u))),
+        Plan::Create { username } => (json!({ "action": "create", "username": username }), Some(None)),
+        Plan::Refuse(code) => (json!({ "action": "refuse", "code": code }), None),
+    };
+    // 會怎麼改角色（沒有群組 claim = 不改）。/ How roles would change (no groups claim = unchanged).
+    if let (Some(user), Some(groups)) = (user, groups.as_ref()) {
+        let rules = live_rules(state, p.id).await?;
+        let now = match &user {
+            Some(u) => current(state, p, u).await?,
+            None => Current { other_admins: true, ..Default::default() },
+        };
+        // 沒有規則也沒給過東西 = 不會碰角色，就不提。/ No rules and nothing granted = roles untouched; say nothing.
+        if !rules.is_empty() || !now.granted.is_empty() {
+            let sync = roles::plan(&roles::desired(&rules, groups), &now);
+            let names = group_names(state).await?;
+            would["roles"] = roles_json(&sync, &names);
+        }
+    }
+    Ok(json!({ "provider": { "id": p.id, "slug": p.slug, "name": p.name }, "claims": raw, "groups_claim": p.groups_claim, "groups": groups, "would": would }))
+}
+
+/// id_token 的所有 claim（具名欄位放回去）。/ Every claim of the id_token (named fields put back).
+fn full_claims(claims: &Claims) -> serde_json::Map<String, Value> {
     let mut raw = claims.rest.clone();
     raw.insert("sub".into(), json!(claims.sub));
     for (k, v) in [("email", &claims.email), ("preferred_username", &claims.preferred_username), ("name", &claims.name), ("given_name", &claims.given_name), ("family_name", &claims.family_name)] {
@@ -267,13 +300,107 @@ async fn test_report(state: &AppState, p: &Provider, claims: &Claims) -> ApiResu
     if let Some(v) = claims.email_verified {
         raw.insert("email_verified".into(), json!(v));
     }
-    let would = match plan(state, p, claims).await? {
-        Plan::Linked(u) => json!({ "action": "sign_in", "username": u.username }),
-        Plan::ByEmail(u) => json!({ "action": "link_by_email", "username": u.username }),
-        Plan::Create { username } => json!({ "action": "create", "username": username }),
-        Plan::Refuse(code) => json!({ "action": "refuse", "code": code }),
+    raw
+}
+
+fn claim_groups(p: &Provider, claims: &Claims) -> Option<Vec<String>> {
+    roles::claim_groups(&full_claims(claims), &p.groups_claim)
+}
+
+async fn group_names(state: &AppState) -> sqlx::Result<std::collections::HashMap<i64, String>> {
+    Ok(db::features::groups(&state.db).await?.into_iter().map(|g| (g.id, g.name)).collect())
+}
+
+/// 這個提供者的規則，指向已經不存在的群組的那些不算。/ The provider's rules, minus ones whose group is gone.
+async fn live_rules(state: &AppState, provider_id: i64) -> sqlx::Result<Vec<Rule>> {
+    let names = group_names(state).await?;
+    Ok(db::oidc::rules(&state.db, provider_id).await?.into_iter().filter(|r| r.target.group_id().is_none_or(|id| names.contains_key(&id))).collect())
+}
+
+async fn current(state: &AppState, p: &Provider, user: &User) -> sqlx::Result<Current> {
+    Ok(Current {
+        member_of: db::features::groups_of(&state.db, user.id).await?,
+        is_admin: user.is_superuser,
+        granted: db::oidc::granted(&state.db, p.id, user.id).await?,
+        other_admins: db::oidc::other_admins(&state.db, user.id).await? > 0,
+    })
+}
+
+fn roles_json(sync: &SyncPlan, names: &std::collections::HashMap<i64, String>) -> Value {
+    let name = |id: &i64| names.get(id).cloned().unwrap_or_else(|| format!("#{id}"));
+    let admin = if sync.make_admin {
+        Some("grant")
+    } else if sync.revoke_admin {
+        Some("revoke")
+    } else if sync.kept_last_admin {
+        Some("keep_last")
+    } else {
+        None
     };
-    Ok(json!({ "provider": { "id": p.id, "slug": p.slug, "name": p.name }, "claims": raw, "would": would }))
+    json!({ "join": sync.join.iter().map(name).collect::<Vec<_>>(), "leave": sync.leave.iter().map(name).collect::<Vec<_>>(), "admin": admin })
+}
+
+/// 照群組 claim 對一次角色：加規則說要的、拿掉這個提供者以前給但現在不該有的。沒有 claim 就什麼都不動。
+/// Sync roles from the groups claim: add what the rules call for, take away what this provider gave before and the
+/// groups no longer call for. Without the claim nothing changes.
+async fn apply_roles(state: &AppState, p: &Provider, user: &User, claims: &Claims) -> sqlx::Result<()> {
+    let Some(groups) = claim_groups(p, claims) else {
+        if !db::oidc::rules(&state.db, p.id).await?.is_empty() {
+            tracing::info!(provider = p.slug, claim = p.groups_claim, "[OIDC] the id_token has no groups claim; roles left as they are");
+        }
+        return Ok(());
+    };
+    let rules = live_rules(state, p.id).await?;
+    let now = current(state, p, user).await?;
+    if rules.is_empty() && now.granted.is_empty() {
+        return Ok(());
+    }
+    let sync = roles::plan(&roles::desired(&rules, &groups), &now);
+    if sync.is_empty() && !sync.kept_last_admin {
+        return Ok(());
+    }
+    for id in &sync.join {
+        db::features::add_member(&state.db, *id, user.id).await?;
+    }
+    for id in &sync.leave {
+        db::features::remove_member(&state.db, *id, user.id).await?;
+    }
+    if sync.make_admin || sync.revoke_admin {
+        db::users::set_flags(&state.db, user.id, None, Some(sync.make_admin)).await?;
+    }
+    for t in &sync.record {
+        db::oidc::record(&state.db, p.id, user.id, *t).await?;
+    }
+    for t in &sync.forget {
+        db::oidc::forget(&state.db, p.id, user.id, *t).await?;
+    }
+    state.features.invalidate();
+    let names = group_names(state).await?;
+    let quoted = |ids: &[i64]| ids.iter().map(|id| format!("\"{}\"", names.get(id).cloned().unwrap_or_else(|| format!("#{id}")))).collect::<Vec<_>>().join(", ");
+    let mut parts = Vec::new();
+    if !sync.join.is_empty() {
+        parts.push(format!("joined {}", quoted(&sync.join)));
+    }
+    if !sync.leave.is_empty() {
+        parts.push(format!("left {}", quoted(&sync.leave)));
+    }
+    if sync.make_admin {
+        parts.push("became an administrator".to_string());
+    }
+    if sync.revoke_admin {
+        parts.push("is no longer an administrator".to_string());
+    }
+    if sync.kept_last_admin {
+        parts.push("stays an administrator because they are the last one".to_string());
+    }
+    if !parts.is_empty() {
+        state.gateway.event("sso_role", None, None, None, format!("{} {} (groups from {})", user.username, parts.join(", "), p.name)).await;
+    }
+    // 拿掉了東西：進行中的 session 重新檢查一次。/ Something was taken away: re-check live sessions now.
+    if sync.takes_away() {
+        crate::access_recheck::kick(state, None, Some(user.id));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- public flow
@@ -558,7 +685,7 @@ async fn unlink(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
 
 // ---------------------------------------------------------------- admin
 
-fn provider_json(p: &Provider, base: &str, links: i64) -> Value {
+fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleRow], names: &std::collections::HashMap<i64, String>) -> Value {
     json!({
         "id": p.id,
         "slug": p.slug,
@@ -576,14 +703,39 @@ fn provider_json(p: &Provider, base: &str, links: i64) -> Value {
         "updated_at": crate::util::db_to_iso_utc_z(&p.updated_at),
         "callback_url": callback_url(base, &p.slug),
         "links": links,
+        "groups_claim": p.groups_claim,
+        "required_groups": p.required(),
+        // 規則；指向已刪掉的群組的 group_name = null。/ Rules; group_name null when the group is gone.
+        "group_rules": rules.iter().map(|r| json!({
+            "idp_group": r.idp_group,
+            "target": r.target,
+            "group_id": r.group_id,
+            "group_name": r.group_id.and_then(|id| names.get(&id).cloned()),
+        })).collect::<Vec<_>>(),
     })
 }
 
 async fn admin_json(state: &AppState, headers: &HeaderMap) -> ApiResult<Value> {
     let base = base(state, headers);
     let counts = db::oidc::link_counts(&state.db).await?;
-    let providers: Vec<Value> = db::oidc::list(&state.db).await?.iter().map(|p| provider_json(p, &base, counts.get(&p.id).copied().unwrap_or(0))).collect();
-    Ok(json!({ "providers": providers, "callback_base": format!("{base}/api/auth/oidc/"), "public_url_set": state.config.public_base().is_some() }))
+    let rules = db::oidc::all_rules(&state.db).await?;
+    let groups = db::features::groups(&state.db).await?;
+    let names: std::collections::HashMap<i64, String> = groups.iter().map(|g| (g.id, g.name.clone())).collect();
+    let providers: Vec<Value> = db::oidc::list(&state.db)
+        .await?
+        .iter()
+        .map(|p| {
+            let mine: Vec<&db::oidc::RuleRow> = rules.iter().filter(|r| r.provider_id == p.id).collect();
+            provider_json(p, &base, counts.get(&p.id).copied().unwrap_or(0), &mine, &names)
+        })
+        .collect();
+    Ok(json!({
+        "providers": providers,
+        "callback_base": format!("{base}/api/auth/oidc/"),
+        "public_url_set": state.config.public_base().is_some(),
+        // 規則可以指向的使用者群組（功能權限的群組）。/ The user groups rules may point at (feature-access groups).
+        "user_groups": groups.iter().map(|g| json!({ "id": g.id, "name": g.name })).collect::<Vec<_>>(),
+    }))
 }
 
 /// 一個網域：小寫、有點、只有網域字元。/ One domain: lowercase, dotted, hostname characters.
@@ -605,10 +757,70 @@ struct Form {
     create_users: bool,
     link_by_email: bool,
     enabled: bool,
+    groups_claim: String,
+    /// JSON 陣列。/ A JSON array.
+    required_groups: String,
+    /// None = 不動（修改時沒給）。/ None = keep (omitted on update).
+    rules: Option<Vec<Rule>>,
+}
+
+/// 一串群組名稱：去頭尾空白、不空、不重複、不太長。/ A list of group names: trimmed, non-empty, unique, bounded.
+fn parse_group_list(v: &Value, field: &str, max: usize) -> ApiResult<Vec<String>> {
+    let items = match v {
+        Value::Array(a) => a.clone(),
+        Value::Null => vec![],
+        _ => return Err(ApiError::field(field, "A list of group names.")),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for it in items {
+        let g = it.as_str().map(str::trim).unwrap_or("");
+        if g.is_empty() || g.chars().count() > roles::MAX_GROUP_LEN {
+            return Err(ApiError::field(field, format!("Group names are 1–{} characters.", roles::MAX_GROUP_LEN)));
+        }
+        if !out.iter().any(|x| x == g) {
+            out.push(g.to_string());
+        }
+    }
+    if out.len() > max {
+        return Err(ApiError::field(field, format!("At most {max}.")));
+    }
+    Ok(out)
+}
+
+/// 規則：`[{idp_group, target: admin|group, group_id}]`，群組必須存在。/ Rules; the user group must exist.
+fn parse_rules(v: &Value, known: &std::collections::HashMap<i64, String>) -> ApiResult<Vec<Rule>> {
+    let items = match v {
+        Value::Array(a) => a.clone(),
+        Value::Null => vec![],
+        _ => return Err(ApiError::field("group_rules", "A list of rules.")),
+    };
+    let mut out: Vec<Rule> = Vec::new();
+    for it in items {
+        let idp_group = it.get("idp_group").and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        if idp_group.is_empty() || idp_group.chars().count() > roles::MAX_GROUP_LEN {
+            return Err(ApiError::field("group_rules", format!("Each rule needs the provider's group name (1–{} characters).", roles::MAX_GROUP_LEN)));
+        }
+        let target = match it.get("target").and_then(Value::as_str) {
+            Some("admin") => Target::Admin,
+            Some("group") => match it.get("group_id").and_then(Value::as_i64) {
+                Some(id) if known.contains_key(&id) => Target::Group(id),
+                _ => return Err(ApiError::field("group_rules", "Pick a Telepy user group that exists.")),
+            },
+            _ => return Err(ApiError::field("group_rules", "target must be admin or group.")),
+        };
+        let rule = Rule { idp_group, target };
+        if !out.contains(&rule) {
+            out.push(rule);
+        }
+    }
+    if out.len() > roles::MAX_RULES {
+        return Err(ApiError::field("group_rules", format!("At most {} rules.", roles::MAX_RULES)));
+    }
+    Ok(out)
 }
 
 /// 新增時全部欄位，修改時沒給的沿用舊值。/ All fields on create; on update, missing ones keep their value.
-fn parse_form(body: &Value, old: Option<&Provider>) -> ApiResult<Form> {
+fn parse_form(body: &Value, old: Option<&Provider>, known_groups: &std::collections::HashMap<i64, String>) -> ApiResult<Form> {
     let s = |k: &str| body.get(k).and_then(Value::as_str).map(str::trim).map(str::to_string);
     let b = |k: &str, default: bool| body.get(k).and_then(Value::as_bool).unwrap_or(default);
     let name = s("name").or_else(|| old.map(|o| o.name.clone())).unwrap_or_default();
@@ -658,6 +870,17 @@ fn parse_form(body: &Value, old: Option<&Provider>) -> ApiResult<Form> {
     if allowed_domains.len() > 1024 {
         return Err(ApiError::field("allowed_domains", "Too many domains."));
     }
+    let groups_claim = s("groups_claim").filter(|x| !x.is_empty()).or_else(|| old.map(|o| o.groups_claim.clone())).unwrap_or_else(|| "groups".into());
+    roles::check_claim_path(&groups_claim).map_err(|e| ApiError::field("groups_claim", e))?;
+    let required = match body.get("required_groups") {
+        Some(v) => parse_group_list(v, "required_groups", roles::MAX_REQUIRED)?,
+        None => old.map(|o| o.required()).unwrap_or_default(),
+    };
+    let rules = match body.get("group_rules") {
+        Some(v) => Some(parse_rules(v, known_groups)?),
+        None if old.is_none() => Some(vec![]),
+        None => None,
+    };
     Ok(Form {
         slug,
         name,
@@ -670,6 +893,9 @@ fn parse_form(body: &Value, old: Option<&Provider>) -> ApiResult<Form> {
         create_users: b("create_users", old.map(|o| o.create_users).unwrap_or(true)),
         link_by_email: b("link_by_email", old.map(|o| o.link_by_email).unwrap_or(false)),
         enabled: b("enabled", old.map(|o| o.enabled).unwrap_or(true)),
+        groups_claim,
+        required_groups: serde_json::to_string(&required).unwrap_or_else(|_| "[]".into()),
+        rules,
     })
 }
 
@@ -686,6 +912,8 @@ impl Form {
             create_users: self.create_users,
             link_by_email: self.link_by_email,
             enabled: self.enabled,
+            groups_claim: &self.groups_claim,
+            required_groups: &self.required_groups,
         }
     }
 }
@@ -722,9 +950,13 @@ async fn admin_list(State(state): State<AppState>, AuthUser(me): AuthUser, heade
 ))]
 async fn admin_create(State(state): State<AppState>, AuthUser(me): AuthUser, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     admin_only(&me)?;
-    let form = parse_form(&body_object(&body), None)?;
+    let known = group_names(&state).await?;
+    let form = parse_form(&body_object(&body), None, &known)?;
     let id = db::oidc::create(&state.db, &form.row()).await.map_err(slug_taken)?;
     save_secret(&state, id, &form.secret).await?;
+    if let Some(rules) = &form.rules {
+        db::oidc::set_rules(&state.db, id, rules).await?;
+    }
     state.gateway.event("sso_provider", None, None, None, format!("{} added the sign-in provider {} ({})", me.username, form.name, form.issuer)).await;
     let mut v = admin_json(&state, &headers).await?;
     v["created_id"] = json!(id);
@@ -740,9 +972,13 @@ async fn admin_create(State(state): State<AppState>, AuthUser(me): AuthUser, hea
 async fn admin_update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     admin_only(&me)?;
     let old = db::oidc::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("No such sign-in provider."))?;
-    let form = parse_form(&body_object(&body), Some(&old))?;
+    let known = group_names(&state).await?;
+    let form = parse_form(&body_object(&body), Some(&old), &known)?;
     db::oidc::update(&state.db, id, &form.row()).await.map_err(slug_taken)?;
     save_secret(&state, id, &form.secret).await?;
+    if let Some(rules) = &form.rules {
+        db::oidc::set_rules(&state.db, id, rules).await?;
+    }
     let what = if old.enabled != form.enabled { if form.enabled { "turned on" } else { "turned off" } } else { "changed" };
     state.gateway.event("sso_provider", None, None, None, format!("{} {what} the sign-in provider {}", me.username, form.name)).await;
     Ok(Json(admin_json(&state, &headers).await?))

@@ -94,6 +94,8 @@ export interface AccessGroup {
     description: string;
     created_at: string;
     members: number[];
+    /** 單一登入給的成員（每次登入重新對一次）。/ Members a sign-in provider added (re-checked at every sign-in). */
+    sso_members?: { user_id: number; provider: string }[];
     grants: Grants;
 }
 
@@ -102,6 +104,8 @@ export interface AccessUser {
     username: string;
     email: string;
     is_superuser: boolean;
+    /** 管理員身分是哪個單一登入給的（不是 = null）。/ The sign-in provider that made them an administrator, if any. */
+    sso_admin?: string | null;
     is_active: boolean;
     groups: number[];
     grants: Grants;
