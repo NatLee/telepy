@@ -83,6 +83,42 @@ export interface DesktopStart {
     max_resolution?: number;
     target: { host: string; port: number; label: string; lan_host_id: number | null };
     username: string;
+    /** RDP 預檢看到的：伺服器選的安全層，或它回的協商失敗。/ What the RDP pre-flight saw: the server's security layer or its refusal. */
+    rdp?: RdpPreflight | null;
+}
+
+/** RDP 預檢的結果（後端 `desktop/rdp_probe.rs`）。/ The RDP pre-flight's result (`desktop/rdp_probe.rs`). */
+export interface RdpPreflight {
+    /** rdp | tls | nla | nla_ex | rdstls | other */
+    security: string;
+    /** RDP_NEG_FAILURE，例如 ssl_not_allowed_by_server。/ The negotiation failure, e.g. ssl_not_allowed_by_server. */
+    failure: string | null;
+}
+
+/** 安全層給人看的名字（技術名詞不翻）。/ The security layer's name for people (technical names stay untranslated). */
+export function rdpSecurityLabel(security: string): string {
+    switch (security) {
+        case "nla":
+        case "nla_ex":
+            return "NLA";
+        case "tls":
+            return "TLS";
+        case "rdstls":
+            return "RDSTLS";
+        case "rdp":
+            return "RDP";
+        default:
+            return security;
+    }
+}
+
+/**
+ * 裝置是 Windows 裡的 WSL 嗎（裝置資訊的核心版本；跟後端 `rdp_probe::is_wsl` 同一條規則）。
+ * Is the device WSL inside Windows (by the kernel in its facts; the same rule as the backend's `rdp_probe::is_wsl`)?
+ */
+export function isWslKernel(kernel: string | null | undefined): boolean {
+    const k = (kernel ?? "").toLowerCase();
+    return k.includes("microsoft-standard-wsl") || k.endsWith("-microsoft") || k.includes("-microsoft ");
 }
 
 /** 聲音偏好（帳號上的遠端桌面偏好 `audio`，預設關：吃頻寬）。/ The sound preference (on the account; off by default: it costs bandwidth). */
@@ -119,6 +155,8 @@ export interface DesktopFailure {
     key: TranslationKey;
     vars?: Record<string, string | number>;
     at: FlowSpot;
+    /** 第二句：可以怎麼做（例如 WSL 的情況）。/ A second sentence: what to do (e.g. for WSL). */
+    hint?: { key: TranslationKey; vars?: Record<string, string | number> };
 }
 
 /** 這台主機掃描到的桌面服務（3389 = RDP、5900–5909 = VNC、21118 = RustDesk）。/ Desktop services seen on a host. */
@@ -145,8 +183,27 @@ export function isValidPort(value: string): boolean {
  * Why a start or probe failed. A refused RustDesk port almost always means Direct IP Access is off on that RustDesk,
  * so RustDesk mode gets its own explanation instead of the RDP / VNC one.
  */
-export function startFailure(code: string | undefined, status: number, vars: { account: string; address: string }, mode: DesktopMode = "rdp"): DesktopFailure {
+/** 預檢時對面回的不是 RDP：那是什麼（後端的 `seen`）。/ What answered instead of RDP (the backend's `seen`). */
+const SEEN_KEY: Record<string, TranslationKey> = {
+    ssh: "desktop.err.seen.ssh",
+    http: "desktop.err.seen.http",
+    text: "desktop.err.seen.other",
+    binary: "desktop.err.seen.other",
+};
+
+/**
+ * `extra`：RDP 預檢的錯誤附的東西——`seen`（回答的是什麼）與 `wsl`（目標是 WSL 裝置本身）。
+ * `extra`: what an RDP pre-flight error carries — `seen` (what answered) and `wsl` (the target is a WSL device itself).
+ */
+export function startFailure(code: string | undefined, status: number, vars: { account: string; address: string }, mode: DesktopMode = "rdp", extra: { seen?: string | null; wsl?: boolean | null } = {}): DesktopFailure {
+    const wslHint = extra.wsl ? { hint: { key: "desktop.err.wslHint" as TranslationKey } } : {};
     switch (code) {
+        case "rdp_no_answer":
+            return { key: "desktop.err.rdpNoAnswer", vars: { address: vars.address }, at: "target", ...wslHint };
+        case "rdp_silent":
+            return { key: "desktop.err.rdpSilent", vars: { address: vars.address }, at: "target", ...wslHint };
+        case "rdp_not_rdp":
+            return { key: SEEN_KEY[extra.seen ?? ""] ?? "desktop.err.seen.other", vars: { address: vars.address }, at: "target", ...wslHint };
         case "device_offline":
             return { key: "desktop.err.deviceOffline", at: "tunnel" };
         case "device_auth":
@@ -177,7 +234,7 @@ export function startFailure(code: string | undefined, status: number, vars: { a
  * 連線中斷：後端的關閉碼（4xxx，放在 Guacamole status code）或 guacd 的 Guacamole 狀態碼。null = 正常結束。
  * The session ended: our 4xxx close codes (carried as the Guacamole status) or guacd's status codes. null = normal.
  */
-export function sessionFailure(code: number, message?: string): DesktopFailure | null {
+export function sessionFailure(code: number, message?: string, rdp?: RdpPreflight | null): DesktopFailure | null {
     switch (code) {
         case 0:
         case 1000:
@@ -209,6 +266,13 @@ export function sessionFailure(code: number, message?: string): DesktopFailure |
             return { key: "desktop.err.loginRejected", at: "target" };
         case 0x0207: // UPSTREAM_NOT_FOUND
         case 0x0208: // UPSTREAM_UNAVAILABLE
+            // 預檢時那裡回答得像 RDP 伺服器：斷在 guacd 自己的握手（安全層 / 帳號），不是「沒有回應」。
+            // The pre-flight saw an RDP server: it broke in guacd's own handshake (security / login), not "no answer".
+            if (rdp) {
+                return rdp.failure
+                    ? { key: "desktop.err.rdpRefusedSecurity", vars: { reason: rdp.failure }, at: "target" }
+                    : { key: "desktop.err.rdpHandshake", vars: { security: rdpSecurityLabel(rdp.security) }, at: "target" };
+            }
             return { key: "desktop.err.noAnswer", at: "target" };
         case 0x0209: // SESSION_CONFLICT
             return { key: "desktop.err.conflict", at: "target" };

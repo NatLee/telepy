@@ -22,6 +22,7 @@
 pub mod bridge;
 pub mod display;
 pub mod guac;
+pub mod rdp_probe;
 pub mod screens;
 pub mod stats;
 
@@ -318,6 +319,8 @@ pub struct Session {
     pub saved_label: Option<String>,
     /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
     pub web_session: Option<i64>,
+    /// RDP 預檢時伺服器選的安全層（`rdp_probe`；VNC 是 None）。/ The security layer the RDP pre-flight saw (None for VNC).
+    pub rdp_security: Option<&'static str>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     handoff: Mutex<Option<Handoff>>,
@@ -370,7 +373,8 @@ impl Session {
             (Protocol::Vnc, true) => ", resizes with the window",
             _ => "",
         };
-        format!("Remote desktop ({}{sound}{size}) by {} to {} through {}@{}{saved}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
+        let security = self.rdp_security.map(|s| format!(", {s}")).unwrap_or_default();
+        format!("Remote desktop ({}{security}{sound}{size}) by {} to {} through {}@{}{saved}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
@@ -393,6 +397,7 @@ pub struct NewSession {
     pub saved_label: Option<String>,
     /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
     pub web_session: Option<i64>,
+    pub rdp_security: Option<&'static str>,
 }
 
 pub struct Desktop {
@@ -436,6 +441,7 @@ impl Desktop {
             resize: new.resize,
             saved_label: new.saved_label,
             web_session: new.web_session,
+            rdp_security: new.rdp_security,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             handoff: Mutex::new(Some(Handoff { credentials: new.credentials, prepared: new.prepared })),

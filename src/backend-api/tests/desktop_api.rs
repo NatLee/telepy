@@ -135,16 +135,53 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
     (addr, seen)
 }
 
-/// 「桌面」：把收到的 bytes 原樣送回。/ The "desktop": echoes what it gets.
+/// RDP 伺服器回的連線確認（協商回應：CredSSP + early user auth，Windows 的預設）。/ An RDP Connection Confirm (NLA, Windows' default).
+const RDP_CONFIRM: [u8; 19] = [0x03, 0x00, 0x00, 0x13, 0x0e, 0xd0, 0x00, 0x00, 0x12, 0x34, 0x00, 0x02, 0x00, 0x08, 0x00, 0x08, 0x00, 0x00, 0x00];
+
+/// 「桌面」：把收到的 bytes 原樣送回；連線一開始是 RDP 的連線請求（Telepy 的 RDP 預檢）就先回連線確認，像 RDP 伺服器。
+/// The "desktop": echoes what it gets; a connection opening with an RDP Connection Request (Telepy's RDP pre-flight)
+/// first gets a Connection Confirm, like an RDP server.
 async fn echo_service() -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((mut s, _)) = l.accept().await {
             tokio::spawn(async move {
+                let mut first = [0u8; 19];
+                let mut n = 0;
+                while n < first.len() {
+                    match s.read(&mut first[n..]).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(k) => n += k,
+                    }
+                    if first[0] != 0x03 {
+                        break;
+                    }
+                }
+                if n == first.len() && first[0] == 0x03 && first[5] == 0xe0 {
+                    let _ = s.write_all(&RDP_CONFIRM).await;
+                } else if s.write_all(&first[..n]).await.is_err() {
+                    return;
+                }
                 let (mut r, mut w) = s.split();
                 let _ = tokio::io::copy(&mut r, &mut w).await;
             });
+        }
+    });
+    port
+}
+
+/// 3389 上不是 RDP 的東西：`close` 接了就關、`ssh` 先說 SSH 的招呼。/ Not RDP on the port: close at once, or an SSH greeting.
+async fn not_rdp_service(kind: &'static str) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            if kind == "ssh" {
+                let _ = s.write_all(b"SSH-2.0-OpenSSH_10.2p1 Ubuntu\r\n").await;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            drop(s);
         }
     });
     port
@@ -578,6 +615,73 @@ async fn desktop_refusals() {
     assert_eq!(r.json["values"]["desktop_clipboard"], "to_remote", "{}", r.text);
 }
 
+/// RDP 預檢：交給 guacd 之前先確定那裡是 RDP 伺服器。接了就關、別的服務都在 REST 擋下並說是哪一種；裝置是 WSL 時說；
+/// 真的 RDP 伺服器照常開始，回應與 desktop_open 寫出它要的安全層。
+/// RDP pre-flight: before guacd gets the target, make sure an RDP server is there. A port that closes at once or
+/// another service is stopped at the REST call with which one it is, WSL devices are named as such, and a real RDP
+/// server starts as before with its security layer in the answer and in desktop_open.
+#[tokio::test]
+async fn desktop_rdp_preflight_says_what_answered() {
+    let (guacd, _seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.guacd_addr = guacd.clone();
+        c.desktop_callback_host = "127.0.0.1".into();
+    });
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let id = dev.tunnel_id;
+    let start = |body: Value| {
+        let token = alice.token.clone();
+        async move { app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&token), body).await }
+    };
+    let closer = not_rdp_service("close").await;
+    let ssh = not_rdp_service("ssh").await;
+    let rdp = echo_service().await;
+
+    // 接了就關：沒有 RDP 伺服器。/ Closed at once: no RDP server.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": closer})).await;
+    assert_eq!((r.status, r.json["code"].as_str(), r.json["wsl"].as_bool()), (StatusCode::BAD_GATEWAY, Some("rdp_no_answer"), Some(false)), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().contains(&format!("pc:{closer}")), "{}", r.text);
+    // 別的服務：說是 SSH。/ Another service: said to be SSH.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": ssh})).await;
+    assert_eq!((r.status, r.json["code"].as_str(), r.json["seen"].as_str()), (StatusCode::BAD_GATEWAY, Some("rdp_not_rdp"), Some("ssh")), "{}", r.text);
+    // VNC 不做 RDP 預檢。/ VNC skips the RDP pre-flight.
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": ssh, "password": "x"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(r.json["rdp"].is_null());
+    assert_eq!(app.post(&format!("/api/reverse/server/desktop/{}/stop", r.json["session_id"].as_str().unwrap()), Some(&alice.token), json!({})).await.status, StatusCode::OK);
+
+    // 裝置回報的核心是 WSL：目標是裝置本身時說；區網主機不算。/ A WSL kernel: said for the device itself, not for a LAN host.
+    telepy_server::db::tunnel_endpoints::record_probe(&app.state.db, id, Some("NATLEE"), None, Some(r#"{"kernel":"Linux 6.18.33.2-microsoft-standard-WSL2"}"#), None, "2026-11-07 00:00:00").await.unwrap();
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": closer})).await;
+    assert_eq!((r.json["code"].as_str(), r.json["wsl"].as_bool()), (Some("rdp_no_answer"), Some(true)), "{}", r.text);
+    let host = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "localhost", "label": "nas"})).await.json["id"].as_i64().unwrap();
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": closer, "lan_host_id": host})).await;
+    assert_eq!((r.json["code"].as_str(), r.json["wsl"].as_bool()), (Some("rdp_no_answer"), Some(false)), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().contains(&format!("localhost:{closer}")), "{}", r.text);
+
+    // 真的 RDP 伺服器：照常開始，回應帶它要的安全層，desktop_open 也寫。/ A real RDP server: starts, with its security layer.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": rdp, "login": "a", "password": "b"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["rdp"], json!({"security": "nla_ex", "failure": null}));
+    let mut ws = open_ws(&lab, &r.json).await.unwrap();
+    let _ = recv(&mut ws).await;
+    let token = alice.token.clone();
+    let mut opened = String::new();
+    for _ in 0..50 {
+        if let Some(e) = events(&lab, &token, id).await.into_iter().rev().find(|e| e["event"] == "desktop_open") {
+            opened = e["message"].as_str().unwrap_or_default().to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(opened.contains("(RDP, NLA)"), "{opened}");
+}
+
 /// RDP 的聲音：開了 → 握手給 audio/L8 + audio/L16、不帶 disable-audio，guacd 的音訊串流（audio / blob / end）
 /// 原樣到瀏覽器，瀏覽器的 ack 回到 guacd，但瀏覽器自己送的 audio（麥克風）被擋。沒開 → disable-audio、握手不給格式；
 /// VNC 帶 audio 也當沒開。
@@ -627,7 +731,7 @@ async fn desktop_rdp_sound_is_offered_and_relayed() {
     .await;
     assert!(!seen.lock().unwrap().after_ready.iter().any(|o| o == "audio"), "{:?}", seen.lock().unwrap().after_ready);
     let ev = events(&lab, &alice.token, id).await;
-    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (RDP, sound) by alice")), "{ev:?}");
+    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (RDP, NLA, sound) by alice")), "{ev:?}");
     drop(ws);
     // 結束那句帶聲音的量（中繼數 guacd 聲音串流上的 blob）。/ The close line carries the sound byte count.
     let closed = |needle: &'static str| {
@@ -785,7 +889,7 @@ async fn desktop_resolution_follows_the_window_within_the_site_limit() {
     wait_for("key at guacd", || seen.lock().unwrap().after_ready.iter().filter(|o| *o == "key").count() >= 1).await;
     assert!(seen.lock().unwrap().sizes.is_empty(), "{:?}", seen.lock().unwrap().sizes);
     let ev = events(&lab, &alice.token, id).await;
-    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("(RDP, fixed size)")), "{ev:?}");
+    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("(RDP, NLA, fixed size)")), "{ev:?}");
     drop(ws);
     wait_for("the session to end", || app.state.desktop.count() == 0).await;
     seen.lock().unwrap().connect.clear();
