@@ -240,6 +240,34 @@ const TABLES: &[(&str, &str)] = &[
             "created_at" datetime NOT NULL
         )"#,
     ),
+    // SCIM 帳號同步：身分提供者建立 / 管理的帳號（userName、externalId 原樣記著；DELETE 之後 deleted = 1）。
+    // SCIM provisioning: accounts a provider created and manages (userName / externalId kept as sent; deleted after DELETE).
+    (
+        "telepy_scim_user",
+        r#"CREATE TABLE "telepy_scim_user" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "provider_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "user_name" varchar(256) NOT NULL,
+            "external_id" varchar(256) NULL,
+            "display_name" varchar(256) NULL,
+            "deleted" bool NOT NULL DEFAULT 0,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // SCIM 群組 → 功能權限的使用者群組。/ SCIM groups → Feature-permissions user groups.
+    (
+        "telepy_scim_group",
+        r#"CREATE TABLE "telepy_scim_group" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "provider_id" integer NOT NULL,
+            "group_id" integer NOT NULL,
+            "external_id" varchar(256) NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // 身分提供者給過誰什麼（之後只拿掉這裡記著的；手動給的不動）。/ What a provider granted (only these are ever taken away).
     (
         "telepy_oidc_grant",
@@ -1134,6 +1162,8 @@ const INDEXES: &[&str] = &[
     // 用 (provider, sub) 找連結的帳號（不是 UNIQUE：舊資料可能有重複，唯一性在程式裡守）。/ Look a link up by (provider, sub).
     r#"CREATE INDEX IF NOT EXISTS "telepy_social_account_provider_uid" ON "social_account" ("provider", "unique_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oidc_group_rule_provider" ON "telepy_oidc_group_rule" ("provider_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_scim_user_provider_user" ON "telepy_scim_user" ("provider_id", "user_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_scim_group_provider_group" ON "telepy_scim_group" ("provider_id", "group_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_oidc_grant_unique" ON "telepy_oidc_grant" ("provider_id", "user_id", "target", IFNULL("group_id", 0))"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_install_id" ON "telepy_device_install" ("install_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
@@ -1210,6 +1240,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_oidc_provider", "required_groups", "text NOT NULL DEFAULT '[]'"),
     // 登出 Telepy 時一併登出身分提供者（RP-Initiated Logout）。/ Also sign out at the provider when signing out of Telepy.
     ("telepy_oidc_provider", "end_session", "bool NOT NULL DEFAULT 0"),
+    // SCIM 權杖（只存 SHA-256；前幾碼給人認）與最後一次使用。/ The SCIM token (SHA-256 only; a prefix to recognise it) and last use.
+    ("telepy_oidc_provider", "scim_token", "varchar(64) NOT NULL DEFAULT ''"),
+    ("telepy_oidc_provider", "scim_token_prefix", "varchar(16) NOT NULL DEFAULT ''"),
+    ("telepy_oidc_provider", "scim_token_created", "datetime NULL"),
+    ("telepy_oidc_provider", "scim_last_used", "datetime NULL"),
     // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.

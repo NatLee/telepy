@@ -127,7 +127,7 @@ export function badDomain(domains: readonly string[]): string | null {
 }
 
 /** 試登入時 Telepy 會怎麼做。/ What Telepy would do with a test sign-in. */
-export type WouldAction = "sign_in" | "link_by_email" | "create" | "refuse";
+export type WouldAction = "sign_in" | "link_by_email" | "link_provisioned" | "create" | "refuse";
 
 /** 試登入時角色會怎麼變（沒規則就沒有）。/ How roles would change in a test (absent without rules). */
 export interface RoleChange {

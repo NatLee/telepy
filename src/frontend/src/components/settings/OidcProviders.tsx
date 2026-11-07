@@ -9,7 +9,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Building2, CircleHelp, Copy, FlaskConical, Pencil, Plug, Plus, Search, ShieldCheck, Trash2, Users } from "lucide-react";
+import { ArrowRight, Building2, CircleHelp, Copy, FlaskConical, Pencil, Plug, Plus, RefreshCcw, Search, ShieldCheck, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -24,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/Toast";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { OidcFlowDialog } from "@/components/sso/OidcFlow";
+import { ScimTab } from "@/components/settings/OidcScim";
 import { useOidcProviders, type Discovery, type FieldErrors, type OidcProvider, type ProviderDraft } from "@/hooks/useOidcProviders";
 import { useI18n } from "@/lib/i18n";
 import { badDomain, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, parseDomains, ruleValue, slugify, tidyRules, type GroupRule } from "@/lib/sso";
@@ -55,7 +56,7 @@ function CopyButton({ text }: { text: string }) {
 
 export function OidcProvidersPanel() {
     const { t } = useI18n();
-    const { list, failed, save, toggle, remove, discover, test } = useOidcProviders();
+    const { list, failed, save, toggle, remove, discover, test, refresh, createScimToken, removeScimToken } = useOidcProviders();
     const [editing, setEditing] = useState<OidcProvider | "new" | null>(null);
     const [deleting, setDeleting] = useState<OidcProvider | null>(null);
     const [info, setInfo] = useState(false);
@@ -124,6 +125,7 @@ export function OidcProvidersPanel() {
                                     {(p.group_rules?.length ?? 0) > 0 && <span>{t("sso.roles.count", { count: p.group_rules.length })}</span>}
                                     {p.end_session && <span>{t("sso.logout.listNote")}</span>}
                                     {(p.required_groups?.length ?? 0) > 0 && <span>{t("sso.roles.onlyGroups", { groups: p.required_groups.join(", ") })}</span>}
+                                    {p.scim?.active && <span>{t("scim.listNote", { users: p.scim.users })}</span>}
                                 </p>
                                 <div className="flex items-center gap-1 rounded-md bg-surface py-1 pl-2.5 pr-1">
                                     <span className="shrink-0 text-xs text-muted-foreground">{t("sso.admin.callback")}</span>
@@ -139,6 +141,10 @@ export function OidcProvidersPanel() {
             {editing && list && (
                 <ProviderDialog
                     provider={editing === "new" ? null : editing}
+                    // 權杖換過之後用清單裡最新的那份。/ The list's latest copy, so a token change shows.
+                    current={editing === "new" ? null : (list.providers.find((p) => p.id === editing.id) ?? editing)}
+                    scimBase={list.scim_base ?? ""}
+                    scim={{ create: createScimToken, remove: removeScimToken, refresh }}
                     callbackBase={list.callback_base}
                     userGroups={list.user_groups ?? []}
                     onClose={() => setEditing(null)}
@@ -210,7 +216,7 @@ function draftOf(p: OidcProvider): ProviderDraft {
     };
 }
 
-type DialogTab = "connection" | "accounts" | "groups";
+type DialogTab = "connection" | "accounts" | "groups" | "scim";
 
 /** 欄位在哪一頁（錯誤時跳過去）。/ Which tab a field lives on (errors jump there). */
 const FIELD_TAB: Record<keyof ProviderDraft, DialogTab> = {
@@ -233,6 +239,9 @@ const FIELD_TAB: Record<keyof ProviderDraft, DialogTab> = {
 
 function ProviderDialog({
     provider,
+    current,
+    scimBase,
+    scim,
     callbackBase,
     userGroups,
     onClose,
@@ -240,6 +249,9 @@ function ProviderDialog({
     discover,
 }: {
     provider: OidcProvider | null;
+    current: OidcProvider | null;
+    scimBase: string;
+    scim: { create: (p: OidcProvider, reauth: unknown) => Promise<Response>; remove: (p: OidcProvider) => Promise<void>; refresh: () => Promise<void> };
     callbackBase: string;
     userGroups: { id: number; name: string }[];
     onClose: () => void;
@@ -329,6 +341,7 @@ function ProviderDialog({
         { value: "connection" as const, label: t("sso.admin.tabConnection"), icon: <Plug />, hint: flag("connection", t("sso.admin.tabConnectionHint")) },
         { value: "accounts" as const, label: t("sso.admin.accounts"), icon: <Users />, hint: flag("accounts", t(draft.create_users ? "sso.admin.createsAccounts" : "sso.admin.linkedOnly")) },
         { value: "groups" as const, label: t("sso.roles.tab"), icon: <ShieldCheck />, hint: flag("groups", ruleCount ? t("sso.roles.count", { count: ruleCount }) : t("sso.roles.none")) },
+        { value: "scim" as const, label: t("scim.tab"), icon: <RefreshCcw />, hint: t(current?.scim?.active ? "scim.on" : "scim.off") },
     ];
 
     return (
@@ -573,6 +586,8 @@ function ProviderDialog({
                         <Callout tone="info">{t("sso.roles.how")}</Callout>
                     </div>
                 )}
+
+                {tab === "scim" && <ScimTab provider={current} base={scimBase} createToken={scim.create} removeToken={scim.remove} refresh={scim.refresh} />}
             </form>
         </Modal>
     );

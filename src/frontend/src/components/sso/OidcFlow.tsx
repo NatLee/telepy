@@ -15,7 +15,7 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
 const STEPS: TranslationKey[] = ["sso.flow.step1", "sso.flow.step2", "sso.flow.step3", "sso.flow.step4", "sso.flow.step5", "sso.flow.step6"];
-const ACCOUNT: TranslationKey[] = ["sso.flow.account1", "sso.flow.account2", "sso.flow.account3", "sso.flow.account4"];
+const ACCOUNT: TranslationKey[] = ["sso.flow.account1", "sso.flow.accountScim", "sso.flow.account2", "sso.flow.account3", "sso.flow.account4"];
 const GUARDS: TranslationKey[] = ["sso.flow.guard1", "sso.flow.guard2", "sso.flow.guard3", "sso.flow.guard4"];
 const ROLES: TranslationKey[] = ["sso.flow.roles1", "sso.flow.roles2", "sso.flow.roles3", "sso.flow.roles4"];
 

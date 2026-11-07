@@ -5607,3 +5607,13 @@ pub struct LogoutResponse {
     /// 單一登入開的登入、且那個身分提供者設定成一併登出：瀏覽器要打開的網址。/ The provider's sign-out URL to open, if any.
     pub end_session_url: Option<String>,
 }
+
+/// 新的 SCIM 權杖（只顯示這一次）。/ A new SCIM token, shown once.
+#[derive(ToSchema)]
+pub struct ScimTokenCreated {
+    #[schema(example = "tps_…")]
+    pub token: String,
+    pub prefix: String,
+    #[schema(example = "https://telepy.example.com/api/scim/v2")]
+    pub base_url: String,
+}

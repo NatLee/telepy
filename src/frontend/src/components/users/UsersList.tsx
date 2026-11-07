@@ -119,6 +119,11 @@ export function UsersList() {
                                                     {t("security.badge")}
                                                 </span>
                                             )}
+                                            {u.provisioned_by && (
+                                                <span className="ml-2 text-xs text-muted-foreground" title={t("scim.userHint", { provider: u.provisioned_by })}>
+                                                    {t("scim.provisionedBy", { provider: u.provisioned_by })}
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{u.email || "—"}</td>
                                         <td className="px-4 py-3">
@@ -265,6 +270,7 @@ function UserEditModal({
                         <div>
                             <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
                             <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
+                            {user.provisioned_by && <p className="mt-1 text-sm text-warning">{t("scim.userHint", { provider: user.provisioned_by })}</p>}
                         </div>
                         <Switch
                             checked={user.is_active}

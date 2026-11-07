@@ -6,7 +6,7 @@ use crate::db::users::User;
 use crate::util::now_db;
 
 const T: &str = "telepy_oidc_provider";
-const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session";
+const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session, scim_token, scim_token_prefix, scim_token_created, scim_last_used";
 const SESSION: &str = "telepy_oidc_session";
 const RULE: &str = "telepy_oidc_group_rule";
 const GRANT: &str = "telepy_oidc_grant";
@@ -34,6 +34,11 @@ pub struct Provider {
     pub required_groups: String,
     /// 登出時一併登出身分提供者。/ Sign out at the provider too.
     pub end_session: bool,
+    /// SCIM 權杖的 SHA-256（空 = 沒開帳號同步）。/ The SCIM token's SHA-256 (empty = provisioning off).
+    pub scim_token: String,
+    pub scim_token_prefix: String,
+    pub scim_token_created: Option<String>,
+    pub scim_last_used: Option<String>,
 }
 
 impl Provider {
@@ -142,6 +147,9 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<u64> {
     sqlx::query(&format!("DELETE FROM {RULE} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
     sqlx::query(&format!("DELETE FROM {GRANT} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
     sqlx::query(&format!("DELETE FROM {SESSION} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
+    // SCIM 的紀錄一起走；帳號與群組留著，變成一般的。/ SCIM records go too; the accounts and groups stay, as ordinary ones.
+    sqlx::query("DELETE FROM telepy_scim_user WHERE provider_id = ?").bind(id).execute(&db.write).await?;
+    sqlx::query("DELETE FROM telepy_scim_group WHERE provider_id = ?").bind(id).execute(&db.write).await?;
     Ok(sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&db.write).await?.rows_affected())
 }
 
@@ -324,4 +332,29 @@ pub async fn purge_sessions(db: &Db) -> sqlx::Result<u64> {
     .execute(&db.write)
     .await?
     .rows_affected())
+}
+
+/// 設定 / 拿掉 SCIM 權杖（存 SHA-256）。/ Set or clear the SCIM token (its SHA-256).
+pub async fn set_scim_token(db: &Db, id: i64, hash: &str, prefix: &str) -> sqlx::Result<()> {
+    let created: Option<String> = (!hash.is_empty()).then(now_db);
+    sqlx::query(&format!("UPDATE {T} SET scim_token = ?, scim_token_prefix = ?, scim_token_created = ?, scim_last_used = NULL WHERE id = ?"))
+        .bind(hash)
+        .bind(prefix)
+        .bind(created)
+        .bind(id)
+        .execute(&db.write)
+        .await?;
+    Ok(())
+}
+
+pub async fn by_scim_token(db: &Db, hash: &str) -> sqlx::Result<Option<Provider>> {
+    if hash.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query_as(&format!("SELECT {COLS} FROM {T} WHERE scim_token = ?")).bind(hash).fetch_optional(&db.read).await
+}
+
+pub async fn touch_scim(db: &Db, id: i64) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET scim_last_used = ? WHERE id = ?")).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
 }

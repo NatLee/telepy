@@ -108,6 +108,29 @@ By default, signing out of Telepy ends the Telepy sign-in only; the provider kee
 
 When someone then presses Sign out, Telepy sends their browser to the provider's sign-out page with that sign-in's ID token as the hint, and the provider sends it back to Telepy's sign-in page. It only happens when the person signs out themselves: being signed out by an administrator, from another device or because the sign-in expired never takes anyone to the provider. A provider without a published sign-out endpoint (Google is one) can only be signed out of Telepy; the **Check** button shows whether yours has one.
 
+## Accounts made by the provider (SCIM)
+
+Without it, single sign-on creates an account the first time someone signs in. With SCIM the provider manages accounts ahead of that: it creates them, keeps names and emails current, switches people off when they leave, and keeps groups in step. Okta and Microsoft Entra ID both speak it.
+
+To turn it on, open the provider in **Site settings → Sign-in → Single sign-on**, go to the **Provisioning (SCIM)** tab and press **Create token**. Copy the token right away: Telepy keeps only its hash and won't show it again. Then give the provider the base URL `https://<telepy>/api/scim/v2` and the token:
+
+| Provider | Where | Base URL goes in | Token goes in |
+| --- | --- | --- | --- |
+| Okta | Your app → General → Provisioning: SCIM, then Provisioning → Integration | SCIM connector base URL (unique identifier field `userName`; tick push new users, profile updates and groups) | Authentication mode HTTP Header |
+| Microsoft Entra ID | Enterprise application → Provisioning → Automatic | Tenant URL | Secret token |
+
+What the provider can do:
+
+- **Create accounts.** The username is the part of `userName` before the `@`, tidied the same way as single sign-on usernames. An account that already exists with that username is never taken over: the provider gets a conflict and you decide what to do.
+- **Change accounts.** Name and email follow the provider.
+- **Switch accounts off.** `active: false` does what disabling the account here does: web sign-ins and live sessions end, MCP agent sessions close, and the keys Telepy installed leave the devices. Switching it back on restores access. The last active admin is never switched off.
+- **Delete accounts.** A delete switches the account off instead of removing it, so recordings, logs and tunnels stay. If the provider later creates the same person again, they get the same account back.
+- **Push groups.** Each group becomes a Telepy user group, the kind **Feature access** uses, with the members the provider sends. People the provider didn't create are never taken out of those groups, a name that an existing Telepy group already has is refused, and a group the provider deletes is deleted here too.
+
+When someone the provider created signs in through single sign-on for the first time, Telepy links that sign-in to their account (same email or username), whether or not linking by verified email is on.
+
+Only an admin who confirmed it's them can make a token. **Replace token** stops the old one at once; **Turn off** stops provisioning but keeps every account and group it made. The token reaches `/api/scim/v2` and nothing else. The user list marks the accounts a provider manages; a change you make to one of them may be undone by the provider's next sync. Every account and group change appears in the admin **Audit log**.
+
 ## What Telepy checks
 
 - **Each sign-in is bound to the browser that started it.** Telepy gives the browser an HttpOnly cookie at the start. A callback address opened in another browser, for example one someone sends you, signs nobody in.
@@ -135,4 +158,4 @@ For anything else, run **Test sign-in** first. It shows exactly what the provide
 
 ## Not yet
 
-SCIM provisioning (accounts created or disabled ahead of a sign-in) isn't there yet. Groups give roles and feature groups, not tunnels: share tunnels the usual way.
+Groups give roles and feature groups, not tunnels: share tunnels the usual way.

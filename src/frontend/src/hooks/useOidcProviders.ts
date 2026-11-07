@@ -32,6 +32,8 @@ export interface OidcProvider {
     group_rules: GroupRule[];
     end_session?: boolean;
     post_logout_url?: string;
+    /** SCIM 帳號同步。/ SCIM provisioning. */
+    scim?: { active: boolean; prefix: string; created_at: string | null; last_used_at: string | null; users: number; groups: number };
 }
 
 export interface OidcList {
@@ -40,6 +42,8 @@ export interface OidcList {
     public_url_set: boolean;
     /** 規則可以指向的使用者群組。/ The user groups rules may point at. */
     user_groups?: { id: number; name: string }[];
+    /** SCIM 的基底網址。/ The SCIM base URL. */
+    scim_base?: string;
 }
 
 export interface Discovery {
@@ -172,5 +176,30 @@ export function useOidcProviders() {
         [showError, t]
     );
 
-    return { list, failed, save, toggle, remove, discover, test };
+    /** 重抓清單（SCIM 權杖換了之後）。/ Reload the list (after a SCIM token change). */
+    const refresh = useCallback(async () => {
+        const res = await apiFetch("/api/site/oidc");
+        const data = await readJson<OidcList>(res);
+        if (res.ok && data) apply(data);
+    }, [apply]);
+
+    /** 建立 / 換掉 SCIM 權杖（回原始回應，讓呼叫的人處理「確認是你」）。/ Make a SCIM token (raw response: the caller handles reauth). */
+    const createScimToken = useCallback(
+        (p: OidcProvider, reauth: unknown) => apiFetch(`/api/site/oidc/${p.id}/scim-token`, { method: "POST", body: JSON.stringify({ reauth: reauth ?? null }) }),
+        []
+    );
+
+    const removeScimToken = useCallback(
+        async (p: OidcProvider) => {
+            const res = await apiFetch(`/api/site/oidc/${p.id}/scim-token`, { method: "DELETE" });
+            const data = await readJson<OidcList>(res);
+            if (res.ok && data) {
+                apply(data);
+                showSuccess(t("scim.removed"));
+            } else showError(responseError(res, data, t("sso.admin.saveFailed")));
+        },
+        [apply, showError, showSuccess, t]
+    );
+
+    return { list, failed, save, toggle, remove, discover, test, refresh, createScimToken, removeScimToken };
 }

@@ -18,7 +18,7 @@ New here? The [project README](../README.md) covers what Telepy is and how to in
 | [The command line and API tokens](./cli.md) | Installing, signing in, every command, and what a token may do |
 | [MCP](./mcp.md) | Connecting MCP clients, approving them, and what agents can and can't do |
 | [Webhooks](./webhooks.md) | Personal and site-wide webhooks: events, formats, signatures and retries |
-| [Single sign-on (OIDC)](./sso.md) | Signing in with Okta, Entra ID, Google Workspace, Keycloak and others: setup, who gets in, groups and roles, linking accounts |
+| [Single sign-on (OIDC)](./sso.md) | Signing in with Okta, Entra ID, Google Workspace, Keycloak and others: setup, who gets in, groups and roles, accounts made by the provider (SCIM), linking accounts |
 
 ## How it works inside
 
