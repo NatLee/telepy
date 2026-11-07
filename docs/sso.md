@@ -89,6 +89,15 @@ On Feature permissions, members and administrators that came from a provider are
 | Authentik | `groups` | Sent with the `profile` scope |
 | Dex | `groups` | Add `groups` to the scopes |
 
+## Sharing tunnels with a group
+
+Groups can also open tunnels. On a tunnel's share dialog, the **Groups** tab shares it with a user group, with a permission, the accounts members may log in as, and an optional end date, just like sharing with a person. Everyone in the group then has the tunnel, each with their own share, and that follows the group: people who join it get the tunnel, people who leave it lose it and their open sessions end. Because single sign-on rules and SCIM keep user groups in step with your provider, an identity provider group ends up deciding who reaches which tunnel.
+
+- **Someone shared with directly keeps their own share.** The group never changes it. **Set this person on their own** turns a share that came through a group into their own.
+- **Several groups add up.** Someone in two groups the tunnel is shared with gets the higher permission, every account of both, and the later end date.
+- **Changes go through the group.** A share that came through a group can't be revoked, changed or left one person at a time: take the person out of the group, or change or stop the group's share. Access requests still work on top of it.
+- Only the tunnel's owner and its Admins share with groups, as with people. Every change appears in the tunnel's **Logs**.
+
 ## Linking your existing account
 
 Anyone can link their own account in **Preferences → Security → Single sign-on**:
@@ -155,7 +164,3 @@ Every change to a provider and every link or unlink appears in the admin **Audit
 | Your groups at the provider aren't allowed to sign in here | The person is in none of the listed groups |
 
 For anything else, run **Test sign-in** first. It shows exactly what the provider sent.
-
-## Not yet
-
-Groups give roles and feature groups, not tunnels: share tunnels the usual way.

@@ -23,7 +23,7 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean, canAdd =
     // 新分享的期限。/ How long a new share lasts.
     const [expiryPreset, setExpiryPreset] = useState<ShareExpiryPreset>("never");
     const [expiryDate, setExpiryDate] = useState("");
-    const { showSuccess, showError } = useToast();
+    const { showSuccess, showError, showToast } = useToast();
 
     const fetchUsers = useCallback(async () => {
         if (!tunnelId) return;
@@ -139,9 +139,13 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean, canAdd =
             if (res.ok) {
                 // Success toast is handled by WebSocket notification
                 setUnshareConfirm(null);
+                // 他還在某個分享給這條通道的群組裡：群組會再給他（說出來）。/ Still in a shared group: the group gives it back.
+                const data = (await readJson(res)) as { still_via_groups?: string[] } | null;
+                const groups = data?.still_via_groups ?? [];
+                if (groups.length > 0) showToast(t("share.group.stillVia", { username: unshareConfirm.username, groups: groups.join(", ") }), "warning");
                 fetchUsers();
             } else {
-                showError(t("share.unshareFailed"));
+                showError(responseError(res, await readJson(res), t("share.unshareFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
@@ -169,6 +173,34 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean, canAdd =
             showError(e.message || t("share.expiry.updateFailed"));
         }
         return false;
+    };
+
+    /** 經由群組的分享改成他自己的：照現在的權限、帳號、期限，之後群組不再改它。
+     * Turn a share through a group into their own, with today's permission, accounts and end; groups leave it after. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleOwnShare = async (row: any) => {
+        if (!tunnelId) return;
+        try {
+            const res = await apiFetch(`/tunnels/share/${tunnelId}`, {
+                method: "POST",
+                body: JSON.stringify({
+                    shared_with_user_id: row.id,
+                    permission_type: row.base_permission || row.permission_type || "view",
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    allowed_target_username_ids: (row.allowed_target_usernames ?? []).filter((a: any) => !a.until).map((a: any) => a.id),
+                    expires_at: row.expires_at ?? undefined,
+                }),
+            });
+            if (res.ok) {
+                showSuccess(t("share.group.ownDone", { username: row.username }));
+                fetchUsers();
+            } else {
+                showError(responseError(res, await readJson(res), t("share.shareFailed")));
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (e: any) {
+            showError(e.message || t("share.shareFailed"));
+        }
     };
 
     const handleSaveAllowed = async () => {
@@ -210,6 +242,7 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean, canAdd =
             handleUnshare,
             handleSaveAllowed,
             handleUpdateExpiry,
+            handleOwnShare,
             refresh: fetchUsers,
         }
     };

@@ -6,7 +6,7 @@
  * access requests sit on top of every tab.
  */
 import React, { useState } from "react";
-import { Share2, Table2, UserPlus, Users } from "lucide-react";
+import { Share2, Table2, UserPlus, Users, UsersRound } from "lucide-react";
 import { NavTabLabel, NavTabs } from "@/components/ui/nav-tabs";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -15,6 +15,7 @@ import { ShareModalPermissionMatrix } from "@/components/tunnels/ShareModalPermi
 import { ShareModalShareForm } from "@/components/tunnels/ShareModalShareForm";
 import { ShareModalSharedList, type SharedUserRow } from "@/components/tunnels/ShareModalSharedList";
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
+import { ShareModalGroups } from "@/components/tunnels/ShareModalGroups";
 import { AccessRequestsPanel } from "@/components/tunnels/AccessRequests";
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
@@ -22,7 +23,7 @@ import { useFeatures } from "@/hooks/useFeatures";
 import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 
-type ShareTab = "people" | "add" | "matrix";
+type ShareTab = "people" | "add" | "groups" | "matrix";
 
 interface ShareModalProps extends TunnelModalProps {
     readOnly?: boolean;
@@ -51,7 +52,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
         expiryDate,
         setExpiryDate,
     } = state;
-    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed, handleUpdateExpiry, refresh } = actions;
+    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed, handleUpdateExpiry, handleOwnShare, refresh } = actions;
     // 左側分頁：分享給誰（清單）/ 新增分享 / 權限對照。看權限的人（唯讀）先看對照表。
     // Side tabs: who it's shared with / share with someone / the permission table. Read-only viewers start on the table.
     const canAdd = !readOnly;
@@ -59,6 +60,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
     const tabs = [
         { value: "people" as const, icon: <Users />, label: <NavTabLabel label={t("share.tab.people", { count: sharedUsers.length })} mark={null} />, hint: t("share.tab.peopleHint") },
         ...(canAdd ? [{ value: "add" as const, icon: <UserPlus />, label: t("share.tab.add"), hint: t("share.tab.addHint") }] : []),
+        { value: "groups" as const, icon: <UsersRound />, label: t("share.tab.groups"), hint: t("share.tab.groupsHint") },
         { value: "matrix" as const, icon: <Table2 />, label: t("share.matrixTitle"), hint: t("share.tab.matrixHint") },
     ];
 
@@ -114,6 +116,8 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                         onUpdatePermission={handleUpdatePermission}
                         onUpdateExpiry={handleUpdateExpiry}
                         onUnshare={(payload) => setUnshareConfirm({ isOpen: true, userId: payload.userId, username: payload.username })}
+                        onOwnShare={handleOwnShare}
+                        onGroups={() => setTab("groups")}
                     />
                     {canAdd && canShare && sharedUsers.length === 0 && !loading && (
                         <Button type="button" variant="outline" size="sm" onClick={() => setTab("add")}>
@@ -121,6 +125,11 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                             {t("share.tab.add")}
                         </Button>
                     )}
+                    </div>
+
+                    {/* 分享給使用者群組：成員跟著群組。/ Shared with user groups: members follow the group. */}
+                    <div role="tabpanel" hidden={tab !== "groups"}>
+                        <ShareModalGroups tunnelId={tunnelId} isOpen={isOpen && tab === "groups"} tunnelUsernames={tunnelUsernames} readOnly={readOnly} locked={!canShare} onChanged={refresh} />
                     </div>
 
                     {/* 權限對照表：自己一頁，直接展開。/ The permission table: its own tab, open. */}

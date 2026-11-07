@@ -169,6 +169,8 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
         ("PATCH", ["tunnels", "share", _, _, _]) => TunnelsShare,
         ("PATCH", ["tunnels", "update-permission", ..]) => TunnelsShare,
         ("GET", ["tunnels", "available-users", ..]) => TunnelsShare,
+        ("POST", ["api", "reverse", "server", _, "group-shares"]) => TunnelsShare,
+        ("PATCH", ["api", "reverse", "server", _, "group-shares", _]) => TunnelsShare,
         ("POST", ["api", "reverse", "access-requests", _, "approve"]) => TunnelsShare,
 
         // 工具箱：新增 / 改 / 刪片段（用片段 = 打進終端機，要「網頁終端機」）。/ Toolbox: snippet writes (running one needs the terminal).
@@ -520,6 +522,10 @@ mod tests {
             ("PATCH", "/tunnels/update-permission/4/7", Some(TunnelsShare)),
             ("DELETE", "/tunnels/unshare/4/7", None),
             ("GET", "/tunnels/shared-users/4", None),
+            ("POST", "/api/reverse/server/4/group-shares", Some(TunnelsShare)),
+            ("PATCH", "/api/reverse/server/4/group-shares/9", Some(TunnelsShare)),
+            ("DELETE", "/api/reverse/server/4/group-shares/9", None),
+            ("GET", "/api/reverse/server/4/group-shares", None),
             ("POST", "/api/reverse/access-requests/5/approve", Some(TunnelsShare)),
             ("POST", "/api/reverse/access-requests/5/deny", None),
             ("POST", "/api/snippets", Some(Toolbox)),

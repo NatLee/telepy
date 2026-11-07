@@ -76,6 +76,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     recording_deleted: { key: "logs.event.recording_deleted", tone: "outline", category: "change" },
     step_up_setting: { key: "logs.event.step_up_setting", tone: "outline", category: "change" },
     access_request: { key: "logs.event.access_request", tone: "outline", category: "change" },
+    group_share: { key: "logs.event.group_share", tone: "outline", category: "change" },
     command_blocked: { key: "logs.event.command_blocked", tone: "destructive", category: "problem" },
     command_held: { key: "logs.event.command_held", tone: "warning", category: "session" },
     command_approved: { key: "logs.event.command_approved", tone: "success", category: "session" },

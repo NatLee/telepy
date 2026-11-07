@@ -21,6 +21,8 @@ pub struct Sharing {
     /// 核准的存取申請暫時提升了權限：原本的權限與到期時間。/ A temporary raise from an access request.
     pub base_permission: Option<String>,
     pub permission_until: Option<String>,
+    /// 群組分享替這位成員建的（None = 直接分享給他）。/ Made by a group share for this member (None = shared with them directly).
+    pub group_share_id: Option<i64>,
 }
 
 impl Sharing {
@@ -47,10 +49,11 @@ pub struct SharingWithUser {
     pub expires_at: Option<String>,
     pub base_permission: Option<String>,
     pub permission_until: Option<String>,
+    pub group_share_id: Option<i64>,
 }
 
 const S: &str = "tunnels_tunnelsharing";
-const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at, expires_at, base_permission, permission_until";
+const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at, expires_at, base_permission, permission_until, group_share_id";
 const A: &str = "tunnels_tunnelsharingallowedusername";
 
 pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<Sharing>> {
@@ -63,7 +66,7 @@ pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<S
 
 pub async fn for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<SharingWithUser>> {
     sqlx::query_as(&format!(
-        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email, s.expires_at, s.base_permission, s.permission_until \
+        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email, s.expires_at, s.base_permission, s.permission_until, s.group_share_id \
          FROM {S} s JOIN auth_user a ON a.id = s.shared_with_id WHERE s.tunnel_id = ? ORDER BY s.id"
     ))
     .bind(tunnel_id)

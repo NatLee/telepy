@@ -25,6 +25,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(available_users))
         .routes(routes!(update_allowed_usernames))
         .routes(routes!(update_expiry))
+        .routes(routes!(list_group_shares, create_group_share))
+        .routes(routes!(update_group_share, delete_group_share))
 }
 
 /// 分享為什麼結束：被撤銷、自己離開、或到期。/ Why a share ended.
@@ -32,6 +34,8 @@ pub enum EndReason<'a> {
     Revoked { by: &'a str },
     Left,
     Expired,
+    /// 經由群組的分享結束：離開群組、群組分享被收回或改掉。/ A share through a group ended (left the group, the group share went).
+    Group { group: &'a str },
 }
 
 /// 結束一筆分享（撤銷、離開、到期共用）：他用的帳號交還給 owner、刪分享與釘選、他的金鑰離開這台裝置的清單，
@@ -60,6 +64,10 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
         EndReason::Revoked { by } => (Some(format!("Access to tunnel \"{name}\" has been revoked by {by}")), format!("{by} revoked access from {target_name} for your tunnel \"{name}\"")),
         EndReason::Left => (None, format!("{target_name} left your tunnel \"{name}\"")),
         EndReason::Expired => (Some(format!("Your access to tunnel \"{name}\" has ended: the share expired")), format!("{target_name}'s access to your tunnel \"{name}\" expired")),
+        EndReason::Group { group } => (
+            Some(format!("Your access to tunnel \"{name}\" through the group \"{group}\" has ended")),
+            format!("{target_name} no longer has access to your tunnel \"{name}\" through the group \"{group}\""),
+        ),
     };
     if let Some(details) = to_sharee {
         let mut msg = json!({ "action": "TUNNEL-UNSHARED", "details": details, "tunnel_id": t.id });
@@ -71,7 +79,10 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
         }
         state.hub.notify_user(uid, &msg);
     }
-    if Some(t.user_id) != actor {
+    if matches!(reason, EndReason::Group { .. }) {
+        // 一個群組可以有很多人：主人只收重新整理，細節在通道的紀錄裡。/ A group can be many people: the owner only refreshes.
+        state.hub.notify_user(t.user_id, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
+    } else if Some(t.user_id) != actor {
         state.hub.notify_user(t.user_id, &json!({ "action": "TUNNEL-UNSHARED", "details": to_owner, "tunnel_id": t.id, "revoked_from": target_name }));
     }
     if let Some(actor) = actor {
@@ -81,12 +92,19 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
         EndReason::Revoked { by } => ("revoked", Some(by.to_string())),
         EndReason::Left => ("left", Some(target_name.clone())),
         EndReason::Expired => ("expired", None),
+        EndReason::Group { .. } => ("group", None),
     };
+    let group = match &reason {
+        EndReason::Group { group } => Some(group.to_string()),
+        _ => None,
+    };
+    // 群組的變動不寄給主人（可能一次很多人）。/ Group changes don't go to the owner (could be many people at once).
+    let audience: Vec<i64> = if group.is_some() { vec![uid] } else { vec![uid, t.user_id] };
     state.webhooks.emit(
         Event::new(Kind::ShareEnded)
             .tunnel(t)
-            .to([uid, t.user_id], actor)
-            .data(json!({ "user": target_name, "reason": reason_name, "by": by }))
+            .to(audience, actor)
+            .data(json!({ "user": target_name, "reason": reason_name, "by": by, "group": group }))
             .link("/tunnels"),
     );
     Ok(())
@@ -110,6 +128,10 @@ pub async fn run_expiry(state: AppState) {
         if let Err(e) = expire_once(&state).await {
             tracing::warn!(error = ?e, "share expiry failed");
         }
+        // 群組分享：收掉到期的，並把成員的分享對齊（成員變動漏掉的也補上）。/ Group shares: end expired ones, line members up.
+        if let Err(e) = crate::group_shares::tick(&state).await {
+            tracing::warn!(error = ?e, "group share reconcile failed");
+        }
         // 存取申請給的暫時授權也在這裡收回。/ Temporary grants from access requests end here too.
         if let Err(e) = super::access_requests::revert_once(&state).await {
             tracing::warn!(error = ?e, "temporary access revert failed");
@@ -126,6 +148,21 @@ fn requested_expiry(body: &Value) -> ApiResult<Option<Option<String>>> {
         .and_then(|t| crate::expiry::check_expiry(t, chrono::Utc::now(), 0))
         .map_err(|m| ApiError::field("expires_at", m))?;
     Ok(Some(t.map(crate::util::db_time)))
+}
+
+/// 這筆分享是群組給的：要改就改群組分享或群組成員。/ This share comes from a group: change the group share or its members.
+async fn refuse_via_group(state: &AppState, sharing: &db::sharing::Sharing, own: bool) -> ApiResult<()> {
+    let Some(gs) = sharing.group_share_id else { return Ok(()) };
+    let group = match db::group_shares::get(&state.db, gs).await? {
+        Some(g) => db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default(),
+        None => String::new(),
+    };
+    let msg = if own {
+        format!("You have this tunnel through the group \"{group}\". An admin can take you out of the group, or the tunnel's owner can stop sharing it with the group.")
+    } else {
+        format!("This access comes from the group \"{group}\". Change the group's share, or share with this person directly to set their access on its own.")
+    };
+    Err(ApiError::new(StatusCode::BAD_REQUEST, json!({ "error": msg, "code": "via_group", "group": group })))
 }
 
 fn invalid_permission(raw: &str) -> ApiError {
@@ -147,7 +184,8 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
         return Err(ApiError::bad_request("shared_with_user_id is required"));
     };
     let target = db::users::by_id(&state.db, target_id).await?.ok_or_else(|| ApiError::not_found("User not found"))?;
-    if db::sharing::get(&state.db, t.id, target.id).await?.is_some() {
+    let existing = db::sharing::get(&state.db, t.id, target.id).await?;
+    if existing.as_ref().is_some_and(|s| s.group_share_id.is_none()) {
         return Err(ApiError::bad_request("Tunnel already shared with this user"));
     }
     if target.id == t.user_id {
@@ -160,6 +198,23 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
     let perm = Permission::parse(&raw_perm).ok_or_else(|| invalid_permission(&raw_perm))?;
 
     let expires = requested_expiry(&body)?.flatten();
+    // 他已經經由群組拿到：這筆改成直接分享，從此照這裡的設定（群組不再碰）。
+    // They already have it through a group: the row becomes a direct share with these settings (groups leave it alone).
+    if let Some(row) = existing {
+        let ids: Vec<i64> = match body.get("allowed_target_username_ids") {
+            Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).collect(),
+            _ => vec![],
+        };
+        db::group_shares::make_direct(&state.db, row.id).await?;
+        db::sharing::set_permission(&state.db, row.id, perm.as_str()).await?;
+        db::sharing::set_expiry(&state.db, row.id, expires.as_deref()).await?;
+        db::sharing::replace_allowed_usernames(&state.db, row.id, t.id, &ids).await?;
+        state.device_keys.kick(t.id);
+        crate::access_recheck::kick(&state, Some(t.id), Some(target.id));
+        state.gateway.event("group_share", None, None, Some(t.id), format!("{} set {}'s access to \"{}\" on its own ({}); their groups no longer change it", me.username, target.username, t.host_friendly_name, perm.as_str())).await;
+        state.hub.notify_users([me.id, target.id], &json!({ "action": "TUNNEL-PERMISSION-UPDATED", "tunnel_id": t.id }));
+        return Ok((StatusCode::CREATED, Json(json!({ "message": "Tunnel shared successfully", "converted": true }))));
+    }
     let sharing = db::sharing::create(&state.db, t.id, me.id, target.id, perm.as_str(), expires.as_deref()).await?;
 
     state.hub.notify_user(
@@ -211,9 +266,16 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
         return Err(ApiError::bad_request("You do not have permission to manage sharing for this tunnel"));
     }
     let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing not found"))?;
+    refuse_via_group(&state, &sharing, is_self).await?;
     let reason = if is_self { EndReason::Left } else { EndReason::Revoked { by: &me.username } };
     end_share(&state, &t, &sharing, Some(me.id), reason).await?;
-    Ok(Json(json!({ "message": "Tunnel unshared successfully" })))
+    // 還在某個分享給這條通道的群組裡：群組會再給他一筆（說出來，免得以為已經拿掉了）。
+    // Still in a group the tunnel is shared with: the group gives them a row again (say so, so it isn't mistaken for gone).
+    let groups = db::group_shares::covering(&state.db, t.id, uid).await?;
+    if !groups.is_empty() {
+        crate::group_shares::kick(&state);
+    }
+    Ok(Json(json!({ "message": "Tunnel unshared successfully", "still_via_groups": groups })))
 }
 
 /// `UpdateSharingPermissionView` + `update_sharing_permission`
@@ -226,6 +288,7 @@ async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser
         return Err(ApiError::bad_request("You do not have permission to manage sharing for this tunnel"));
     }
     let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing not found"))?;
+    refuse_via_group(&state, &sharing, false).await?;
     let old = sharing.permission_type.clone();
     db::sharing::set_permission(&state.db, sharing.id, perm.as_str()).await?;
     if perm == Permission::View && matches!(Permission::parse(&old), Some(Permission::Edit) | Some(Permission::Admin)) {
@@ -272,6 +335,7 @@ async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
         return Err(ApiError::forbidden("You do not have permission to view sharing for this tunnel"));
     }
     let mut users = Vec::new();
+    let via = db::group_shares::row_groups(&state.db, t.id).await?;
     for s in db::sharing::for_tunnel(&state.db, t.id).await? {
         let allowed = db::sharing::allowed_usernames(&state.db, s.id).await?;
         let ends = db::access_requests::username_ends(&state.db, s.id).await?;
@@ -287,6 +351,8 @@ async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
             "permission_until": raise.map(|(_, until)| crate::util::db_to_iso_utc_z(until)),
             "base_permission": raise.map(|(base, _)| base),
             "allowed_target_usernames": allowed.iter().map(|(id, u)| json!({ "id": id, "username": u, "until": ends.get(id).map(|e| crate::util::db_to_iso_utc_z(e)) })).collect::<Vec<_>>(),
+            // 經由哪個群組（null = 直接分享給他）。/ Which group it comes through (null = shared with them directly).
+            "via_group": via.get(&s.id).map(|(gs, g, name)| json!({ "group_share_id": gs, "group_id": g, "name": name })),
         }));
     }
     Ok(Json(json!({ "users": users })))
@@ -316,6 +382,7 @@ async fn update_allowed_usernames(State(state): State<AppState>, AuthUser(me): A
         return Err(ApiError::forbidden("You do not have permission to manage this tunnel"));
     }
     let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing record not found"))?;
+    refuse_via_group(&state, &sharing, false).await?;
     let ids: Vec<i64> = match body.get("allowed_target_username_ids") {
         None => vec![],
         Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).collect(),
@@ -339,6 +406,7 @@ async fn update_expiry(State(state): State<AppState>, AuthUser(me): AuthUser, Pa
         return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
     }
     let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing not found"))?;
+    refuse_via_group(&state, &sharing, false).await?;
     let Some(expires) = requested_expiry(&body)? else {
         return Err(ApiError::field("expires_at", "expires_at is required (null = no end)."));
     };
@@ -351,4 +419,156 @@ async fn update_expiry(State(state): State<AppState>, AuthUser(me): AuthUser, Pa
     };
     state.hub.notify_user(uid, &json!({ "action": "TUNNEL-PERMISSION-UPDATED", "details": details, "tunnel_id": t.id, "expires_at": iso }));
     Ok(Json(json!({ "expires_at": iso })))
+}
+
+// ---------------------------------------------------------------- shared with a user group
+
+fn id_list(body: &Value) -> ApiResult<Option<Vec<i64>>> {
+    match body.get("allowed_target_username_ids") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => Ok(Some(a.iter().filter_map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).collect())),
+        Some(_) => Err(ApiError::bad_request("allowed_target_username_ids must be a list")),
+    }
+}
+
+/// 這條通道分享給哪些使用者群組；能管分享的人另外拿到成員名稱與可選的群組。
+/// The user groups a tunnel is shared with; those who manage sharing also get member names and the groups to pick from.
+async fn group_shares_json(state: &AppState, t: &Tunnel, can_manage: bool) -> ApiResult<Value> {
+    let groups = db::group_shares::groups_with_counts(&state.db).await?;
+    let counts: std::collections::HashMap<i64, (String, i64)> = groups.iter().map(|(id, n, c)| (*id, (n.clone(), *c))).collect();
+    let rows = db::sharing::for_tunnel(&state.db, t.id).await?;
+    let mut shares = Vec::new();
+    let mut shared = std::collections::HashSet::new();
+    for g in db::group_shares::for_tunnel(&state.db, t.id).await? {
+        shared.insert(g.group_id);
+        let members = db::group_shares::member_names(&state.db, g.group_id).await?;
+        let through = rows.iter().filter(|r| r.group_share_id == Some(g.id)).count();
+        let direct = members.iter().filter(|(uid, _)| rows.iter().any(|r| r.shared_with_id == *uid && r.group_share_id.is_none())).count();
+        let by = match g.shared_by_id {
+            Some(id) => db::users::by_id(&state.db, id).await?.map(|u| u.username),
+            None => None,
+        };
+        let (name, count) = counts.get(&g.group_id).cloned().unwrap_or_default();
+        shares.push(json!({
+            "id": g.id,
+            "group_id": g.group_id,
+            "name": name,
+            "members": count,
+            "member_names": if can_manage { json!(members.iter().map(|(_, n)| n).collect::<Vec<_>>()) } else { Value::Null },
+            "through": through,
+            "direct": direct,
+            "permission_type": g.permission_type,
+            "expires_at": g.expires_at.as_deref().map(crate::util::db_to_iso_utc_z),
+            "shared_by": by,
+            "created_at": crate::util::db_to_iso_utc_z(&g.created_at),
+            "allowed_target_usernames": db::group_shares::usernames(&state.db, g.id).await?.into_iter().map(|(id, u)| json!({ "id": id, "username": u, "until": null })).collect::<Vec<_>>(),
+        }));
+    }
+    let choices: Vec<Value> = if can_manage {
+        groups.iter().map(|(id, n, c)| json!({ "id": id, "name": n, "members": c, "shared": shared.contains(id) })).collect()
+    } else {
+        vec![]
+    };
+    Ok(json!({ "can_manage": can_manage, "shares": shares, "groups": choices }))
+}
+
+async fn group_share_of(state: &AppState, t: &Tunnel, gsid: i64) -> ApiResult<db::group_shares::GroupShare> {
+    db::group_shares::get(&state.db, gsid).await?.filter(|g| g.tunnel_id == t.id).ok_or_else(|| ApiError::not_found("Group share not found"))
+}
+
+/// 分享給使用者群組的清單（看得到這條通道的人都能看）。/ The tunnel's group shares (anyone who can see the tunnel).
+#[utoipa::path(get, path = "/api/reverse/server/{id}/group-shares", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::GroupShares), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn list_group_shares(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = tunnel_or_404(&state, id).await?;
+    if permissions::effective_for(&state.db, me.id, &t).await?.is_none() {
+        return Err(ApiError::forbidden("You do not have permission to view sharing for this tunnel"));
+    }
+    let can_manage = permissions::check_share_access(&state.db, me.id, &t).await?;
+    Ok(Json(group_shares_json(&state, &t, can_manage).await?))
+}
+
+/// 分享給一個使用者群組：成員各自拿到一筆分享，之後跟著群組成員增減（owner / ADMIN）。
+/// Share with a user group: each member gets a share, which follows the group's members from then on (owner / ADMIN).
+#[utoipa::path(post, path = "/api/reverse/server/{id}/group-shares", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::GroupShareRequest, responses((status = 201, body = super::schemas::GroupShares), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn create_group_share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let t = tunnel_or_404(&state, id).await?;
+    if !permissions::check_share_access(&state.db, me.id, &t).await? {
+        return Err(ApiError::forbidden("You do not have permission to share this tunnel"));
+    }
+    let group_id = json_i64(&body, "group_id").ok_or_else(|| ApiError::field("group_id", "Pick a user group."))?;
+    let group = db::features::group(&state.db, group_id).await?.ok_or_else(|| ApiError::not_found("Group not found"))?;
+    if db::group_shares::by_tunnel_group(&state.db, t.id, group.id).await?.is_some() {
+        return Err(ApiError::field("group_id", "This tunnel is already shared with that group."));
+    }
+    let raw = json_str(&body, "permission_type").unwrap_or_else(|| "view".to_string());
+    let perm = Permission::parse(&raw).ok_or_else(|| invalid_permission(&raw))?;
+    let expires = requested_expiry(&body)?.flatten();
+    let gsid = db::group_shares::create(&state.db, t.id, group.id, me.id, perm.as_str(), expires.as_deref()).await?;
+    if let Some(ids) = id_list(&body)? {
+        db::group_shares::set_usernames(&state.db, gsid, t.id, &ids).await?;
+    }
+    state.gateway.event("group_share", None, None, Some(t.id), format!("{} shared \"{}\" with the group \"{}\" ({})", me.username, t.host_friendly_name, group.name, perm.as_str())).await;
+    crate::group_shares::reconcile(&state, &std::collections::HashMap::new()).await?;
+    if t.user_id != me.id {
+        state.hub.notify_user(
+            t.user_id,
+            &json!({ "action": "TUNNEL-SHARED", "details": format!("{} shared your tunnel \"{}\" with the group \"{}\"", me.username, t.host_friendly_name, group.name), "tunnel_id": t.id }),
+        );
+    }
+    state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-SHARED", "tunnel_id": t.id }));
+    Ok((StatusCode::CREATED, Json(group_shares_json(&state, &t, true).await?)))
+}
+
+/// 改群組分享的權限、帳號或期限；成員的分享跟著改（owner / ADMIN）。/ Change a group share; members' shares follow.
+#[utoipa::path(patch, path = "/api/reverse/server/{id}/group-shares/{gsid}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("gsid" = i64, Path, description = "Group share id")), request_body = super::schemas::GroupShareRequest, responses((status = 200, body = super::schemas::GroupShares), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn update_group_share(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, gsid)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let t = tunnel_or_404(&state, id).await?;
+    if !permissions::check_share_access(&state.db, me.id, &t).await? {
+        return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
+    }
+    let g = group_share_of(&state, &t, gsid).await?;
+    let perm = match json_str(&body, "permission_type") {
+        Some(raw) => Some(Permission::parse(&raw).ok_or_else(|| invalid_permission(&raw))?),
+        None => None,
+    };
+    let expires = requested_expiry(&body)?;
+    let ids = id_list(&body)?;
+    db::group_shares::update(&state.db, g.id, perm.map(|p| p.as_str()), expires.as_ref().map(|e| e.as_deref())).await?;
+    if let Some(ids) = &ids {
+        db::group_shares::set_usernames(&state.db, g.id, t.id, ids).await?;
+    }
+    let name = db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default();
+    let mut what = Vec::new();
+    if let Some(p) = perm {
+        what.push(format!("permission {}", p.as_str()));
+    }
+    if ids.is_some() {
+        what.push("accounts".to_string());
+    }
+    if expires.is_some() {
+        what.push("end".to_string());
+    }
+    state.gateway.event("group_share", None, None, Some(t.id), format!("{} changed the share of \"{}\" with the group \"{name}\": {}", me.username, t.host_friendly_name, what.join(", "))).await;
+    crate::group_shares::reconcile(&state, &std::collections::HashMap::new()).await?;
+    state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-PERMISSION-UPDATED", "tunnel_id": t.id }));
+    Ok(Json(group_shares_json(&state, &t, true).await?))
+}
+
+/// 不再分享給這個群組：經由它拿到的人都結束（直接分享的人不受影響；owner / ADMIN）。
+/// Stop sharing with the group: everyone holding access through it loses it (direct shares stay; owner / ADMIN).
+#[utoipa::path(delete, path = "/api/reverse/server/{id}/group-shares/{gsid}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("gsid" = i64, Path, description = "Group share id")), responses((status = 200, body = super::schemas::GroupShares), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn delete_group_share(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, gsid)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
+    let t = tunnel_or_404(&state, id).await?;
+    if !permissions::check_share_access(&state.db, me.id, &t).await? {
+        return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
+    }
+    let g = group_share_of(&state, &t, gsid).await?;
+    let name = db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default();
+    db::group_shares::delete(&state.db, g.id).await?;
+    state.gateway.event("group_share", None, None, Some(t.id), format!("{} stopped sharing \"{}\" with the group \"{name}\"", me.username, t.host_friendly_name)).await;
+    crate::group_shares::reconcile(&state, &std::collections::HashMap::from([(g.id, name)])).await?;
+    state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
+    // 刪的人自己可能也是經由這個群組拿到的（ADMIN）：那就看不到了。/ The deleter may have held it through this group.
+    let can_manage = permissions::check_share_access(&state.db, me.id, &t).await?;
+    Ok(Json(group_shares_json(&state, &t, can_manage).await?))
 }

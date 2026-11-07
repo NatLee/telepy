@@ -45,6 +45,8 @@ export interface Tunnel {
     terminal_detach_policy?: "user" | "never";
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
+    /** 經由哪個使用者群組分享給我（null = 直接分享）。/ The user group it is shared with me through (null = directly). */
+    share_group?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
     access_requests?: number;
     /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */

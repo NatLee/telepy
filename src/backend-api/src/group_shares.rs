@@ -1,0 +1,384 @@
+//! 分享給使用者群組：每位成員各自拿到一筆「經由群組」的分享列（`tunnels_tunnelsharing.group_share_id`），
+//! 所以權限檢查、允許帳號、裝置金鑰、通知與失去存取時的收尾都照舊走同一條路。`plan`（純函式）比對群組分享 × 成員
+//! 與現有的列；`reconcile` 套用它。直接分享給這個人的列優先，群組不碰。
+//!
+//! A tunnel shared with a user group: each member gets a share row marked with the group share, so permission checks,
+//! allowed accounts, device keys, notifications and the access-loss clean-up all keep working unchanged. `plan` (pure)
+//! compares group shares × members with the rows that exist; `reconcile` applies it. A row shared with the person
+//! directly wins; groups never touch it.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use serde_json::json;
+
+use crate::db::{self, tunnels::Tunnel};
+use crate::error::ApiResult;
+use crate::permissions::Permission;
+use crate::state::AppState;
+use crate::webhooks::{Event, Kind};
+
+/// 一筆群組分享與它的成員。/ One group share with its group's members.
+#[derive(Debug, Clone)]
+pub struct Rule {
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub owner_id: i64,
+    pub shared_by: i64,
+    pub permission: Permission,
+    pub expires_at: Option<String>,
+    pub accounts: BTreeSet<i64>,
+    pub members: Vec<i64>,
+}
+
+/// 一位成員在一條通道上該有的分享（他的每個群組合起來）。/ What a member should hold on a tunnel (all their groups merged).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Want {
+    pub tunnel_id: i64,
+    pub user_id: i64,
+    /// 給最高權限的那筆群組分享（同樣高時取最早的）。/ The group share giving the highest permission (earliest on a tie).
+    pub group_share_id: i64,
+    pub shared_by: i64,
+    pub permission: Permission,
+    /// 任一筆不到期就不到期，否則取最晚的。/ No end if any has none, else the latest.
+    pub expires_at: Option<String>,
+    pub accounts: BTreeSet<i64>,
+}
+
+/// 現有的一筆分享列（群組管的那幾個欄位）。/ An existing share row (the fields a group manages).
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub user_id: i64,
+    pub group_share_id: Option<i64>,
+    /// 群組管的權限：暫時提升時是它結束後回去的那個。/ The permission a group manages (the one a raise returns to).
+    pub permission: String,
+    pub raised: bool,
+    pub expires_at: Option<String>,
+    /// 永久的允許帳號（存取申請給的暫時帳號不算）。/ Permanent accounts (temporary ones from requests excluded).
+    pub accounts: BTreeSet<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Step {
+    Create(Want),
+    Update { row: i64, want: Want, old_permission: String, permission_changed: bool, accounts_changed: bool },
+    Remove { row: i64, tunnel_id: i64, user_id: i64, group_share_id: i64 },
+}
+
+/// 每位成員在每條通道上該有什麼。/ What every member should hold on every tunnel.
+pub fn wants(rules: &[Rule]) -> BTreeMap<(i64, i64), Want> {
+    let mut out: BTreeMap<(i64, i64), Want> = BTreeMap::new();
+    let mut sorted: Vec<&Rule> = rules.iter().collect();
+    sorted.sort_by_key(|r| r.id);
+    for r in sorted {
+        for &u in &r.members {
+            if u == r.owner_id {
+                continue;
+            }
+            match out.get_mut(&(r.tunnel_id, u)) {
+                None => {
+                    out.insert(
+                        (r.tunnel_id, u),
+                        Want {
+                            tunnel_id: r.tunnel_id,
+                            user_id: u,
+                            group_share_id: r.id,
+                            shared_by: r.shared_by,
+                            permission: r.permission,
+                            expires_at: r.expires_at.clone(),
+                            accounts: r.accounts.clone(),
+                        },
+                    );
+                }
+                Some(w) => {
+                    if r.permission > w.permission {
+                        w.permission = r.permission;
+                        w.group_share_id = r.id;
+                        w.shared_by = r.shared_by;
+                    }
+                    w.expires_at = match (&w.expires_at, &r.expires_at) {
+                        (Some(a), Some(b)) => Some(a.max(b).clone()),
+                        _ => None,
+                    };
+                    w.accounts.extend(r.accounts.iter().copied());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 比對要的與現有的列：建、改、收。直接分享的列不動。/ Compare wants with rows: create, update, remove. Direct rows stay.
+pub fn plan(rules: &[Rule], rows: &[Row]) -> Vec<Step> {
+    let mut want = wants(rules);
+    let mut steps = Vec::new();
+    for row in rows {
+        let key = (row.tunnel_id, row.user_id);
+        match (row.group_share_id, want.remove(&key)) {
+            // 直接分享優先：群組不碰它（之後收掉直接分享，群組才補上）。/ A direct share wins.
+            (None, _) => {}
+            (Some(gs), None) => steps.push(Step::Remove { row: row.id, tunnel_id: row.tunnel_id, user_id: row.user_id, group_share_id: gs }),
+            (Some(gs), Some(w)) => {
+                let permission_changed = Permission::parse(&row.permission) != Some(w.permission);
+                let accounts_changed = row.accounts != w.accounts;
+                if permission_changed || accounts_changed || row.expires_at != w.expires_at || gs != w.group_share_id {
+                    steps.push(Step::Update { row: row.id, old_permission: row.permission.clone(), permission_changed, accounts_changed, want: w });
+                }
+            }
+        }
+    }
+    steps.extend(want.into_values().map(Step::Create));
+    steps
+}
+
+static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 背景跑一次比對（成員或群組分享變了之後）。/ Reconcile in the background (after members or group shares changed).
+pub fn kick(state: &AppState) {
+    kick_with(state, HashMap::new());
+}
+
+/// 同上，帶著剛收掉的群組分享 → 群組名稱（說明用）。/ The same, with just-removed group shares → group names.
+pub fn kick_with(state: &AppState, gone: HashMap<i64, String>) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = reconcile(&state, &gone).await {
+            tracing::warn!(error = ?e, "group share reconcile failed");
+        }
+    });
+}
+
+/// 刪群組之前：它的群組分享 → 名稱，給之後的說明用。/ Before deleting a group: its shares → its name, for the wording.
+pub async fn gone_for_group(state: &AppState, group_id: i64, name: &str) -> ApiResult<HashMap<i64, String>> {
+    Ok(db::group_shares::ids_of_group(&state.db, group_id).await?.into_iter().map(|id| (id, name.to_string())).collect())
+}
+
+/// 收掉到期的群組分享，再比對一次。每 30 秒跟著分享到期一起跑。/ End expired group shares, then reconcile (every 30 s).
+pub async fn tick(state: &AppState) -> ApiResult<()> {
+    let mut gone = HashMap::new();
+    for g in db::group_shares::expired(&state.db).await? {
+        let name = group_name(state, g.group_id).await?;
+        db::group_shares::delete(&state.db, g.id).await?;
+        let tunnel = db::tunnels::by_id(&state.db, g.tunnel_id).await?.map(|t| t.host_friendly_name).unwrap_or_default();
+        state.gateway.event("group_share", None, None, Some(g.tunnel_id), format!("The share of \"{tunnel}\" with the group \"{name}\" expired")).await;
+        gone.insert(g.id, name);
+    }
+    reconcile(state, &gone).await
+}
+
+async fn group_name(state: &AppState, group_id: i64) -> ApiResult<String> {
+    Ok(db::features::group(&state.db, group_id).await?.map(|g| g.name).unwrap_or_default())
+}
+
+/// 把所有成員的分享列對齊群組分享。`gone` = 剛收掉的群組分享 → 群組名稱（說明用）。
+/// Bring every member's row in line with the group shares. `gone` = just-removed group shares → group names (for wording).
+pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResult<()> {
+    let _held = LOCK.lock().await;
+    let shares = db::group_shares::live(&state.db).await?;
+    let accounts = db::group_shares::all_username_ids(&state.db).await?;
+    let mut members: HashMap<i64, Vec<i64>> = HashMap::new();
+    for (g, u) in db::features::memberships(&state.db).await? {
+        members.entry(g).or_default().push(u);
+    }
+    let names: HashMap<i64, String> = db::features::groups(&state.db).await?.into_iter().map(|g| (g.id, g.name)).collect();
+    let mut tunnels: HashMap<i64, Tunnel> = HashMap::new();
+    let mut share_group: HashMap<i64, String> = gone.clone();
+    let mut rules = Vec::new();
+    for g in &shares {
+        let Some(t) = cached_tunnel(state, &mut tunnels, g.tunnel_id).await? else { continue };
+        let Some(perm) = Permission::parse(&g.permission_type) else { continue };
+        share_group.insert(g.id, names.get(&g.group_id).cloned().unwrap_or_default());
+        rules.push(Rule {
+            id: g.id,
+            tunnel_id: g.tunnel_id,
+            owner_id: t.user_id,
+            shared_by: g.shared_by_id.unwrap_or(t.user_id),
+            permission: perm,
+            expires_at: g.expires_at.clone(),
+            accounts: accounts.get(&g.id).cloned().unwrap_or_default(),
+            members: members.get(&g.group_id).cloned().unwrap_or_default(),
+        });
+    }
+    let permanent = db::group_shares::permanent_accounts(&state.db).await?;
+    let rows: Vec<Row> = db::group_shares::rows(&state.db)
+        .await?
+        .into_iter()
+        .map(|s| Row {
+            id: s.id,
+            tunnel_id: s.tunnel_id,
+            user_id: s.shared_with_id,
+            group_share_id: s.group_share_id,
+            permission: s.base_permission.clone().unwrap_or_else(|| s.permission_type.clone()),
+            raised: s.base_permission.is_some(),
+            expires_at: s.expires_at.clone(),
+            accounts: permanent.get(&s.id).cloned().unwrap_or_default(),
+        })
+        .collect();
+    let raised: HashMap<i64, bool> = rows.iter().map(|r| (r.id, r.raised)).collect();
+    for step in plan(&rules, &rows) {
+        let tunnel_id = match &step {
+            Step::Create(w) | Step::Update { want: w, .. } => w.tunnel_id,
+            Step::Remove { tunnel_id, .. } => *tunnel_id,
+        };
+        let Some(t) = cached_tunnel(state, &mut tunnels, tunnel_id).await? else { continue };
+        match step {
+            Step::Create(w) => create(state, &t, &w, share_group.get(&w.group_share_id).map(String::as_str).unwrap_or_default()).await?,
+            Step::Update { row, want, old_permission, permission_changed, accounts_changed } => {
+                let group = share_group.get(&want.group_share_id).map(String::as_str).unwrap_or_default();
+                update(state, &t, row, raised.get(&row).copied().unwrap_or(false), &want, &old_permission, permission_changed, accounts_changed, group).await?
+            }
+            Step::Remove { user_id, group_share_id, .. } => {
+                let group = share_group.get(&group_share_id).cloned().unwrap_or_default();
+                if let Some(s) = db::sharing::get(&state.db, t.id, user_id).await? {
+                    crate::api::sharing::end_share(state, &t, &s, None, crate::api::sharing::EndReason::Group { group: &group }).await?;
+                    let user = username(state, user_id).await?;
+                    state.gateway.event("group_share", None, None, Some(t.id), format!("{user} no longer has access to \"{}\" through the group \"{group}\"", t.host_friendly_name)).await;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cached_tunnel(state: &AppState, cache: &mut HashMap<i64, Tunnel>, id: i64) -> ApiResult<Option<Tunnel>> {
+    if let Some(t) = cache.get(&id) {
+        return Ok(Some(t.clone()));
+    }
+    let t = db::tunnels::by_id(&state.db, id).await?;
+    if let Some(t) = &t {
+        cache.insert(id, t.clone());
+    }
+    Ok(t)
+}
+
+async fn username(state: &AppState, id: i64) -> ApiResult<String> {
+    Ok(db::users::by_id(&state.db, id).await?.map(|u| u.username).unwrap_or_default())
+}
+
+async fn create(state: &AppState, t: &Tunnel, w: &Want, group: &str) -> ApiResult<()> {
+    let id = db::group_shares::create_row(&state.db, t.id, w.shared_by, w.user_id, w.permission.as_str(), w.expires_at.as_deref(), w.group_share_id).await?;
+    db::group_shares::set_permanent_accounts(&state.db, id, t.id, &w.accounts).await?;
+    let user = username(state, w.user_id).await?;
+    let by = username(state, w.shared_by).await?;
+    state.hub.notify_user(
+        w.user_id,
+        &json!({
+            "action": "TUNNEL-SHARED",
+            "details": format!("Tunnel \"{}\" has been shared with you through the group \"{group}\"", t.host_friendly_name),
+            "tunnel_id": t.id,
+            "shared_by": by,
+            "permission_type": w.permission.as_str(),
+            "group": group,
+        }),
+    );
+    state.hub.notify_user(t.user_id, &json!({ "action": "TUNNEL-SHARED", "tunnel_id": t.id }));
+    state.webhooks.emit(
+        Event::new(Kind::ShareReceived)
+            .tunnel(t)
+            .to([w.user_id], None)
+            .data(json!({ "by": by, "permission": w.permission.as_str(), "group": group, "expires_at": w.expires_at.as_deref().map(crate::util::db_to_iso_utc_z) }))
+            .link("/tunnels"),
+    );
+    state.gateway.event("group_share", None, None, Some(t.id), format!("{user} can use \"{}\" through the group \"{group}\" ({})", t.host_friendly_name, w.permission.as_str())).await;
+    state.device_keys.kick(t.id);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update(state: &AppState, t: &Tunnel, row: i64, raised: bool, w: &Want, old: &str, permission_changed: bool, accounts_changed: bool, group: &str) -> ApiResult<()> {
+    db::group_shares::update_row(&state.db, row, w.permission.as_str(), raised, w.expires_at.as_deref(), w.group_share_id).await?;
+    if accounts_changed {
+        db::group_shares::set_permanent_accounts(&state.db, row, t.id, &w.accounts).await?;
+    }
+    if permission_changed && w.permission == Permission::View && matches!(Permission::parse(old), Some(Permission::Edit) | Some(Permission::Admin)) && !raised {
+        db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, w.user_id).await?;
+    }
+    if permission_changed || accounts_changed {
+        state.device_keys.kick(t.id);
+        crate::access_recheck::kick(state, Some(t.id), Some(w.user_id));
+        let user = username(state, w.user_id).await?;
+        state.gateway.event("group_share", None, None, Some(t.id), format!("{user}'s access to \"{}\" through the group \"{group}\" changed ({})", t.host_friendly_name, w.permission.as_str())).await;
+    }
+    if permission_changed {
+        state.hub.notify_user(
+            w.user_id,
+            &json!({
+                "action": "TUNNEL-PERMISSION-UPDATED",
+                "details": format!("Your permission for tunnel \"{}\" through the group \"{group}\" is now \"{}\"", t.host_friendly_name, w.permission.display()),
+                "tunnel_id": t.id,
+                "old_permission": old,
+                "new_permission": w.permission.as_str(),
+            }),
+        );
+    } else {
+        state.hub.notify_user(w.user_id, &json!({ "action": "TUNNEL-USERNAMES-UPDATED", "tunnel_id": t.id }));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(id: i64, tunnel: i64, perm: Permission, accounts: &[i64], members: &[i64], expires: Option<&str>) -> Rule {
+        Rule {
+            id,
+            tunnel_id: tunnel,
+            owner_id: 1,
+            shared_by: 1,
+            permission: perm,
+            expires_at: expires.map(str::to_string),
+            accounts: accounts.iter().copied().collect(),
+            members: members.to_vec(),
+        }
+    }
+
+    fn row(id: i64, tunnel: i64, user: i64, gs: Option<i64>, perm: &str, accounts: &[i64]) -> Row {
+        Row { id, tunnel_id: tunnel, user_id: user, group_share_id: gs, permission: perm.into(), raised: false, expires_at: None, accounts: accounts.iter().copied().collect() }
+    }
+
+    #[test]
+    fn members_get_a_row_and_the_owner_does_not() {
+        let steps = plan(&[rule(7, 10, Permission::View, &[3], &[1, 2, 4], None)], &[]);
+        let made: Vec<i64> = steps.iter().filter_map(|s| if let Step::Create(w) = s { Some(w.user_id) } else { None }).collect();
+        assert_eq!(made, vec![2, 4]);
+    }
+
+    #[test]
+    fn a_direct_share_wins_over_the_group() {
+        let steps = plan(&[rule(7, 10, Permission::Admin, &[], &[2], None)], &[row(50, 10, 2, None, "view", &[])]);
+        assert!(steps.is_empty());
+    }
+
+    #[test]
+    fn several_groups_merge_to_the_highest_permission_and_every_account() {
+        let w = wants(&[rule(7, 10, Permission::View, &[3], &[2], Some("2030-01-01 00:00:00")), rule(8, 10, Permission::Edit, &[4], &[2], Some("2029-01-01 00:00:00"))]);
+        let w = &w[&(10, 2)];
+        assert_eq!(w.permission, Permission::Edit);
+        assert_eq!(w.group_share_id, 8);
+        assert_eq!(w.accounts, [3, 4].into_iter().collect());
+        assert_eq!(w.expires_at.as_deref(), Some("2030-01-01 00:00:00"));
+        let w = wants(&[rule(7, 10, Permission::View, &[], &[2], None), rule(8, 10, Permission::View, &[], &[2], Some("2029-01-01 00:00:00"))]);
+        assert_eq!(w[&(10, 2)].expires_at, None, "one share without an end means no end");
+        assert_eq!(w[&(10, 2)].group_share_id, 7, "the earliest on a tie");
+    }
+
+    #[test]
+    fn changes_update_the_row_and_leaving_removes_it() {
+        let rules = [rule(7, 10, Permission::Edit, &[3, 4], &[2], None)];
+        let steps = plan(&rules, &[row(50, 10, 2, Some(7), "view", &[3]), row(51, 10, 9, Some(7), "view", &[3])]);
+        assert_eq!(steps.len(), 2);
+        assert!(matches!(&steps[0], Step::Update { row: 50, permission_changed: true, accounts_changed: true, .. }));
+        assert_eq!(steps[1], Step::Remove { row: 51, tunnel_id: 10, user_id: 9, group_share_id: 7 });
+        // 一樣就不動。/ Nothing changes, nothing happens.
+        assert!(plan(&rules, &[row(50, 10, 2, Some(7), "edit", &[3, 4])]).is_empty());
+    }
+
+    #[test]
+    fn a_raised_row_is_compared_by_the_permission_it_returns_to() {
+        let mut r = row(50, 10, 2, Some(7), "view", &[]);
+        r.raised = true;
+        assert!(plan(&[rule(7, 10, Permission::View, &[], &[2], None)], &[r]).is_empty());
+    }
+}

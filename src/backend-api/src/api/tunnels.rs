@@ -78,6 +78,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let pins = db::tunnel_tags::pinned_by(&state.db, user_id).await?;
     let my_groups = db::groups::tunnel_group_of(&state.db, user_id).await?;
     let my_expiries = db::sharing::my_expiries(&state.db, user_id).await?;
+    let my_share_groups = db::group_shares::my_groups(&state.db, user_id).await?;
     let requests = db::access_requests::pending_counts(&state.db).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
@@ -110,6 +111,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             v["group_id"] = json!(my_groups.get(&t.id));
             // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
             v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
+            // 被分享的人：經由哪個使用者群組拿到的（null = 直接分享給我）。/ For sharees: the user group it comes through.
+            v["share_group"] = json!(my_share_groups.get(&t.id));
             // owner / ADMIN：還在等我決定的存取申請。/ Owner / ADMIN: access requests waiting for a decision.
             let decides = eff.is_some_and(|e| e.satisfies(permissions::Permission::Admin));
             v["access_requests"] = json!(if decides { requests.get(&t.id).copied().unwrap_or(0) } else { 0 });

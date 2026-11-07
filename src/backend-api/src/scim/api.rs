@@ -344,6 +344,8 @@ async fn set_members(state: &AppState, p: &Provider, group_id: i64, wanted: &BTr
 /// 功能權限跟著變：快取作廢、結束失去功能的 session。/ Feature access follows: invalidate, end sessions that lost a feature.
 fn after_group_change(state: &AppState, p: &Provider) {
     state.features.invalidate();
+    // 分享給這些群組的通道跟著成員走。/ Tunnels shared with these groups follow the members.
+    crate::group_shares::kick(state);
     let (state, by) = (state.clone(), format!("{} (SCIM)", p.name));
     tokio::spawn(async move {
         crate::features::end_denied_sessions(&state, &by).await;
@@ -451,10 +453,12 @@ async fn patch_group(State(state): State<AppState>, headers: HeaderMap, Path(id)
 async fn delete_group(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Res {
     let p = provider(&state, &headers).await?;
     let row = managed_group(&state, &p, id_of(&id)?).await?;
+    let gone = crate::group_shares::gone_for_group(&state, row.group_id, &row.name).await.map_err(|e| internal(format!("{e:?}")))?;
     db::features::delete_group(&state.db, row.group_id).await.map_err(internal)?;
     db::oidc::forget_user_group(&state.db, row.group_id).await.map_err(internal)?;
     db::scim::forget_group(&state.db, row.group_id).await.map_err(internal)?;
     after_group_change(&state, &p);
+    crate::group_shares::kick_with(&state, gone);
     state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) deleted the user group \"{}\"", p.name, row.name)).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

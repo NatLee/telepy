@@ -103,6 +103,8 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
 /// 寫入之後：快取作廢、結束失去功能的 session、寫稽核事件。/ After a write: invalidate, end lost sessions, audit.
 async fn after_write(state: &AppState, me: &User, kind: &str, message: String) {
     state.features.invalidate();
+    // 分享給群組的通道跟著成員走。/ Tunnels shared with a group follow its members.
+    crate::group_shares::kick(state);
     state.gateway.event(kind, None, None, None, message).await;
     let (state, by) = (state.clone(), me.username.clone());
     tokio::spawn(async move {
@@ -234,11 +236,13 @@ async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
 async fn delete_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     admin(&me)?;
     let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
+    let gone = crate::group_shares::gone_for_group(&state, id, &group.name).await?;
     db::features::delete_group(&state.db, id).await?;
     // 單一登入規則與紀錄指向它的一起走。/ Single sign-on rules and grant records pointing at it go too.
     db::oidc::forget_user_group(&state.db, id).await?;
     db::scim::forget_group(&state.db, id).await?;
     after_write(&state, &me, "user_group", format!("{} deleted the group \"{}\"", me.username, group.name)).await;
+    crate::group_shares::kick_with(&state, gone);
     Ok(Json(policy_json(&state).await?))
 }
 
