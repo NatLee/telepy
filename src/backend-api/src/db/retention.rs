@@ -47,6 +47,8 @@ pub async fn purge(db: &Db) -> sqlx::Result<u64> {
     deleted += super::device_keys::removals_purge(db).await?;
     // 網頁登入 session（帶 IP）：到期或登出超過一天就沒用了。/ Web sign-in sessions (with IPs): gone a day after expiry or logout.
     deleted += super::web_sessions::purge(db, &db_time(chrono::Utc::now() - chrono::Duration::days(1))).await?;
+    // 單一登入的 id_token：登入不在了就刪（用來登出身分提供者）。/ SSO id_tokens of sign-ins that are gone.
+    deleted += super::oidc::purge_sessions(db).await?;
     // 登入已經不在的推播訂閱（到期的登入不會經過撤銷）。/ Push subscriptions of sign-ins that are gone (expiry doesn't revoke).
     deleted += super::push::delete_orphans(db).await?;
     // 委派 token 的呼叫紀錄（帶 IP）：90 天，連同已刪除使用者的列。/ The token call log (with IPs): 90 days, plus deleted users' rows.

@@ -5497,6 +5497,10 @@ pub struct OidcProvider {
     /// 只有這些群組能登入（空 = 不限）。/ Only these groups may sign in (empty = anyone).
     pub required_groups: Vec<String>,
     pub group_rules: Vec<OidcGroupRule>,
+    pub end_session: bool,
+    /// 要在身分提供者那邊登記的登出後回來網址。/ The post-logout redirect URI to register at the provider.
+    #[schema(example = "https://telepy.example.com/login")]
+    pub post_logout_url: String,
 }
 
 /// 身分提供者的群組 → Telepy 角色。/ A provider group → Telepy role rule.
@@ -5549,6 +5553,8 @@ pub struct OidcProviderRequest {
     pub required_groups: Option<Vec<String>>,
     /// 沒給 = 不動；給了 = 換掉整組（`group_name` 不用給）。/ Omitted = keep; given = replace the set.
     pub group_rules: Option<Vec<OidcGroupRule>>,
+    /// 登出 Telepy 時一併登出身分提供者（預設 false）。/ Also sign out at the provider (default false).
+    pub end_session: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -5592,4 +5598,12 @@ pub struct SsoButton {
     pub slug: String,
     #[schema(example = "Okta")]
     pub name: String,
+}
+
+/// 登出的回應。/ The logout answer.
+#[derive(ToSchema)]
+pub struct LogoutResponse {
+    pub revoked: bool,
+    /// 單一登入開的登入、且那個身分提供者設定成一併登出：瀏覽器要打開的網址。/ The provider's sign-out URL to open, if any.
+    pub end_session_url: Option<String>,
 }

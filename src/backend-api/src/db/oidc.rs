@@ -6,7 +6,8 @@ use crate::db::users::User;
 use crate::util::now_db;
 
 const T: &str = "telepy_oidc_provider";
-const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups";
+const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session";
+const SESSION: &str = "telepy_oidc_session";
 const RULE: &str = "telepy_oidc_group_rule";
 const GRANT: &str = "telepy_oidc_grant";
 
@@ -31,6 +32,8 @@ pub struct Provider {
     pub groups_claim: String,
     /// 「只有這些群組能登入」（JSON 陣列；空 = 不限）。/ Required groups (JSON array; empty = anyone).
     pub required_groups: String,
+    /// 登出時一併登出身分提供者。/ Sign out at the provider too.
+    pub end_session: bool,
 }
 
 impl Provider {
@@ -62,6 +65,7 @@ pub struct NewProvider<'a> {
     pub groups_claim: &'a str,
     /// JSON 陣列。/ A JSON array.
     pub required_groups: &'a str,
+    pub end_session: bool,
 }
 
 pub async fn list(db: &Db) -> sqlx::Result<Vec<Provider>> {
@@ -82,7 +86,7 @@ pub async fn by_slug(db: &Db, slug: &str) -> sqlx::Result<Option<Provider>> {
 
 pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
     let now = now_db();
-    Ok(sqlx::query(&format!("INSERT INTO {T} (slug, name, issuer, client_id, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+    Ok(sqlx::query(&format!("INSERT INTO {T} (slug, name, issuer, client_id, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
         .bind(p.slug)
         .bind(p.name)
         .bind(p.issuer)
@@ -97,6 +101,7 @@ pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
         .bind(&now)
         .bind(p.groups_claim)
         .bind(p.required_groups)
+        .bind(p.end_session)
         .execute(&db.write)
         .await?
         .last_insert_rowid())
@@ -104,7 +109,7 @@ pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
 
 /// 整列換掉（secret 另外存）。/ Replace the row (the secret is stored separately).
 pub async fn update(db: &Db, id: i64, p: &NewProvider<'_>) -> sqlx::Result<()> {
-    sqlx::query(&format!("UPDATE {T} SET slug = ?, name = ?, issuer = ?, client_id = ?, scopes = ?, username_from = ?, allowed_domains = ?, create_users = ?, link_by_email = ?, enabled = ?, updated_at = ?, groups_claim = ?, required_groups = ? WHERE id = ?"))
+    sqlx::query(&format!("UPDATE {T} SET slug = ?, name = ?, issuer = ?, client_id = ?, scopes = ?, username_from = ?, allowed_domains = ?, create_users = ?, link_by_email = ?, enabled = ?, updated_at = ?, groups_claim = ?, required_groups = ?, end_session = ? WHERE id = ?"))
         .bind(p.slug)
         .bind(p.name)
         .bind(p.issuer)
@@ -118,6 +123,7 @@ pub async fn update(db: &Db, id: i64, p: &NewProvider<'_>) -> sqlx::Result<()> {
         .bind(now_db())
         .bind(p.groups_claim)
         .bind(p.required_groups)
+        .bind(p.end_session)
         .bind(id)
         .execute(&db.write)
         .await?;
@@ -135,6 +141,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<u64> {
     sqlx::query("DELETE FROM social_account WHERE provider = ?").bind(link_key(id)).execute(&db.write).await?;
     sqlx::query(&format!("DELETE FROM {RULE} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
     sqlx::query(&format!("DELETE FROM {GRANT} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
+    sqlx::query(&format!("DELETE FROM {SESSION} WHERE provider_id = ?")).bind(id).execute(&db.write).await?;
     Ok(sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&db.write).await?.rows_affected())
 }
 
@@ -282,4 +289,39 @@ pub async fn granted_admins(db: &Db) -> sqlx::Result<Vec<(i64, String)>> {
 /// 除了這個人以外還有幾位啟用中的管理員。/ Active administrators other than this one.
 pub async fn other_admins(db: &Db, user_id: i64) -> sqlx::Result<i64> {
     sqlx::query_scalar("SELECT COUNT(*) FROM auth_user WHERE is_superuser = 1 AND is_active = 1 AND id != ?").bind(user_id).fetch_one(&db.read).await
+}
+
+// ---------------------------------------------------------------- sign-out at the provider
+
+/// 記下這個網頁登入是哪個身分提供者開的，以及它的 id_token（已封存）。/ Remember a web sign-in's provider and sealed id_token.
+pub async fn set_session(db: &Db, session_id: i64, provider_id: i64, sealed_id_token: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("INSERT OR REPLACE INTO {SESSION} (session_id, provider_id, id_token, created_at) VALUES (?, ?, ?, ?)"))
+        .bind(session_id)
+        .bind(provider_id)
+        .bind(sealed_id_token)
+        .bind(now_db())
+        .execute(&db.write)
+        .await?;
+    Ok(())
+}
+
+/// (provider_id, 封存的 id_token)。/ (provider id, sealed id_token).
+pub async fn session(db: &Db, session_id: i64) -> sqlx::Result<Option<(i64, String)>> {
+    sqlx::query_as(&format!("SELECT provider_id, id_token FROM {SESSION} WHERE session_id = ?")).bind(session_id).fetch_optional(&db.read).await
+}
+
+pub async fn forget_session(db: &Db, session_id: i64) -> sqlx::Result<()> {
+    sqlx::query(&format!("DELETE FROM {SESSION} WHERE session_id = ?")).bind(session_id).execute(&db.write).await?;
+    Ok(())
+}
+
+/// 登入已經不在（登出、撤銷、到期）的就不用留 id_token。/ Drop id_tokens of sign-ins that are gone (logout, revoked, expired).
+pub async fn purge_sessions(db: &Db) -> sqlx::Result<u64> {
+    Ok(sqlx::query(&format!(
+        "DELETE FROM {SESSION} WHERE session_id NOT IN (SELECT id FROM telepy_web_session WHERE revoked_at IS NULL AND expires_at > ?)"
+    ))
+    .bind(now_db())
+    .execute(&db.write)
+    .await?
+    .rows_affected())
 }

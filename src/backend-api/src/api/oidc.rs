@@ -186,7 +186,7 @@ async fn plan(state: &AppState, p: &Provider, claims: &Claims) -> ApiResult<Plan
 
 /// 登入：照計畫找 / 建帳號，然後跟密碼登入一樣（2FA 照舊）。錯誤是要帶回頁面的 code。
 /// Sign in: find / create the account, then the same as a password sign-in (2FA included). Errors are page codes.
-async fn sign_in(state: &AppState, p: &Provider, claims: &Claims, meta: &ClientMeta) -> Result<Value, &'static str> {
+async fn sign_in(state: &AppState, p: &Provider, claims: &Claims, id_token: &str, meta: &ClientMeta) -> Result<Value, &'static str> {
     let fail = |e: ApiError| {
         tracing::error!(provider = p.slug, error = ?e, "[OIDC] sign-in failed");
         "sso_failed"
@@ -235,7 +235,73 @@ async fn sign_in(state: &AppState, p: &Provider, claims: &Claims, meta: &ClientM
     if result.get("mfa_required").is_none() {
         tracing::info!(username = user.username, provider = p.slug, "[OIDC] Login success");
     }
+    // 記下 id_token，登出時給身分提供者當提示；要過第二步的話等通過才掛上。
+    // Keep the id_token as the sign-out hint; with a second step, it is attached once that passes.
+    match result.get("mfa_token").and_then(Value::as_str) {
+        Some(mfa_token) => state.oidc_flows.put_awaiting_mfa(mfa_token.to_string(), p.id, id_token.to_string()),
+        None => remember_session(state, p.id, &result, id_token).await,
+    }
     Ok(result)
+}
+
+/// 登入成功的回應裡有 refresh token：從它找出這個網頁登入，記下身分提供者與封存的 id_token。
+/// From the sign-in's refresh token, find the web session and remember its provider and sealed id_token.
+async fn remember_session(state: &AppState, provider_id: i64, tokens: &Value, id_token: &str) {
+    let Some(refresh) = tokens.get("refresh_token").and_then(Value::as_str) else { return };
+    let Some(sid) = state.jwt.verify(refresh, crate::auth::jwt::TokenType::Refresh).ok().and_then(|c| c.sid) else { return };
+    let sealed = state.vault.seal(&session_aad(sid), id_token.as_bytes());
+    if let Err(e) = db::oidc::set_session(&state.db, sid, provider_id, &sealed).await {
+        tracing::warn!(error = %e, "[OIDC] could not remember the sign-in for signing out at the provider");
+    }
+}
+
+fn session_aad(sid: i64) -> String {
+    format!("telepy-oidc-session:{sid}")
+}
+
+/// 第二步通過了：之前等著的單一登入掛到新的網頁登入上。/ The second step passed: attach the waiting SSO sign-in.
+pub async fn after_mfa(state: &AppState, mfa_token: &str, tokens: &Value) {
+    if let Some((provider_id, id_token)) = state.oidc_flows.take_awaiting_mfa(mfa_token) {
+        remember_session(state, provider_id, tokens, &id_token).await;
+    }
+}
+
+/// 登出時：這個網頁登入是用單一登入開的，而那個身分提供者設定成一併登出，就回它的登出網址（給瀏覽器整頁打開）。
+/// 不管有沒有網址，記錄都刪掉。/ On logout: when this web sign-in came from a provider set to sign out too, its sign-out
+/// URL for the browser to open. The record goes either way.
+pub async fn end_session_url(state: &AppState, headers: &HeaderMap, refresh: &str) -> Option<String> {
+    let claims = state.jwt.verify(refresh, crate::auth::jwt::TokenType::Refresh).ok()?;
+    let sid = claims.sid?;
+    let (provider_id, sealed) = db::oidc::session(&state.db, sid).await.ok()??;
+    let _ = db::oidc::forget_session(&state.db, sid).await;
+    let p = db::oidc::by_id(&state.db, provider_id).await.ok()??;
+    if !p.end_session {
+        return None;
+    }
+    let id_token = String::from_utf8(state.vault.open(&session_aad(sid), &sealed)?).ok()?;
+    let d = match state.oidc.discover(&p.issuer, false).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(provider = p.slug, error = e, "[OIDC] cannot sign out at the provider: discovery failed");
+            return None;
+        }
+    };
+    let Some(endpoint) = d.end_session_endpoint.as_deref() else {
+        tracing::warn!(provider = p.slug, "[OIDC] the provider publishes no end_session_endpoint; signed out of Telepy only");
+        return None;
+    };
+    match proto::end_session_url(endpoint, &id_token, &post_logout_url(&base(state, headers)), &p.client_id) {
+        Ok(u) => Some(u),
+        Err(e) => {
+            tracing::warn!(provider = p.slug, error = e, "[OIDC] cannot sign out at the provider");
+            None
+        }
+    }
+}
+
+/// 從身分提供者登出後回到哪裡（要在身分提供者那邊登記）。/ Where the browser comes back after signing out at the provider.
+fn post_logout_url(base: &str) -> String {
+    format!("{base}/login")
 }
 
 /// 已登入的人把這個身分連到自己。/ A signed-in person links this identity.
@@ -520,7 +586,7 @@ async fn callback(State(state): State<AppState>, Path(slug): Path<String>, Query
         Ok(Some(p)) => p,
         _ => return fail("sso_unknown", cookies),
     };
-    let claims = {
+    let (claims, id_token) = {
         let d = match state.oidc.discover(&p.issuer, false).await {
             Ok(d) => d,
             Err(e) => {
@@ -537,7 +603,7 @@ async fn callback(State(state): State<AppState>, Path(slug): Path<String>, Query
             }
         };
         match state.oidc.verify(&d, &id_token, &p.client_id, &pending.nonce).await {
-            Ok(c) => c,
+            Ok(c) => (c, id_token),
             Err(e) => {
                 tracing::error!(provider = p.slug, error = e, "[OIDC] id_token rejected");
                 return fail("sso_failed", cookies);
@@ -546,7 +612,7 @@ async fn callback(State(state): State<AppState>, Path(slug): Path<String>, Query
     };
     let ticket_binding = proto::random_token(32);
     match purpose {
-        Purpose::Login => match sign_in(&state, &p, &claims, &meta).await {
+        Purpose::Login => match sign_in(&state, &p, &claims, &id_token, &meta).await {
             Ok(v) => {
                 let ticket = state.oidc_flows.put_ticket(Outcome::Login(v), flow::hash(&ticket_binding));
                 cookies.push(cookie(&flow::ticket_cookie(&ticket), &ticket_binding, secure, flow::TICKET_TTL.as_secs()));
@@ -705,6 +771,9 @@ fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleR
         "links": links,
         "groups_claim": p.groups_claim,
         "required_groups": p.required(),
+        "end_session": p.end_session,
+        // 要在身分提供者那邊登記的「登出後回來的網址」。/ The post-logout redirect URI to register at the provider.
+        "post_logout_url": post_logout_url(base),
         // 規則；指向已刪掉的群組的 group_name = null。/ Rules; group_name null when the group is gone.
         "group_rules": rules.iter().map(|r| json!({
             "idp_group": r.idp_group,
@@ -762,6 +831,7 @@ struct Form {
     required_groups: String,
     /// None = 不動（修改時沒給）。/ None = keep (omitted on update).
     rules: Option<Vec<Rule>>,
+    end_session: bool,
 }
 
 /// 一串群組名稱：去頭尾空白、不空、不重複、不太長。/ A list of group names: trimmed, non-empty, unique, bounded.
@@ -896,6 +966,7 @@ fn parse_form(body: &Value, old: Option<&Provider>, known_groups: &std::collecti
         groups_claim,
         required_groups: serde_json::to_string(&required).unwrap_or_else(|_| "[]".into()),
         rules,
+        end_session: b("end_session", old.map(|o| o.end_session).unwrap_or(false)),
     })
 }
 
@@ -914,6 +985,7 @@ impl Form {
             enabled: self.enabled,
             groups_claim: &self.groups_claim,
             required_groups: &self.required_groups,
+            end_session: self.end_session,
         }
     }
 }

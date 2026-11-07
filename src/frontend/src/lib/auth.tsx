@@ -70,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const handleUnauthorized = () => {
             announceSignedOutRef.current();
             const here = window.location.pathname + window.location.search;
-            logout(isAuthorizePath(here) ? here : undefined);
+            endSignIn(isAuthorizePath(here) ? here : undefined, false);
         };
         // 403 mfa_enrollment_required（lib/api.ts）→ 重抓 profile，mfa_missing 會帶出設定畫面。
         // 403 mfa_enrollment_required → refetch the profile; its mfa_missing brings up the enrollment gate.
@@ -247,11 +247,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         fetchUserProfileState(access);
     };
 
-    /** next = 登入後要回去的站內路徑（同意頁會走 OAuth 登入頁）。/ next = where to return after signing in. */
-    const logout = (next?: string) => {
+    /**
+     * 結束這個登入。next = 登入後要回去的站內路徑（同意頁會走 OAuth 登入頁）；atProvider = 單一登入開的話也去身分提供者
+     * 登出（只有使用者自己按登出才是；被撤銷、過期、換帳號都不是）。
+     * End this sign-in. next = where to return after signing in; atProvider = also sign out at the single sign-on
+     * provider (only when the person pressed Sign out — not when revoked, expired or switching account).
+     */
+    const endSignIn = (next: string | undefined, atProvider: boolean) => {
         // 先請伺服器撤銷這個登入（refresh token 從此不能續期），再清本機。/ Revoke the sign-in server-side, then clear locally.
         const refresh = localStorage.getItem("refreshToken");
-        if (refresh) revokeSession(refresh);
+        const revoked = refresh ? revokeSession(refresh) : Promise.resolve(null);
         localStorage.removeItem("accessToken");
         localStorage.removeItem("refreshToken");
         resetNotifyPrefs(); // 通知偏好也是帳號的 / notification preferences belong to the account too
@@ -259,15 +264,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         void dropPushHere(); // 這台裝置的推播跟著登入結束 / this device's push ends with the sign-in
         setAccessToken(null);
         setUser(null);
-        router.push(loginPathFor(next));
+        if (!atProvider) {
+            router.push(loginPathFor(next));
+            return;
+        }
+        // 單一登入開的登入、身分提供者也要登出：整頁去它的登出頁（回來是登入頁）；等不到回答就照常回登入頁。
+        // An SSO sign-in set to sign out at the provider too: open its sign-out page (it comes back to the sign-in page);
+        // without an answer in time, go to the sign-in page as usual.
+        const giveUp = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
+        void Promise.race([revoked, giveUp]).then((url) => {
+            if (url) window.location.assign(url);
+            else router.push(loginPathFor(next));
+        });
     };
+
+    /** 使用者按的登出：換帳號（有 next）時不去身分提供者。/ The person's own Sign out; switching account (next) stays here. */
+    const logout = (next?: string) => endSignIn(next, !next);
 
     // 背景續期被拒時走跟 401 一樣的路（同意頁回到同一個請求）。/ A refused renewal takes the 401 path (consent page included).
     const handleUnauthorizedRef = useRef<() => void>(() => { });
     handleUnauthorizedRef.current = () => {
         announceSignedOutRef.current();
         const here = window.location.pathname + window.location.search;
-        logout(isAuthorizePath(here) ? here : undefined);
+        endSignIn(isAuthorizePath(here) ? here : undefined, false);
     };
 
     return (

@@ -72,9 +72,19 @@ struct Intent {
     created: Instant,
 }
 
+/// 要先過兩步驟驗證的單一登入：mfa_token → (提供者, id_token)，通過時才掛到新的網頁登入上。
+/// An SSO sign-in waiting for the second step: mfa_token → (provider, id_token), attached once it passes.
+#[derive(Debug, Clone)]
+struct AwaitingMfa {
+    provider_id: i64,
+    id_token: String,
+    created: Instant,
+}
+
 #[derive(Default)]
 pub struct Flows {
     pending: Mutex<HashMap<String, Pending>>,
+    awaiting_mfa: Mutex<HashMap<String, AwaitingMfa>>,
     tickets: Mutex<HashMap<String, Ticket>>,
     intents: Mutex<HashMap<String, Intent>>,
 }
@@ -169,6 +179,18 @@ impl Flows {
         }
         let i = m.remove(id)?;
         (i.provider_id == provider_id && i.created.elapsed() < TICKET_TTL).then_some(i.purpose)
+    }
+
+    pub fn put_awaiting_mfa(&self, mfa_token: String, provider_id: i64, id_token: String) {
+        let mut m = self.awaiting_mfa.lock().unwrap();
+        prune(&mut m, PENDING_TTL, |v| v.created);
+        m.insert(mfa_token, AwaitingMfa { provider_id, id_token, created: Instant::now() });
+    }
+
+    /// (provider_id, id_token)；過期的當作沒有。/ (provider id, id_token); an expired one counts as missing.
+    pub fn take_awaiting_mfa(&self, mfa_token: &str) -> Option<(i64, String)> {
+        let a = self.awaiting_mfa.lock().unwrap().remove(mfa_token)?;
+        (a.created.elapsed() < PENDING_TTL).then_some((a.provider_id, a.id_token))
     }
 
     /// 測試用：有幾筆進行中。/ For tests: how many are pending.

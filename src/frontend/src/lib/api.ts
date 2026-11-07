@@ -196,16 +196,25 @@ export async function refreshAccessToken(): Promise<boolean> {
  * 登出：請伺服器撤銷這個登入 session（refresh token 之後不能再續期）。盡力而為、不等回應，頁面要走了所以 keepalive。
  * Logout: ask the server to revoke this sign-in session. Best effort, not awaited; keepalive because the page is leaving.
  */
-export function revokeSession(refresh: string): void {
+/**
+ * 撤銷這個登入；回單一登入身分提供者的登出網址（這個登入是用它開的、而且它設定成一併登出時），否則 null。
+ * Revoke this sign-in; answers the single sign-on provider's sign-out URL when this sign-in came from one set to sign
+ * out too, else null.
+ */
+export async function revokeSession(refresh: string): Promise<string | null> {
     try {
-        void fetch(`${API_BASE}/api/auth/logout`, {
+        const res = await fetch(`${API_BASE}/api/auth/logout`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refresh }),
             keepalive: true,
-        }).catch(() => undefined);
+        });
+        const data = (await res.json().catch(() => null)) as { end_session_url?: unknown } | null;
+        const url = data?.end_session_url;
+        return typeof url === "string" && /^https?:\/\//.test(url) ? url : null;
     } catch {
-        /* 離開頁面中 / leaving the page */
+        /* 離開頁面中或連不上 / leaving the page or unreachable */
+        return null;
     }
 }
 

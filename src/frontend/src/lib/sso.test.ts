@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { badDomain, canUnlink, fromRuleValue, grantsAdmin, groupLines, orderedClaims, ruleValue, tidyRules, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
+import { badDomain, canUnlink, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, orderedClaims, ruleValue, tidyRules, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
 
 test("buttons come from the public endpoint; anything odd is dropped", () => {
     assert.deepEqual(parseSsoButtons([{ slug: "okta", name: "Okta" }, { slug: "Bad Slug", name: "x" }, { slug: "kc", name: " " }, 3, null]), [
@@ -70,4 +70,9 @@ test("group lists and rules are tidied before saving", () => {
     assert.deepEqual(fromRuleValue("group:3"), { target: "group", group_id: 3 });
     assert.deepEqual(fromRuleValue("admin"), { target: "admin", group_id: null });
     assert.equal(ssoErrorKey("sso_group_not_allowed"), "sso.err.groupNotAllowed");
+});
+
+test("the post-logout URL comes from the callback base", () => {
+    assert.equal(postLogoutUrl("https://telepy.example/api/auth/oidc/"), "https://telepy.example/login");
+    assert.equal(postLogoutUrl("http://localhost:3123/api/auth/oidc"), "http://localhost:3123/login");
 });

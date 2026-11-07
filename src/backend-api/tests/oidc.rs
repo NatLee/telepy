@@ -58,6 +58,7 @@ async fn discovery(State(idp): State<Shared>) -> Json<Value> {
         "authorization_endpoint": format!("{i}/authorize?tenant=t1"),
         "token_endpoint": format!("{i}/token"),
         "jwks_uri": format!("{i}/jwks"),
+        "end_session_endpoint": format!("{i}/logout?tenant=t1"),
         "code_challenge_methods_supported": ["S256"],
     }))
 }
@@ -486,4 +487,65 @@ async fn provider_groups_become_admin_rights_and_user_groups() {
     assert_eq!(r.json["providers"][0]["group_rules"], json!([{"idp_group": "telepy-admins", "target": "admin", "group_id": null, "group_name": null}]));
     let r = app.get("/api/log/ssh/events?scope=all&limit=100", Some(&admin)).await;
     assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "sso_role" && e["message"].as_str().unwrap_or("").contains("became an administrator")), "{}", r.text);
+}
+
+fn code_at(secret_b32: &str, unix: i64) -> String {
+    let secret = telepy_server::mfa::base32_decode(secret_b32).unwrap();
+    format!("{:06}", telepy_server::mfa::hotp(&secret, telepy_server::mfa::totp_step(unix as u64)))
+}
+
+async fn logout_url(app: &TestApp, tokens: &Value) -> Value {
+    let r = app.post("/api/auth/logout", None, json!({"refresh": tokens["refresh_token"]})).await;
+    assert_eq!((r.status, r.json["revoked"].as_bool()), (StatusCode::OK, Some(true)), "{}", r.text);
+    r.json["end_session_url"].clone()
+}
+
+#[tokio::test]
+async fn signing_out_also_signs_out_at_the_provider_when_asked() {
+    let app = common::spawn().await;
+    let idp = start_idp(Some("s3cret")).await;
+    let issuer = idp.lock().unwrap().issuer.clone();
+    let admin = app.login("admin", "pw").await;
+    let r = app.post("/api/site/oidc", Some(&admin), json!({"name": "Corp", "issuer": issuer, "client_id": "telepy", "client_secret": "s3cret", "end_session": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["providers"][0]["end_session"].as_bool(), r.json["providers"][0]["post_logout_url"].as_str()), (Some(true), Some("http://localhost/login")));
+    let id = r.json["created_id"].as_i64().unwrap();
+    let kim = json!({"sub": "k-1", "email": "kim@corp.example"});
+
+    // 單一登入的登出：回身分提供者的登出網址，帶 id_token、回來的網址與 client_id；只回一次。
+    // An SSO sign-in's logout answers the provider's sign-out URL (id_token, way back, client id), once.
+    let tokens = sign_in(&app, &idp, "corp", kim.clone()).await.unwrap();
+    let url = logout_url(&app, &tokens).await;
+    let url = url::Url::parse(url.as_str().unwrap_or_else(|| panic!("no url: {url}"))).unwrap();
+    assert_eq!(format!("{}://{}{}", url.scheme(), url.host_str().unwrap(), url.path()), format!("{}/logout", issuer.replace(&format!(":{}", url.port().unwrap()), "")));
+    let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    assert_eq!((q["tenant"].as_str(), q["post_logout_redirect_uri"].as_str(), q["client_id"].as_str()), ("t1", "http://localhost/login", "telepy"));
+    let payload = q["id_token_hint"].split('.').nth(1).unwrap();
+    let payload: Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    assert_eq!(payload["sub"], "k-1", "the hint is this sign-in's own id_token");
+    let r = app.post("/api/auth/logout", None, json!({"refresh": tokens["refresh_token"]})).await;
+    assert_eq!(r.json["end_session_url"], Value::Null, "the record goes with the first logout");
+
+    // 密碼登入、或身分提供者沒開這個選項：只登出 Telepy。/ A password sign-in, or the option off: Telepy only.
+    let r = app.post("/api/auth/token", None, json!({"username": "admin", "password": "pw"})).await;
+    assert_eq!(logout_url(&app, &r.json).await, Value::Null);
+    app.patch(&format!("/api/site/oidc/{id}"), Some(&admin), json!({"end_session": false})).await;
+    let tokens = sign_in(&app, &idp, "corp", kim.clone()).await.unwrap();
+    assert_eq!(logout_url(&app, &tokens).await, Value::Null);
+    app.patch(&format!("/api/site/oidc/{id}"), Some(&admin), json!({"end_session": true})).await;
+
+    // 有兩步驟驗證：通過第二步之後的登入一樣會登出身分提供者。/ With two-step sign-in, the sign-in after the second step too.
+    let tokens = sign_in(&app, &idp, "corp", kim.clone()).await.unwrap();
+    let web = tokens["access_token"].as_str().unwrap().to_string();
+    let r = app.post("/api/auth/mfa/totp/setup", Some(&web), json!({})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let now = chrono::Utc::now().timestamp();
+    let r = app.post("/api/auth/mfa/totp/enable", Some(&web), json!({"code": code_at(&secret, now)})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    sqlx::query("UPDATE telepy_user_mfa SET totp_last_step = NULL").execute(&app.state.db.write).await.unwrap();
+    let ch = sign_in(&app, &idp, "corp", kim.clone()).await.unwrap();
+    assert_eq!(ch["mfa_required"], true, "{ch}");
+    let r = app.post("/api/auth/mfa/verify", None, json!({"mfa_token": ch["mfa_token"], "method": "totp", "code": code_at(&secret, now)})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(logout_url(&app, &r.json).await.as_str().is_some_and(|u| u.contains("id_token_hint=")));
 }

@@ -8746,6 +8746,17 @@ export const en = {
     "sso.flow.roles2": "Each sign-in adds the administrator right and user groups the rules give for their groups.",
     "sso.flow.roles3": "It only takes away what this provider gave before; anything given by hand stays.",
     "sso.flow.roles4": "A token without the groups claim changes nothing, and the last administrator is never removed.",
+    // 單一登入：一併登出身分提供者。/ Single sign-on: signing out at the provider.
+    "sso.logout.switch": "Also sign out at the provider when signing out of Telepy",
+    "sso.logout.on": "Pressing Sign out in Telepy also ends the person's session at the provider, then comes back to Telepy's sign-in page. Being signed out by an administrator or another device doesn't.",
+    "sso.logout.off": "Off: signing out of Telepy leaves the provider signed in, so the next sign-in button may go straight through.",
+    "sso.logout.redirect": "Sign-out redirect URI",
+    "sso.logout.redirectHint": "Register this at the provider as an allowed post-logout (sign-out) redirect URI.",
+    "sso.logout.missing": "This provider publishes no sign-out endpoint, so Telepy can only sign out of itself.",
+    "sso.logout.endpoint": "Sign-out",
+    "sso.logout.noEndpoint": "none published",
+    "sso.logout.listNote": "Signs out at the provider too",
+    "sso.flow.step6": "Signing out of Telepy can also end the session at the provider (if the admin turned that on): Telepy sends the browser to the provider's sign-out page with this sign-in's ID token as the hint, and it comes back to the sign-in page.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

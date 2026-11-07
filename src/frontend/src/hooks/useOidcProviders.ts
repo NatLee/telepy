@@ -30,6 +30,8 @@ export interface OidcProvider {
     groups_claim: string;
     required_groups: string[];
     group_rules: GroupRule[];
+    end_session?: boolean;
+    post_logout_url?: string;
 }
 
 export interface OidcList {
@@ -68,6 +70,7 @@ export interface ProviderDraft {
     groups_claim: string;
     required_groups: string[];
     group_rules: GroupRule[];
+    end_session: boolean;
 }
 
 /** 欄位錯誤（`{field: [msg]}`）。/ Field errors. */
