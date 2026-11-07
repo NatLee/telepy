@@ -8697,7 +8697,7 @@ export const en = {
     "access.viaSso": "Added by {provider} (single sign-on groups)",
     "access.ssoMembersHint": "Members with a building icon came from single sign-on groups. Removing one here lasts only until their next sign-in; change their group at the provider instead.",
     "logs.event.sso_role": "Single sign-on roles",
-    "sso.err.noGroups": "This sign-in option only lets in certain groups, and the provider didn't say which groups you're in.",
+    "sso.err.noGroups": "This sign-in option only lets in certain groups, and the provider sent no groups for you: you may be in none of them, or it isn't set up to send groups.",
     "sso.err.groupNotAllowed": "Your groups at the provider aren't allowed to sign in here.",
     "sso.admin.tabError": "Check this tab",
     "sso.admin.required": "This field is required.",

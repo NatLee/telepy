@@ -8679,7 +8679,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "access.viaSso": "由 {provider} 加入（單一登入的群組）",
     "access.ssoMembersHint": "有大樓圖示的成員來自單一登入的群組。在這裡拿掉只維持到他下次登入；要改請到身分提供者那邊改群組。",
     "logs.event.sso_role": "單一登入的角色",
-    "sso.err.noGroups": "這個登入方式只讓特定群組進來，但身分提供者沒有告訴 Telepy 你在哪些群組。",
+    "sso.err.noGroups": "這個登入方式只讓特定群組進來，但身分提供者沒有送來你的任何群組：可能你不在任何群組，或它沒有設定送出群組。",
     "sso.err.groupNotAllowed": "你在身分提供者的群組不能在這裡登入。",
     "sso.admin.tabError": "這頁有問題",
     "sso.admin.required": "這一欄必填。",

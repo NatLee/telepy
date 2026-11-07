@@ -8679,7 +8679,7 @@ export const ja: Record<TranslationKey, string> = {
     "access.viaSso": "{provider} により追加（シングルサインオンのグループ）",
     "access.ssoMembersHint": "ビルのアイコンが付いたメンバーはシングルサインオンのグループから来ています。ここで外しても次のサインインまでしか続きません。変更はプロバイダー側のグループで行ってください。",
     "logs.event.sso_role": "シングルサインオンのロール",
-    "sso.err.noGroups": "このサインイン方法は特定のグループだけを通しますが、プロバイダーが所属グループを伝えていません。",
+    "sso.err.noGroups": "このサインイン方法は特定のグループだけを通しますが、プロバイダーからあなたのグループが届いていません。どのグループにも入っていないか、グループを送る設定がない可能性があります。",
     "sso.err.groupNotAllowed": "プロバイダーでの所属グループでは、ここにサインインできません。",
     "sso.admin.tabError": "このタブを確認",
     "sso.admin.required": "この項目は必須です。",
