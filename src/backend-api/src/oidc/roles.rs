@@ -97,6 +97,19 @@ pub fn claim_groups(claims: &Map<String, Value>, path: &str) -> Option<Vec<Strin
     Some(out)
 }
 
+/// 身分提供者沒送群組 claim 時怎麼看。這家之前替這個人給過東西 = claim 有設好，現在沒送就是他一個群組都沒有
+/// （Keycloak、Entra ID 在沒有群組時整個省略 claim）；從沒給過 = 不知道是沒設好還是沒群組，角色不動（None）。
+/// How to read a missing groups claim. The provider gave this person something before = the claim is set up, so
+/// its absence means they are in no groups now (Keycloak and Entra ID leave it out then); never gave anything =
+/// can't tell a missing setup from no groups, so roles stay (None).
+pub fn groups_or_none(sent: Option<Vec<String>>, granted_before: bool) -> Option<Vec<String>> {
+    match sent {
+        Some(g) => Some(g),
+        None if granted_before => Some(Vec::new()),
+        None => None,
+    }
+}
+
 /// 「只有這些群組能登入」。清單空 = 不限。/ "Only these groups may sign in"; empty = anyone.
 pub fn allowed(required: &[String], groups: Option<&[String]>) -> Result<(), &'static str> {
     if required.is_empty() {
@@ -264,5 +277,12 @@ mod tests {
         let p = plan(&BTreeSet::new(), &Current { member_of: BTreeSet::new(), is_admin: false, ..now });
         assert!(p.leave.is_empty() && !p.revoke_admin);
         assert_eq!(p.forget, vec![Target::Admin, Target::Group(1)]);
+    }
+
+    #[test]
+    fn a_missing_claim_means_no_groups_only_after_the_provider_gave_something() {
+        assert_eq!(groups_or_none(None, true), Some(vec![]), "Keycloak / Entra leave the claim out when a person has no groups");
+        assert_eq!(groups_or_none(None, false), None, "never gave anything: maybe the claim isn't set up, leave roles alone");
+        assert_eq!(groups_or_none(Some(vec!["ops".into()]), false), Some(vec!["ops".into()]));
     }
 }

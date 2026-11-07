@@ -72,7 +72,7 @@ The rules are applied every time someone signs in with that provider, and they f
 
 - Group names are matched exactly, capital letters included.
 - Telepy only takes away what **this provider gave**. A membership or an admin right an administrator gave by hand stays, even when the person leaves the matching group at the provider.
-- If the ID token carries no groups claim at all, nothing changes. Telepy would rather keep a role it can't confirm than drop one by accident; an empty list is different, and means "in no group".
+- If the ID token carries no groups claim at all, it depends on the person. When the provider has given them something before, the claim is clearly set up, so its absence means they are in no group now (Keycloak and Entra ID leave the claim out when a person has no groups) and what the provider gave is taken away. When it never gave them anything, nothing changes: Telepy can't tell "in no group" from "not set up to send groups", and would rather not guess. An empty list always means "in no group".
 - The last active administrator is never demoted, so the site can't end up with nobody in charge.
 - The person's own Telepy two-step sign-in still runs after the roles are applied.
 
@@ -160,7 +160,7 @@ Every change to a provider and every link or unlink appears in the admin **Audit
 | Finish signing in in the same browser you started in | The cookie was lost: another browser, a private window that closed, or cookies blocked for this site |
 | Single sign-on didn't work | Most often the client secret, the redirect URI or the clock. The backend log says which (`[OIDC]` lines) |
 | The sign-in provider refused the request | The provider's settings for Telepy: the redirect URI, the allowed scopes, or the app isn't assigned to this person |
-| This sign-in option only lets in certain groups, and the provider didn't say which groups you're in | **Only these groups may sign in** is set, but the ID token has no groups claim. Check the claim name, or the provider's groups setup |
+| This sign-in option only lets in certain groups, and the provider sent no groups for you | **Only these groups may sign in** is set, but the ID token has no groups claim. Usually the person is in no groups (Keycloak and Entra ID then leave the claim out); otherwise check the claim name or the provider's groups setup |
 | Your groups at the provider aren't allowed to sign in here | The person is in none of the listed groups |
 
 For anything else, run **Test sign-in** first. It shows exactly what the provider sent.

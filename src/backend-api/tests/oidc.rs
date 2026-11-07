@@ -459,13 +459,22 @@ async fn provider_groups_become_admin_rights_and_user_groups() {
     let ops_json = policy.json["groups"].as_array().unwrap().iter().find(|x| x["id"] == ops).unwrap().clone();
     assert_eq!(ops_json["sso_members"], json!([]), "a hand-given membership is not marked as the provider's");
 
-    // 沒有群組 claim（不再限定群組時）：什麼都不動。/ No groups claim (once nothing is required): nothing changes.
+    // 沒有群組 claim（不再限定群組時）：這家給過她東西，表示 claim 有設好——沒送就是她一個群組都沒有（Keycloak、
+    // Entra ID 這時整個省略 claim），給過的收回。/ No groups claim after the provider gave her something: the claim is
+    // set up, so she is in no groups now (Keycloak and Entra ID leave it out then); what it gave goes.
     app.patch(&format!("/api/site/oidc/{id}"), Some(&admin), json!({"required_groups": []})).await;
     app.patch(&format!("/api/access/groups/{ops}"), Some(&admin), json!({"members": []})).await;
     sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["ops"]})).await.unwrap();
     assert!(groups_of(g.id).await.contains(&ops));
     sign_in(&app, &idp, "corp", json!({"sub": "g-1"})).await.unwrap();
-    assert!(groups_of(g.id).await.contains(&ops), "no claim = left as it is");
+    assert!(!groups_of(g.id).await.contains(&ops), "no claim after a grant = no groups");
+    // 從沒給過東西的人：沒有 claim = 角色不動。/ Someone the provider never gave anything: no claim = roles untouched.
+    sign_in(&app, &idp, "corp", json!({"sub": "h-1", "email": "henry@corp.example"})).await.unwrap();
+    let henry = telepy_server::db::users::by_username(db, "henry").await.unwrap().unwrap();
+    app.patch(&format!("/api/access/groups/{dev}"), Some(&admin), json!({"members": [g.id, henry.id]})).await;
+    sign_in(&app, &idp, "corp", json!({"sub": "h-1"})).await.unwrap();
+    assert!(groups_of(henry.id).await.contains(&dev));
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["ops"]})).await.unwrap();
     let policy = app.get("/api/access", Some(&admin)).await;
     let ops_json = policy.json["groups"].as_array().unwrap().iter().find(|x| x["id"] == ops).unwrap().clone();
     assert_eq!(ops_json["sso_members"], json!([{"user_id": g.id, "provider": "Corp"}]));

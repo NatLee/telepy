@@ -357,15 +357,16 @@ async fn test_report(state: &AppState, p: &Provider, claims: &Claims) -> ApiResu
         Plan::Create { username } => (json!({ "action": "create", "username": username }), Some(None)),
         Plan::Refuse(code) => (json!({ "action": "refuse", "code": code }), None),
     };
-    // 會怎麼改角色（沒有群組 claim = 不改）。/ How roles would change (no groups claim = unchanged).
-    if let (Some(user), Some(groups)) = (user, groups.as_ref()) {
-        let rules = live_rules(state, p.id).await?;
+    // 會怎麼改角色（沒有群組 claim 時照 `roles::groups_or_none`）。/ How roles would change (a missing claim as in a sign-in).
+    if let Some(user) = user {
         let now = match &user {
             Some(u) => current(state, p, u).await?,
             None => Current { other_admins: true, ..Default::default() },
         };
+        let rules = live_rules(state, p.id).await?;
+        let effective = roles::groups_or_none(groups.clone(), !now.granted.is_empty());
         // 沒有規則也沒給過東西 = 不會碰角色，就不提。/ No rules and nothing granted = roles untouched; say nothing.
-        if !rules.is_empty() || !now.granted.is_empty() {
+        if let Some(groups) = effective.as_ref().filter(|_| !rules.is_empty() || !now.granted.is_empty()) {
             let sync = roles::plan(&roles::desired(&rules, groups), &now);
             let names = group_names(state).await?;
             would["roles"] = roles_json(&sync, &names);
@@ -430,14 +431,15 @@ fn roles_json(sync: &SyncPlan, names: &std::collections::HashMap<i64, String>) -
 /// Sync roles from the groups claim: add what the rules call for, take away what this provider gave before and the
 /// groups no longer call for. Without the claim nothing changes.
 async fn apply_roles(state: &AppState, p: &Provider, user: &User, claims: &Claims) -> sqlx::Result<()> {
-    let Some(groups) = claim_groups(p, claims) else {
+    let now = current(state, p, user).await?;
+    // 沒有群組 claim：這家給過他東西 = 他現在沒有群組（要收回）；沒給過 = 不動。/ No claim: see `roles::groups_or_none`.
+    let Some(groups) = roles::groups_or_none(claim_groups(p, claims), !now.granted.is_empty()) else {
         if !db::oidc::rules(&state.db, p.id).await?.is_empty() {
             tracing::info!(provider = p.slug, claim = p.groups_claim, "[OIDC] the id_token has no groups claim; roles left as they are");
         }
         return Ok(());
     };
     let rules = live_rules(state, p.id).await?;
-    let now = current(state, p, user).await?;
     if rules.is_empty() && now.granted.is_empty() {
         return Ok(());
     }
