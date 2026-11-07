@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RECIPES, RECIPE_BY_ID, TELEPY_EXAMPLE, buildSegments, segmentsToString, shellSegments, type ConnectTarget, type ForwardOptions } from "./forwardRecipes.ts";
+import { RECIPES, RECIPE_BY_ID, TELEPY_EXAMPLE, TELEPY_RSYNC_EXAMPLE, buildSegments, segmentsToString, shellSegments, type ConnectTarget, type ForwardOptions } from "./forwardRecipes.ts";
 import { CLI_EXAMPLES } from "./cliExamples.gen.ts";
 import { fillExample } from "./cliGuide.ts";
 
@@ -16,15 +16,19 @@ test("the telepy way is the CLI's own examples (src/cli/src/examples.rs), not a 
         assert.ok(ex, `example ${exampleId}`);
         assert.equal(cmd(recipe as keyof typeof RECIPE_BY_ID, "telepy"), fillExample(ex.lines, context)[0], `${recipe} = ${exampleId}`);
     }
+    // 搬檔案選 rsync：`telepy rsync` 那個範例。/ The copy task with rsync: the `telepy rsync` example.
+    const rsync = CLI_EXAMPLES.find((e) => e.id === TELEPY_RSYNC_EXAMPLE)!;
+    assert.equal(cmd("copy", "telepy", { ...RECIPE_BY_ID.copy.defaults, tool: "rsync" }), fillExample(rsync.lines, context)[0]);
     // 每個任務都對到一個 CLI 範例（那邊的 clap 測試保證它跑得動）。/ Every task maps to a CLI example (whose clap test proves it parses).
     for (const r of RECIPES) assert.ok(TELEPY_EXAMPLE[r.id], `${r.id} has a CLI example`);
 });
 
-test("the telepy way for the rest: a LAN shell through the device, scp, a shell", () => {
+test("the telepy way for the rest: a LAN shell through the device, scp / rsync, a shell", () => {
     assert.equal(cmd("jump", "telepy"), "telepy ssh box@pi --ssh-opt -t -- ssh ubuntu@192.168.1.20");
     assert.equal(cmd("jump", "telepy", { lanUser: "root", lanHost: "10.0.0.5", lanPort: "2200" }), "telepy ssh box@pi --ssh-opt -t -- ssh -p 2200 root@10.0.0.5");
     assert.equal(cmd("copy", "telepy"), "telepy scp -r ./project box@pi:~/");
-    assert.equal(cmd("copy", "telepy", { direction: "download", tool: "rsync", localPath: "./logs", remotePath: "/var/log/my app" }), "telepy scp -r box@pi:'/var/log/my app' ./logs", "no rsync through telepy");
+    assert.equal(cmd("copy", "telepy", { direction: "download", tool: "scp", localPath: "./logs", remotePath: "/var/log/my app" }), "telepy scp -r box@pi:'/var/log/my app' ./logs");
+    assert.equal(cmd("copy", "telepy", { direction: "download", tool: "rsync", localPath: "./logs", remotePath: "/var/log/my app" }), "telepy rsync -avz --progress box@pi:'/var/log/my app' ./logs");
     assert.equal(segmentsToString(shellSegments(target("telepy"))), "telepy ssh box@pi");
     assert.equal(segmentsToString(shellSegments(target("telepy"), "uptime")), "telepy ssh box@pi -- uptime");
     // 名字要引號就整個 <通道>@<帳號> 一起包。/ A name that needs quoting quotes the whole target.

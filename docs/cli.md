@@ -208,9 +208,12 @@ telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # any other ssh option (r
 telepy scp ./build.tar.gz box@pi:/tmp/
 telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
+telepy rsync -avz --progress ./site box@pi:~/site   # rsync's own options; telepy's (--identity, --ssh-opt, --via) go first
 ```
 
 These run your system's OpenSSH and log in with **your personal SSH key**, through Telepy's gateway and the tunnel. It is the same path the web's **SSH config** dialog sets up.
+
+`telepy rsync` hands your system's rsync that same ssh as its `-e`, so rsync has to be installed on the device too. rsync keeps its own `-i` (`--itemize-changes`), so the key option is `--identity` there, and an `-e` of your own is refused because it would go around Telepy.
 
 Each run writes two files into `~/.ssh/telepy/` (move that folder with `TELEPY_SSH_DIR`):
 
@@ -425,6 +428,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy ssh <target>` | SSH into the device; `-N`, `-L`, `-R`, `-D`, `-i`, `--ssh-opt`, `--via`, `--fallback`, a command after `--` | `tunnels:read` + your SSH key |
 | `telepy scp [-r] <from>… <to>` | Copy with scp; the remote side is `<tunnel>[@account]:<path>` | `tunnels:read` + your SSH key |
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
+| `telepy rsync [rsync options…] <from>… <to>` | Sync with rsync over the same ssh; `--identity`, `--ssh-opt`, `--via`, `--fallback` go before rsync's options | `tunnels:read` + your SSH key |
 | `telepy forward <target> <host>[:port]` | Bring a port behind the device to this computer (`ssh -L`); `--open`, `--local`, `--https` | `tunnels:read` + your SSH key |
 | `telepy config install` | Put Telepy's blocks into `~/.ssh/config`; tunnels or `--all`, `--print`, `--file` | `tunnels:read` |
 | `telepy config fallback` | Show or set what to do when the web port can't be reached: `ask`, `always`, `never` | — |

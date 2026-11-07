@@ -250,10 +250,7 @@ function CheatsheetInner() {
         </span>
     );
     const upload = resolved.direction !== "download";
-    // telepy 只有 scp（rsync 不能經 telepy 跑）。/ telepy has scp only (rsync can't run through it).
-    const tool = telepyWay ? (
-        <span className="mx-0.5 inline-flex h-7 items-center rounded-md bg-muted px-2 align-middle font-mono text-sm text-foreground">scp</span>
-    ) : (
+    const tool = (
         <button
             type="button"
             onClick={() => setParam("tool", resolved.tool === "rsync" ? "scp" : "rsync")}

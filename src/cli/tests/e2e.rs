@@ -348,6 +348,61 @@ async fn ssh_explains_and_fixes_a_missing_key() {
     assert!(o.code == 0 && o.stdout.contains("in-pi"), "{}", o.stderr);
 }
 
+/// rsync 經 Telepy：系統的 rsync 用 telepy 產生的 ssh（`-e`），裝置上跑真的 `rsync --server`（lab 的串流 exec）；
+/// 上傳、改了再傳一次、下載回來，`-e` 被拒。/ rsync through Telepy: the system rsync with telepy's ssh (`-e`), a real
+/// `rsync --server` on the device (the lab's streaming exec); upload, sync a change, download back, `-e` refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rsync_syncs_a_folder_through_telepy() {
+    if std::process::Command::new("rsync").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("skipping: no rsync on this computer");
+        return;
+    }
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service, &alice.key])], MachineOpts { shell: true, stream_exec: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "rsync", "scopes": ["tunnels:read"], "expires_at": expires})).await;
+    assert_eq!(r.status.as_u16(), 201, "{}", r.text);
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    let src = h.join("site");
+    std::fs::create_dir_all(src.join("css")).unwrap();
+    std::fs::write(src.join("index.html"), "hello\n").unwrap();
+    std::fs::write(src.join("css").join("a.css"), "body{}\n").unwrap();
+    let key = alice.key.path.to_str().unwrap();
+    let sync = |from: String, to: String| {
+        let h = h.to_path_buf();
+        let key = key.to_string();
+        async move { telepy(&h, &["rsync", "--identity", &key, "--ssh-opt", "-o BatchMode=yes", "-a", &from, &to]).await }
+    };
+    let device = m.account_home("pi").join("site-copy");
+
+    // 上傳：整個資料夾到裝置上。/ Upload: the whole folder onto the device.
+    let o = sync(format!("{}/", src.display()), "box@pi:site-copy/".into()).await;
+    assert_eq!(o.code, 0, "rsync up: {}{}", o.stdout, o.stderr);
+    assert_eq!(std::fs::read_to_string(device.join("index.html")).unwrap(), "hello\n");
+    assert_eq!(std::fs::read_to_string(device.join("css").join("a.css")).unwrap(), "body{}\n");
+    // 改一個檔再同步：裝置上跟著變。/ Change a file and sync again: the device follows.
+    std::fs::write(src.join("index.html"), "hello again\n").unwrap();
+    let o = sync(format!("{}/", src.display()), "box@pi:site-copy/".into()).await;
+    assert_eq!(o.code, 0, "rsync again: {}{}", o.stdout, o.stderr);
+    assert_eq!(std::fs::read_to_string(device.join("index.html")).unwrap(), "hello again\n");
+    // 下載回來。/ And back down.
+    let back = h.join("back");
+    let o = sync("box@pi:site-copy/".into(), format!("{}/", back.display())).await;
+    assert_eq!(o.code, 0, "rsync down: {}{}", o.stdout, o.stderr);
+    assert_eq!(std::fs::read_to_string(back.join("css").join("a.css")).unwrap(), "body{}\n");
+    // 自己給 -e 就繞過 Telepy 了：拒絕，什麼都不跑。/ A user's own -e would bypass Telepy: refused, nothing runs.
+    let o = telepy(h, &["rsync", "-a", "-e", "ssh", "./x", "box:y"]).await;
+    assert!(o.code != 0 && o.stderr.contains("sets rsync's -e itself"), "{}", o.stderr);
+}
+
 fn chrono_like(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     // civil_from_days（Howard Hinnant）。

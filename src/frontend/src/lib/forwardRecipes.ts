@@ -327,6 +327,9 @@ export function cliTarget(target: ConnectTarget): string {
     return shq(`${target.tunnel}@${target.username}`);
 }
 
+/** 搬檔案選 rsync 時對到的 CLI 範例。/ The CLI example the copy task equals when the tool is rsync. */
+export const TELEPY_RSYNC_EXAMPLE = "rsync";
+
 /** 用預設值時，`telepy` 跑法產生的就是這個 CLI 範例（`src/cli/src/examples.rs`；測試比對）。/ The CLI example the telepy way equals with the defaults (tested). */
 export const TELEPY_EXAMPLE: Partial<Record<RecipeId, string>> = {
     local: "forward",
@@ -361,10 +364,10 @@ function telepySsh(target: ConnectTarget): Segment[] {
 
 /**
  * telepy 跑法：一個埠用 `telepy forward`（等到接得通、印出網址），SOCKS / 反向用 `telepy ssh -N`，跳到區網主機用裝置自己的
- * ssh（`--ssh-opt -t` 給它一個終端機），搬檔案用 `telepy scp`（沒有 rsync）。轉發的選項（-f、keep-alive）在這裡不用：CLI 自己處理。
+ * ssh（`--ssh-opt -t` 給它一個終端機），搬檔案用 `telepy scp` 或 `telepy rsync`。轉發的選項（-f、keep-alive）在這裡不用：CLI 自己處理。
  * The telepy way: one port = `telepy forward` (waits until it answers, prints the address), SOCKS / reverse =
- * `telepy ssh -N`, a LAN host = the device's own ssh (`--ssh-opt -t` gives it a terminal), files = `telepy scp`
- * (no rsync). The forwarding options (-f, keep-alive) don't apply: the CLI handles those itself.
+ * `telepy ssh -N`, a LAN host = the device's own ssh (`--ssh-opt -t` gives it a terminal), files = `telepy scp` or
+ * `telepy rsync`. The forwarding options (-f, keep-alive) don't apply: the CLI handles those itself.
  */
 function telepySegments(id: RecipeId, params: RecipeParams, target: ConnectTarget): Segment[] {
     const def = RECIPE_BY_ID[id];
@@ -406,6 +409,9 @@ function telepySegments(id: RecipeId, params: RecipeParams, target: ConnectTarge
             const local: Segment = { tokens: [tok(shq(localPath), "arg")], explain: { key: upload ? "sheet.explain.copyFromLocal" : "sheet.explain.copyToLocal", vars: { path: localPath } } };
             const remote: Segment = { tokens: [tok(`${cliTarget(target)}:${shq(remotePath)}`, "target")], explain: { key: upload ? "sheet.explain.copyToDevice" : "sheet.explain.copyFromDevice", vars: { path: remotePath } } };
             const [src, dst] = upload ? [local, remote] : [remote, local];
+            if ((params.tool ?? def.defaults.tool) === "rsync") {
+                return [TELEPY, { tokens: [tok("rsync", "sub"), tok("-avz", "flag"), tok("--progress", "flag")], explain: { key: "sheet.explain.telepyRsync" } }, src, dst];
+            }
             return [TELEPY, { tokens: [tok("scp", "sub"), tok("-r", "flag")], explain: { key: "sheet.explain.telepyScp" } }, src, dst];
         }
     }
@@ -546,6 +552,7 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.telepyForward": "sheet.part.telepyForward",
     "sheet.explain.telepySsh": "sheet.part.telepySsh",
     "sheet.explain.telepyScp": "sheet.part.telepyScp",
+    "sheet.explain.telepyRsync": "sheet.part.rsync",
     "sheet.explain.telepyTarget": "sheet.part.telepyTarget",
     "sheet.explain.telepyTo": "sheet.part.telepyTo",
     "sheet.explain.telepyLocal": "sheet.part.telepyLocal",
