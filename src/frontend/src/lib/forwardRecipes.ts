@@ -12,7 +12,7 @@
  */
 import type { TranslationKey } from "@/locales/en";
 
-export type RecipeId = "local" | "lan" | "socks" | "remote" | "jump" | "copy" | "rustdesk";
+export type RecipeId = "local" | "lan" | "socks" | "remote" | "jump" | "copy" | "rustdesk" | "vpn";
 
 /**
  * 怎麼跑：telepy = Telepy 的 CLI（`telepy forward` / `telepy ssh`，自己寫 ssh config，不碰 ~/.ssh/config）；
@@ -151,6 +151,16 @@ export const RECIPES: RecipeDef[] = [
             { key: "lanPort", label: "sheet.field.lanSshPort", kind: "port" },
         ],
         defaults: { lanUser: "ubuntu", lanHost: "192.168.1.20", lanPort: "22" },
+        forwarding: false,
+    },
+    {
+        // 整個網段：telepy vpn（內建或 sshuttle）；ssh 跑法用系統的 sshuttle。/ A whole network: telepy vpn; the ssh ways use sshuttle.
+        id: "vpn",
+        group: "reach",
+        flag: "VPN",
+        title: "sheet.recipe.vpn.title",
+        fields: [{ key: "network", label: "sheet.field.network", kind: "text" }],
+        defaults: { network: "192.168.1.0/24" },
         forwarding: false,
     },
     {
@@ -339,6 +349,7 @@ export const TELEPY_EXAMPLE: Partial<Record<RecipeId, string>> = {
     rustdesk: "forwardRustdesk",
     jump: "lanShell",
     copy: "scp",
+    vpn: "vpn",
 };
 
 const TELEPY: Segment = { tokens: [tok("telepy", "telepy")], explain: { key: "sheet.explain.telepy" } };
@@ -401,6 +412,10 @@ function telepySegments(id: RecipeId, params: RecipeParams, target: ConnectTarge
                 { tokens: [tok("--ssh-opt", "flag"), tok("-t", "value")], explain: { key: "sheet.explain.telepyTty" } },
                 { tokens: [tok("--", "arg"), ...inner], explain: { key: "sheet.explain.telepyHop", vars: { user, host: h } } },
             ];
+        }
+        case "vpn": {
+            const net = text(params, "network", def);
+            return [TELEPY, { tokens: [tok("vpn", "sub")], explain: { key: "sheet.explain.telepyVpn" } }, telepyTarget(target), { tokens: [tok(shq(net), "value")], explain: { key: "sheet.explain.vpnNetwork", vars: { net } } }];
         }
         case "copy": {
             const upload = (params.direction ?? def.defaults.direction) !== "download";
@@ -487,6 +502,19 @@ export function buildSegments(id: RecipeId, params: RecipeParams, target: Connec
             out.push({ tokens: [tok(`${shq(user)}@${h}`, "target")], explain: { key: "sheet.explain.lanTarget", vars: { user, host: h } } });
             return out;
         }
+        case "vpn": {
+            // sshuttle 自己開 ssh：alias 跑法讀 ~/.ssh/config；直接跑法用 -e 帶 -J。/ sshuttle opens ssh itself.
+            const net = text(params, "network", def);
+            const out: Segment[] = [{ tokens: [tok("sshuttle", "cmd")], explain: { key: "sheet.explain.sshuttle" } }];
+            if (target.mode === "alias") {
+                out.push({ tokens: [tok("-r", "flag"), tok(target.alias, "value")], explain: { key: "sheet.explain.sshuttleAlias", vars: { alias: target.alias } } });
+            } else {
+                out.push({ tokens: [tok("-r", "flag"), tok(`${target.username}@localhost:${target.reversePort}`, "value")], explain: { key: "sheet.explain.sshuttleDirect", vars: { user: target.username, port: target.reversePort } } });
+                out.push({ tokens: [tok("-e", "flag"), tok(`"ssh -J ${jumpServerSpec(target)}"`, "value")], explain: { key: "sheet.explain.sshuttleJump" } });
+            }
+            out.push({ tokens: [tok(shq(net), "value")], explain: { key: "sheet.explain.vpnNetwork", vars: { net } } });
+            return out;
+        }
         case "copy": {
             const upload = (params.direction ?? def.defaults.direction) !== "download";
             const rsync = (params.tool ?? def.defaults.tool) === "rsync";
@@ -558,6 +586,12 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.telepyLocal": "sheet.part.telepyLocal",
     "sheet.explain.telepyTty": "sheet.part.telepyTty",
     "sheet.explain.telepyHop": "sheet.part.telepyHop",
+    "sheet.explain.telepyVpn": "sheet.part.telepyVpn",
+    "sheet.explain.vpnNetwork": "sheet.part.vpnNetwork",
+    "sheet.explain.sshuttle": "sheet.part.sshuttle",
+    "sheet.explain.sshuttleAlias": "sheet.part.alias",
+    "sheet.explain.sshuttleDirect": "sheet.part.directTarget",
+    "sheet.explain.sshuttleJump": "sheet.part.jumpServer",
 };
 
 export function segmentsToString(segments: Segment[]): string {

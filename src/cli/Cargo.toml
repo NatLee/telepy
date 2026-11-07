@@ -48,7 +48,7 @@ terminal_size = "0.4"
 # `telepy ssh` 經網頁 port 連 Telepy（自己當 ProxyCommand，不需要 python3）：連線、代理、轉接都在 telepy-carrier 這個共用 crate。
 # `telepy ssh` through the web port, no python3: the connection, proxy and relay live in the shared telepy-carrier crate.
 telepy-carrier = { path = "../carrier", default-features = false }
-tokio = { version = "1", features = ["rt", "io-std", "io-util", "net", "time", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "io-std", "io-util", "net", "time", "macros", "sync", "signal"] }
 unicode-width = "0.2"
 url = "2"
 urlencoding = "2"
@@ -59,6 +59,12 @@ urlencoding = "2"
 # SIGPIPE back to its default: a closed output pipe (`telepy ls | head`) ends telepy quietly instead of a println! panic.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# `telepy vpn` 的內建引擎（macOS / Linux）：虛擬網卡 + 使用者空間的 TCP/IP 堆疊，每條連線經裝置的 sshd 出去。
+# `telepy vpn`'s built-in engine (macOS / Linux): a TUN device + a userspace TCP/IP stack; each connection leaves through the device's sshd.
+tun-rs = { version = "2", features = ["async"] }
+ipstack = "1"
+# 這台電腦自己的網段（預設不把它們導進 VPN）。/ This computer's own networks (never routed into the VPN by default).
+getifaddrs = "0.6"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }

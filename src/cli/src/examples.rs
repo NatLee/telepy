@@ -47,7 +47,7 @@ pub const TOPICS: &[Topic] = &[
     Topic {
         id: "forward",
         title: "Port forwarding",
-        intro: "One port: telepy forward waits until it answers and prints the address (--open opens it). Several ports, the other direction (-R) or a SOCKS proxy (-D): telepy ssh -N with the flags ssh uses. The device makes the connection to the host, so only the device has to reach it.",
+        intro: "One port: telepy forward waits until it answers and prints the address (--open opens it). Several ports, the other direction (-R) or a SOCKS proxy (-D): telepy ssh -N with the flags ssh uses. A whole network: telepy vpn. The device makes the connection to the host, so only the device has to reach it.",
     },
     Topic {
         id: "many",
@@ -184,6 +184,30 @@ pub const EXAMPLES: &[Example] = &[
         title: "A port on a machine behind the device",
         note: "Its page at https://localhost:8443. The device opens the connection, so only the device has to reach 192.168.1.1.",
         lines: &["telepy forward <tunnel>@<account> 192.168.1.1:443 --local 8443"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpn",
+        topic: "forward",
+        title: "A whole network behind the device",
+        note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C. sudo asks for your password to add the network device.",
+        lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpnDns",
+        topic: "forward",
+        title: "With the network's own names",
+        note: "Names under corp.lan are looked up on the device, so http://nas.corp.lan works.",
+        lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpnSshuttle",
+        topic: "forward",
+        title: "Through sshuttle",
+        note: "Uses the sshuttle on your computer; the device needs python3. --dns sends every lookup through the device.",
+        lines: &["telepy vpn <tunnel>@<account> --engine sshuttle --dns"],
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {

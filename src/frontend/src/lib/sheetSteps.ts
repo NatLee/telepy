@@ -69,5 +69,7 @@ export function fillSummary(id: RecipeId, r: RecipeParams): string {
             return r.direction === "download" ? `${r.remotePath} → ${r.localPath}` : `${r.localPath} → ${r.remotePath}`;
         case "rustdesk":
             return `${r.lanHost}:${r.remotePort} → 127.0.0.1:${r.localPort}`;
+        case "vpn":
+            return `VPN ${r.network}`;
     }
 }

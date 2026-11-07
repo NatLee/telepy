@@ -390,6 +390,30 @@ telepy ssh box -N -R 9000:localhost:3000      # 逆方向：デバイスの loca
 
 `forward` は `telepy ssh` と同じ ssh config を書き、デバイス経由で `ssh -N -L 127.0.0.1:<ローカル>:<ホスト>:<ポート>` を実行します。ローカルのポートが応答したらアドレスを表示し、Ctrl+C まで転送を続けます。ローカルのポートは同じ番号（1024 未満は 10000 を足す）で、使用中なら次の空き番号です。`--local` で指定できます。127.0.0.1 だけで待ち受けるので、使えるのはこのコンピューターだけです。`telepy ssh` と同じく `tunnels:read` と個人用 SSH 鍵が必要です。Web アプリのネットワークページでは、同じページを Telepy のリモートブラウザーで開きます。
 
+### ネットワーク全体（VPN）
+
+```sh
+telepy vpn box 192.168.1.0/24                          # そのネットワークのすべてのマシンに、それぞれのアドレスで
+telepy vpn box                                         # Telepy が知っているデバイスのネットワーク（自分と重なるものは除外）
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan の名前はデバイス側で引く
+telepy vpn box --engine sshuttle --dns                 # sshuttle 経由。すべての名前解決をデバイス経由に
+```
+
+`telepy vpn` は、Ctrl+C を押すまで、デバイスの向こうのネットワークにこのコンピューターから届くようにします。`ssh`、ブラウザー、データベースクライアントなど TCP を使うものなら何でも、そのネットワークにいるのと同じように `192.168.1.20` に接続できます。このコンピューターのルーティングを変えるため、sudo でパスワードを聞かれます。
+
+エンジンは 2 つあり、既定の `--engine auto` が選びます。
+
+| | 内蔵 | sshuttle |
+| --- | --- | --- |
+| このコンピューター | macOS か Linux。追加のインストールは不要 | `sshuttle` がインストール済み（Linux、macOS） |
+| デバイス側 | 何も不要。TCP 転送を許可している sshd なら、ルーターの Dropbear でも可 | `python3` |
+| 仕組み | コンピューターにネットワークデバイスを作り、各接続を `ssh -D` 経由にしてデバイスの sshd が開く | sshuttle のファイアウォールルールと、デバイス上の小さな Python ヘルパー |
+| 名前 | `--dns-domain <ドメイン>`：そのドメインの名前をデバイス自身の DNS サーバーに問い合わせます（macOS は `/etc/resolver`、Linux は systemd-resolved） | `--dns`：すべての名前解決がデバイス経由 |
+
+`auto` は、このコンピューターに sshuttle があり、デバイスに python3 があれば sshuttle を、なければ内蔵エンジンを使います。ネットワークを指定しないと、Telepy がデバイスから知ったネットワークを使い、このコンピューター自身も属しているものは除外します（自分の LAN をよそへ向けると切れてしまうため）。どうしても向けたい場合は指定してください。Telepy サーバー自身を含むネットワークは拒否します。VPN が自分の接続を自分に向けてしまうからです。
+
+転送されるのは TCP と、指定した名前の DNS だけです。SSH が運ぶのは TCP だからです。ping、UDP のサービス、その他のプロトコルはローカルのままです。アクセスのルールは `telepy ssh` と同じで、`tunnels:read`、個人の SSH 鍵、そのデバイスで使えるアカウントが必要です。内蔵エンジンでは、さらにデバイスの sshd が TCP 転送を許可している必要があります。実行中、Telepy はこのトンネル上であなたを SSH セッションとして表示します。sshuttle は CLI なしでも使えます。`~/.ssh/config` に Telepy のブロックがあれば `sshuttle -r <Host エイリアス> 192.168.1.0/24` で動きます。Web のコマンドシートもこの行を組み立てます。
+
 ### デバイスのネットワーク上のブラウザー
 
 ```sh
@@ -430,6 +454,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy rsync [rsync のオプション…] <from>… <to>` | 同じ ssh で rsync 同期。`--identity`、`--ssh-opt`、`--via`、`--fallback` は rsync のオプションより前に | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
+| `telepy vpn <target> [<network>…]` | Ctrl+C までデバイスの向こうのネットワーク全体に届くようにします（TCP と、`--dns-domain` / `--dns` の DNS）。`--engine auto\|builtin\|sshuttle`。sudo でパスワードを聞かれます | `tunnels:read` + あなたの SSH 鍵 |
 | `telepy config install` | Telepy のブロックを `~/.ssh/config` に入れる。トンネル名か `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |
 | `telepy config tidy` | ssh の設定を簡略化。`--check`、`--wildcards`、`--yes`、`--file`。サインイン不要 | — |
