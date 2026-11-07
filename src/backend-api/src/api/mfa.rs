@@ -271,7 +271,10 @@ async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, meta: Cli
             db::users::touch_last_login(&state.db, user.id).await?;
             sign_ins::record(&state, user.id, &meta, Attempt::ok(ch.first_factor, Some(method))).await;
             tracing::info!(username = %user.username, method, "[AUTH][2FA] Login success");
-            Ok(Json(token_pair(&state, user.id, &meta, ch.first_factor, Some(method)).await?))
+            let tokens = token_pair(&state, user.id, &meta, ch.first_factor, Some(method)).await?;
+            // 單一登入開的：id_token 掛到這個新登入上（登出時用）。/ An SSO sign-in: attach its id_token to this sign-in.
+            super::oidc::after_mfa(&state, &token, &tokens).await;
+            Ok(Json(tokens))
         }
         Err(e) => {
             let attempted = body.get("method").and_then(Value::as_str);

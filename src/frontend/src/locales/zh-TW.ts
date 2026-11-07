@@ -8728,4 +8728,15 @@ export const zhTW: Record<TranslationKey, string> = {
     "sso.flow.roles2": "每次登入都會依規則，給他所屬群組對應的管理員身分與使用者群組。",
     "sso.flow.roles3": "只會拿掉這個身分提供者以前給過的；手動給的都不動。",
     "sso.flow.roles4": "ID token 沒有群組 claim 時什麼都不改，最後一位管理員也絕不會被拿掉。",
+    // 單一登入：一併登出身分提供者。/ Single sign-on: signing out at the provider.
+    "sso.logout.switch": "登出 Telepy 時也登出身分提供者",
+    "sso.logout.on": "在 Telepy 按登出時，也會結束他在身分提供者那邊的登入，然後回到 Telepy 的登入頁。被管理員或其他裝置登出時不會。",
+    "sso.logout.off": "關閉：登出 Telepy 不會登出身分提供者，所以下次按登入按鈕可能直接就進來了。",
+    "sso.logout.redirect": "登出後回來的網址",
+    "sso.logout.redirectHint": "請在身分提供者那邊把它登記成允許的登出後轉回網址（post-logout redirect URI）。",
+    "sso.logout.missing": "這個身分提供者沒有公開登出端點，所以 Telepy 只能登出自己。",
+    "sso.logout.endpoint": "登出端點",
+    "sso.logout.noEndpoint": "沒有公開",
+    "sso.logout.listNote": "也會登出身分提供者",
+    "sso.flow.step6": "登出 Telepy 時也可以結束身分提供者那邊的登入（管理員有打開的話）：Telepy 把瀏覽器帶到身分提供者的登出頁，用這次登入的 ID token 當提示，登出後回到登入頁。",
 };

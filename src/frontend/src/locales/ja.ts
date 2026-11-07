@@ -8728,4 +8728,15 @@ export const ja: Record<TranslationKey, string> = {
     "sso.flow.roles2": "サインインのたびに、ルールに従って所属グループに対応する管理者権限とユーザーグループを付与します。",
     "sso.flow.roles3": "外すのはこのプロバイダーが以前に付与したものだけで、手動のものはそのままです。",
     "sso.flow.roles4": "グループのクレームがないトークンでは何も変えず、最後の管理者は外しません。",
+    // 單一登入：一併登出身分提供者。/ Single sign-on: signing out at the provider.
+    "sso.logout.switch": "Telepy からサインアウトするときにプロバイダーからもサインアウト",
+    "sso.logout.on": "Telepy でサインアウトを押すと、プロバイダー側のセッションも終了し、Telepy のサインインページに戻ります。管理者や別の端末によるサインアウトでは行いません。",
+    "sso.logout.off": "オフ：Telepy からサインアウトしてもプロバイダー側はサインインしたままなので、次にボタンを押すとそのまま入れることがあります。",
+    "sso.logout.redirect": "サインアウト後のリダイレクト URI",
+    "sso.logout.redirectHint": "プロバイダーで、許可されたサインアウト後のリダイレクト URI（post-logout redirect URI）として登録してください。",
+    "sso.logout.missing": "このプロバイダーはサインアウトのエンドポイントを公開していないため、Telepy は自身からのみサインアウトします。",
+    "sso.logout.endpoint": "サインアウト",
+    "sso.logout.noEndpoint": "公開されていません",
+    "sso.logout.listNote": "プロバイダーからもサインアウト",
+    "sso.flow.step6": "Telepy からのサインアウトでプロバイダー側のセッションも終了できます（管理者がオンにした場合）。このサインインの ID トークンをヒントとしてプロバイダーのサインアウトページへ移動し、その後サインインページに戻ります。",
 };

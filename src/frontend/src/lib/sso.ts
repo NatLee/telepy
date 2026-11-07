@@ -91,6 +91,11 @@ export function providerName(buttons: readonly SsoButton[] | null | undefined, s
     return buttons?.find((b) => b.slug === slug)?.name ?? slug;
 }
 
+/** 從回呼網址的開頭算出「登出後回來的網址」（跟後端 `post_logout_url` 一樣）。/ The post-logout URL, as the backend's. */
+export function postLogoutUrl(callbackBase: string): string {
+    return `${callbackBase.replace(/\/api\/auth\/oidc\/?$/, "")}/login`;
+}
+
 /** 名字 → 代號（跟後端 `oidc::slugify` 一樣）。/ Name → slug (as the backend's `oidc::slugify`). */
 export function slugify(name: string): string {
     let out = "";

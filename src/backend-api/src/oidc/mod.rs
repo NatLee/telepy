@@ -119,6 +119,22 @@ pub fn authorize_url(endpoint: &str, r: &AuthRequest) -> Result<String, String> 
     Ok(url.to_string())
 }
 
+/// 身分提供者的登出網址（OpenID Connect RP-Initiated Logout 1.0）：`id_token_hint` 說是誰，登出後回到
+/// `post_logout_redirect_uri`（要先在身分提供者那邊登記）；端點原本的查詢參數保留。
+/// The provider's sign-out URL (RP-Initiated Logout 1.0): `id_token_hint` names the session, the browser comes back to
+/// `post_logout_redirect_uri` (registered at the provider); the endpoint's own query is kept.
+pub fn end_session_url(endpoint: &str, id_token: &str, post_logout_redirect_uri: &str, client_id: &str) -> Result<String, String> {
+    let mut url = url::Url::parse(endpoint).map_err(|e| format!("bad end_session_endpoint: {e}"))?;
+    if url.scheme() != "https" && !url.host_str().is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "[::1]") {
+        return Err("the end_session_endpoint is not https".into());
+    }
+    url.query_pairs_mut()
+        .append_pair("id_token_hint", id_token)
+        .append_pair("post_logout_redirect_uri", post_logout_redirect_uri)
+        .append_pair("client_id", client_id);
+    Ok(url.to_string())
+}
+
 /// scope 一定有 `openid`；空白整理過。/ Scopes always include `openid`; whitespace tidied.
 pub fn normalize_scopes(raw: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
@@ -328,6 +344,14 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgoOS0b1VN1vPoF+hx
 
     fn good() -> serde_json::Value {
         serde_json::json!({"iss": "https://idp.example", "aud": "telepy", "sub": "u-1", "exp": now() + 300, "iat": now(), "nonce": "n1", "email": "alice@corp.example", "email_verified": "true", "preferred_username": "alice.w"})
+    }
+
+    #[test]
+    fn the_sign_out_url_names_the_session_and_the_way_back() {
+        let u = end_session_url("https://idp.example/logout?tenant=t1", "eyJ.a.b", "https://telepy.example/login", "telepy").unwrap();
+        assert_eq!(u, "https://idp.example/logout?tenant=t1&id_token_hint=eyJ.a.b&post_logout_redirect_uri=https%3A%2F%2Ftelepy.example%2Flogin&client_id=telepy");
+        assert!(end_session_url("http://idp.example/logout", "t", "https://x/login", "c").is_err(), "plain http only for loopback");
+        assert!(end_session_url("http://127.0.0.1:9/logout", "t", "https://x/login", "c").is_ok());
     }
 
     #[test]

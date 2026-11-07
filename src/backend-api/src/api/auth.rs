@@ -135,15 +135,17 @@ async fn refresh_token(State(state): State<AppState>, meta: ClientMeta, AppJson(
 /// 登出：撤銷這顆 refresh token 的登入 session（之後不能再續期）。不需要 access token（它可能已經過期）；
 /// 無效的 token 也回 200（沒東西可撤）。/ Logout: revoke the refresh token's sign-in session. No access
 /// token needed (it may have expired); an invalid token is still a 200 (nothing to revoke).
-#[utoipa::path(post, path = "/api/auth/logout", tag = "Login", request_body = super::schemas::LogoutRequest, responses((status = 200, description = "{\"revoked\": bool}", body = Object)))]
-async fn logout(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/auth/logout", tag = "Login", request_body = super::schemas::LogoutRequest, responses((status = 200, description = "`revoked`, and `end_session_url` when this sign-in came from a single sign-on provider set to sign out there too (the browser opens it)", body = super::schemas::LogoutResponse)))]
+async fn logout(State(state): State<AppState>, headers: axum::http::HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["refresh"]) {
         return Err(e);
     }
     let token = json_str(&body, "refresh").unwrap_or_default();
+    // 先看這個登入是不是單一登入開的（撤銷前還找得到），再撤銷。/ Look up the SSO sign-out first (before the revoke), then revoke.
+    let end_session_url = super::oidc::end_session_url(&state, &headers, &token).await;
     let revoked = crate::auth::sessions::revoke(&state, &token).await?;
-    Ok(Json(json!({ "revoked": revoked })))
+    Ok(Json(json!({ "revoked": revoked, "end_session_url": end_session_url })))
 }
 
 /// simplejwt TokenVerifyView：任何型別的有效 token 都回 200 `{}`。

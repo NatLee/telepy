@@ -229,6 +229,17 @@ const TABLES: &[(&str, &str)] = &[
             "group_id" integer NULL
         )"#,
     ),
+    // 用單一登入開的網頁登入：哪個身分提供者、id_token（vault 封存，AAD `telepy-oidc-session:<sid>`），登出時給身分提供者當提示。
+    // Web sign-ins made through single sign-on: the provider and the id_token (sealed), the hint for signing out there too.
+    (
+        "telepy_oidc_session",
+        r#"CREATE TABLE "telepy_oidc_session" (
+            "session_id" integer NOT NULL PRIMARY KEY,
+            "provider_id" integer NOT NULL,
+            "id_token" text NOT NULL,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
     // 身分提供者給過誰什麼（之後只拿掉這裡記著的；手動給的不動）。/ What a provider granted (only these are ever taken away).
     (
         "telepy_oidc_grant",
@@ -1197,6 +1208,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 單一登入：群組 claim 的路徑、「只有這些群組能登入」（JSON 陣列）。/ SSO: the groups claim path and required groups (JSON).
     ("telepy_oidc_provider", "groups_claim", "varchar(128) NOT NULL DEFAULT 'groups'"),
     ("telepy_oidc_provider", "required_groups", "text NOT NULL DEFAULT '[]'"),
+    // 登出 Telepy 時一併登出身分提供者（RP-Initiated Logout）。/ Also sign out at the provider when signing out of Telepy.
+    ("telepy_oidc_provider", "end_session", "bool NOT NULL DEFAULT 0"),
     // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.

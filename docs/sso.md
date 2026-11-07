@@ -102,6 +102,12 @@ From then on the provider's button signs you in to that account. **Unlink** remo
 
 `telepy login` signs in through the browser. When the browser isn't signed in to Telepy yet, its sign-in page shows the same single sign-on buttons, so the CLI works with single sign-on without any extra setup.
 
+## Signing out
+
+By default, signing out of Telepy ends the Telepy sign-in only; the provider keeps its own session, so the next press of its button may go straight through. To end both, switch on **Also sign out at the provider when signing out of Telepy** in the provider's settings and register the **sign-out redirect URI** it shows (`https://<telepy>/login`) at the provider: Okta calls it a sign-out redirect URI, Keycloak a valid post logout redirect URI, Entra a redirect URI of the app.
+
+When someone then presses Sign out, Telepy sends their browser to the provider's sign-out page with that sign-in's ID token as the hint, and the provider sends it back to Telepy's sign-in page. It only happens when the person signs out themselves: being signed out by an administrator, from another device or because the sign-in expired never takes anyone to the provider. A provider without a published sign-out endpoint (Google is one) can only be signed out of Telepy; the **Check** button shows whether yours has one.
+
 ## What Telepy checks
 
 - **Each sign-in is bound to the browser that started it.** Telepy gives the browser an HttpOnly cookie at the start. A callback address opened in another browser, for example one someone sends you, signs nobody in.
@@ -129,4 +135,4 @@ For anything else, run **Test sign-in** first. It shows exactly what the provide
 
 ## Not yet
 
-Signing out of the provider when you sign out of Telepy, and SCIM provisioning (accounts created or disabled ahead of a sign-in) aren't there yet. Groups give roles and feature groups, not tunnels: share tunnels the usual way.
+SCIM provisioning (accounts created or disabled ahead of a sign-in) isn't there yet. Groups give roles and feature groups, not tunnels: share tunnels the usual way.

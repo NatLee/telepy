@@ -26,7 +26,7 @@ import { PasswordInput } from "@/components/auth/PasswordInput";
 import { OidcFlowDialog } from "@/components/sso/OidcFlow";
 import { useOidcProviders, type Discovery, type FieldErrors, type OidcProvider, type ProviderDraft } from "@/hooks/useOidcProviders";
 import { useI18n } from "@/lib/i18n";
-import { badDomain, fromRuleValue, grantsAdmin, groupLines, parseDomains, ruleValue, slugify, tidyRules, type GroupRule } from "@/lib/sso";
+import { badDomain, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, parseDomains, ruleValue, slugify, tidyRules, type GroupRule } from "@/lib/sso";
 
 function CopyButton({ text }: { text: string }) {
     const { t } = useI18n();
@@ -122,6 +122,7 @@ export function OidcProvidersPanel() {
                                     {p.allowed_domains.length > 0 && <span>{t("sso.admin.onlyDomains", { domains: p.allowed_domains.join(", ") })}</span>}
                                     {!p.has_secret && <span>{t("sso.admin.publicClient")}</span>}
                                     {(p.group_rules?.length ?? 0) > 0 && <span>{t("sso.roles.count", { count: p.group_rules.length })}</span>}
+                                    {p.end_session && <span>{t("sso.logout.listNote")}</span>}
                                     {(p.required_groups?.length ?? 0) > 0 && <span>{t("sso.roles.onlyGroups", { groups: p.required_groups.join(", ") })}</span>}
                                 </p>
                                 <div className="flex items-center gap-1 rounded-md bg-surface py-1 pl-2.5 pr-1">
@@ -185,6 +186,7 @@ function emptyDraft(): ProviderDraft {
         groups_claim: "groups",
         required_groups: [],
         group_rules: [],
+        end_session: false,
     };
 }
 
@@ -204,6 +206,7 @@ function draftOf(p: OidcProvider): ProviderDraft {
         required_groups: p.required_groups ?? [],
         // 群組已刪掉的規則留著讓人看到（存檔時要改掉）。/ Rules whose group is gone stay visible until fixed.
         group_rules: (p.group_rules ?? []).map((r) => ({ idp_group: r.idp_group, target: r.target, group_id: r.group_id })),
+        end_session: p.end_session ?? false,
     };
 }
 
@@ -225,6 +228,7 @@ const FIELD_TAB: Record<keyof ProviderDraft, DialogTab> = {
     groups_claim: "groups",
     required_groups: "groups",
     group_rules: "groups",
+    end_session: "connection",
 };
 
 function ProviderDialog({
@@ -405,6 +409,8 @@ function ProviderDialog({
                                         <dd className="min-w-0 truncate font-mono">{check.token_endpoint}</dd>
                                         <dt className="text-muted-foreground">PKCE</dt>
                                         <dd>{check.pkce === "S256" ? "S256" : t("sso.admin.pkceUnlisted")}</dd>
+                                        <dt className="text-muted-foreground">{t("sso.logout.endpoint")}</dt>
+                                        <dd className="min-w-0 truncate font-mono">{check.end_session_endpoint || <span className="font-sans">{t("sso.logout.noEndpoint")}</span>}</dd>
                                     </dl>
                                 </Callout>
                             ) : (
@@ -433,6 +439,22 @@ function ProviderDialog({
                                 <span className="text-sm">{t("sso.admin.dropSecret")}</span>
                             </Switch>
                         )}
+
+                        <div className="space-y-2">
+                            <Switch size="sm" checked={draft.end_session} onCheckedChange={(v) => set("end_session", v)}>
+                                <span className="text-sm">{t("sso.logout.switch")}</span>
+                            </Switch>
+                            <p className="pl-11 text-xs text-muted-foreground">{t(draft.end_session ? "sso.logout.on" : "sso.logout.off")}</p>
+                            {draft.end_session && (
+                                <Field label={t("sso.logout.redirect")} hint={t("sso.logout.redirectHint")}>
+                                    <div className="flex items-center gap-1 rounded-md bg-surface py-1.5 pl-3 pr-1">
+                                        <code className="min-w-0 flex-1 break-all font-mono text-xs">{postLogoutUrl(callbackBase)}</code>
+                                        <CopyButton text={postLogoutUrl(callbackBase)} />
+                                    </div>
+                                </Field>
+                            )}
+                            {draft.end_session && check && check.ok && !check.end_session_endpoint && <Callout tone="warning">{t("sso.logout.missing")}</Callout>}
+                        </div>
 
                         <Field label={t("sso.admin.scopes")} hint={t("sso.admin.scopesHint")} error={errors.scopes}>
                             <Input value={draft.scopes} onChange={(e) => set("scopes", e.target.value)} className="font-mono" spellCheck={false} autoCapitalize="none" />
