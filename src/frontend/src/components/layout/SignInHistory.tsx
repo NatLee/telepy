@@ -33,6 +33,7 @@ export const METHOD_KEYS: Record<string, TranslationKey> = {
     password: "security.signInMethod.password",
     google: "security.signInMethod.google",
     passkey: "security.signInMethod.passkey",
+    sso: "security.signInMethod.sso",
 };
 export const FACTOR_KEYS: Record<string, TranslationKey> = {
     totp: "security.signInFactor.totp",

@@ -135,6 +135,8 @@ pub struct SignInPage {
     /// PUBLIC_URL in effect (null when unset)
     #[schema(example = "https://telepy.example.com")]
     pub public_url: Option<String>,
+    /// 單一登入按鈕（啟用的 OIDC 身分提供者）。/ Single sign-on buttons (enabled OIDC providers)
+    pub sso: Vec<SsoButton>,
 }
 
 /// 呼叫用的委派 token。/ The delegated token the call came with.
@@ -5417,4 +5419,147 @@ pub struct PushSubscriptionJson {
     pub last_success_at: Option<String>,
     pub last_error: Option<String>,
     pub last_error_at: Option<String>,
+}
+
+// ---------------------------------------------------------------- OIDC single sign-on
+
+/// 一次性票券（`/login?sso=…` / `/tunnels/sso?test=…`）。/ A one-time ticket from the callback.
+#[derive(ToSchema)]
+pub struct OidcTicketRequest {
+    pub ticket: String,
+}
+
+/// 連結 / 解除連結：帳號有第二因素時要「確認是你」。/ Link / unlink: a confirmation once the account has a factor.
+#[derive(ToSchema)]
+pub struct OidcReauth {
+    pub reauth: Option<MfaProof>,
+}
+
+/// 在這個瀏覽器整頁打開的網址。/ The URL to open in this browser.
+#[derive(ToSchema)]
+pub struct OidcIntent {
+    #[schema(example = "/api/auth/oidc/okta/start?intent=Xb3…")]
+    pub url: String,
+}
+
+#[derive(ToSchema)]
+pub struct OidcLinkRow {
+    pub id: i64,
+    #[schema(example = "okta")]
+    pub slug: String,
+    #[schema(example = "Okta")]
+    pub name: String,
+    pub enabled: bool,
+    pub linked: bool,
+}
+
+/// 你的單一登入連結與其他登入方式。/ Your single sign-on links and other ways in.
+#[derive(ToSchema)]
+pub struct OidcLinks {
+    pub providers: Vec<OidcLinkRow>,
+    pub has_password: bool,
+    pub google: bool,
+    pub passkeys: i64,
+}
+
+/// 身分提供者（管理員看的）。/ A sign-in provider as admins see it.
+#[derive(ToSchema)]
+pub struct OidcProvider {
+    pub id: i64,
+    #[schema(example = "okta")]
+    pub slug: String,
+    #[schema(example = "Okta")]
+    pub name: String,
+    #[schema(example = "https://example.okta.com")]
+    pub issuer: String,
+    pub client_id: String,
+    /// 有沒有存 client secret（內容永遠不回）。/ Whether a client secret is stored (never returned).
+    pub has_secret: bool,
+    #[schema(example = "openid email profile")]
+    pub scopes: String,
+    /// email | preferred_username
+    pub username_from: String,
+    /// 空 = 不限。/ Empty = any.
+    pub allowed_domains: Vec<String>,
+    pub create_users: bool,
+    pub link_by_email: bool,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 在身分提供者那邊登記的 redirect URI。/ The redirect URI to register at the provider.
+    #[schema(example = "https://telepy.example.com/api/auth/oidc/okta/callback")]
+    pub callback_url: String,
+    /// 連了幾個帳號。/ How many accounts it links.
+    pub links: i64,
+}
+
+#[derive(ToSchema)]
+pub struct OidcProviderList {
+    pub providers: Vec<OidcProvider>,
+    #[schema(example = "https://telepy.example.com/api/auth/oidc/")]
+    pub callback_base: String,
+    /// PUBLIC_URL 有沒有設（沒設時回呼網址跟著請求的主機）。/ Whether PUBLIC_URL is set (else callbacks follow the request's host).
+    pub public_url_set: bool,
+    /// 只有新增時有。/ Only after a create.
+    pub created_id: Option<i64>,
+}
+
+/// 新增 / 修改身分提供者；修改時沒給的欄位不變。/ Create / change a provider; missing fields keep their value on PATCH.
+#[derive(ToSchema)]
+pub struct OidcProviderRequest {
+    pub name: Option<String>,
+    /// `[a-z0-9-]{1,32}`；新增沒給 = 從名字產生。/ Generated from the name when omitted on create.
+    pub slug: Option<String>,
+    pub issuer: Option<String>,
+    pub client_id: Option<String>,
+    /// 沒給 = 不動；空字串 = 拿掉（public client）。/ Omitted = keep; empty = remove (a public client).
+    pub client_secret: Option<String>,
+    pub scopes: Option<String>,
+    pub username_from: Option<String>,
+    pub allowed_domains: Option<Vec<String>>,
+    /// 第一次登入就建帳號（預設 true）。/ Create accounts on first sign-in (default true).
+    pub create_users: Option<bool>,
+    /// 依已驗證的 email 連到既有帳號（預設 false）。/ Link existing accounts by a verified email (default false).
+    pub link_by_email: Option<bool>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct OidcDiscoverRequest {
+    #[schema(example = "https://example.okta.com")]
+    pub issuer: String,
+}
+
+#[derive(ToSchema)]
+pub struct OidcDiscoverResult {
+    pub ok: bool,
+    pub issuer: String,
+    pub authorization_endpoint: Option<String>,
+    pub token_endpoint: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub end_session_endpoint: Option<String>,
+    /// 公開的簽章金鑰數。/ Signing keys published.
+    pub keys: Option<i64>,
+    /// S256 | unlisted
+    pub pkce: Option<String>,
+    pub error: Option<String>,
+}
+
+/// 試登入的結果。/ A test sign-in's result.
+#[derive(ToSchema)]
+pub struct OidcTestResult {
+    pub provider: serde_json::Value,
+    /// id_token 的 claim。/ The id_token's claims.
+    pub claims: serde_json::Value,
+    /// `{action: sign_in | link_by_email | create | refuse, username?, code?}`
+    pub would: serde_json::Value,
+}
+
+/// 登入頁上的單一登入按鈕。/ A single sign-on button on the sign-in page.
+#[derive(ToSchema)]
+pub struct SsoButton {
+    #[schema(example = "okta")]
+    pub slug: String,
+    #[schema(example = "Okta")]
+    pub name: String,
 }

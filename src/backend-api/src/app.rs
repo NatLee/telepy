@@ -52,6 +52,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::host_keys::router())
         .merge(api::device_install::router())
         .merge(api::oauth::router())
+        .merge(api::oidc::router())
         .merge(api::ai::router())
         .merge(api::mfa::router())
         .merge(api::sign_ins::router())
@@ -127,7 +128,7 @@ pub fn build(state: AppState) -> Router {
 /// that create or renew a sign-in get 421 + the right address; anything else passes, and nothing is blocked unless
 /// both names are configured and differ.
 async fn ssh_host_guard(axum::extract::State(state): axum::extract::State<AppState>, req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
-    const SIGN_IN: &[&str] = &["/api/auth/token", "/api/auth/token/refresh", "/api/auth/google/token", "/api/auth/passkey/login", "/api/auth/register"];
+    const SIGN_IN: &[&str] = &["/api/auth/token", "/api/auth/token/refresh", "/api/auth/google/token", "/api/auth/passkey/login", "/api/auth/register", "/api/auth/oidc/redeem"];
     if req.method() == axum::http::Method::POST && SIGN_IN.contains(&req.uri().path()) {
         let public = state.config.public_base();
         let web = crate::ssh_host::web_host(public.as_deref());

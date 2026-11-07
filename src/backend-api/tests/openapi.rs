@@ -88,6 +88,9 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/user/terminal-schemes/{id}", vec!["patch", "delete"]),
         ("/api/auth/passkeys/{id}", vec!["patch", "delete"]),
         ("/api/user/users/{id}/mfa", vec!["delete"]),
+        ("/api/site/oidc", vec!["get", "post"]),
+        ("/api/site/oidc/{id}", vec!["patch", "delete"]),
+        ("/api/auth/oidc/links/{id}", vec!["post", "delete"]),
     ] {
         let item = paths.get(path).unwrap_or_else(|| panic!("missing path {path}"));
         for verb in verbs {
@@ -101,6 +104,8 @@ async fn spec_is_served_and_covers_the_rest_api() {
     let public = ["/api/auth/setup-status", "/api/auth/sign-in-page", "/api/auth/token", "/api/auth/token/refresh", "/api/auth/logout", "/api/auth/token/verify", "/api/auth/register", "/api/auth/google/token", "/tunnels/server/script/one-time/{token}",
         "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/api/oauth/register", "/api/oauth/token", "/api/oauth/revoke", "/api/oauth/authorize/preview",
         "/api/auth/mfa/verify", "/api/auth/mfa/passkey/options", "/api/auth/passkey/options", "/api/auth/passkey/login",
+        // OIDC 單一登入：整頁導向與用綁定 cookie 兌換的票券。/ OIDC sign-in: navigations and the cookie-bound ticket.
+        "/api/auth/oidc/{slug}/start", "/api/auth/oidc/{slug}/callback", "/api/auth/oidc/redeem",
         "/api/join/install.sh", "/api/join/telepy-ws.py", "/api/join/carrier/{target}", "/api/join/carrier/{target}/sha256", "/api/join/gateway", "/api/join/{token}", "/api/join/{token}/status", "/api/join/{token}/config", "/api/whoami",
         // 一次性下載連結：權杖本身就是授權（瀏覽器自己下載，帶不了 Authorization）。/ The one-time token is the authorisation.
         "/api/sftp/fetch/{token}",

@@ -1,0 +1,102 @@
+# 單一登入（OIDC）
+
+<p align="center"><a href="./sso.md">English</a> | <b>繁體中文</b> | <a href="./sso.ja.md">日本語</a></p>
+
+Telepy 可以讓大家用公司或組織的身分提供者登入，不必另外記一組 Telepy 密碼。Okta、Microsoft Entra ID、Google Workspace、Keycloak、Authentik、Dex，以及其他支援 authorization code + PKCE 的 OpenID Connect 提供者都能用。每新增一個身分提供者，登入頁就多一顆按鈕，例如「使用 Okta 登入」。
+
+密碼照樣能用，passkey、Google 登入和 Telepy 自己的兩步驟驗證也都還在。單一登入是多一種進來的方式，不是取代其他方式，也不會強迫任何人用。
+
+## 需要什麼
+
+- Telepy 的管理員帳號。
+- 能在身分提供者那邊登記應用程式的權限。
+- `PUBLIC_URL` 設成 Telepy 的網址，例如 `https://telepy.example.com`（網站設定 → 伺服器，或 `.env`）。沒設的話，回呼網址會跟著你剛好用來開網頁的網址走，哪天網址一換，身分提供者就會拒絕。
+
+## 設定身分提供者
+
+### 在身分提供者那邊
+
+1. 登記一個新的 **web 應用程式**。有的身分提供者叫它 OIDC client、應用程式註冊或 confidential client。
+2. Redirect URI 填 Telepy 為這個身分提供者顯示的回呼網址，長得像 `https://telepy.example.com/api/auth/oidc/okta/callback`，`/callback` 前面那段是它在 Telepy 的代號。
+3. 允許 `openid`、`email`、`profile` 這三個 scope。
+4. 抄下 issuer 網址、client ID 和 client secret。
+
+沒有 secret 的公開 client 也可以。這時 Telepy 只靠 PKCE，身分提供者會接受，資安審查則會很樂意拿來討論。
+
+### 在 Telepy 這邊
+
+1. 打開**網站設定 → 登入 → 單一登入（OIDC）**，按**新增身分提供者**。
+2. 填上按鈕要顯示的名字。
+3. 貼上 issuer 網址，按**檢查**。Telepy 會讀身分提供者的 discovery 文件和簽章金鑰，告訴你找到了什麼，或為什麼這個網址不能用。
+4. 如果還沒登記，把對話框裡的回呼網址登記到身分提供者那邊。
+5. 填 client ID 和 secret，決定帳號規則（下一節），存檔。
+6. 按**試登入**。你在身分提供者那邊登入一次，Telepy 會顯示收到的 claim，以及它會怎麼處理：登入哪個帳號、建立新帳號，或拒絕。試登入不會讓任何人登入，也不會建立帳號。
+7. 結果沒問題就把它打開，登入頁就會出現它的按鈕。
+
+小提醒：新的身分提供者可以先關著存起來，試過再打開。關著的身分提供者也能試登入。
+
+### 各家的小地方
+
+| 身分提供者 | Issuer 網址 | 值得知道 |
+| --- | --- | --- |
+| Okta | `https://<你的組織>.okta.com` 或 `https://<你的組織>.okta.com/oauth2/default` | 用應用程式登入政策所屬的那一個 |
+| Microsoft Entra ID | `https://login.microsoftonline.com/<租戶 id>/v2.0` | 常常沒有 `email`，使用者名稱請選 **preferred_username**。Entra 不送 `email_verified`，所以「依 email 連結」永遠不會生效 |
+| Google Workspace | `https://accounts.google.com` | Google 會放行**所有** Google 帳號，一定要填**允許的 email 網域** |
+| Keycloak | `https://<主機>/realms/<realm>` | |
+| Authentik | `https://<主機>/application/o/<應用程式代號>/` | 結尾的斜線照 Authentik 顯示的保留 |
+| Dex | Dex 設定裡的 `issuer` | |
+
+## 誰進得來
+
+有人用身分提供者登入時，Telepy 依這個順序決定是哪個帳號：
+
+1. **連結過**：跟上次同一個 Telepy 帳號。Telepy 用身分提供者固定的使用者 ID（`sub`）找，不是用 email，因為 email 會變。
+2. **依已驗證的 email 連結**（預設關閉）：email 相同的既有帳號，而且身分提供者要說這個 email 驗證過。只對你們組織自己管的身分提供者打開。誰在那邊握有某個 email，就能拿到用那個 email 的 Telepy 帳號，管理員也一樣。
+3. **第一次登入時建立帳號**（預設開啟）：用 email 的 `@` 前面，或 `preferred_username` 取名建一個新帳號。名字已經有人用了，Telepy 會拒絕並說明，不會自己亂猜。
+4. 其他情況一律不放行，由本人把既有帳號連結起來（下一節）。
+
+**允許的 email 網域**（預設空白）套用在透過這個身分提供者的每一次登入，既有帳號也一樣。身分提供者只放自己人進來時留空就好；它會放全世界進來時（Google、多租戶的 Entra 應用程式）就要填。
+
+身分提供者的「建立帳號」開關跟上面的「註冊」設定無關，「註冊」管的是密碼註冊和 Google 登入。
+
+帳號決定之後，規則跟平常一樣：停用的帳號進不來，有兩步驟驗證的帳號照樣要過 passkey 或驗證碼。身分提供者自己的 MFA 發生在這之前，在身分提供者那邊。沒錯，這可能代表要過兩次 MFA；Telepy 寧可問兩次，也不要一次都沒問。
+
+## 連結既有的帳號
+
+每個人都可以在**偏好設定 → 安全性 → 單一登入**連結自己的帳號：
+
+1. 按身分提供者旁邊的**連結**。帳號有兩步驟驗證的話，先確認是你本人。
+2. 到身分提供者那邊登入，回來會看到一頁說已經連好了。
+
+之後按那個身分提供者的按鈕就會登入這個帳號。**解除連結**同樣要先確認。Telepy 不會讓你拿掉最後一個登入方式：要先留下密碼、passkey 或另一個連結。
+
+## 命令列
+
+`telepy login` 是透過瀏覽器登入。瀏覽器還沒登入 Telepy 時，它的登入頁一樣有單一登入的按鈕，所以 CLI 不用額外設定就能用單一登入。
+
+## Telepy 會檢查什麼
+
+- **每次登入都綁在開始登入的那個瀏覽器。** 一開始 Telepy 會給瀏覽器一個 HttpOnly cookie。回呼網址如果在別的瀏覽器打開（例如別人傳給你的），誰都不會因此登入。
+- **每個身分提供者有自己的回呼網址**，給這一家的回應不能拿去冒充另一家。
+- **ID token** 必須用身分提供者公開的金鑰簽章（RSA、ECDSA 或 EdDSA；沒簽章和 HMAC 的 token 一律不收），issuer、audience、期限和這次登入的 nonce 都要對。
+- **每樣東西都只能用一次。** state、code 和最後給瀏覽器的票券都只能用一次，而且幾分鐘內就失效。
+- Client secret 用 `SECRET_KEY` 加密存放，存檔後就不會再顯示。
+
+身分提供者的每次變更、每次連結或解除連結，都會出現在管理區的**稽核日誌**。登入會以「單一登入」出現在每個人的登入紀錄裡。
+
+## 不成功的時候
+
+| 頁面上寫 | 通常是 |
+| --- | --- |
+| 還沒有 Telepy 帳號連到這個登入 | 沒有開「建立帳號」，這個人也還沒連結。請他用其他方式登入再連結，或把建立帳號打開 |
+| 已經有同名的 Telepy 帳號 | 那個使用者名稱有人用了。請他用那個帳號登入，再連結身分提供者 |
+| 這個 email 網域的帳號不能在這裡登入 | Email 不在**允許的 email 網域**裡 |
+| 請在開始登入的同一個瀏覽器完成登入 | Cookie 不見了：換了瀏覽器、無痕視窗關掉了，或這個網站的 cookie 被擋 |
+| 單一登入沒有成功 | 最常見是 client secret、redirect URI 或時鐘。後端紀錄會寫是哪一個（`[OIDC]` 開頭的那幾行） |
+| 身分提供者拒絕了這次登入 | 身分提供者那邊給 Telepy 的設定：redirect URI、允許的 scope，或這個人沒被指派到這個應用程式 |
+
+其他狀況先跑一次**試登入**，它會把身分提供者送來的東西原原本本列出來。
+
+## 還沒有的
+
+Telepy 只讀「這個人是誰」，不讀「他屬於哪些群組」。群組對應到角色、登出 Telepy 時一併登出身分提供者、SCIM 帳號同步，目前都還沒有。通道和功能請照平常的方式給。

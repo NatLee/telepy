@@ -21,6 +21,7 @@ pub mod mfa;
 pub mod notify_prefs;
 pub mod push;
 pub mod oauth;
+pub mod oidc;
 pub mod pool;
 pub mod recordings;
 pub mod retention;

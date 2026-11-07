@@ -67,6 +67,7 @@ import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
 import { ShellHistoryPref } from "@/components/tunnels/ShellHistoryPref";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
+import { SsoLinks } from "@/components/layout/SsoLinks";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
@@ -373,6 +374,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             {tab === "security" && (
                 <div className="space-y-6">
                     <SecuritySettings />
+                    <SsoLinks />
                     <SignInDevices />
                     <SignInHistory endpoint="/api/auth/sign-ins" description={t("security.signInsDescription")} />
                 </div>

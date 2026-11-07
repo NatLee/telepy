@@ -32,6 +32,7 @@ pub mod notify;
 pub mod notify_prefs;
 pub mod push;
 pub mod oauth;
+pub mod oidc;
 pub mod recordings;
 pub mod terminal_detach;
 pub mod remote_browser;

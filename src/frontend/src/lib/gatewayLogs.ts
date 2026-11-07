@@ -89,6 +89,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     feature_grant: { key: "logs.event.feature_grant", tone: "outline", category: "change" },
     notify_default: { key: "logs.event.notify_default", tone: "outline", category: "change" },
     health_ack: { key: "logs.event.health_ack", tone: "outline", category: "change" },
+    sso_provider: { key: "logs.event.sso_provider", tone: "outline", category: "change" },
+    sso_link: { key: "logs.event.sso_link", tone: "outline", category: "change" },
     audit_reseal: { key: "logs.event.audit_reseal", tone: "warning", category: "change" },
     carriers_updated: { key: "logs.event.carriers_updated", tone: "outline", category: "change" },
     carriers_update_failed: { key: "logs.event.carriers_update_failed", tone: "warning", category: "problem" },

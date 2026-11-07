@@ -13,6 +13,7 @@ test("the public endpoint and the cache both parse", () => {
         webHost: null,
         sshHost: null,
         publicUrl: null,
+        sso: null,
     });
     assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", consentStyle: "standard", message: "" }), {
         style: "standard",
@@ -24,6 +25,7 @@ test("the public endpoint and the cache both parse", () => {
         webHost: null,
         sshHost: null,
         publicUrl: null,
+        sso: null,
     });
     // 舊後端 / 舊快取沒有授權頁那個：一般（以前就是這樣）。/ No approval-page look = standard, as before.
     assert.equal(parseSignInLook({ style: "discreet", oauth_style: "discreet", cli_style: "discreet" })?.consentStyle, "standard");
@@ -37,6 +39,8 @@ test("the public endpoint and the cache both parse", () => {
     assert.equal(parseSignInLook(null), null);
     assert.equal(parseSignInLook("discreet"), null);
     assert.equal(parseSignInLook({ style: "discreet", oauth_style: "discreet", message: 3 })?.message, "");
+    // 單一登入按鈕。/ Single sign-on buttons.
+    assert.deepEqual(parseSignInLook({ style: "standard", oauth_style: "standard", sso: [{ slug: "okta", name: "Okta" }] })?.sso, [{ slug: "okta", name: "Okta" }]);
 });
 
 test("each page reads its own look", () => {

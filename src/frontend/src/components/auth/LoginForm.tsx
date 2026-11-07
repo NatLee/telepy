@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * 登入表單：帳密、passkey 與 Google 登入；帳號有兩步驟驗證時接著顯示第二步（passkey / 驗證器代碼 / 復原碼）。
+ * 登入表單：帳密、passkey、單一登入（OIDC）與 Google 登入；帳號有兩步驟驗證時接著顯示第二步（passkey / 驗證器代碼 / 復原碼）。
  * 一般登入頁（/login）與 MCP 應用程式的 OAuth 登入頁（/oauth/login）共用；外框、標題與上方的說明由頁面決定。
- * Sign-in form: credentials, passkey and Google sign-in, then the two-factor step when the account has one.
+ * Sign-in form: credentials, passkey, single sign-on (OIDC) and Google sign-in, then the two-factor step when the account has one.
  * Shared by the normal sign-in page and the OAuth sign-in page; the page supplies the frame, title and intro.
  */
 import React from "react";
-import { ArrowLeft, ArrowRight, KeyRound, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ArrowLeft, ArrowRight, Building2, KeyRound, ShieldCheck } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthDivider, AuthHeading, AuthSpinner } from "@/components/auth/AuthShell";
 import { GoogleSignIn } from "@/components/auth/GoogleSignIn";
 import { PasswordInput } from "@/components/auth/PasswordInput";
-import { useLoginPage } from "@/hooks/useLoginPage";
-import { useGoogleClientId } from "@/hooks/useSignInLook";
+import { safeNextPath, useLoginPage } from "@/hooks/useLoginPage";
+import { useGoogleClientId, useSsoButtons } from "@/hooks/useSignInLook";
+import { ssoStartUrl, type SsoButton } from "@/lib/sso";
 import { useI18n } from "@/lib/i18n";
 import { passkeySupported } from "@/lib/webauthn";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ const noop = () => {};
 export function LoginFormPreview(props: LoginFormProps) {
     // 預覽也照生效中的 client ID 決定畫不畫 Google 按鈕。/ The preview follows the client ID in effect too.
     const googleClientId = useGoogleClientId();
+    const sso = useSsoButtons();
     const state: LoginPage["state"] = {
         username: "",
         setUsername: noop,
@@ -52,6 +54,9 @@ export function LoginFormPreview(props: LoginFormProps) {
         setPassword: noop,
         isSubmitting: false,
         googleClientId,
+        sso,
+        ssoLeaving: null,
+        setSsoLeaving: noop,
         passkeyAvailable: passkeySupported(),
         mfa: null,
         mfaMethod: "totp",
@@ -85,6 +90,37 @@ function GoogleButtonPreview({ text }: { text?: "signin_with" | "continue_with" 
     );
 }
 
+/**
+ * 一個單一登入按鈕：整頁導向後端的 start（不是 fetch——要離開這個網站去身分提供者那邊）。按下去之後轉圈，
+ * 避免連點開出兩個登入。預覽只畫樣子。
+ * One single sign-on button: a full navigation to the backend's start (we leave for the provider). Spins once
+ * pressed so a double click doesn't start two sign-ins. The preview only draws it.
+ */
+function SsoButtonLink({ button, preview, leaving, onLeave }: { button: SsoButton; preview: boolean; leaving: boolean; onLeave: () => void }) {
+    const { t } = useI18n();
+    const cls = cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 w-full");
+    const body = (
+        <>
+            {leaving ? <AuthSpinner /> : <Building2 size={16} />}
+            <span className="truncate">{t("login.ssoWith", { name: button.name })}</span>
+        </>
+    );
+    if (preview) return <span className={cls}>{body}</span>;
+    return (
+        <a
+            href={ssoStartUrl(button.slug, safeNextPath())}
+            className={cls}
+            aria-busy={leaving || undefined}
+            onClick={(e) => {
+                if (leaving) e.preventDefault();
+                else onLeave();
+            }}
+        >
+            {body}
+        </a>
+    );
+}
+
 export function LoginFormView({
     title,
     description,
@@ -94,7 +130,7 @@ export function LoginFormView({
     actions,
     preview = false,
 }: LoginFormProps & { state: LoginPage["state"]; actions: LoginPage["actions"]; preview?: boolean }) {
-    const { username, setUsername, password, setPassword, isSubmitting, googleClientId, passkeyAvailable, mfa, mfaMethod, setMfaMethod, mfaCode, setMfaCode } = state;
+    const { username, setUsername, password, setPassword, isSubmitting, googleClientId, sso, ssoLeaving, setSsoLeaving, passkeyAvailable, mfa, mfaMethod, setMfaMethod, mfaCode, setMfaCode } = state;
     const { handleSubmit, signInWithPasskey, submitMfaCode, verifyWithPasskey, cancelMfa } = actions;
     const { t } = useI18n();
 
@@ -236,10 +272,21 @@ export function LoginFormView({
             )}
 
             {/* 第二步時只隱藏，避免回來時 GSI 按鈕重畫閃一下。/ Only hidden during the second step, so the GSI button doesn't redraw. */}
-            {googleClientId && (
+            {(googleClientId || sso.length > 0) && (
                 <div className={mfa ? "hidden" : undefined}>
                     <AuthDivider label={t("login.orContinueWith")} />
-                    {preview ? <GoogleButtonPreview text={googleText} /> : <GoogleSignIn clientId={googleClientId} text={googleText} />}
+                    {sso.length > 0 && (
+                        <div className="flex flex-col gap-2.5">
+                            {sso.map((b) => (
+                                <SsoButtonLink key={b.slug} button={b} preview={preview} leaving={ssoLeaving === b.slug} onLeave={() => setSsoLeaving(b.slug)} />
+                            ))}
+                        </div>
+                    )}
+                    {googleClientId && (
+                        <div className={sso.length > 0 ? "mt-2.5" : undefined}>
+                            {preview ? <GoogleButtonPreview text={googleText} /> : <GoogleSignIn clientId={googleClientId} text={googleText} />}
+                        </div>
+                    )}
                 </div>
             )}
         </>
