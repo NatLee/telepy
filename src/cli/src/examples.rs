@@ -190,7 +190,7 @@ pub const EXAMPLES: &[Example] = &[
         id: "vpn",
         topic: "forward",
         title: "A whole network behind the device",
-        note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C. Nothing runs on the device: its sshd only forwards. sudo asks for your password to add the network device here.",
+        note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C (TCP and DNS; not ping). Nothing runs on the device: its sshd only forwards. sudo asks for your password to add the network device here.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24"],
         needs: &["tunnels:read", "ssh-key"],
     },
@@ -200,6 +200,14 @@ pub const EXAMPLES: &[Example] = &[
         title: "With the network's own names",
         note: "The device's sshd finds names under corp.lan the device's own way, so http://nas.corp.lan works. Not for Mac devices.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpnDnsServer",
+        topic: "forward",
+        title: "Names from the network's DNS server",
+        note: "Asks 192.168.1.1 for names under corp.lan, over TCP through the device: real answers, Mac devices too.",
+        lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1"],
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {

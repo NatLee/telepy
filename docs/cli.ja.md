@@ -396,6 +396,7 @@ telepy ssh box -N -R 9000:localhost:3000      # 逆方向：デバイスの loca
 telepy vpn box 192.168.1.0/24                          # そのネットワークのすべてのマシンに、それぞれのアドレスで
 telepy vpn box                                         # Telepy が知っているデバイスのネットワーク（自分と重なるものは除外）
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan の名前も。名前はデバイスが引く
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1   # …またはそのネットワークの DNS サーバーに聞く
 ```
 
 `telepy vpn` は、Ctrl+C を押すまで、デバイスの向こうのネットワークにこのコンピューターから届くようにします。`ssh`、ブラウザー、データベースクライアントなど TCP を使うものなら何でも、そのネットワークにいるのと同じように `192.168.1.20` に接続できます。このコンピューターにネットワークデバイスとルートを追加するため、sudo でパスワードを聞かれます（macOS と Linux）。
@@ -408,10 +409,12 @@ telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan の名前も�
 | その間 | Telepy を通る SSH 接続 1 本（127.0.0.1 の `ssh -D`）。切れたら `telepy vpn` が 1、2、4…最大 30 秒おきにつなぎ直し、その間もネットワークデバイスは残ります。 |
 | デバイス | その sshd が、ログインしたアカウントで各接続を開きます |
 | 名前（`--dns-domain`） | このコンピューターが、ドメインの名前に 198.18.128.0/17 の代わりのアドレスで答えます。そのアドレスへの接続は名前のままデバイスに渡り、デバイスの sshd がデバイス自身の方法（`/etc/hosts`、その DNS サーバー…）で名前を引きます |
+| 名前（`--dns-server`） | ドメインの名前は、代わりにその DNS サーバーへデバイス経由の TCP で問い合わせます。本物の答え（すべてのレコード種別）が返り、デバイスが Mac でも使えます |
+| 接続 | VPN はまずデバイスから接続し、それが成功してからあなたのプログラムの接続を通します。閉じたポートは開いているように見えず、すぐに「接続拒否」になります |
 
 ネットワークを指定しないと、Telepy がデバイスから知ったネットワークを使い、このコンピューター自身も属しているものは除きます（自分の LAN をよそへ向けると切れてしまうため）。それでも向けたいときは指定してください。Telepy サーバー自身を含むネットワークは拒否します。VPN が自分の接続を自分の中に向けてしまうからです。
 
-転送されるのは TCP だけです。SSH が運ぶのは TCP だからです。ping、UDP のサービス、その他のプロトコル、`--dns-domain` 以外の名前はローカルのままです。デバイスが Mac のときは `--dns-domain` を使えません。Apple の sshd は名前への接続を頼まれると SSH 接続全体を切ってしまうので、そこではアドレスを使うか（`telepy lan ls box` で一覧できます）、名前をこのコンピューターの `/etc/hosts` に書いてください。アクセスのルールは `telepy ssh` と同じで、`tunnels:read`、個人の SSH 鍵、そのデバイスで使えるアカウントが必要です。デバイスの sshd は TCP 転送を許可している必要があります。動いている間、Telepy はあなたをこのトンネルの SSH セッションとして表示します。
+TCP は通り、DNS も通ります。デバイスの向こうの DNS サーバーへの問い合わせ（UDP 53 番）は TCP に変えて送ります。DNS サーバーはもともと TCP にも応じます。ping とその他の UDP は通りません。SSH が運ぶのは TCP だけだからです。黙ってタイムアウトするのではなく、すぐに「フィルターされた」と返り、`telepy vpn` も最初に一度説明します。`--dns-domain` 以外の名前はローカルのままです。デバイスが Mac のときは `--dns-domain` に `--dns-server` が必要です。Apple の sshd は名前への接続を頼まれると SSH 接続全体を切ってしまうので、そのネットワークの DNS サーバー、アドレス（`telepy lan ls box` で一覧できます）、またはこのコンピューターの `/etc/hosts` を使ってください。アイドル状態の接続は、両端が保っている限り切れません（SSH を 1 時間放っておいても大丈夫です）。アクセスのルールは `telepy ssh` と同じで、`tunnels:read`、個人の SSH 鍵、そのデバイスで使えるアカウントが必要です。デバイスの sshd は TCP 転送を許可している必要があります（許可されていなければ `telepy vpn` が知らせます）。動いている間、Telepy はあなたをこのトンネルの SSH セッションとして表示します。
 
 ### デバイスのネットワーク上のブラウザー
 
@@ -453,7 +456,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy rsync [rsync のオプション…] <from>… <to>` | 同じ ssh で rsync 同期。`--identity`、`--ssh-opt`、`--via`、`--fallback` は rsync のオプションより前に | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
-| `telepy vpn <target> [<network>…]` | Ctrl+C までデバイスの向こうのネットワーク全体に届くようにします（TCP と、`--dns-domain` の名前）。デバイスでは何も実行しません。切れたら自動でつなぎ直します。sudo でパスワードを聞かれます | `tunnels:read` + あなたの SSH 鍵 |
+| `telepy vpn <target> [<network>…]` | Ctrl+C までデバイスの向こうのネットワーク全体に届くようにします（TCP と DNS、`--dns-domain` の名前、`--dns-server` で DNS を指定可）。デバイスでは何も実行しません。切れたら自動でつなぎ直します。sudo でパスワードを聞かれます | `tunnels:read` + あなたの SSH 鍵 |
 | `telepy config install` | Telepy のブロックを `~/.ssh/config` に入れる。トンネル名か `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |
 | `telepy config tidy` | ssh の設定を簡略化。`--check`、`--wildcards`、`--yes`、`--file`。サインイン不要 | — |

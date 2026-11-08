@@ -170,6 +170,9 @@ pub struct VpnArgs {
     /// Names under this domain are found by the device, e.g. corp.lan (repeatable)
     #[arg(long = "dns-domain")]
     pub dns_domain: Vec<String>,
+    /// Ask this DNS server for the --dns-domain names instead (through the device, over TCP), e.g. 192.168.1.1
+    #[arg(long = "dns-server")]
+    pub dns_server: Option<std::net::Ipv4Addr>,
     #[command(flatten)]
     pub opts: SshOpts,
 }
@@ -182,6 +185,8 @@ pub struct VpnHelperArgs {
     pub nets: Vec<String>,
     #[arg(long = "dns-domain")]
     pub dns_domain: Vec<String>,
+    #[arg(long = "dns-server")]
+    pub dns_server: Option<std::net::Ipv4Addr>,
     /// The telepy that started it: stop once it is gone
     #[arg(long)]
     pub owner: Option<u32>,
@@ -1614,15 +1619,19 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
     // Apple 的 sshd 收到「用名稱轉送」會整條斷線（見 docs/device-connections.md），Mac 上名稱不轉。
     // Apple's sshd drops the whole connection on a forward to a name, so names are not carried to a Mac.
-    if !domains.is_empty() && vpn::device_is_mac(&t["endpoint"]["facts"]) {
+    if a.dns_server.is_some() && domains.is_empty() {
+        bail!("--dns-server answers the names under --dns-domain; add the domain too, e.g. --dns-domain corp.lan");
+    }
+    // 沒給 DNS 伺服器時名稱交給裝置的 sshd 去查（SOCKS 帶名稱）。/ Without a DNS server, names go to the device's sshd.
+    if !domains.is_empty() && a.dns_server.is_none() && vpn::device_is_mac(&t["endpoint"]["facts"]) {
         bail!(
-            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so --dns-domain can't work through it. Use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
+            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so it can't find names for you. Name the network's DNS server instead (--dns-server 192.168.1.1), use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
             name_of(&t),
             a.target
         );
     }
     let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
-    vpn_run(&file, &alias, &extra_opts(&a.opts), &nets, &domains, name_of(&t))
+    vpn_run(&file, &alias, &extra_opts(&a.opts), &nets, &domains, a.dns_server, name_of(&t))
 }
 
 /// 這台電腦自己的 IPv4 網段（不含回送）。/ This computer's own IPv4 networks (no loopback).
@@ -1646,7 +1655,7 @@ fn local_nets() -> Vec<vpn::Net> {
 }
 
 #[cfg(not(unix))]
-fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &[vpn::Net], _: &[String], _: &str) -> Result<i32> {
+fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &[vpn::Net], _: &[String], _: Option<std::net::Ipv4Addr>, _: &str) -> Result<i32> {
     bail!("telepy vpn runs on macOS and Linux.")
 }
 
@@ -1667,7 +1676,27 @@ fn vpn_stopping() -> bool {
 /// 開一條 `ssh -D`，等它的 SOCKS port 能連（最多 30 秒）。/ Start one `ssh -D` and wait until its SOCKS port answers.
 #[cfg(unix)]
 fn start_socks(mut cmd: Command, port: u16) -> std::result::Result<std::process::Child, String> {
-    let mut ssh = cmd.spawn().map_err(|e| format!("cannot run ssh (is OpenSSH installed?): {e}"))?;
+    let mut ssh = cmd.stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("cannot run ssh (is OpenSSH installed?): {e}"))?;
+    // ssh 每條連不上的轉送都印一行（程式已經收到「連線被拒」，VPN 也說了）；裝置不准轉送要說清楚。
+    // ssh prints a line per refused forward (the program got "connection refused" and the VPN said so); a device that
+    // forbids forwarding is spelled out.
+    if let Some(err) = ssh.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            for line in std::io::BufReader::new(err).lines().map_while(std::result::Result::ok) {
+                match vpn::ssh_stderr_line(&line) {
+                    vpn::SshLine::Keep => eprintln!("{line}"),
+                    vpn::SshLine::Drop => {}
+                    vpn::SshLine::NoForwarding => {
+                        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            eprintln!("The device's sshd doesn't allow TCP forwarding (AllowTcpForwarding), so nothing can go through it. Turn it on in its sshd_config.");
+                        }
+                    }
+                }
+            }
+        });
+    }
     let started = std::time::Instant::now();
     loop {
         if let Ok(Some(status)) = ssh.try_wait() {
@@ -1768,7 +1797,7 @@ fn wait_engine(helper: &mut std::process::Child) -> Result<i32> {
 /// `ssh -D` 開 SOCKS（裝置的 sshd 開 direct-tcpip，斷了自己重連），再用 root 開虛擬網卡把網段導過去。
 /// `ssh -D` for SOCKS (the device's sshd opens direct-tcpip; reconnected when it drops), then root brings up the TUN device.
 #[cfg(unix)]
-fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::Net], domains: &[String], tunnel: &str) -> Result<i32> {
+fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::Net], domains: &[String], dns_server: Option<std::net::Ipv4Addr>, tunnel: &str) -> Result<i32> {
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
     let make = {
         let (file, alias, extra) = (file.to_path_buf(), alias.to_string(), extra.to_vec());
@@ -1800,11 +1829,11 @@ fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::N
     let socks = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     // 已經是 root 就自己做；不然用 sudo 跑特權那一半（會問密碼）。/ As root do it here; otherwise sudo the privileged half.
     let code = if unsafe { libc::geteuid() } == 0 {
-        vpn_engine::run(vpn_engine::Options { socks, nets: nets.to_vec(), dns_domains: domains.to_vec(), owner: None }).map(|_| 0)
+        vpn_engine::run(vpn_engine::Options { socks, nets: nets.to_vec(), dns_domains: domains.to_vec(), dns_server, owner: None }).map(|_| 0)
     } else {
         eprintln!("Bringing up the network device needs admin rights here: sudo may ask for your password.");
         let exe = std::env::current_exe().context("where is telepy?")?;
-        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(port, nets, domains, std::process::id())).spawn().context("cannot run sudo")?;
+        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(port, nets, domains, dns_server, std::process::id())).spawn().context("cannot run sudo")?;
         wait_engine(&mut helper)
     };
     VPN_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1818,7 +1847,7 @@ fn vpn_helper(a: &VpnHelperArgs) -> Result<i32> {
     {
         let nets: Vec<vpn::Net> = a.nets.iter().map(|n| vpn::parse_net(n)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
         let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
-        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, owner: a.owner })?;
+        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, dns_server: a.dns_server, owner: a.owner })?;
         Ok(0)
     }
     #[cfg(not(unix))]
