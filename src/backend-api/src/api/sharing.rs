@@ -184,6 +184,9 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
         return Err(ApiError::bad_request("shared_with_user_id is required"));
     };
     let target = db::users::by_id(&state.db, target_id).await?.ok_or_else(|| ApiError::not_found("User not found"))?;
+    // 跟群組比對輪流來：讀到的列在改完之前不會被它的舊快照改回去或收掉。
+    // Take turns with the group reconcile: the row read here isn't overwritten or removed from its older snapshot meanwhile.
+    let _held = crate::group_shares::lock().await;
     let existing = db::sharing::get(&state.db, t.id, target.id).await?;
     if existing.as_ref().is_some_and(|s| s.group_share_id.is_none()) {
         return Err(ApiError::bad_request("Tunnel already shared with this user"));

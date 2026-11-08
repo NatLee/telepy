@@ -122,7 +122,7 @@ export function KeyListFilterBar({ filter }: { filter: KeyListFilterState }) {
                         value={filter.bucket}
                         onChange={(e) => filter.setBucket(e.target.value as KeyListBucket)}
                         aria-label={t("keys.list.bucketAria")}
-                        className="w-auto min-w-0 sm:hidden [&>select]:h-8"
+                        className="w-auto min-w-0 sm:hidden h-8"
                     >
                         {shown.map((b) => (
                             <option key={b.value} value={b.value}>
@@ -132,7 +132,7 @@ export function KeyListFilterBar({ filter }: { filter: KeyListFilterState }) {
                     </NativeSelect>
                 </>
             )}
-            <NativeSelect value={filter.sort} onChange={(e) => filter.setSort(e.target.value as KeyListSort)} aria-label={t("keys.list.sort")} className="w-auto [&>select]:h-8">
+            <NativeSelect value={filter.sort} onChange={(e) => filter.setSort(e.target.value as KeyListSort)} aria-label={t("keys.list.sort")} className="w-auto h-8">
                 {SORTS.map((s) => (
                     <option key={s.value} value={s.value}>
                         {t(s.label)}

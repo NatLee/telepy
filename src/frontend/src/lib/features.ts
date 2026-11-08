@@ -209,6 +209,13 @@ export function grantBody(subject: Subject, feature: string, value: GrantValue) 
 }
 
 /** 以名稱 / email 找人（不分大小寫）。/ Find people by name or email (case-insensitive). */
+/** 群組依名稱與說明找。/ Groups by name and description. */
+export function filterGroups(groups: AccessGroup[], query: string): AccessGroup[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter((g) => g.name.toLowerCase().includes(q) || g.description.toLowerCase().includes(q));
+}
+
 export function filterUsers(users: AccessUser[], query: string): AccessUser[] {
     const q = query.trim().toLowerCase();
     if (!q) return users;

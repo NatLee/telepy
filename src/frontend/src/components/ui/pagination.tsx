@@ -52,7 +52,7 @@ export function Pagination({
         <nav aria-label={t("ui.page.aria")} className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted-foreground", className)}>
             <span className="tabular-nums">{t("ui.page.range", { from: pager.from, to: pager.to, total: pager.total })}</span>
             <div className="flex flex-wrap items-center gap-2">
-                <NativeSelect value={pager.size} onChange={(e) => pager.setSize(Number(e.target.value))} aria-label={t("ui.page.size")} className="w-auto [&>select]:h-8 [&>select]:text-xs">
+                <NativeSelect value={pager.size} onChange={(e) => pager.setSize(Number(e.target.value))} aria-label={t("ui.page.size")} className="w-auto h-8 text-xs">
                     {pager.sizes.map((n) => (
                         <option key={n} value={n}>
                             {t("ui.page.sizeOption", { size: n })}

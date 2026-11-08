@@ -16,6 +16,9 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Section } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
+import { Pagination } from "@/components/ui/pagination";
+import { usePagination } from "@/hooks/usePagination";
+import { pageSlice } from "@/lib/pagination";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { ShareExpiryChoice, ShareExpiryControl } from "@/components/tunnels/ShareExpiry";
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
@@ -52,6 +55,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
     const [editing, setEditing] = useState<{ id: number; name: string; allowedIds: number[] } | null>(null);
     const [removing, setRemoving] = useState<GroupShare | null>(null);
     const [info, setInfo] = useState(false);
+    const pager = usePagination(list?.shares.length ?? 0, { storageKey: "telepy.groupSharesPageSize" });
 
     if (!list) return null;
     const manage = list.can_manage && !readOnly;
@@ -89,7 +93,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                 </div>
             ) : (
                 <ul className="divide-y divide-border/70 overflow-hidden rounded-xl ring-1 ring-inset ring-border/80" data-refresh-list>
-                    {list.shares.map((g) => {
+                    {pageSlice(list.shares, pager.page, pager.size).map((g) => {
                         const others = otherMembers(g);
                         return (
                             <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3">
@@ -116,7 +120,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                                 </Button>
                                             </PopoverTrigger>
                                             <PopoverContent align="end" className="w-60 p-3">
-                                                <p className="mb-2 text-xs text-muted-foreground">{t("share.group.membersOf", { name: g.name })}</p>
+                                                <p className="mb-2 text-xs text-muted-foreground">{t("share.group.membersOf", { name: g.name })} · {g.member_names.length}</p>
                                                 {g.member_names.length === 0 ? (
                                                     <p className="text-sm text-muted-foreground">{t("share.group.empty")}</p>
                                                 ) : (
@@ -133,7 +137,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                         type="button"
                                         disabled={!canAdd || tunnelUsernames.length === 0}
                                         onClick={() => setEditing({ id: g.id, name: g.name, allowedIds: g.allowed_target_usernames.map((a) => a.id) })}
-                                        className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground ring-1 ring-inset ring-border transition-colors enabled:hover:bg-muted enabled:hover:text-foreground disabled:cursor-default"
+                                        className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground ring-1 ring-inset ring-border transition-colors enabled:hover:bg-muted enabled:hover:text-foreground disabled:cursor-default"
                                         title={g.allowed_target_usernames.map((a) => a.username).join(", ") || t("share.group.noAccounts")}
                                     >
                                         <UserCog size={14} aria-hidden />
@@ -170,6 +174,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                     })}
                 </ul>
             )}
+            <Pagination pager={pager} />
 
             {canAdd &&
                 (list.groups.length === 0 ? (
