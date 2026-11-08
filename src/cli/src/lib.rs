@@ -173,6 +173,9 @@ pub struct VpnArgs {
     /// Ask this DNS server for the --dns-domain names instead (through the device, over TCP), e.g. 192.168.1.1
     #[arg(long = "dns-server")]
     pub dns_server: Option<std::net::Ipv4Addr>,
+    /// Also use the Telepy carrier already on the device (only while the VPN runs) for ping, UDP and names; nothing is installed or written there
+    #[arg(long)]
+    pub carrier: bool,
     #[command(flatten)]
     pub opts: SshOpts,
 }
@@ -187,6 +190,15 @@ pub struct VpnHelperArgs {
     pub dns_domain: Vec<String>,
     #[arg(long = "dns-server")]
     pub dns_server: Option<std::net::Ipv4Addr>,
+    /// telepy's local bridge to the device carrier's agent
+    #[arg(long)]
+    pub agent: Option<std::net::SocketAddr>,
+    /// The file holding the bridge's token
+    #[arg(long = "agent-token")]
+    pub agent_token: Option<PathBuf>,
+    /// Never hand names to the device's sshd (a Mac's drops the connection)
+    #[arg(long = "no-sshd-names")]
+    pub no_sshd_names: bool,
     /// The telepy that started it: stop once it is gone
     #[arg(long)]
     pub owner: Option<u32>,
@@ -1622,16 +1634,31 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     if a.dns_server.is_some() && domains.is_empty() {
         bail!("--dns-server answers the names under --dns-domain; add the domain too, e.g. --dns-domain corp.lan");
     }
-    // 沒給 DNS 伺服器時名稱交給裝置的 sshd 去查（SOCKS 帶名稱）。/ Without a DNS server, names go to the device's sshd.
-    if !domains.is_empty() && a.dns_server.is_none() && vpn::device_is_mac(&t["endpoint"]["facts"]) {
+    // 名稱：有 DNS 伺服器就問它；有 carrier 就請裝置查；否則交給裝置的 sshd（SOCKS 帶名稱），Mac 的 sshd 不行。
+    // Names: asked of the DNS server when given; looked up by the carrier with --carrier; else handed to the device's
+    // sshd (SOCKS with a name), which a Mac's can't take.
+    let mac = vpn::device_is_mac(&t["endpoint"]["facts"]);
+    if !domains.is_empty() && a.dns_server.is_none() && !a.carrier && mac {
         bail!(
-            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so it can't find names for you. Name the network's DNS server instead (--dns-server 192.168.1.1), use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
+            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so it can't find names for you. Use the device's carrier (--carrier), name the network's DNS server (--dns-server 192.168.1.1), use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
             name_of(&t),
             a.target
         );
     }
     let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
-    vpn_run(&file, &alias, &extra_opts(&a.opts), &nets, &domains, a.dns_server, name_of(&t))
+    let plan = VpnPlan { nets, domains, dns_server: a.dns_server, carrier: a.carrier, sshd_names: !mac };
+    vpn_run(&file, &alias, &extra_opts(&a.opts), &plan, name_of(&t))
+}
+
+/// 這次 VPN 要做的事。/ What this VPN does.
+struct VpnPlan {
+    nets: Vec<vpn::Net>,
+    domains: Vec<String>,
+    dns_server: Option<std::net::Ipv4Addr>,
+    /// 用裝置上已有的 carrier（ping、UDP、查名稱）。/ Use the carrier already on the device (ping, UDP, names).
+    carrier: bool,
+    /// 名稱能不能交給裝置的 sshd（Mac 不行）。/ Whether names may go to the device's sshd (not on a Mac).
+    sshd_names: bool,
 }
 
 /// 這台電腦自己的 IPv4 網段（不含回送）。/ This computer's own IPv4 networks (no loopback).
@@ -1655,7 +1682,7 @@ fn local_nets() -> Vec<vpn::Net> {
 }
 
 #[cfg(not(unix))]
-fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &[vpn::Net], _: &[String], _: Option<std::net::Ipv4Addr>, _: &str) -> Result<i32> {
+fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &VpnPlan, _: &str) -> Result<i32> {
     bail!("telepy vpn runs on macOS and Linux.")
 }
 
@@ -1671,6 +1698,99 @@ extern "C" fn vpn_on_stop(_: libc::c_int) {
 #[cfg(unix)]
 fn vpn_stopping() -> bool {
     VPN_STOP.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Linux：telepy 被硬停（kill -9）時這個子程序跟著結束，不留一條連到裝置的線。
+/// Linux: the child ends with a killed telepy, so no line to the device is left behind.
+#[cfg(unix)]
+fn dies_with_us(c: &mut Command) {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        c.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = c;
+}
+
+/// `--carrier` 的本機轉接：特權那一半連到 127.0.0.1 的這個 port、先送 32 位元組的通行碼（存在只有這個帳號讀得到的
+/// 檔案），這裡再開一條 SSH 在裝置上找並啟動 carrier 的 agent，兩邊對接。一次一條；斷了它會再連。
+/// The `--carrier` bridge: the privileged half connects to this 127.0.0.1 port and sends the 32-byte token first (kept
+/// in a file only this account can read); then another SSH session finds and starts the carrier's agent on the device,
+/// and the two are joined. One at a time; the engine reconnects when it drops.
+#[cfg(unix)]
+fn agent_bridge(make: impl Fn() -> Command + Send + 'static) -> Result<(u16, PathBuf, Vec<u8>)> {
+    use rand::RngCore;
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    let mut token = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut token);
+    let dir = creds::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("vpn-agent-{}.token", std::process::id()));
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).context("writing the carrier bridge's token")?;
+        f.write_all(&token)?;
+    }
+    let expected = token.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            if vpn_stopping() {
+                break;
+            }
+            let Ok(mut conn) = conn else { continue };
+            let mut got = [0u8; 32];
+            let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            if conn.read_exact(&mut got).is_err() || got[..] != expected[..] {
+                continue;
+            }
+            let _ = conn.set_read_timeout(None);
+            let mut cmd = make();
+            cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+            let Ok(mut child) = cmd.spawn() else { continue };
+            let (Some(mut cin), Some(mut cout), Some(err)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else { continue };
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(err).lines().map_while(std::result::Result::ok) {
+                    if vpn::ssh_stderr_line(&line) == vpn::SshLine::Keep && !line.starts_with("Warning: Permanently added") && !line.starts_with("debug") {
+                        eprintln!("  carrier: {line}");
+                    }
+                }
+            });
+            let _ = conn.set_nodelay(true);
+            let Ok(mut back) = conn.try_clone() else { continue };
+            let up = std::thread::spawn(move || pump(&mut conn, &mut cin));
+            pump(&mut cout, &mut back);
+            let _ = back.shutdown(std::net::Shutdown::Both);
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = up.join();
+        }
+    });
+    Ok((port, path, token))
+}
+
+/// 讀到多少就馬上寫多少。不用 `std::io::copy`：它在 Linux 用 splice，socket 到 pipe 會把資料留著等下一筆才送出，
+/// 一個 ping 要等到下一個 ping 才到裝置。/ Write whatever was read, at once. Not `std::io::copy`: on Linux it splices, and a
+/// socket-to-pipe splice holds data until more arrives, so one ping only reached the device with the next one.
+#[cfg(unix)]
+fn pump(from: &mut impl std::io::Read, to: &mut impl std::io::Write) {
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        match from.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                if to.write_all(&buf[..n]).and_then(|_| to.flush()).is_err() {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 /// 開一條 `ssh -D`，等它的 SOCKS port 能連（最多 30 秒）。/ Start one `ssh -D` and wait until its SOCKS port answers.
@@ -1797,22 +1917,14 @@ fn wait_engine(helper: &mut std::process::Child) -> Result<i32> {
 /// `ssh -D` 開 SOCKS（裝置的 sshd 開 direct-tcpip，斷了自己重連），再用 root 開虛擬網卡把網段導過去。
 /// `ssh -D` for SOCKS (the device's sshd opens direct-tcpip; reconnected when it drops), then root brings up the TUN device.
 #[cfg(unix)]
-fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::Net], domains: &[String], dns_server: Option<std::net::Ipv4Addr>, tunnel: &str) -> Result<i32> {
+fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], plan: &VpnPlan, tunnel: &str) -> Result<i32> {
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
     let make = {
         let (file, alias, extra) = (file.to_path_buf(), alias.to_string(), extra.to_vec());
         move || {
             let mut c = Command::new("ssh");
             c.arg("-F").arg(&file).args(["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-D"]).arg(format!("127.0.0.1:{port}")).args(&extra).arg(&alias);
-            // Linux：telepy 被硬停（kill -9）時 ssh 跟著結束，不留一條連到裝置的線。/ Linux: ssh ends with a killed telepy.
-            #[cfg(target_os = "linux")]
-            unsafe {
-                use std::os::unix::process::CommandExt;
-                c.pre_exec(|| {
-                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                    Ok(())
-                });
-            }
+            dies_with_us(&mut c);
             c
         }
     };
@@ -1826,18 +1938,53 @@ fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::N
         let tunnel = tunnel.to_string();
         std::thread::spawn(move || keep_socks(ssh, make, port, &tunnel))
     };
+    // `--carrier`：另一條 SSH 在裝置上啟動 carrier 的 agent（只讀、不寫、SSH 一斷就結束）。
+    // `--carrier`: another SSH session starts the carrier's agent on the device (reads only, writes nothing, ends with SSH).
+    let bridge = if plan.carrier {
+        let (file, alias, extra) = (file.to_path_buf(), alias.to_string(), extra.to_vec());
+        Some(agent_bridge(move || {
+            let mut c = Command::new("ssh");
+            c.arg("-F").arg(&file).args(["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"]).args(&extra).arg(&alias).arg(telepy_carrier::agent::remote_command());
+            dies_with_us(&mut c);
+            c
+        })?)
+    } else {
+        None
+    };
     let socks = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     // 已經是 root 就自己做；不然用 sudo 跑特權那一半（會問密碼）。/ As root do it here; otherwise sudo the privileged half.
     let code = if unsafe { libc::geteuid() } == 0 {
-        vpn_engine::run(vpn_engine::Options { socks, nets: nets.to_vec(), dns_domains: domains.to_vec(), dns_server, owner: None }).map(|_| 0)
+        let agent = bridge.as_ref().map(|(p, _, token)| (std::net::SocketAddr::from(([127, 0, 0, 1], *p)), token.clone()));
+        vpn_engine::run(vpn_engine::Options {
+            socks,
+            nets: plan.nets.clone(),
+            dns_domains: plan.domains.clone(),
+            dns_server: plan.dns_server,
+            owner: None,
+            agent,
+            sshd_names: plan.sshd_names,
+        })
+        .map(|_| 0)
     } else {
         eprintln!("Bringing up the network device needs admin rights here: sudo may ask for your password.");
         let exe = std::env::current_exe().context("where is telepy?")?;
-        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(port, nets, domains, dns_server, std::process::id())).spawn().context("cannot run sudo")?;
+        let helper = vpn::Helper {
+            socks_port: port,
+            nets: plan.nets.clone(),
+            dns_domains: plan.domains.clone(),
+            dns_server: plan.dns_server,
+            agent: bridge.as_ref().map(|(p, path, _)| (*p, path.display().to_string())),
+            sshd_names: plan.sshd_names,
+            owner: std::process::id(),
+        };
+        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(&helper)).spawn().context("cannot run sudo")?;
         wait_engine(&mut helper)
     };
     VPN_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = keeper.join();
+    if let Some((_, path, _)) = bridge {
+        let _ = std::fs::remove_file(path);
+    }
     code
 }
 
@@ -1847,7 +1994,11 @@ fn vpn_helper(a: &VpnHelperArgs) -> Result<i32> {
     {
         let nets: Vec<vpn::Net> = a.nets.iter().map(|n| vpn::parse_net(n)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
         let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
-        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, dns_server: a.dns_server, owner: a.owner })?;
+        let agent = match (a.agent, &a.agent_token) {
+            (Some(addr), Some(path)) => Some((addr, std::fs::read(path).context("reading the carrier bridge's token")?)),
+            _ => None,
+        };
+        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, dns_server: a.dns_server, owner: a.owner, agent, sshd_names: !a.no_sshd_names })?;
         Ok(0)
     }
     #[cfg(not(unix))]

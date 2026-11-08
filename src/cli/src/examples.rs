@@ -190,7 +190,7 @@ pub const EXAMPLES: &[Example] = &[
         id: "vpn",
         topic: "forward",
         title: "A whole network behind the device",
-        note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C (TCP and DNS; not ping). Nothing runs on the device: its sshd only forwards. sudo asks for your password to add the network device here.",
+        note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C (TCP and DNS; ping with --carrier). Nothing runs on the device: its sshd only forwards. sudo asks for your password to add the network device here.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24"],
         needs: &["tunnels:read", "ssh-key"],
     },
@@ -208,6 +208,14 @@ pub const EXAMPLES: &[Example] = &[
         title: "Names from the network's DNS server",
         note: "Asks 192.168.1.1 for names under corp.lan, over TCP through the device: real answers, Mac devices too.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpnCarrier",
+        topic: "forward",
+        title: "Ping and UDP too",
+        note: "Starts the Telepy carrier already on the device (added the automatic or web-port way) for as long as the VPN runs: ping, UDP and names. Nothing is installed or written there.",
+        lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --carrier"],
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {

@@ -397,24 +397,33 @@ telepy vpn box 192.168.1.0/24                          # 那個網段上的每�
 telepy vpn box                                         # Telepy 知道的裝置網段（跟你自己重疊的會略過）
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名稱也通，由裝置去找
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1   # …或改問那個網路的 DNS 伺服器
+telepy vpn box 192.168.1.0/24 --carrier                # ping 和 UDP 也通，借裝置上本來就有的 Telepy carrier
 ```
 
 `telepy vpn` 讓這台電腦連得到裝置後面的網段，直到按 Ctrl+C：`ssh`、瀏覽器、資料庫工具，任何走 TCP 的程式連 `192.168.1.20` 都像人在那個網路上一樣。它會在這台電腦加一張網路卡和路由，所以會透過 sudo 問你的密碼（macOS 和 Linux）。
 
-**它不打擾裝置。** 裝置上什麼都不裝、不複製、不執行：沒有 shell、沒有腳本、也沒有 Python。每條連線都是裝置的 sshd 本來就會為 `ssh -L`、`ssh -D` 做的 TCP 轉送，所以只要 sshd 允許 TCP 轉送就能用（路由器上的 Dropbear 也行），裝置的紀錄裡也只會看到一次帶轉送的 SSH 登入。跟它很像的 sshuttle 會在裝置上跑一小段 Python 程式，`telepy vpn` 不會。
+**它不打擾裝置。** 裝置上什麼都不裝、不複製、不執行：沒有 shell、沒有腳本、也沒有 Python。每條連線都是裝置的 sshd 本來就會為 `ssh -L`、`ssh -D` 做的 TCP 轉送，所以只要 sshd 允許 TCP 轉送就能用（路由器上的 Dropbear 也行），裝置的紀錄裡也只會看到一次帶轉送的 SSH 登入。跟它很像的 sshuttle 會在裝置上跑一小段 Python 程式，`telepy vpn` 不會——除非你加 `--carrier`（見下面），那會啟動裝置上本來就有的 Telepy carrier。
 
 | | 會發生什麼事 |
 | --- | --- |
 | 這台電腦 | 一張網路卡（`utun` / `tun`），每個網段一條路由；用 `--dns-domain` 時再加上 `/etc/resolver/<網域>`（macOS）或這張網卡的 systemd-resolved 設定（Linux）。按 Ctrl+C 全部收掉。 |
 | 中間 | 一條經過 Telepy 的 SSH 連線（127.0.0.1 上的 `ssh -D`）。斷了的話 `telepy vpn` 會隔 1、2、4… 最多 30 秒重連，這段期間網路卡會留著。 |
-| 裝置上 | 它的 sshd 用你登入的帳號開出每條連線 |
+| 裝置上 | 它的 sshd 用你登入的帳號開出每條連線；加 `--carrier` 時還有 carrier 的 `vpn-agent`，只在 VPN 開著時跑 |
 | 名稱（`--dns-domain`） | 這台電腦用 198.18.128.0/17 裡的替身位址回答這個網域底下的名稱；連到替身位址的連線會用名稱交給裝置，由裝置的 sshd 照裝置自己的方式查（`/etc/hosts`、它的 DNS 伺服器…） |
 | 名稱（`--dns-server`） | 這個網域底下的名稱改問那台 DNS 伺服器，經裝置走 TCP：拿到真正的答案（各種紀錄都有），裝置是 Mac 也行 |
 | 連線 | VPN 先從裝置連，連上了才讓你程式的連線接通，所以連到沒開的埠會馬上「連線被拒」，不會看起來像開著 |
 
 指令裡沒給網段時，`telepy vpn` 會用 Telepy 從裝置學到的網段，並略過這台電腦自己也在的網段（把自己的區網導走會斷線）；真的要導就自己指定。含有 Telepy 伺服器本身的網段會被拒絕，因為 VPN 會把自己的連線導進自己。
 
-TCP 會轉送，DNS 也會：問裝置後面任何一台 DNS 伺服器的查詢（UDP 53 埠）會改走 TCP 送過去，DNS 伺服器本來就都接受 TCP。ping 和其他 UDP 不會過去，因為 SSH 只帶 TCP；它們會馬上收到「被過濾」，不會乾等到逾時，`telepy vpn` 第一次遇到也會說明。`--dns-domain` 以外的名稱留在本機。裝置是 Mac 時，`--dns-domain` 要搭配 `--dns-server`：Apple 的 sshd 被要求連一個名稱時會把整條 SSH 連線斷掉，所以請用那個網路的 DNS 伺服器、位址（`telepy lan ls box` 會列出來），或這台電腦的 `/etc/hosts`。閒置的連線只要兩端還留著就不會被切（SSH 放著一小時也沒事）。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號，裝置的 sshd 也要允許 TCP 轉送（不允許時 `telepy vpn` 會告訴你）。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。
+TCP 會轉送，DNS 也會：問裝置後面任何一台 DNS 伺服器的查詢（UDP 53 埠）會改走 TCP 送過去，DNS 伺服器本來就都接受 TCP。沒加 `--carrier` 時，ping 和其他 UDP 不會過去，因為 SSH 只帶 TCP；它們會馬上收到「被過濾」，不會乾等到逾時，`telepy vpn` 第一次遇到也會說明。`--dns-domain` 以外的名稱留在本機。裝置是 Mac 時，`--dns-domain` 要搭配 `--dns-server` 或 `--carrier`：Apple 的 sshd 被要求連一個名稱時會把整條 SSH 連線斷掉，所以請用那個網路的 DNS 伺服器、位址（`telepy lan ls box` 會列出來），或這台電腦的 `/etc/hosts`。閒置的連線只要兩端還留著就不會被切（SSH 放著一小時也沒事）。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號，裝置的 sshd 也要允許 TCP 轉送（不允許時 `telepy vpn` 會告訴你）。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。
+
+**加 `--carrier`：ping 與 UDP 也通。** 用「自動」或「網頁 port」方式加進來的裝置（以及用內建 SSH client 的裝置），登入帳號的 `~/.ssh` 裡本來就有 Telepy 的 carrier。加上 `--carrier`，`telepy vpn` 會多開一條 SSH 連線，在 VPN 開著的期間啟動那個 carrier 的 `vpn-agent`；它只透過這條連線的輸入輸出工作，不寫任何檔案、不需要 root，連線一結束（按 Ctrl+C、連線斷了、`telepy` 被強制結束）它就跟著結束。多出來的能力：
+
+- **ping**：只要那個帳號不用 root 就能 ping（Linux 看 `net.ipv4.ping_group_range`，macOS 一律可以）；
+- **各種 UDP**（NTP、SNMP、syslog、走 UDP 的區網 DNS…），從裝置的位址送出；
+- **`--dns-domain` 的名稱由裝置查**，裝置是 Mac 也行。
+
+這不會替裝置安裝任何東西：裝置上沒有 carrier，或是舊版的 carrier，`telepy vpn` 會說明，然後照常只帶 TCP 與 DNS。裝置的服務重新設定一次（通道頁的「連線方式」分頁）就會換上新版 carrier。在這台電腦上，引擎經 127.0.0.1 的一個本機 port 接到那條連線，這個 port 只認一組一次性的通行碼，存在只有你讀得到的檔案裡。
 
 ### 裝置網路上的瀏覽器
 
@@ -456,7 +465,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy rsync [rsync 選項…] <from>… <to>` | 用同一個 ssh 跑 rsync 同步；`--identity`、`--ssh-opt`、`--via`、`--fallback` 放在 rsync 的選項前面 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
-| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP 與 DNS，`--dns-domain` 底下的名稱，可用 `--dns-server` 指定 DNS）；裝置上不跑任何東西；斷了會自己重連；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP 與 DNS，`--dns-domain` 底下的名稱，可用 `--dns-server` 指定 DNS；加 `--carrier` 連 ping 和 UDP 也通）；沒加 `--carrier` 時裝置上不跑任何東西；斷了會自己重連；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |

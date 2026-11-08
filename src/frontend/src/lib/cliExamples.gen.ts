@@ -33,6 +33,7 @@ export const CLI_EXAMPLES = [
     { id: "vpn", topic: "forward", lines: ["telepy vpn <tunnel>@<account> 192.168.1.0/24"], needs: ["tunnels:read", "ssh-key"] },
     { id: "vpnDns", topic: "forward", lines: ["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan"], needs: ["tunnels:read", "ssh-key"] },
     { id: "vpnDnsServer", topic: "forward", lines: ["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1"], needs: ["tunnels:read", "ssh-key"] },
+    { id: "vpnCarrier", topic: "forward", lines: ["telepy vpn <tunnel>@<account> 192.168.1.0/24 --carrier"], needs: ["tunnels:read", "ssh-key"] },
     { id: "forwardMany", topic: "forward", lines: ["telepy ssh <tunnel>@<account> -N -L 8080:localhost:80 -L 15432:localhost:5432"], needs: ["tunnels:read", "ssh-key"] },
     { id: "forwardSocks", topic: "forward", lines: ["telepy ssh <tunnel>@<account> -N -D 1080"], needs: ["tunnels:read", "ssh-key"] },
     { id: "forwardRemote", topic: "forward", lines: ["telepy ssh <tunnel>@<account> -N -R 9000:localhost:3000"], needs: ["tunnels:read", "ssh-key"] },

@@ -371,13 +371,36 @@ pub fn icmp_prohibited(original: &[u8], from: Ipv4Addr) -> Option<Vec<u8>> {
     Some([&ipv4_header(from, ip.src, PROTO_ICMP, m.len())[..], &m[..]].concat())
 }
 
+/// 一個 ping（ICMP echo request）。/ A ping (ICMP echo request).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Echo {
+    pub src: Ipv4Addr,
+    pub dst: Ipv4Addr,
+    pub ident: u16,
+    pub seq: u16,
+    pub data: Vec<u8>,
+}
+
+/// 一個 UDP 封包。/ A UDP datagram.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Datagram {
+    pub src: SocketAddrV4,
+    pub dst: SocketAddrV4,
+    pub data: Vec<u8>,
+}
+
 /// 虛擬網卡收到的封包怎麼處理。/ What to do with a packet from the TUN device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inbound {
-    /// 交給 TCP/IP 堆疊（已有的連線、DNS 查詢）。/ Hand to the TCP/IP stack (existing connections, DNS queries).
+    /// 交給 TCP/IP 堆疊（已有的連線、問這裡的 DNS）。/ Hand to the TCP/IP stack (existing connections, DNS asked here).
     Pass,
     /// 新的 TCP 連線：先從裝置連，連上了才接。/ A new TCP connection: connect from the device first, accept only then.
     Connect(Syn),
+    /// ping：有裝置上的 carrier 就請它 ping，否則回 ICMP 禁止。/ A ping: the device's carrier pings when there is one.
+    Ping(Echo),
+    /// UDP：有 carrier 就經它送；沒有時 DNS（53）改走 TCP，其他回 ICMP 禁止。
+    /// UDP: through the carrier when there is one; without it DNS (53) goes as TCP, the rest gets ICMP prohibited.
+    Udp(Datagram),
     /// 這條路不帶：回 ICMP 禁止並說一次為什麼。/ Not carried: answer ICMP prohibited and say why once.
     Refuse(Refused),
     Drop,
@@ -394,16 +417,58 @@ pub fn classify(p: &[u8]) -> Inbound {
     let Some(ip) = parse_ipv4(p) else { return Inbound::Drop };
     match ip.proto {
         PROTO_TCP => tcp_syn(p).map_or(Inbound::Pass, Inbound::Connect),
-        // DNS（不管問誰）由堆疊交給我們：自己答或改走 TCP。/ DNS (to any server) goes to the stack: answered here or carried over TCP.
-        PROTO_UDP => match p.get(ip.ihl + 2..ip.ihl + 4) {
-            Some(port) if u16::from_be_bytes([port[0], port[1]]) == 53 => Inbound::Pass,
-            Some(port) => Inbound::Refuse(Refused::Udp(SocketAddrV4::new(ip.dst, u16::from_be_bytes([port[0], port[1]])))),
-            None => Inbound::Drop,
+        PROTO_UDP => {
+            let Some(h) = p.get(ip.ihl..ip.ihl + 8) else { return Inbound::Drop };
+            let src = SocketAddrV4::new(ip.src, u16::from_be_bytes([h[0], h[1]]));
+            let dst = SocketAddrV4::new(ip.dst, u16::from_be_bytes([h[2], h[3]]));
+            // 問這裡（198.18.0.2）的 DNS 由堆疊交給我們答。/ DNS asked here goes to the stack, which hands it to us.
+            if dst == SocketAddrV4::new(DNS_ADDR, 53) {
+                return Inbound::Pass;
+            }
+            let len = usize::from(u16::from_be_bytes([h[4], h[5]])).clamp(8, p.len() - ip.ihl);
+            Inbound::Udp(Datagram { src, dst, data: p[ip.ihl + 8..ip.ihl + len].to_vec() })
+        }
+        PROTO_ICMP => match p.get(ip.ihl..ip.ihl + 8) {
+            Some(m) if m[0] == 8 => Inbound::Ping(Echo {
+                src: ip.src,
+                dst: ip.dst,
+                ident: u16::from_be_bytes([m[4], m[5]]),
+                seq: u16::from_be_bytes([m[6], m[7]]),
+                data: p[ip.ihl + 8..].to_vec(),
+            }),
+            _ => Inbound::Drop,
         },
-        PROTO_ICMP if p.get(ip.ihl) == Some(&8) => Inbound::Refuse(Refused::Ping(ip.dst)),
-        PROTO_ICMP => Inbound::Drop,
         other => Inbound::Refuse(Refused::Other(other)),
     }
+}
+
+/// ping 的回覆（從被 ping 的位址回來）。/ The reply to a ping (coming back from the pinged address).
+pub fn echo_reply(e: &Echo) -> Vec<u8> {
+    let mut m = vec![0u8, 0, 0, 0];
+    m.extend_from_slice(&e.ident.to_be_bytes());
+    m.extend_from_slice(&e.seq.to_be_bytes());
+    m.extend_from_slice(&e.data);
+    let c = checksum(&[&m]);
+    m[2..4].copy_from_slice(&c.to_be_bytes());
+    [&ipv4_header(e.dst, e.src, PROTO_ICMP, m.len())[..], &m[..]].concat()
+}
+
+/// 一個 UDP 封包（含校驗和）。/ A UDP datagram (with its checksum).
+pub fn udp_packet(src: SocketAddrV4, dst: SocketAddrV4, data: &[u8]) -> Vec<u8> {
+    let len = (8 + data.len()) as u16;
+    let mut u = Vec::with_capacity(usize::from(len));
+    u.extend_from_slice(&src.port().to_be_bytes());
+    u.extend_from_slice(&dst.port().to_be_bytes());
+    u.extend_from_slice(&len.to_be_bytes());
+    u.extend_from_slice(&[0, 0]);
+    u.extend_from_slice(data);
+    let pseudo = [&src.ip().octets()[..], &dst.ip().octets()[..], &[0, PROTO_UDP][..], &len.to_be_bytes()[..]].concat();
+    let c = match checksum(&[&pseudo, &u]) {
+        0 => 0xffff,
+        c => c,
+    };
+    u[6..8].copy_from_slice(&c.to_be_bytes());
+    [&ipv4_header(*src.ip(), *dst.ip(), PROTO_UDP, u.len())[..], &u[..]].concat()
 }
 
 /// DNS 查詢走 TCP 時的前綴長度。/ The length prefix of DNS over TCP.
@@ -434,18 +499,37 @@ pub fn ssh_stderr_line(line: &str) -> SshLine {
     }
 }
 
-/// 內建引擎特權部分（`sudo telepy _vpn …`）的參數。/ The arguments of the privileged part.
-pub fn helper_argv(socks_port: u16, nets: &[Net], dns_domains: &[String], dns_server: Option<Ipv4Addr>, owner: u32) -> Vec<String> {
-    let mut out = vec!["_vpn".to_string(), "--socks".to_string(), format!("127.0.0.1:{socks_port}"), "--owner".to_string(), owner.to_string()];
-    if let Some(ip) = dns_server {
+/// 特權那一半（`sudo telepy _vpn …`）要知道的事。/ What the privileged half (`sudo telepy _vpn …`) needs to know.
+#[derive(Debug, Clone, Default)]
+pub struct Helper {
+    pub socks_port: u16,
+    pub nets: Vec<Net>,
+    pub dns_domains: Vec<String>,
+    pub dns_server: Option<Ipv4Addr>,
+    /// 裝置上 carrier 的 agent：本機轉接的 port 與通行碼檔。/ The device carrier's agent: the local bridge port and token file.
+    pub agent: Option<(u16, String)>,
+    /// 名稱能不能交給裝置的 sshd（Mac 不行）。/ Whether names may be handed to the device's sshd (not on a Mac).
+    pub sshd_names: bool,
+    pub owner: u32,
+}
+
+pub fn helper_argv(h: &Helper) -> Vec<String> {
+    let mut out = vec!["_vpn".to_string(), "--socks".to_string(), format!("127.0.0.1:{}", h.socks_port), "--owner".to_string(), h.owner.to_string()];
+    if let Some(ip) = h.dns_server {
         out.push("--dns-server".into());
         out.push(ip.to_string());
     }
-    for n in nets {
+    if let Some((port, token)) = &h.agent {
+        out.extend(["--agent".to_string(), format!("127.0.0.1:{port}"), "--agent-token".to_string(), token.clone()]);
+    }
+    if !h.sshd_names {
+        out.push("--no-sshd-names".into());
+    }
+    for n in &h.nets {
         out.push("--net".into());
         out.push(n.to_string());
     }
-    for d in dns_domains {
+    for d in &h.dns_domains {
         out.push("--dns-domain".into());
         out.push(d.clone());
     }
@@ -578,7 +662,11 @@ mod tests {
     #[test]
     fn the_helper_and_the_commands() {
         let nets = [parse_net("10.77.0.0/24").unwrap()];
-        assert_eq!(helper_argv(41234, &nets, &["corp.lan".into()], Some(Ipv4Addr::new(10, 77, 0, 1)), 77), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--dns-server", "10.77.0.1", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
+        let h = Helper { socks_port: 41234, nets: nets.to_vec(), dns_domains: vec!["corp.lan".into()], dns_server: Some(Ipv4Addr::new(10, 77, 0, 1)), agent: None, sshd_names: true, owner: 77 };
+        assert_eq!(helper_argv(&h), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--dns-server", "10.77.0.1", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
+        let h = Helper { agent: Some((41300, "/tmp/t".into())), sshd_names: false, dns_server: None, ..h };
+        assert_eq!(helper_argv(&h)[5..9], ["--agent", "127.0.0.1:41300", "--agent-token", "/tmp/t"]);
+        assert!(helper_argv(&h).contains(&"--no-sshd-names".to_string()));
         assert_eq!(route_commands(Os::Linux, "tun0", &nets), [["ip", "route", "replace", "10.77.0.0/24", "dev", "tun0"]]);
         assert_eq!(route_commands(Os::Macos, "utun7", &nets), [["route", "-q", "-n", "add", "-net", "10.77.0.0/24", "-interface", "utun7"]]);
         assert!(macos_resolver("corp.lan").1.contains("nameserver 198.18.0.2"));
@@ -616,23 +704,33 @@ mod tests {
     }
 
     #[test]
-    fn ping_and_other_udp_are_answered_prohibited_dns_is_kept() {
-        let mut echo = vec![8u8, 0, 0, 0, 0, 1, 0, 1];
+    fn pings_and_udp_are_read_and_answered() {
+        let mut echo = vec![8u8, 0, 0, 0, 0x12, 0x34, 0, 1, b'h', b'i'];
         let c = checksum(&[&echo]);
         echo[2..4].copy_from_slice(&c.to_be_bytes());
-        let ping = [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 10), PROTO_ICMP, 8)[..], &echo[..]].concat();
-        assert_eq!(classify(&ping), Inbound::Refuse(Refused::Ping(Ipv4Addr::new(10, 77, 0, 10))));
+        let ping = [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 10), PROTO_ICMP, echo.len())[..], &echo[..]].concat();
+        let Inbound::Ping(e) = classify(&ping) else { panic!("an echo request is a ping") };
+        assert_eq!((e.ident, e.seq, e.data.as_slice()), (0x1234, 1, &b"hi"[..]));
+        let r = echo_reply(&e);
+        let ip = parse_ipv4(&r).unwrap();
+        assert_eq!((ip.src, ip.dst, r[20]), (Ipv4Addr::new(10, 77, 0, 10), Ipv4Addr::new(10, 0, 0, 2), 0), "a reply from the pinged host");
+        assert_eq!((checksum(&[&r[..20]]), checksum(&[&r[20..]])), (0, 0));
+        assert_eq!(&r[24..], &echo[4..], "same id, seq and data");
+        // 不支援時：ICMP 禁止，附原封包。/ Without support: ICMP prohibited quoting the original.
         let m = icmp_prohibited(&ping, DNS_ADDR).unwrap();
-        assert_eq!(checksum(&[&m[..20]]), 0);
-        assert_eq!(checksum(&[&m[20..]]), 0, "ICMP checksum");
         assert_eq!((m[20], m[21]), (3, 13));
-        assert_eq!(&m[28..], &ping[..], "quotes the header and first 8 bytes");
-        assert_eq!(parse_ipv4(&m).unwrap().dst, Ipv4Addr::new(10, 0, 0, 2));
-        let udp = |port: u16| [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 1), PROTO_UDP, 8)[..], &[0x9c, 0x40], &port.to_be_bytes()[..], &[0, 8, 0, 0][..]].concat();
-        assert_eq!(classify(&udp(53)), Inbound::Pass);
-        assert_eq!(classify(&udp(123)), Inbound::Refuse(Refused::Udp("10.77.0.1:123".parse().unwrap())));
-        // ICMP 錯誤不再回 ICMP 錯誤。/ No ICMP error for an ICMP error.
-        assert!(icmp_prohibited(&m, DNS_ADDR).is_none());
+        assert_eq!((checksum(&[&m[..20]]), checksum(&[&m[20..]])), (0, 0));
+        assert_eq!(&m[28..], &ping[..28], "quotes the header and first 8 bytes");
+        assert!(icmp_prohibited(&m, DNS_ADDR).is_none(), "no ICMP error for an ICMP error");
+
+        let from = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40000);
+        let lan = |port: u16| SocketAddrV4::new(Ipv4Addr::new(10, 77, 0, 1), port);
+        let ntp = udp_packet(from, lan(123), b"time?");
+        assert_eq!(classify(&ntp), Inbound::Udp(Datagram { src: from, dst: lan(123), data: b"time?".to_vec() }));
+        let pseudo = [&ntp[12..20], &[0, PROTO_UDP, 0, 13][..]].concat();
+        assert_eq!(checksum(&[&pseudo, &ntp[20..]]), 0, "UDP checksum");
+        assert!(matches!(classify(&udp_packet(from, lan(53), b"q")), Inbound::Udp(d) if d.dst.port() == 53));
+        assert_eq!(classify(&udp_packet(from, SocketAddrV4::new(DNS_ADDR, 53), b"q")), Inbound::Pass, "DNS asked here");
         assert_eq!(classify(&[0x60, 0, 0, 0]), Inbound::Drop, "IPv6 isn't routed here");
         assert_eq!(dns_tcp_frame(&[1, 2, 3]), [0, 3, 1, 2, 3]);
     }

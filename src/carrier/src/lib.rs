@@ -35,6 +35,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
+/// `telepy vpn --carrier` 在裝置上的幫手（UDP、ping、查名稱），只活在那條 SSH 連線裡。
+/// The device-side helper of `telepy vpn --carrier` (UDP, ping, names), alive only inside that SSH session.
+pub mod agent;
+
 /// 內建的 SSH client：沒有可用 ssh 的裝置由它自己跑反向隧道（`telepy-carrier tunnel`）。
 /// The built-in SSH client: runs the reverse tunnel itself on devices without a usable ssh (`telepy-carrier tunnel`).
 #[cfg(feature = "client")]
@@ -652,7 +656,9 @@ usage: telepy-carrier [--tcp host:port] [--proxy http://[user:pass@]host:port | 
 Everything ssh writes to stdin goes to Telepy; everything that comes back goes to stdout. The SSH inside is unchanged:\n\
 the same keys, the same host-key check. Which way it took is written to stderr.\n\n\
 Without a usable ssh on the device, `telepy-carrier tunnel` runs the reverse tunnel with its built-in SSH client and\n\
-`telepy-carrier keygen` makes its key (see telepy-carrier tunnel --help).\n";
+`telepy-carrier keygen` makes its key (see telepy-carrier tunnel --help).\n\n\
+`telepy-carrier vpn-agent` is started by `telepy vpn --carrier` over an SSH session: it sends UDP, pings and looks\n\
+names up for that VPN while the session lasts, through stdin / stdout only; it writes no files and needs no root.\n";
 
 /// 要用哪個代理：`--no-proxy` 一律不；`--proxy` 指定；否則看環境變數（對網址的主機套 NO_PROXY）。
 /// Which proxy to use: none with `--no-proxy`, `--proxy` when given, else the environment (NO_PROXY against the URL's host).
