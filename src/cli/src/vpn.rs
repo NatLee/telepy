@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 use serde_json::Value;
 
@@ -262,9 +262,185 @@ pub fn answer_query(msg: &[u8], domains: &[String], fake: &mut FakeDns) -> Optio
     Some(dns_answer(msg, &q, ip, 0))
 }
 
+/// 一個 IPv4 封包裡我們要看的部分。/ What we read from an IPv4 packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ip4 {
+    pub src: Ipv4Addr,
+    pub dst: Ipv4Addr,
+    pub proto: u8,
+    /// IP 標頭長度（位元組）。/ The IP header length in bytes.
+    pub ihl: usize,
+}
+
+pub const PROTO_ICMP: u8 = 1;
+pub const PROTO_TCP: u8 = 6;
+pub const PROTO_UDP: u8 = 17;
+
+pub fn parse_ipv4(p: &[u8]) -> Option<Ip4> {
+    if p.len() < 20 || p[0] >> 4 != 4 {
+        return None;
+    }
+    let ihl = usize::from(p[0] & 0x0f) * 4;
+    (ihl >= 20 && p.len() >= ihl).then(|| Ip4 { src: Ipv4Addr::new(p[12], p[13], p[14], p[15]), dst: Ipv4Addr::new(p[16], p[17], p[18], p[19]), proto: p[9], ihl })
+}
+
+/// 一個新連線的 SYN（沒有 ACK）。/ A new connection's SYN (no ACK).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Syn {
+    pub src: SocketAddrV4,
+    pub dst: SocketAddrV4,
+    pub seq: u32,
+}
+
+pub fn tcp_syn(p: &[u8]) -> Option<Syn> {
+    let ip = parse_ipv4(p).filter(|ip| ip.proto == PROTO_TCP)?;
+    let t = p.get(ip.ihl..ip.ihl + 20)?;
+    let (syn, ack) = (t[13] & 0x02 != 0, t[13] & 0x10 != 0);
+    (syn && !ack).then(|| Syn {
+        src: SocketAddrV4::new(ip.src, u16::from_be_bytes([t[0], t[1]])),
+        dst: SocketAddrV4::new(ip.dst, u16::from_be_bytes([t[2], t[3]])),
+        seq: u32::from_be_bytes([t[4], t[5], t[6], t[7]]),
+    })
+}
+
+/// 網際網路校驗和（RFC 1071）。/ The Internet checksum (RFC 1071).
+pub fn checksum(chunks: &[&[u8]]) -> u16 {
+    let mut sum: u32 = 0;
+    let mut odd: Option<u8> = None;
+    for c in chunks {
+        for &b in c.iter() {
+            match odd.take() {
+                Some(hi) => sum += u32::from(u16::from_be_bytes([hi, b])),
+                None => odd = Some(b),
+            }
+        }
+    }
+    if let Some(hi) = odd {
+        sum += u32::from(hi) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+fn ipv4_header(src: Ipv4Addr, dst: Ipv4Addr, proto: u8, payload_len: usize) -> [u8; 20] {
+    let total = (20 + payload_len) as u16;
+    let mut h = [0u8; 20];
+    h[0] = 0x45;
+    h[2..4].copy_from_slice(&total.to_be_bytes());
+    h[8] = 64;
+    h[9] = proto;
+    h[12..16].copy_from_slice(&src.octets());
+    h[16..20].copy_from_slice(&dst.octets());
+    let c = checksum(&[&h]);
+    h[10..12].copy_from_slice(&c.to_be_bytes());
+    h
+}
+
+/// 回給 SYN 的 RST：程式馬上看到「連線被拒」，而不是先連上再斷。
+/// The RST answering a SYN: the program sees "connection refused" at once instead of connected-then-closed.
+pub fn rst_for(syn: &Syn) -> Vec<u8> {
+    let mut t = [0u8; 20];
+    t[0..2].copy_from_slice(&syn.dst.port().to_be_bytes());
+    t[2..4].copy_from_slice(&syn.src.port().to_be_bytes());
+    t[8..12].copy_from_slice(&syn.seq.wrapping_add(1).to_be_bytes());
+    t[12] = 5 << 4;
+    t[13] = 0x04 | 0x10;
+    let (src, dst) = (*syn.dst.ip(), *syn.src.ip());
+    let pseudo = [&src.octets()[..], &dst.octets()[..], &[0, PROTO_TCP, 0, 20][..]].concat();
+    let c = checksum(&[&pseudo, &t]);
+    t[16..18].copy_from_slice(&c.to_be_bytes());
+    [&ipv4_header(src, dst, PROTO_TCP, 20)[..], &t[..]].concat()
+}
+
+/// ICMP「目的地無法到達：管理上禁止」（type 3 code 13），附原封包的標頭與前 8 個位元組：ping 與 UDP 程式
+/// 馬上知道這條路不帶它，不用乾等。/ ICMP "destination unreachable: administratively prohibited" with the
+/// original header and first 8 bytes: ping and UDP programs learn at once that this path doesn't carry them.
+pub fn icmp_prohibited(original: &[u8], from: Ipv4Addr) -> Option<Vec<u8>> {
+    let ip = parse_ipv4(original)?;
+    // 別回 ICMP 錯誤給 ICMP 錯誤。/ Never answer an ICMP error with one.
+    if ip.proto == PROTO_ICMP && original.get(ip.ihl).is_some_and(|t| ![0, 8].contains(t)) {
+        return None;
+    }
+    let quoted = &original[..original.len().min(ip.ihl + 8)];
+    let mut m = vec![3u8, 13, 0, 0, 0, 0, 0, 0];
+    m.extend_from_slice(quoted);
+    let c = checksum(&[&m]);
+    m[2..4].copy_from_slice(&c.to_be_bytes());
+    Some([&ipv4_header(from, ip.src, PROTO_ICMP, m.len())[..], &m[..]].concat())
+}
+
+/// 虛擬網卡收到的封包怎麼處理。/ What to do with a packet from the TUN device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inbound {
+    /// 交給 TCP/IP 堆疊（已有的連線、DNS 查詢）。/ Hand to the TCP/IP stack (existing connections, DNS queries).
+    Pass,
+    /// 新的 TCP 連線：先從裝置連，連上了才接。/ A new TCP connection: connect from the device first, accept only then.
+    Connect(Syn),
+    /// 這條路不帶：回 ICMP 禁止並說一次為什麼。/ Not carried: answer ICMP prohibited and say why once.
+    Refuse(Refused),
+    Drop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Refused {
+    Ping(Ipv4Addr),
+    Udp(SocketAddrV4),
+    Other(u8),
+}
+
+pub fn classify(p: &[u8]) -> Inbound {
+    let Some(ip) = parse_ipv4(p) else { return Inbound::Drop };
+    match ip.proto {
+        PROTO_TCP => tcp_syn(p).map_or(Inbound::Pass, Inbound::Connect),
+        // DNS（不管問誰）由堆疊交給我們：自己答或改走 TCP。/ DNS (to any server) goes to the stack: answered here or carried over TCP.
+        PROTO_UDP => match p.get(ip.ihl + 2..ip.ihl + 4) {
+            Some(port) if u16::from_be_bytes([port[0], port[1]]) == 53 => Inbound::Pass,
+            Some(port) => Inbound::Refuse(Refused::Udp(SocketAddrV4::new(ip.dst, u16::from_be_bytes([port[0], port[1]])))),
+            None => Inbound::Drop,
+        },
+        PROTO_ICMP if p.get(ip.ihl) == Some(&8) => Inbound::Refuse(Refused::Ping(ip.dst)),
+        PROTO_ICMP => Inbound::Drop,
+        other => Inbound::Refuse(Refused::Other(other)),
+    }
+}
+
+/// DNS 查詢走 TCP 時的前綴長度。/ The length prefix of DNS over TCP.
+pub fn dns_tcp_frame(query: &[u8]) -> Vec<u8> {
+    let mut out = (query.len() as u16).to_be_bytes().to_vec();
+    out.extend_from_slice(query);
+    out
+}
+
+/// `ssh -D` 的 stderr 一行怎麼處理：每條連不上的轉送它都會印一行，我們已經回了 RST、也會自己說；
+/// 裝置不准轉送則要說清楚，因為那樣什麼都過不去。
+/// What to do with a line of `ssh -D`'s stderr: it prints one per refused forward, which the RST and our own line
+/// already cover; a device that forbids forwarding is spelled out, because then nothing goes through.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SshLine {
+    Keep,
+    Drop,
+    NoForwarding,
+}
+
+pub fn ssh_stderr_line(line: &str) -> SshLine {
+    if line.contains("open failed: administratively prohibited") {
+        SshLine::NoForwarding
+    } else if line.contains("open failed: connect failed:") || line.contains("open failed: unknown channel type") {
+        SshLine::Drop
+    } else {
+        SshLine::Keep
+    }
+}
+
 /// 內建引擎特權部分（`sudo telepy _vpn …`）的參數。/ The arguments of the privileged part.
-pub fn helper_argv(socks_port: u16, nets: &[Net], dns_domains: &[String], owner: u32) -> Vec<String> {
+pub fn helper_argv(socks_port: u16, nets: &[Net], dns_domains: &[String], dns_server: Option<Ipv4Addr>, owner: u32) -> Vec<String> {
     let mut out = vec!["_vpn".to_string(), "--socks".to_string(), format!("127.0.0.1:{socks_port}"), "--owner".to_string(), owner.to_string()];
+    if let Some(ip) = dns_server {
+        out.push("--dns-server".into());
+        out.push(ip.to_string());
+    }
     for n in nets {
         out.push("--net".into());
         out.push(n.to_string());
@@ -402,11 +578,69 @@ mod tests {
     #[test]
     fn the_helper_and_the_commands() {
         let nets = [parse_net("10.77.0.0/24").unwrap()];
-        assert_eq!(helper_argv(41234, &nets, &["corp.lan".into()], 77), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
+        assert_eq!(helper_argv(41234, &nets, &["corp.lan".into()], Some(Ipv4Addr::new(10, 77, 0, 1)), 77), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--dns-server", "10.77.0.1", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
         assert_eq!(route_commands(Os::Linux, "tun0", &nets), [["ip", "route", "replace", "10.77.0.0/24", "dev", "tun0"]]);
         assert_eq!(route_commands(Os::Macos, "utun7", &nets), [["route", "-q", "-n", "add", "-net", "10.77.0.0/24", "-interface", "utun7"]]);
         assert!(macos_resolver("corp.lan").1.contains("nameserver 198.18.0.2"));
         assert_eq!(linux_resolved_commands("tun0", &["corp.lan".into()])[1], ["resolvectl", "domain", "tun0", "~corp.lan"]);
         assert_eq!((reconnect_delay(0), reconnect_delay(3), reconnect_delay(20)), (1, 8, 30));
+    }
+
+    /// 從筆電 10.0.0.2:40000 到 10.77.0.10:9999 的 SYN。/ A SYN from 10.0.0.2:40000 to 10.77.0.10:9999.
+    fn syn_packet(flags: u8) -> Vec<u8> {
+        let mut t = [0u8; 20];
+        t[0..2].copy_from_slice(&40000u16.to_be_bytes());
+        t[2..4].copy_from_slice(&9999u16.to_be_bytes());
+        t[4..8].copy_from_slice(&1000u32.to_be_bytes());
+        t[12] = 5 << 4;
+        t[13] = flags;
+        [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 10), PROTO_TCP, 20)[..], &t[..]].concat()
+    }
+
+    #[test]
+    fn new_connections_are_told_apart_and_refused_with_a_valid_rst() {
+        let p = syn_packet(0x02);
+        let Inbound::Connect(syn) = classify(&p) else { panic!("a SYN is a new connection") };
+        assert_eq!((syn.src.to_string(), syn.dst.to_string(), syn.seq), ("10.0.0.2:40000".into(), "10.77.0.10:9999".into(), 1000));
+        assert_eq!(classify(&syn_packet(0x12)), Inbound::Pass, "SYN+ACK isn't new");
+        assert_eq!(classify(&syn_packet(0x10)), Inbound::Pass);
+        let r = rst_for(&syn);
+        let ip = parse_ipv4(&r).unwrap();
+        assert_eq!((ip.src, ip.dst, ip.proto), (Ipv4Addr::new(10, 77, 0, 10), Ipv4Addr::new(10, 0, 0, 2), PROTO_TCP));
+        assert_eq!(checksum(&[&r[..20]]), 0, "IP header checksum");
+        let pseudo = [&r[12..20], &[0, PROTO_TCP, 0, 20][..]].concat();
+        assert_eq!(checksum(&[&pseudo, &r[20..]]), 0, "TCP checksum");
+        assert_eq!((u16::from_be_bytes([r[20], r[21]]), u16::from_be_bytes([r[22], r[23]])), (9999, 40000));
+        assert_eq!(u32::from_be_bytes([r[28], r[29], r[30], r[31]]), 1001, "acknowledges the SYN");
+        assert_eq!(r[33], 0x14, "RST + ACK");
+    }
+
+    #[test]
+    fn ping_and_other_udp_are_answered_prohibited_dns_is_kept() {
+        let mut echo = vec![8u8, 0, 0, 0, 0, 1, 0, 1];
+        let c = checksum(&[&echo]);
+        echo[2..4].copy_from_slice(&c.to_be_bytes());
+        let ping = [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 10), PROTO_ICMP, 8)[..], &echo[..]].concat();
+        assert_eq!(classify(&ping), Inbound::Refuse(Refused::Ping(Ipv4Addr::new(10, 77, 0, 10))));
+        let m = icmp_prohibited(&ping, DNS_ADDR).unwrap();
+        assert_eq!(checksum(&[&m[..20]]), 0);
+        assert_eq!(checksum(&[&m[20..]]), 0, "ICMP checksum");
+        assert_eq!((m[20], m[21]), (3, 13));
+        assert_eq!(&m[28..], &ping[..], "quotes the header and first 8 bytes");
+        assert_eq!(parse_ipv4(&m).unwrap().dst, Ipv4Addr::new(10, 0, 0, 2));
+        let udp = |port: u16| [&ipv4_header(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 77, 0, 1), PROTO_UDP, 8)[..], &[0x9c, 0x40], &port.to_be_bytes()[..], &[0, 8, 0, 0][..]].concat();
+        assert_eq!(classify(&udp(53)), Inbound::Pass);
+        assert_eq!(classify(&udp(123)), Inbound::Refuse(Refused::Udp("10.77.0.1:123".parse().unwrap())));
+        // ICMP 錯誤不再回 ICMP 錯誤。/ No ICMP error for an ICMP error.
+        assert!(icmp_prohibited(&m, DNS_ADDR).is_none());
+        assert_eq!(classify(&[0x60, 0, 0, 0]), Inbound::Drop, "IPv6 isn't routed here");
+        assert_eq!(dns_tcp_frame(&[1, 2, 3]), [0, 3, 1, 2, 3]);
+    }
+
+    #[test]
+    fn ssh_lines_about_refused_forwards_are_folded() {
+        assert_eq!(ssh_stderr_line("channel 2: open failed: connect failed: Connection refused"), SshLine::Drop);
+        assert_eq!(ssh_stderr_line("channel 3: open failed: administratively prohibited: open failed"), SshLine::NoForwarding);
+        assert_eq!(ssh_stderr_line("Permission denied (publickey)."), SshLine::Keep);
     }
 }

@@ -396,6 +396,7 @@ telepy ssh box -N -R 9000:localhost:3000      # 反方向：裝置的 localhost:
 telepy vpn box 192.168.1.0/24                          # 那個網段上的每台機器，直接用它自己的位址連
 telepy vpn box                                         # Telepy 知道的裝置網段（跟你自己重疊的會略過）
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名稱也通，由裝置去找
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1   # …或改問那個網路的 DNS 伺服器
 ```
 
 `telepy vpn` 讓這台電腦連得到裝置後面的網段，直到按 Ctrl+C：`ssh`、瀏覽器、資料庫工具，任何走 TCP 的程式連 `192.168.1.20` 都像人在那個網路上一樣。它會在這台電腦加一張網路卡和路由，所以會透過 sudo 問你的密碼（macOS 和 Linux）。
@@ -408,10 +409,12 @@ telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名�
 | 中間 | 一條經過 Telepy 的 SSH 連線（127.0.0.1 上的 `ssh -D`）。斷了的話 `telepy vpn` 會隔 1、2、4… 最多 30 秒重連，這段期間網路卡會留著。 |
 | 裝置上 | 它的 sshd 用你登入的帳號開出每條連線 |
 | 名稱（`--dns-domain`） | 這台電腦用 198.18.128.0/17 裡的替身位址回答這個網域底下的名稱；連到替身位址的連線會用名稱交給裝置，由裝置的 sshd 照裝置自己的方式查（`/etc/hosts`、它的 DNS 伺服器…） |
+| 名稱（`--dns-server`） | 這個網域底下的名稱改問那台 DNS 伺服器，經裝置走 TCP：拿到真正的答案（各種紀錄都有），裝置是 Mac 也行 |
+| 連線 | VPN 先從裝置連，連上了才讓你程式的連線接通，所以連到沒開的埠會馬上「連線被拒」，不會看起來像開著 |
 
 指令裡沒給網段時，`telepy vpn` 會用 Telepy 從裝置學到的網段，並略過這台電腦自己也在的網段（把自己的區網導走會斷線）；真的要導就自己指定。含有 Telepy 伺服器本身的網段會被拒絕，因為 VPN 會把自己的連線導進自己。
 
-只有 TCP 會轉送，因為 SSH 只帶 TCP。ping、UDP 服務、其他協定，以及 `--dns-domain` 以外的名稱都留在本機。裝置是 Mac 時不能用 `--dns-domain`：Apple 的 sshd 被要求連一個名稱時會把整條 SSH 連線斷掉，所以那邊請用位址（`telepy lan ls box` 會列出來），或把名稱寫進這台電腦的 `/etc/hosts`。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號，裝置的 sshd 也要允許 TCP 轉送。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。
+TCP 會轉送，DNS 也會：問裝置後面任何一台 DNS 伺服器的查詢（UDP 53 埠）會改走 TCP 送過去，DNS 伺服器本來就都接受 TCP。ping 和其他 UDP 不會過去，因為 SSH 只帶 TCP；它們會馬上收到「被過濾」，不會乾等到逾時，`telepy vpn` 第一次遇到也會說明。`--dns-domain` 以外的名稱留在本機。裝置是 Mac 時，`--dns-domain` 要搭配 `--dns-server`：Apple 的 sshd 被要求連一個名稱時會把整條 SSH 連線斷掉，所以請用那個網路的 DNS 伺服器、位址（`telepy lan ls box` 會列出來），或這台電腦的 `/etc/hosts`。閒置的連線只要兩端還留著就不會被切（SSH 放著一小時也沒事）。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號，裝置的 sshd 也要允許 TCP 轉送（不允許時 `telepy vpn` 會告訴你）。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。
 
 ### 裝置網路上的瀏覽器
 
@@ -453,7 +456,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy rsync [rsync 選項…] <from>… <to>` | 用同一個 ssh 跑 rsync 同步；`--identity`、`--ssh-opt`、`--via`、`--fallback` 放在 rsync 的選項前面 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
-| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP，加上 `--dns-domain` 底下的名稱）；裝置上不跑任何東西；斷了會自己重連；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP 與 DNS，`--dns-domain` 底下的名稱，可用 `--dns-server` 指定 DNS）；裝置上不跑任何東西；斷了會自己重連；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |

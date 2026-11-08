@@ -293,7 +293,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "sftp <tunnel>[@account]", key: "sftp", needs: ["tunnels:read", "ssh-key"] },
     { usage: "rsync [--identity …] [rsync options…] <from>… <to>", key: "rsync", needs: ["tunnels:read", "ssh-key"] },
     { usage: "forward <tunnel>[@account] <host>[:port] [--local N] [--open]", key: "forward", needs: ["tunnels:read", "ssh-key"] },
-    { usage: "vpn <tunnel>[@account] [<network>…] [--dns-domain <domain>]", key: "vpn", needs: ["tunnels:read", "ssh-key"] },
+    { usage: "vpn <tunnel>[@account] [<network>…] [--dns-domain <domain>] [--dns-server <ip>]", key: "vpn", needs: ["tunnels:read", "ssh-key"] },
     { usage: "config install [<tunnel>…|--all] [--print] | tidy [--check] [--yes] | fallback [ask|always|never]", key: "config", needs: ["tunnels:read"] },
     { usage: "exec <tunnel>… [--label …] [--group …] -- <cmd>", key: "exec", needs: ["ssh:exec"] },
     { usage: "cp <from> <to>", key: "cp", needs: ["ssh:files"] },
