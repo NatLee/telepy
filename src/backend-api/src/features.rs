@@ -533,6 +533,7 @@ mod tests {
             ("PATCH", "/api/user/groups/3", Some(TunnelsShare)),
             ("POST", "/api/user/groups/3/preview", Some(TunnelsShare)),
             ("DELETE", "/api/user/groups/3", None),
+            ("DELETE", "/api/user/groups/3/membership", None),
             ("GET", "/api/user/users", None),
             ("POST", "/api/reverse/access-requests/5/approve", Some(TunnelsShare)),
             ("POST", "/api/reverse/access-requests/5/deny", None),

@@ -3,6 +3,11 @@
 //! - `GET /api/user/groups` → `{groups, users, limit, max_members}`（`users` = 能加進來的人：其他還在用的帳號）
 //! - `POST /api/user/groups`、`PATCH/DELETE /api/user/groups/{id}` → 同上（建立多一個 `created_id`）
 //! - `POST /api/user/groups/{id}/preview` `{members}` | `{delete: true}` → 誰會多了 / 少了哪些通道
+//! - `DELETE /api/user/groups/{id}/membership` → 退出別人的個人群組（任何人都能把你加進去，所以你一定能自己退出）
+//!
+//! 能加誰：只有至少管得到一條通道分享的人（擁有者或 ADMIN）拿得到帳號清單、能放成員 —— 跟「可分享的人」名單同一道
+//! 門檻；不然誰都能用成員 id 試出有哪些帳號。/ Only people who manage sharing on at least one tunnel get the account
+//! list and may add members — the available-users bar; otherwise anyone could probe member ids to list accounts.
 //!
 //! 分享給個人群組的通道跟著它的成員走，但只在群組主人還管得到那條通道時算（見 `crate::group_shares`）。
 //! 別人的群組一律 404。
@@ -31,6 +36,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list, create))
         .routes(routes!(update, remove))
         .routes(routes!(preview))
+        .routes(routes!(leave))
 }
 
 /// 一個人最多幾個個人群組。/ Personal groups per person.
@@ -39,15 +45,29 @@ pub const MAX_GROUPS: usize = 50;
 pub const MAX_MEMBERS: usize = 200;
 
 async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
+    let can_share = db::group_shares::manages_any(&state.db, me.id).await?;
     let groups = db::features::personal_groups(&state.db, me.id).await?;
     let ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
     let active = crate::group_shares::active_shares(state).await?;
     let mut shares: HashMap<i64, Vec<Value>> = HashMap::new();
+    let mut sees: HashMap<i64, bool> = HashMap::new();
     for (id, g, tunnel_id, tunnel_name, _owner, perm, _expires, _through) in db::group_shares::shares_of_groups(&state.db, &ids).await? {
+        // 已經看不到的通道（分享暫停中）不說名字。/ No name for a tunnel I can no longer see (the share is paused).
+        let visible = match sees.get(&tunnel_id) {
+            Some(v) => *v,
+            None => {
+                let v = match db::tunnels::by_id(&state.db, tunnel_id).await? {
+                    Some(t) => crate::permissions::effective_for(&state.db, me.id, &t).await?.is_some(),
+                    None => false,
+                };
+                sees.insert(tunnel_id, v);
+                v
+            }
+        };
         shares.entry(g).or_default().push(json!({
             "id": id,
             "tunnel_id": tunnel_id,
-            "tunnel_name": tunnel_name,
+            "tunnel_name": if visible { Some(tunnel_name) } else { None },
             "permission_type": perm,
             "active": active.contains(&id),
         }));
@@ -69,9 +89,15 @@ async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
             "created_at": crate::util::db_to_iso_utc_z(&g.created_at),
         }));
     }
+    let pickable: Vec<Value> = if can_share {
+        users.iter().filter(|u| u.is_active && u.id != me.id).map(|u| json!({ "id": u.id, "username": u.username, "email": u.email })).collect()
+    } else {
+        vec![]
+    };
     Ok(json!({
         "groups": out,
-        "users": users.iter().filter(|u| u.is_active && u.id != me.id).map(|u| json!({ "id": u.id, "username": u.username, "email": u.email })).collect::<Vec<_>>(),
+        "can_share": can_share,
+        "users": pickable,
         "limit": MAX_GROUPS,
         "max_members": MAX_MEMBERS,
     }))
@@ -94,6 +120,13 @@ async fn parse_members(state: &AppState, me: &User, body: &Value) -> ApiResult<O
     }
     if ids.contains(&me.id) {
         return Err(ApiError::field("members", "You don't need to be in your own group."));
+    }
+    // 管不到任何通道的人不能放成員（不然成員 id 的對錯就能列出帳號）。/ No tunnel to manage, no members (else ids would list accounts).
+    if !ids.is_empty() && !db::group_shares::manages_any(&state.db, me.id).await? {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "Add people once you own or administer a tunnel to share.", "code": "no_tunnels" }),
+        ));
     }
     let active: std::collections::HashSet<i64> = db::users::all_ordered(&state.db).await?.iter().filter(|u| u.is_active).map(|u| u.id).collect();
     if let Some(bad) = ids.iter().find(|id| !active.contains(id)) {
@@ -178,4 +211,35 @@ async fn preview(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id)
         None => return Err(ApiError::bad_request("Send one of: members, delete: true.")),
     };
     Ok(Json(crate::group_shares::preview(&state, id, &change).await?))
+}
+
+/// 退出別人的個人群組：經由它拿到的通道收回（自己另有的分享不受影響）。只限個人群組，組織群組由管理員管。
+/// Leave someone else's personal group: tunnels held through it go (shares of your own stay). Personal groups only;
+/// organization groups are kept by admins.
+#[utoipa::path(delete, path = "/api/user/groups/{id}/membership", tag = "Personal Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), responses((status = 200, body = super::schemas::GroupLeft), (status = 404, body = super::schemas::ErrorBody)))]
+async fn leave(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let group = db::features::any_group(&state.db, id)
+        .await?
+        .filter(|g| g.owner_id.is_some_and(|o| o != me.id))
+        .ok_or_else(|| ApiError::not_found("Group not found."))?;
+    if !db::features::members_of(&state.db, id).await?.contains(&me.id) {
+        return Err(ApiError::not_found("Group not found."));
+    }
+    db::features::remove_member(&state.db, id, me.id).await?;
+    let owner = match group.owner_id {
+        Some(o) => db::users::by_id(&state.db, o).await?.map(|u| u.username).unwrap_or_default(),
+        None => String::new(),
+    };
+    let shares = db::group_shares::shares_of_groups(&state.db, &[id]).await?;
+    for (_, _, tunnel_id, ..) in &shares {
+        state
+            .gateway
+            .event("group_share", None, None, Some(*tunnel_id), format!("{} left {owner}'s personal group \"{}\"", me.username, group.label()))
+            .await;
+    }
+    crate::group_shares::reconcile(&state, &HashMap::new()).await?;
+    if let Some(o) = group.owner_id {
+        state.hub.notify_user(o, &json!({ "action": "PERSONAL-GROUP-LEFT", "group_id": id, "group": group.label(), "user": me.username }));
+    }
+    Ok(Json(json!({ "left": true, "group": group.label(), "tunnels": shares.len() })))
 }

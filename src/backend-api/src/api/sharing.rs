@@ -158,15 +158,16 @@ async fn refuse_via_group(state: &AppState, sharing: &db::sharing::Sharing, own:
         None => None,
     };
     let personal = group.as_ref().is_some_and(|g| g.is_personal());
+    let group_id = group.as_ref().map(|g| g.id);
     let group = group.map(|g| g.label().to_string()).unwrap_or_default();
     let msg = if own && personal {
-        format!("You have this tunnel through the personal group \"{group}\". Its owner can take you out of it, or the tunnel's owner can stop sharing it with the group.")
+        format!("You have this tunnel through the personal group \"{group}\". Leave the group (DELETE /api/user/groups/{}/membership), or the tunnel's owner can stop sharing it with the group.", group_id.unwrap_or_default())
     } else if own {
         format!("You have this tunnel through the group \"{group}\". An admin can take you out of the group, or the tunnel's owner can stop sharing it with the group.")
     } else {
         format!("This access comes from the group \"{group}\". Change the group's share, or share with this person directly to set their access on its own.")
     };
-    Err(ApiError::new(StatusCode::BAD_REQUEST, json!({ "error": msg, "code": "via_group", "group": group })))
+    Err(ApiError::new(StatusCode::BAD_REQUEST, json!({ "error": msg, "code": "via_group", "group": group, "group_id": group_id, "personal": personal })))
 }
 
 fn invalid_permission(raw: &str) -> ApiError {

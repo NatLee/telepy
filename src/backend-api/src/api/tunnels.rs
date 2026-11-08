@@ -111,8 +111,13 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             v["group_id"] = json!(my_groups.get(&t.id));
             // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
             v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
-            // 被分享的人：經由哪個使用者群組拿到的（null = 直接分享給我）。/ For sharees: the user group it comes through.
-            v["share_group"] = json!(my_share_groups.get(&t.id));
+            // 被分享的人：經由哪個群組拿到的（null = 直接分享給我）；個人群組另外給 id 與主人，讓他能退出。
+            // For sharees: the group it comes through (null = shared with me directly); a personal group also gives its
+            // id and owner so they can leave it.
+            let via = my_share_groups.get(&t.id);
+            v["share_group"] = json!(via.map(|g| &g.0));
+            v["share_group_id"] = json!(via.map(|g| g.1));
+            v["share_group_owner"] = json!(via.and_then(|g| g.2.as_ref()));
             // owner / ADMIN：還在等我決定的存取申請。/ Owner / ADMIN: access requests waiting for a decision.
             let decides = eff.is_some_and(|e| e.satisfies(permissions::Permission::Admin));
             v["access_requests"] = json!(if decides { requests.get(&t.id).copied().unwrap_or(0) } else { 0 });

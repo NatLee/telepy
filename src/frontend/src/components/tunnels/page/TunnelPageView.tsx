@@ -115,7 +115,8 @@ export function TunnelPageView() {
 
     const health = liveHealth(tunnel, page.online);
     const manager = tunnel.is_owner || tunnel.can_share;
-    const role = form.state.details?.user_permission ?? (tunnel.is_owner ? "owner" : tunnel.can_share ? "admin" : tunnel.can_edit ? "edit" : "view");
+    // 先看即時的列表資料（權限被改、退出群組都會跟著變），詳細資料只讀一次。/ Prefer the live list item; details are read once.
+    const role = tunnel.user_permission ?? form.state.details?.user_permission ?? (tunnel.is_owner ? "owner" : tunnel.can_share ? "admin" : tunnel.can_edit ? "edit" : "view");
     const showDevice = !!tunnel.endpoint;
     const active: TunnelTab = tab === "device" && !showDevice ? "overview" : tab;
     const { errors, basicsDirty, keyChanged } = form.state;
@@ -223,6 +224,7 @@ export function TunnelPageView() {
                             onShare={() => actions.onShare(tunnel.id)}
                             onUsers={(readOnly) => actions.onUsers(tunnel.id, readOnly)}
                             onRequestAccess={() => actions.onRequestAccess?.(tunnel.id)}
+                            onLeftGroup={() => void reload()}
                         />
                     )}
                     {active === "sessions" && (

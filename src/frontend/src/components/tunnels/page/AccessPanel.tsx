@@ -7,10 +7,13 @@
  * with (owners / Admins manage it), the OS accounts, and your SSH keys on the device. The editing stays in the existing
  * dialogs (sharing, login accounts); this tab makes them findable.
  */
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
-import { ArrowRight, KeyRound, LockKeyholeOpen, Share2, ShieldCheck, UserRound, Users } from "lucide-react";
+import { ArrowRight, KeyRound, LockKeyholeOpen, LogOut, Share2, ShieldCheck, UserRound, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/Toast";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { ShareExpiryText } from "@/components/tunnels/ShareExpiry";
 import { useI18n } from "@/lib/i18n";
@@ -35,9 +38,55 @@ interface Props {
     onShare: () => void;
     onUsers: (readOnly: boolean) => void;
     onRequestAccess: () => void;
+    /** 退出了經由的個人群組（重新載入）。/ Left the personal group it came through (reload). */
+    onLeftGroup: () => void;
 }
 
-export function AccessPanel({ tunnel, role, manager, onShare, onUsers, onRequestAccess }: Props) {
+/**
+ * 退出別人的個人群組：任何人都能把你加進去，所以你一定能自己退出。經由它拿到的通道（不只這條）都會收回。
+ * Leave someone's personal group: anyone can add you, so you can always leave. Every tunnel held through it goes.
+ */
+function LeaveGroup({ groupId, name, owner, onLeft }: { groupId: number; name: string; owner: string; onLeft: () => void }) {
+    const { t } = useI18n();
+    const { showSuccess, showError } = useToast();
+    const [asking, setAsking] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const leave = async () => {
+        setAsking(false);
+        setBusy(true);
+        try {
+            const res = await apiFetch(`/api/user/groups/${groupId}/membership`, { method: "DELETE" });
+            if (res.ok) {
+                showSuccess(t("share.group.leftGroup", { name }));
+                onLeft();
+            } else {
+                showError(responseError(res, await readJson(res), t("share.group.leaveGroupFailed")));
+            }
+        } catch (e) {
+            showError((e instanceof Error && e.message) || t("share.group.leaveGroupFailed"));
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <>
+            <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setAsking(true)}>
+                <LogOut size={14} /> {t("share.group.leave")}
+            </Button>
+            <ConfirmDialog
+                isOpen={asking}
+                onClose={() => setAsking(false)}
+                onConfirm={() => void leave()}
+                title={t("share.group.leaveTitle", { name, owner })}
+                message={t("share.group.leaveMessage", { owner })}
+                confirmText={t("share.group.leave")}
+                isDestructive
+            />
+        </>
+    );
+}
+
+export function AccessPanel({ tunnel, role, manager, onShare, onUsers, onRequestAccess, onLeftGroup }: Props) {
     const { t } = useI18n();
     const sharees = tunnel.shared_with ?? [];
     const requests = tunnel.access_requests ?? 0;
@@ -57,7 +106,20 @@ export function AccessPanel({ tunnel, role, manager, onShare, onUsers, onRequest
                     )}
                     {!tunnel.is_owner && tunnel.share_group && (
                         <Property label={t("share.group.through")}>
-                            <span title={t("share.group.viaHintMine", { name: tunnel.share_group })}>{tunnel.share_group}</span>
+                            <span className="flex flex-wrap items-center gap-2">
+                                <span title={t("share.group.viaHintMine", { name: tunnel.share_group })}>{tunnel.share_group}</span>
+                                {tunnel.share_group_owner && (
+                                    <>
+                                        <Chip>
+                                            <UserRound aria-hidden />
+                                            {t("share.group.personalOf", { owner: tunnel.share_group_owner })}
+                                        </Chip>
+                                        {tunnel.share_group_id != null && (
+                                            <LeaveGroup groupId={tunnel.share_group_id} name={tunnel.share_group} owner={tunnel.share_group_owner} onLeft={onLeftGroup} />
+                                        )}
+                                    </>
+                                )}
+                            </span>
                         </Property>
                     )}
                 </PropertyList>

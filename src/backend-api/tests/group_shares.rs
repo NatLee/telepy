@@ -287,10 +287,26 @@ async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
     let carol = lab.user("carol").await;
     let dave = lab.user("dave").await;
     let eve = lab.user("eve").await;
+    let frank = lab.user("frank").await;
+    let gus = lab.user("gus").await;
+    let zed = lab.user("zed").await;
     let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
     let dev = lab.device(&alice, "box", &boxm).await;
     let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
     let url = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
+
+    // 管不到任何通道的人：拿不到帳號清單、不能放成員（不然成員 id 的對錯就能列出帳號）；空群組可以。
+    // Someone who manages no tunnel gets no account list and can't add members (ids would list accounts); empty groups are fine.
+    let r = lab.app.get("/api/user/groups", Some(&zed.token)).await;
+    assert_eq!((r.json["can_share"].as_bool(), r.json["users"].as_array().map(Vec::len)), (Some(false), Some(0)), "{}", r.text);
+    let r = lab.app.post("/api/user/groups", Some(&zed.token), json!({"name": "probe", "members": [alice.id]})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("no_tunnels")), "{}", r.text);
+    let r = lab.app.post("/api/user/groups", Some(&zed.token), json!({"name": "later"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let later = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(lab.app.patch(&format!("/api/user/groups/{later}"), Some(&zed.token), json!({"members": [bob.id]})).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(lab.app.post(&format!("/api/user/groups/{later}/preview"), Some(&zed.token), json!({"members": [bob.id]})).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(lab.app.get("/api/user/groups", Some(&alice.token)).await.json["can_share"], true, "alice owns a tunnel");
 
     // alice 建「pals」= carol。不能放自己、不能重名；別人可以用同一個名字。/ alice makes "pals"; rules for members and names.
     assert_eq!(lab.app.post("/api/user/groups", Some(&alice.token), json!({"name": "pals", "members": [alice.id]})).await.status, StatusCode::BAD_REQUEST);
@@ -349,7 +365,8 @@ async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
     let bobs = r.json["created_id"].as_i64().unwrap();
     let r = lab.app.post(&url, Some(&bob.token), json!({"group_id": bobs})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
-    assert_eq!(item(&lab, &eve.token, dev.tunnel_id).await.expect("eve through bobs")["share_group"], "bobs");
+    let it = item(&lab, &eve.token, dev.tunnel_id).await.expect("eve through bobs");
+    assert_eq!((it["share_group"].as_str(), it["share_group_id"].as_i64(), it["share_group_owner"].as_str()), (Some("bobs"), Some(bobs), Some("bob")), "{it}");
     let set = |perm: &'static str| {
         let (lab, alice, bob) = (&lab, &alice, &bob);
         async move {
@@ -380,6 +397,34 @@ async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
     active(true).await;
     assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_some());
 
+    // 任何人都能把你加進個人群組，所以你一定能自己退出：離開通道會說「經由個人群組」並給群組 id，退出群組就沒了。
+    // Anyone can add you to a personal group, so you can always leave it: leaving the tunnel names the group, leaving the group ends it.
+    let r = lab.app.delete(&format!("/tunnels/unshare/{}/{}", dev.tunnel_id, eve.id), Some(&eve.token)).await;
+    assert_eq!((r.status, r.json["code"].as_str(), r.json["group_id"].as_i64(), r.json["personal"].as_bool()), (StatusCode::BAD_REQUEST, Some("via_group"), Some(bobs), Some(true)), "{}", r.text);
+    let r = lab.app.delete(&format!("/api/user/groups/{bobs}/membership"), Some(&eve.token)).await;
+    assert_eq!((r.status, r.json["left"].as_bool()), (StatusCode::OK, Some(true)), "{}", r.text);
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_none(), "eve left bobs");
+    assert_eq!(lab.app.delete(&format!("/api/user/groups/{bobs}/membership"), Some(&eve.token)).await.status, StatusCode::NOT_FOUND, "not a member any more");
+    assert_eq!(lab.app.delete(&format!("/api/user/groups/{bobs}/membership"), Some(&bob.token)).await.status, StatusCode::NOT_FOUND, "not your own group");
+    let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": "leads", "members": [frank.id], "shareable": true})).await;
+    let leads = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(lab.app.delete(&format!("/api/user/groups/{leads}/membership"), Some(&frank.token)).await.status, StatusCode::NOT_FOUND, "organization groups are kept by admins");
+
+    // 連帶的暫停：frank 經由組織群組 leads 有 ADMIN，他的個人群組 = gus；管理員預告把 frank 移出 leads 時，gus 也列在會失去的人裡，
+    // 而且同一次比對就停。/ Knock-on pauses: frank's ADMIN comes from leads; previewing frank out of leads lists gus too, and one reconcile stops it.
+    let r = lab.app.post(&url, Some(&alice.token), json!({"group_id": leads, "permission_type": "admin"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let r = lab.app.post("/api/user/groups", Some(&frank.token), json!({"name": "franks", "members": [gus.id]})).await;
+    let franks = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(lab.app.post(&url, Some(&frank.token), json!({"group_id": franks})).await.status, StatusCode::CREATED);
+    assert!(item(&lab, &gus.token, dev.tunnel_id).await.is_some(), "gus through franks");
+    let r = lab.app.post(&format!("/api/access/groups/{leads}/preview"), Some(&lab.admin_token), json!({"members": []})).await;
+    let lost: Vec<i64> = r.json["lose"].as_array().unwrap().iter().filter_map(|p| p["user_id"].as_i64()).collect();
+    assert_eq!(lost, vec![frank.id, gus.id], "{}", r.text);
+    db::features::set_members(&lab.app.state.db, leads, &[]).await.unwrap();
+    settle(&lab).await;
+    assert!(item(&lab, &gus.token, dev.tunnel_id).await.is_none(), "paused in the same reconcile");
+
     // 刪掉 pals：預告 carol、dave 會少；刪了就真的沒了。/ Deleting pals: previewed, then carol and dave lose it.
     let r = lab.app.post(&format!("/api/user/groups/{pals}/preview"), Some(&alice.token), json!({"delete": true})).await;
     let lost: Vec<i64> = r.json["lose"].as_array().unwrap().iter().filter_map(|p| p["user_id"].as_i64()).collect();
@@ -388,4 +433,8 @@ async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert!(item(&lab, &carol.token, dev.tunnel_id).await.is_none());
     assert!(item(&lab, &dave.token, dev.tunnel_id).await.is_none());
+    // carol 已經看不到這條通道：她暫停中的分享不再說通道名稱。/ carol can't see the tunnel any more: her paused share hides its name.
+    let r = lab.app.get("/api/user/groups", Some(&carol.token)).await;
+    let s = r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == carols).unwrap()["shares"][0].clone();
+    assert_eq!((s["tunnel_name"].is_null(), s["active"].as_bool()), (true, Some(false)), "{}", r.text);
 }

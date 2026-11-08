@@ -910,7 +910,7 @@ fn parse_rules(v: &Value, known: &std::collections::HashMap<i64, String>) -> Api
             Some("admin") => Target::Admin,
             Some("group") => match it.get("group_id").and_then(Value::as_i64) {
                 Some(id) if known.contains_key(&id) => Target::Group(id),
-                _ => return Err(ApiError::field("group_rules", "Pick a Telepy user group that exists.")),
+                _ => return Err(ApiError::field("group_rules", "Pick a Telepy organization group that exists.")),
             },
             _ => return Err(ApiError::field("group_rules", "target must be admin or group.")),
         };

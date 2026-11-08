@@ -299,15 +299,30 @@ pub async fn ids_of_group(db: &Db, group_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(&format!("SELECT id FROM {G} WHERE group_id = ?")).bind(group_id).fetch_all(&db.read).await
 }
 
-/// 我經由群組拿到的通道 → 群組名稱。/ Tunnels I hold through a group → the group's name.
-pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, String>> {
-    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
-        "SELECT s.tunnel_id, {LABEL} FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.shared_with_id = ?"
+/// 我經由群組拿到的通道 → (群組名稱, 群組 id, 個人群組的主人；組織群組 = None)。
+/// Tunnels I hold through a group → (the group's name, its id, a personal group's owner; None for organization groups).
+pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, (String, i64, Option<String>)>> {
+    let rows: Vec<(i64, String, i64, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT s.tunnel_id, {LABEL}, g.id, o.username FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id \
+         LEFT JOIN auth_user o ON o.id = g.owner_id WHERE s.shared_with_id = ?"
     ))
     .bind(user_id)
     .fetch_all(&db.read)
     .await?;
-    Ok(rows.into_iter().collect())
+    Ok(rows.into_iter().map(|(t, name, id, owner)| (t, (name, id, owner))).collect())
+}
+
+/// 這個人能不能管至少一條通道的分享（擁有者或 ADMIN）——跟「可分享的人」名單同一道門檻。
+/// Whether this person manages sharing on at least one tunnel (owner or ADMIN) — the bar the available-users list uses.
+pub async fn manages_any(db: &Db, user_id: i64) -> sqlx::Result<bool> {
+    sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM authorized_keys_reverseserverauthorizedkeys WHERE user_id = ?) \
+            OR EXISTS(SELECT 1 FROM {S} WHERE shared_with_id = ? AND permission_type = 'admin')"
+    ))
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_one(&db.read)
+    .await
 }
 
 /// 這條通道上每筆經由群組的分享列 → (群組分享 id, 群組 id, 群組名稱)。/ Each group-made row on a tunnel → its group.
