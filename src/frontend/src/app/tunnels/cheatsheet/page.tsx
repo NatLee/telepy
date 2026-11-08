@@ -329,7 +329,13 @@ function CheatsheetInner() {
             case "jump": return <p>{t(telepyWay ? "sheet.next.telepyJump" : "sheet.next.jump")}</p>;
             case "copy": return null;
             case "rustdesk": return <p>{tn("sheet.next.rustdesk", { addr: code(resolved.localPort === "21118" ? "127.0.0.1" : `127.0.0.1:${resolved.localPort}`) })}</p>;
-            case "vpn": return <p>{t(telepyWay ? "sheet.next.telepyVpn" : "sheet.next.vpn")}</p>;
+            case "vpn":
+                return (
+                    <>
+                        {!telepyWay && <p>{t("sheet.next.vpnTelepyOnly")}</p>}
+                        <p>{t("sheet.next.telepyVpn")}</p>
+                    </>
+                );
         }
     })();
 

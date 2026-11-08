@@ -395,24 +395,23 @@ telepy ssh box -N -R 9000:localhost:3000      # 反方向：裝置的 localhost:
 ```sh
 telepy vpn box 192.168.1.0/24                          # 那個網段上的每台機器，直接用它自己的位址連
 telepy vpn box                                         # Telepy 知道的裝置網段（跟你自己重疊的會略過）
-telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名稱到裝置上查
-telepy vpn box --engine sshuttle --dns                 # 改用 sshuttle，所有 DNS 查詢都經過裝置
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan 底下的名稱也通，由裝置去找
 ```
 
-`telepy vpn` 讓這台電腦連得到裝置後面的網段，直到按 Ctrl+C：`ssh`、瀏覽器、資料庫工具，任何走 TCP 的程式連 `192.168.1.20` 都像人在那個網路上一樣。它會改這台電腦的路由，所以會透過 sudo 問你的密碼。
+`telepy vpn` 讓這台電腦連得到裝置後面的網段，直到按 Ctrl+C：`ssh`、瀏覽器、資料庫工具，任何走 TCP 的程式連 `192.168.1.20` 都像人在那個網路上一樣。它會在這台電腦加一張網路卡和路由，所以會透過 sudo 問你的密碼（macOS 和 Linux）。
 
-它有兩種引擎，預設的 `--engine auto` 會自己選：
+**它不打擾裝置。** 裝置上什麼都不裝、不複製、不執行：沒有 shell、沒有腳本、也沒有 Python。每條連線都是裝置的 sshd 本來就會為 `ssh -L`、`ssh -D` 做的 TCP 轉送，所以只要 sshd 允許 TCP 轉送就能用（路由器上的 Dropbear 也行），裝置的紀錄裡也只會看到一次帶轉送的 SSH 登入。跟它很像的 sshuttle 會在裝置上跑一小段 Python 程式，`telepy vpn` 不會。
 
-| | 內建 | sshuttle |
-| --- | --- | --- |
-| 這台電腦 | macOS 或 Linux，不用另外裝 | 要裝好 `sshuttle`（Linux、macOS） |
-| 裝置上 | 什麼都不用：只要 sshd 允許 TCP 轉送，路由器上的 Dropbear 也行 | `python3` |
-| 怎麼做 | 在你電腦上建一個網路裝置；每條連線都經過 `ssh -D`，由裝置的 sshd 開出去 | sshuttle 的防火牆規則，加上它放在裝置上的一小段 Python |
-| 名稱 | `--dns-domain <網域>`：這個網域底下的名稱去問裝置自己的 DNS 伺服器（macOS 用 `/etc/resolver`，Linux 用 systemd-resolved） | `--dns`：所有查詢都經過裝置 |
+| | 會發生什麼事 |
+| --- | --- |
+| 這台電腦 | 一張網路卡（`utun` / `tun`），每個網段一條路由；用 `--dns-domain` 時再加上 `/etc/resolver/<網域>`（macOS）或這張網卡的 systemd-resolved 設定（Linux）。按 Ctrl+C 全部收掉。 |
+| 中間 | 一條經過 Telepy 的 SSH 連線（127.0.0.1 上的 `ssh -D`）。斷了的話 `telepy vpn` 會隔 1、2、4… 最多 30 秒重連，這段期間網路卡會留著。 |
+| 裝置上 | 它的 sshd 用你登入的帳號開出每條連線 |
+| 名稱（`--dns-domain`） | 這台電腦用 198.18.128.0/17 裡的替身位址回答這個網域底下的名稱；連到替身位址的連線會用名稱交給裝置，由裝置的 sshd 照裝置自己的方式查（`/etc/hosts`、它的 DNS 伺服器…） |
 
-`auto` 在這台電腦有 sshuttle、裝置也有 python3 時用 sshuttle，否則用內建引擎。指令裡沒給網段時，`telepy vpn` 會用 Telepy 從裝置學到的網段，並略過這台電腦自己也在的網段（把自己的區網導走會斷線）；真的要導就自己指定。含有 Telepy 伺服器本身的網段會被拒絕，因為 VPN 會把自己的連線導進自己。
+指令裡沒給網段時，`telepy vpn` 會用 Telepy 從裝置學到的網段，並略過這台電腦自己也在的網段（把自己的區網導走會斷線）；真的要導就自己指定。含有 Telepy 伺服器本身的網段會被拒絕，因為 VPN 會把自己的連線導進自己。
 
-只有 TCP 會轉送，再加上指定名稱的 DNS，因為 SSH 只帶 TCP。ping、UDP 服務和其他協定都留在本機。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號；內建引擎另外需要裝置的 sshd 允許 TCP 轉送。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。不用 CLI 也能用 sshuttle：`~/.ssh/config` 裡有 Telepy 的設定區塊時，跑 `sshuttle -r <Host 別名> 192.168.1.0/24` 就行；網頁的指令速查也會幫你組好這一行。
+只有 TCP 會轉送，因為 SSH 只帶 TCP。ping、UDP 服務、其他協定，以及 `--dns-domain` 以外的名稱都留在本機。裝置是 Mac 時不能用 `--dns-domain`：Apple 的 sshd 被要求連一個名稱時會把整條 SSH 連線斷掉，所以那邊請用位址（`telepy lan ls box` 會列出來），或把名稱寫進這台電腦的 `/etc/hosts`。存取規則跟 `telepy ssh` 一樣：要有 `tunnels:read`、你的個人 SSH 金鑰，以及你在這台裝置上可以用的帳號，裝置的 sshd 也要允許 TCP 轉送。執行期間，Telepy 會在這條通道上把你顯示成一個 SSH 連線。
 
 ### 裝置網路上的瀏覽器
 
@@ -454,7 +453,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy rsync [rsync 選項…] <from>… <to>` | 用同一個 ssh 跑 rsync 同步；`--identity`、`--ssh-opt`、`--via`、`--fallback` 放在 rsync 的選項前面 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy forward <target> <host>[:port]` | 把裝置後面的一個 port 開到這台電腦（`ssh -L`）；`--open`、`--local`、`--https` | `tunnels:read` + 你的 SSH 金鑰 |
-| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP，加上 `--dns-domain` / `--dns` 的 DNS）；`--engine auto\|builtin\|sshuttle`；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
+| `telepy vpn <target> [<network>…]` | 直到按 Ctrl+C 前，連得到裝置後面的整個網段（TCP，加上 `--dns-domain` 底下的名稱）；裝置上不跑任何東西；斷了會自己重連；會用 sudo 問密碼 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy config install` | 把 Telepy 的區塊放進 `~/.ssh/config`；指定通道或 `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | 顯示或設定網頁連接埠連不上時怎麼辦：`ask`、`always`、`never` | — |
 | `telepy config tidy` | 簡化 ssh 設定檔；`--check`、`--wildcards`、`--yes`、`--file`；不需要登入 | — |

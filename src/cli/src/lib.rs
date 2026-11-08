@@ -116,7 +116,7 @@ pub enum Cmd {
     Rsync(RsyncArgs),
     /// Bring a port behind a device to your computer (ssh -L through Telepy): `forward <tunnel> <host>[:port] --open` opens a LAN web page in your own browser
     Forward(ForwardArgs),
-    /// Reach whole networks behind a device as if you were there (TCP, plus DNS for chosen domains): built-in, or sshuttle when both ends have it; asks for sudo
+    /// Reach whole networks behind a device as if you were there (TCP, plus names under chosen domains); nothing runs on the device, only its sshd forwards; asks for sudo here
     Vpn(VpnArgs),
     /// Install Telepy's ssh config blocks into ~/.ssh/config (like the web's SSH config dialog)
     Config(ConfigArgs),
@@ -167,15 +167,9 @@ pub struct VpnArgs {
     pub target: String,
     /// Networks to reach through the device, e.g. 192.168.1.0/24 (default: the device's own networks Telepy knows)
     pub nets: Vec<String>,
-    /// auto = sshuttle when this computer has it and the device has python3, else built-in; builtin; sshuttle
-    #[arg(long, value_parser = ["auto", "builtin", "sshuttle"], default_value = "auto")]
-    pub engine: String,
-    /// Look names under this domain up on the device, e.g. corp.lan (built-in engine; repeatable)
+    /// Names under this domain are found by the device, e.g. corp.lan (repeatable)
     #[arg(long = "dns-domain")]
     pub dns_domain: Vec<String>,
-    /// Send every DNS lookup through the device (sshuttle engine)
-    #[arg(long)]
-    pub dns: bool,
     #[command(flatten)]
     pub opts: SshOpts,
 }
@@ -186,10 +180,11 @@ pub struct VpnHelperArgs {
     pub socks: std::net::SocketAddr,
     #[arg(long = "net")]
     pub nets: Vec<String>,
-    #[arg(long = "dns-server")]
-    pub dns_server: Option<std::net::Ipv4Addr>,
     #[arg(long = "dns-domain")]
     pub dns_domain: Vec<String>,
+    /// The telepy that started it: stop once it is gone
+    #[arg(long)]
+    pub owner: Option<u32>,
 }
 
 #[derive(Args, Debug)]
@@ -1573,21 +1568,13 @@ fn rsync(api: &Api, a: &RsyncArgs) -> Result<i32> {
     hand_over(cmd).map_err(|e| if e.to_string().contains("is OpenSSH installed") { anyhow!("cannot run rsync: is it installed on this computer?") } else { e })
 }
 
-/// 這台電腦的 PATH 上有沒有這個程式。/ Whether a program is on this computer's PATH.
-fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file() || d.join(format!("{program}.exe")).is_file()))
-}
-
-/// 在裝置上跑一行（`ssh -F <檔> <別名> <指令>`），回標準輸出；連不上 / 失敗回 None。/ One command on the device.
-fn device_output(file: &std::path::Path, alias: &str, extra: &[String], command: &str) -> Option<String> {
-    let out = Command::new("ssh").arg("-F").arg(file).args(["-o", "BatchMode=yes"]).args(extra).arg(alias).arg(command).stdin(std::process::Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// `telepy vpn <通道> [網段…]`：裝置後面整個網段像在現場一樣用（TCP，加上指定網域的 DNS）。sshuttle 引擎 =
-/// 交給系統的 sshuttle；內建引擎 = `ssh -D` + `sudo telepy _vpn`（虛擬網卡）。兩種都要這台電腦的管理員權限。
-/// `telepy vpn <tunnel> [networks…]`: whole networks behind a device as if you were there. sshuttle = hand over to
-/// the system's sshuttle; built-in = `ssh -D` + `sudo telepy _vpn` (a TUN device). Both need admin rights here.
+/// `telepy vpn <通道> [網段…]`：裝置後面整個網段像在現場一樣用（TCP，加上指定網域的名稱）。`ssh -D` 開 SOCKS
+/// （裝置的 sshd 開 direct-tcpip），再用 root 開虛擬網卡把網段導過去（`sudo telepy _vpn`）。裝置上不跑任何東西：
+/// 名稱也交給 sshd 用裝置自己的方式解析（假 IP，見 `vpn_engine.rs`）。SSH 斷了會自己重連。
+/// `telepy vpn <tunnel> [networks…]`: whole networks behind a device as if you were there. `ssh -D` gives SOCKS (the
+/// device's sshd opens direct-tcpip), then root brings up a TUN device routing the networks there (`sudo telepy _vpn`).
+/// Nothing runs on the device: names are handed to sshd too, which resolves them the device's way (fake IPs, see
+/// `vpn_engine.rs`). A dropped SSH connection is reconnected.
 fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     let d = dashboard(api)?;
     let (t, _) = resolve(&d.tunnels, &a.target)?;
@@ -1625,30 +1612,17 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
         bail!("{n} includes {ip}, the Telepy server itself: the VPN would route its own connection into itself. Pick narrower networks.");
     }
     let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
-    let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
-    let extra = extra_opts(&a.opts);
-    let builtin_here = cfg!(unix);
-    let have_sshuttle = on_path("sshuttle");
-    // auto 才需要知道裝置有沒有 python3（sshuttle 在裝置上跑一小段 Python）。/ Only auto needs to ask the device about python3.
-    let python = (a.engine == "auto" && have_sshuttle).then(|| device_output(&file, &alias, &extra, "command -v python3 || command -v python").is_some_and(|o| !o.trim().is_empty()));
-    let engine = vpn::choose(&a.engine, have_sshuttle, python, builtin_here).map_err(|e| anyhow!(e))?;
-    match engine {
-        vpn::Engine::Sshuttle => {
-            if !domains.is_empty() {
-                bail!("--dns-domain is for the built-in engine; with sshuttle use --dns (all lookups through the device).");
-            }
-            eprintln!("Starting sshuttle (it asks for your password through sudo to set up the firewall).");
-            let mut cmd = Command::new("sshuttle");
-            cmd.args(vpn::sshuttle_argv(&alias, &sshcfg::config_path(&file), &nets, a.dns, &extra));
-            hand_over(cmd).map_err(|e| if e.to_string().contains("is OpenSSH installed") { anyhow!("cannot run sshuttle: is it installed on this computer?") } else { e })
-        }
-        vpn::Engine::Builtin => {
-            if a.dns {
-                bail!("--dns sends every lookup through the device and needs --engine sshuttle; the built-in engine takes --dns-domain <domain>.");
-            }
-            vpn_builtin(&file, &alias, &extra, &nets, &domains, name_of(&t))
-        }
+    // Apple 的 sshd 收到「用名稱轉送」會整條斷線（見 docs/device-connections.md），Mac 上名稱不轉。
+    // Apple's sshd drops the whole connection on a forward to a name, so names are not carried to a Mac.
+    if !domains.is_empty() && vpn::device_is_mac(&t["endpoint"]["facts"]) {
+        bail!(
+            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so --dns-domain can't work through it. Use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
+            name_of(&t),
+            a.target
+        );
     }
+    let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
+    vpn_run(&file, &alias, &extra_opts(&a.opts), &nets, &domains, name_of(&t))
 }
 
 /// 這台電腦自己的 IPv4 網段（不含回送）。/ This computer's own IPv4 networks (no loopback).
@@ -1672,87 +1646,185 @@ fn local_nets() -> Vec<vpn::Net> {
 }
 
 #[cfg(not(unix))]
-fn vpn_builtin(_: &std::path::Path, _: &str, _: &[String], _: &[vpn::Net], _: &[String], _: &str) -> Result<i32> {
-    bail!("The built-in VPN runs on macOS and Linux.")
+fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &[vpn::Net], _: &[String], _: &str) -> Result<i32> {
+    bail!("telepy vpn runs on macOS and Linux.")
 }
 
-/// 內建引擎：`ssh -D` 開 SOCKS（裝置的 sshd 開 direct-tcpip），再用 root 開虛擬網卡把網段導過去。
-/// The built-in engine: `ssh -D` for SOCKS (the device's sshd opens direct-tcpip), then root brings up the TUN device.
+/// Ctrl-C / SIGTERM 之後收工（不讓 telepy 先走，等引擎把設定收回）。/ Set by Ctrl-C / SIGTERM: stop after the engine undid its setup.
 #[cfg(unix)]
-fn vpn_builtin(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::Net], domains: &[String], tunnel: &str) -> Result<i32> {
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
-    let mut ssh = Command::new("ssh")
-        .arg("-F")
-        .arg(file)
-        .args(["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-D"])
-        .arg(format!("127.0.0.1:{port}"))
-        .args(extra)
-        .arg(alias)
-        .spawn()
-        .context("cannot run ssh (is OpenSSH installed?)")?;
+static VPN_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn vpn_on_stop(_: libc::c_int) {
+    VPN_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn vpn_stopping() -> bool {
+    VPN_STOP.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// 開一條 `ssh -D`，等它的 SOCKS port 能連（最多 30 秒）。/ Start one `ssh -D` and wait until its SOCKS port answers.
+#[cfg(unix)]
+fn start_socks(mut cmd: Command, port: u16) -> std::result::Result<std::process::Child, String> {
+    let mut ssh = cmd.spawn().map_err(|e| format!("cannot run ssh (is OpenSSH installed?): {e}"))?;
     let started = std::time::Instant::now();
     loop {
-        if let Some(status) = ssh.try_wait()? {
-            bail!("ssh ended before the VPN was up ({status}). Run with --ssh-opt -v to see why.");
+        if let Ok(Some(status)) = ssh.try_wait() {
+            return Err(format!("ssh ended ({status})"));
         }
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
+            return Ok(ssh);
         }
-        if started.elapsed() > std::time::Duration::from_secs(30) {
+        if started.elapsed() > std::time::Duration::from_secs(30) || vpn_stopping() {
             let _ = ssh.kill();
-            bail!("The SSH connection to {tunnel} did not come up within 30 seconds.");
+            let _ = ssh.wait();
+            return Err("no answer within 30 seconds".into());
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    // 指定網域的名字問裝置自己的 DNS 伺服器（它的 /etc/resolv.conf）。/ Names under the domains go to the device's own resolver.
-    let dns_server = if domains.is_empty() {
-        None
-    } else {
-        let r = device_output(file, alias, extra, "cat /etc/resolv.conf").as_deref().and_then(vpn::parse_resolv);
-        if r.is_none() {
-            eprintln!("Couldn't read the device's DNS server (/etc/resolv.conf); names won't be looked up there.");
+}
+
+/// 顧著 `ssh -D`：斷了就隔 1、2、4…最多 30 秒重連，直到收工。/ Keep `ssh -D` up: reconnect after 1, 2, 4… ≤ 30 s until stopping.
+#[cfg(unix)]
+fn keep_socks(mut ssh: std::process::Child, make: impl Fn() -> Command, port: u16, tunnel: &str) {
+    let pause = |secs: u64| {
+        for _ in 0..secs * 10 {
+            if vpn_stopping() {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        r
+        true
+    };
+    loop {
+        let status = loop {
+            if vpn_stopping() {
+                let _ = ssh.kill();
+                let _ = ssh.wait();
+                return;
+            }
+            match ssh.try_wait() {
+                Ok(Some(s)) if s.success() => break String::new(),
+                Ok(Some(s)) => break format!(" ({s})"),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(300)),
+                Err(e) => break format!(" ({e})"),
+            }
+        };
+        // Ctrl-C 也會讓 ssh 結束：先看是不是在收工。/ Ctrl-C ends ssh too: check for stopping first.
+        if !pause(1) {
+            return;
+        }
+        eprintln!("The SSH connection to {tunnel} ended{status}; reconnecting…");
+        let mut attempt = 0;
+        ssh = loop {
+            match start_socks(make(), port) {
+                Ok(s) => {
+                    eprintln!("Reconnected to {tunnel}.");
+                    break s;
+                }
+                Err(e) => {
+                    let wait = vpn::reconnect_delay(attempt);
+                    attempt += 1;
+                    if vpn_stopping() {
+                        return;
+                    }
+                    eprintln!("  not yet ({e}); trying again in {wait} s");
+                    if !pause(wait) {
+                        return;
+                    }
+                }
+            }
+        };
+    }
+}
+
+/// 等 sudo 跑的引擎結束；收工時請它收好（SIGTERM 給 sudo，它會轉過去），10 秒後還在就硬停。
+/// Wait for the engine under sudo; when stopping, ask it to finish (SIGTERM to sudo, which passes it on), force after 10 s.
+#[cfg(unix)]
+fn wait_engine(helper: &mut std::process::Child) -> Result<i32> {
+    loop {
+        if let Some(status) = helper.try_wait()? {
+            return Ok(status.code().unwrap_or(1));
+        }
+        if vpn_stopping() {
+            if let Ok(pid) = libc::pid_t::try_from(helper.id()) {
+                unsafe { libc::kill(pid, libc::SIGTERM) };
+            }
+            for _ in 0..100 {
+                if let Some(status) = helper.try_wait()? {
+                    return Ok(status.code().unwrap_or(0));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let _ = helper.kill();
+            let _ = helper.wait();
+            return Ok(1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// `ssh -D` 開 SOCKS（裝置的 sshd 開 direct-tcpip，斷了自己重連），再用 root 開虛擬網卡把網段導過去。
+/// `ssh -D` for SOCKS (the device's sshd opens direct-tcpip; reconnected when it drops), then root brings up the TUN device.
+#[cfg(unix)]
+fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], nets: &[vpn::Net], domains: &[String], tunnel: &str) -> Result<i32> {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
+    let make = {
+        let (file, alias, extra) = (file.to_path_buf(), alias.to_string(), extra.to_vec());
+        move || {
+            let mut c = Command::new("ssh");
+            c.arg("-F").arg(&file).args(["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-D"]).arg(format!("127.0.0.1:{port}")).args(&extra).arg(&alias);
+            // Linux：telepy 被硬停（kill -9）時 ssh 跟著結束，不留一條連到裝置的線。/ Linux: ssh ends with a killed telepy.
+            #[cfg(target_os = "linux")]
+            unsafe {
+                use std::os::unix::process::CommandExt;
+                c.pre_exec(|| {
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                    Ok(())
+                });
+            }
+            c
+        }
+    };
+    let ssh = start_socks(make(), port).map_err(|e| anyhow!("The SSH connection to {tunnel} didn't come up: {e}. Run with --ssh-opt -v to see why."))?;
+    // 從這裡起 Ctrl-C 只是「收工」：等引擎收好再走。/ From here Ctrl-C means "stop": wait for the engine to clean up.
+    unsafe {
+        libc::signal(libc::SIGINT, vpn_on_stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, vpn_on_stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+    let keeper = {
+        let tunnel = tunnel.to_string();
+        std::thread::spawn(move || keep_socks(ssh, make, port, &tunnel))
     };
     let socks = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     // 已經是 root 就自己做；不然用 sudo 跑特權那一半（會問密碼）。/ As root do it here; otherwise sudo the privileged half.
     let code = if unsafe { libc::geteuid() } == 0 {
-        let r = vpn_engine::run(vpn_engine::Options { socks, nets: nets.to_vec(), dns_server, dns_domains: domains.to_vec() });
-        r.map(|_| 0)
+        vpn_engine::run(vpn_engine::Options { socks, nets: nets.to_vec(), dns_domains: domains.to_vec(), owner: None }).map(|_| 0)
     } else {
-        eprintln!("Bringing up the network device needs admin rights: sudo may ask for your password.");
+        eprintln!("Bringing up the network device needs admin rights here: sudo may ask for your password.");
         let exe = std::env::current_exe().context("where is telepy?")?;
-        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(port, nets, dns_server, domains)).spawn().context("cannot run sudo")?;
-        loop {
-            if let Some(status) = helper.try_wait()? {
-                break Ok(status.code().unwrap_or(1));
-            }
-            if let Some(status) = ssh.try_wait()? {
-                let _ = helper.kill();
-                let _ = helper.wait();
-                break Err(anyhow!("the SSH connection to {tunnel} ended ({status})"));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
+        let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(port, nets, domains, std::process::id())).spawn().context("cannot run sudo")?;
+        wait_engine(&mut helper)
     };
-    let _ = ssh.kill();
-    let _ = ssh.wait();
+    VPN_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = keeper.join();
     code
 }
 
-/// `telepy _vpn`（root）：虛擬網卡、路由、DNS，轉到 Ctrl-C。/ `telepy _vpn` (root): the device, routes, DNS, until Ctrl-C.
+/// `telepy _vpn`（root）：虛擬網卡、路由、DNS，轉到收工。/ `telepy _vpn` (root): the device, routes, DNS, until stopped.
 fn vpn_helper(a: &VpnHelperArgs) -> Result<i32> {
     #[cfg(unix)]
     {
         let nets: Vec<vpn::Net> = a.nets.iter().map(|n| vpn::parse_net(n)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
         let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
-        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_server: a.dns_server, dns_domains: domains })?;
+        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, owner: a.owner })?;
         Ok(0)
     }
     #[cfg(not(unix))]
     {
         let _ = a;
-        bail!("The built-in VPN runs on macOS and Linux.")
+        bail!("telepy vpn runs on macOS and Linux.")
     }
 }
 
