@@ -52,6 +52,10 @@ test("personal groups parse defensively", () => {
     assert.equal(l.limit, 50, "missing limits fall back");
     assert.equal(l.max_members, 200);
     assert.equal(l.created_id, 12);
+    assert.equal(l.can_share, true, "an older backend without the field = may share");
+    assert.equal(parsePersonalGroups({ can_share: false }).can_share, false);
+    // 已經看不到的通道沒有名字：顯示編號。/ A tunnel you can no longer see has no name: shown by id.
+    assert.equal(parsePersonalGroups({ groups: [{ id: 1, shares: [{ id: 2, tunnel_id: 7, tunnel_name: null }] }] }).groups[0].shares[0].tunnel_name, "#7");
     assert.deepEqual(parsePersonalGroups(undefined).groups, []);
 });
 

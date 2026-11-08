@@ -7,7 +7,7 @@
  * shared by the tunnel list and the tunnel page; drawn by `components/tunnels/TunnelModals.tsx`.
  */
 import { useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
@@ -48,6 +48,13 @@ export function useLeaveTunnel(after: () => void) {
             if (res.ok) {
                 showSuccess(t("tunnels.left", { name: tunnelName }));
                 after();
+                return;
+            }
+            // 經由群組拿到的不能自己離開：說清楚要怎麼辦（個人群組可以在通道頁退出）。
+            // A share through a group can't be left on its own: say what to do (a personal group can be left on the tunnel page).
+            const data = (await readJson(res)) as { code?: string; group?: string; personal?: boolean } | null;
+            if (data?.code === "via_group") {
+                showError(t(data.personal ? "tunnels.leaveViaPersonal" : "tunnels.leaveViaGroup", { name: data.group ?? "" }));
             } else {
                 showError(t("tunnels.leaveFailed"));
             }

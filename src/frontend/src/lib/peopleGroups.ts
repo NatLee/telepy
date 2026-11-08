@@ -108,11 +108,13 @@ export interface PickableUser {
 export interface PersonalGroupList {
     groups: PersonalGroup[];
     users: PickableUser[];
+    /** 至少管得到一條通道的分享；否則不能放成員。/ Manages sharing on at least one tunnel; otherwise no members can be added. */
+    can_share: boolean;
     limit: number;
     max_members: number;
 }
 
-export const EMPTY_PERSONAL: PersonalGroupList = { groups: [], users: [], limit: 50, max_members: 200 };
+export const EMPTY_PERSONAL: PersonalGroupList = { groups: [], users: [], can_share: true, limit: 50, max_members: 200 };
 
 /** `GET /api/user/groups` → 型別（缺欄位給安全預設）。/ The answer → typed (safe defaults). */
 export function parsePersonalGroups(v: unknown): PersonalGroupList & { created_id: number | null } {
@@ -145,6 +147,7 @@ export function parsePersonalGroups(v: unknown): PersonalGroupList & { created_i
             .map(obj)
             .filter((u) => typeof u.id === "number")
             .map((u) => ({ id: num(u.id), username: str(u.username) || `#${num(u.id)}`, email: str(u.email) })),
+        can_share: o.can_share !== false,
         limit: typeof o.limit === "number" && o.limit > 0 ? o.limit : EMPTY_PERSONAL.limit,
         max_members: typeof o.max_members === "number" && o.max_members > 0 ? o.max_members : EMPTY_PERSONAL.max_members,
         created_id: typeof o.created_id === "number" ? o.created_id : null,

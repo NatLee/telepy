@@ -260,6 +260,10 @@ pub struct Tunnel {
     pub share_expires_at: Option<String>,
     /// 經由哪個使用者群組分享給我（null = 直接分享）。/ The user group it is shared with me through (null = directly).
     pub share_group: Option<String>,
+    /// 經由的群組 id。/ The id of the group it comes through.
+    pub share_group_id: Option<i64>,
+    /// 經由的是個人群組時，它的主人（可以退出）；組織群組 = null。/ A personal group's owner (you may leave it); null for organization groups.
+    pub share_group_owner: Option<String>,
     /// 只有列表帶：owner / ADMIN 看得到還在等的存取申請數；其他人 0。/ List only: pending access requests (owner / ADMIN; else 0).
     pub access_requests: Option<i64>,
     /// 只有列表帶：分享給誰（分享的先後順序，權限是現在有效的那個）；只給 owner / ADMIN（能管分享的人），其他人 null。
@@ -4489,7 +4493,8 @@ pub struct GroupPreview {
 pub struct PersonalGroupShare {
     pub id: i64,
     pub tunnel_id: i64,
-    pub tunnel_name: String,
+    /// null = 你已經看不到這條通道（分享暫停中）。/ null = you can no longer see this tunnel (the share is paused).
+    pub tunnel_name: Option<String>,
     pub permission_type: String,
     /// false = paused (you no longer manage that tunnel)
     pub active: bool,
@@ -4510,10 +4515,21 @@ pub struct PersonalGroup {
 #[derive(ToSchema)]
 pub struct PersonalGroups {
     pub groups: Vec<PersonalGroup>,
-    /// 能加進來的人：其他還在用的帳號。/ Who can be added: other active accounts.
+    /// 你至少管得到一條通道的分享（擁有者或 ADMIN）；否則 `users` 是空的、不能放成員。
+    /// You manage sharing on at least one tunnel (owner or ADMIN); otherwise `users` is empty and members can't be added.
+    pub can_share: bool,
+    /// 能加進來的人：其他還在用的帳號（只給 `can_share`）。/ Who can be added: other active accounts (only with `can_share`).
     pub users: Vec<AvailableUser>,
     pub limit: i64,
     pub max_members: i64,
+}
+
+#[derive(ToSchema)]
+pub struct GroupLeft {
+    pub left: bool,
+    pub group: String,
+    /// 分享給這個群組的通道數（你經由它拿到的已收回）。/ Tunnels shared with the group (what you held through it is gone).
+    pub tunnels: i64,
 }
 
 #[derive(ToSchema)]

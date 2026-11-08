@@ -45,8 +45,14 @@ export interface Tunnel {
     terminal_detach_policy?: "user" | "never";
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
-    /** 經由哪個使用者群組分享給我（null = 直接分享）。/ The user group it is shared with me through (null = directly). */
+    /** 我在這條通道上的權限（owner / admin / edit / view）。/ My permission on this tunnel (owner / admin / edit / view). */
+    user_permission?: string | null;
+    /** 經由哪個群組分享給我（null = 直接分享）。/ The group it is shared with me through (null = directly). */
     share_group?: string | null;
+    /** 那個群組的 id。/ That group's id. */
+    share_group_id?: number | null;
+    /** 經由的是個人群組時，它的主人（我可以退出）；組織群組 = null。/ A personal group's owner (I may leave it); null for organization groups. */
+    share_group_owner?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
     access_requests?: number;
     /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */
@@ -170,7 +176,7 @@ export interface ReverseServerUsername {
     created_by_id?: number | null;
 }
 
-export interface TargetUser extends ReverseServerUsername { }
+export type TargetUser = ReverseServerUsername;
 
 export interface FileItem {
     type: "directory" | "file";

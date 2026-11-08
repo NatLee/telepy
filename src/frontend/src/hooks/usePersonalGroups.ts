@@ -57,7 +57,7 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
                 return null;
             }
             const parsed = parsePersonalGroups(data);
-            setList({ groups: parsed.groups, users: parsed.users, limit: parsed.limit, max_members: parsed.max_members });
+            setList({ groups: parsed.groups, users: parsed.users, can_share: parsed.can_share, limit: parsed.limit, max_members: parsed.max_members });
             showSuccess(ok);
             onChanged?.();
             return parsed.created_id ?? true;
