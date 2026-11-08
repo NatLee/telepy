@@ -39,7 +39,7 @@ webhook 分兩種。每個人都能建立**個人 webhook**，收自己本來就
 - **允許內網位址**（`notify_private_targets`，預設關）：讓個人 webhook 能連到內網、本機與雲端 metadata。
 - **每人 webhook 上限**（`notify_max_webhooks`，預設 10，可設 0–100）。
 
-管理員也可以在「使用者與權限 → 功能權限」替某些人或某個使用者群組關掉「個人 webhook」功能。那個人的 Webhooks 頁會換成一段說明，`/api/webhooks*` 回 403 `feature_disabled`。退出全站 webhook 用的兩個路由不受影響。
+管理員也可以在「使用者與權限 → 功能權限」替某些人或某個組織群組關掉「個人 webhook」功能。那個人的 Webhooks 頁會換成一段說明，`/api/webhooks*` 回 403 `feature_disabled`。退出全站 webhook 用的兩個路由不受影響。
 
 帳號被停用時，他的個人 webhook 就不再送出。
 

@@ -1197,6 +1197,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_grant" ON "telepy_api_call" ("grant_id", "at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_at" ON "telepy_api_call" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_owner" ON "telepy_user_group" ("owner_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_shell_history_pref_user_tunnel" ON "telepy_shell_history_pref" ("user_id", "tunnel_id")"#,
@@ -1273,6 +1274,15 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_oidc_provider", "scim_last_used", "datetime NULL"),
     // 掃描認出來的服務（JSON：每個 port 的協定、網頁標題、Server、憑證、banner）。/ What a scan recognised per port (JSON).
     ("telepy_lan_host", "services", "text NOT NULL DEFAULT '[]'"),
+    // 群組分兩種：組織群組（`owner_id` NULL，管理員 / 單一登入 / SCIM 管）與個人群組（某人自己建、只用來分享）。
+    // `name` 整張表 UNIQUE，所以個人群組的名稱放 `display_name`，`name` 放一個不會撞到的佔位。`shareable` = 組織群組
+    // 能不能出現在分享對話框。/ Groups come in two kinds: organization groups (`owner_id` NULL; admins / SSO / SCIM) and
+    // personal groups (made by someone, only for sharing). `name` is UNIQUE across the table, so a personal group's
+    // name lives in `display_name` and `name` holds a placeholder that never collides. `shareable` = an organization
+    // group may be picked in share dialogs.
+    ("telepy_user_group", "owner_id", "integer NULL"),
+    ("telepy_user_group", "display_name", "varchar(64) NULL"),
+    ("telepy_user_group", "shareable", "bool NOT NULL DEFAULT 0"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.
     ("telepy_lan_host", "checked_at", "datetime NULL"),
     // 使用者寫的備註與標籤（JSON 陣列，跟通道標籤同規則）。/ The person's notes and labels (JSON array, tunnel label rules).
@@ -1568,6 +1578,11 @@ pub const CLI_SIGNIN_STYLE: &str = "2026-10-28-cli-signin-style-from-oauth";
 /// web-port carrier existed (#189, 2026-10-24 19:18 UTC) can only have come in over SSH.
 pub const TUNNEL_WAY_IN: &str = "2026-10-30-tunnel-way-in";
 
+/// 組織群組多了「可以被分享」（預設關）：升級前已經有通道分享給它的群組打開，現有分享照舊。
+/// Organization groups got "can be shared" (off by default); groups that already had tunnels shared with them get it
+/// on, so existing shares keep working.
+pub const SHAREABLE_GROUPS: &str = "2026-11-08-shareable-organization-groups";
+
 /// 網頁 port 的載體（SSH over WebSocket）出貨的時間；在那之前建立的隧道只會走 SSH port。
 /// When the web-port carrier shipped; tunnels created before it can only use the SSH port.
 const WS_CARRIER_SHIPPED: &str = "2026-10-24 19:18:11";
@@ -1591,7 +1606,23 @@ pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     drop_rustdesk_server(pool).await?;
     cli_signin_style(pool).await?;
     personal_command_rules(pool).await?;
-    tunnel_way_in(pool).await
+    tunnel_way_in(pool).await?;
+    shareable_groups(pool).await
+}
+
+async fn shareable_groups(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, SHAREABLE_GROUPS).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let opened = sqlx::query("UPDATE telepy_user_group SET shareable = 1 WHERE owner_id IS NULL AND id IN (SELECT group_id FROM telepy_group_share)")
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(SHAREABLE_GROUPS).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    tracing::debug!(opened, "data migration: organization groups already shared with tunnels stay shareable");
+    Ok(())
 }
 
 async fn tunnel_way_in(pool: &SqlitePool) -> anyhow::Result<()> {

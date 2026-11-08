@@ -26,11 +26,12 @@ export interface AdminArea {
 
 export const ADMIN_AREAS: readonly AdminArea[] = [
     {
-        // 人：帳號（停用、角色、重設兩步驟）與每個人能用哪些功能。/ People: accounts and which features each may use.
+        // 人：帳號（停用、角色、重設兩步驟）、組織群組與每個人能用哪些功能。/ People: accounts, organization groups and which features each may use.
         id: "people",
         key: "nav.areaPeople",
         pages: [
             { key: "settings.tabUsers", href: "/tunnels/admin/users" },
+            { key: "orgGroups.title", href: "/tunnels/admin/groups" },
             { key: "access.manageTitle", href: "/tunnels/admin/access" },
         ],
     },

@@ -1,12 +1,13 @@
-//! 分享給使用者群組（`telepy_group_share` + 允許的帳號），以及成員各自那筆「經由群組」的分享列
+//! 分享給群組（組織群組或個人群組；`telepy_group_share` + 允許的帳號），以及成員各自那筆「經由群組」的分享列
 //! （`tunnels_tunnelsharing.group_share_id`）。哪些列該有由 `crate::group_shares` 決定。
-//! Tunnels shared with user groups and the share row each member gets from one; `crate::group_shares` decides which
-//! rows should exist.
+//! Tunnels shared with groups (organization or personal) and the share row each member gets from one;
+//! `crate::group_shares` decides which rows should exist.
 
 use std::collections::{BTreeSet, HashMap};
 
 use sqlx::FromRow;
 
+use super::features::LABEL;
 use super::sharing::Sharing;
 use super::Db;
 use crate::util::now_db;
@@ -248,13 +249,39 @@ pub async fn make_direct(db: &Db, sharing_id: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
-/// 群組名稱與成員數（分享對話框用）。/ Group names and member counts (for the share dialog).
-pub async fn groups_with_counts(db: &Db) -> sqlx::Result<Vec<(i64, String, i64)>> {
-    sqlx::query_as(
-        "SELECT g.id, g.name, (SELECT COUNT(*) FROM telepy_user_group_member m WHERE m.group_id = g.id) FROM telepy_user_group g ORDER BY g.name COLLATE NOCASE",
-    )
+/// 這個人能拿來分享的群組：他自己的個人群組在前，再來是打開分享的組織群組（各自依名稱）→ (id, 名稱, 人數, 種類)。
+/// The groups this person may share with: their own personal groups first, then organization groups open to sharing
+/// (each by name) → (id, name, members, kind).
+pub async fn share_choices(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, String, i64, String)>> {
+    sqlx::query_as(&format!(
+        "SELECT g.id, {LABEL}, (SELECT COUNT(*) FROM telepy_user_group_member m WHERE m.group_id = g.id), \
+            CASE WHEN g.owner_id IS NULL THEN 'org' ELSE 'personal' END \
+         FROM telepy_user_group g WHERE g.owner_id = ? OR (g.owner_id IS NULL AND g.shareable) \
+         ORDER BY g.owner_id IS NULL, {LABEL} COLLATE NOCASE, g.id"
+    ))
+    .bind(user_id)
     .fetch_all(&db.read)
     .await
+}
+
+/// 分享給這些群組的通道 → (群組分享 id, 群組 id, 通道 id, 通道名稱, 通道擁有者, 權限, 到期, 經由它的人數)。
+/// The tunnels shared with these groups → (share id, group id, tunnel id, tunnel name, owner, permission, end, holders).
+pub async fn shares_of_groups(db: &Db, group_ids: &[i64]) -> sqlx::Result<Vec<(i64, i64, i64, String, String, String, Option<String>, i64)>> {
+    if group_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let marks = vec!["?"; group_ids.len()].join(",");
+    let sql = format!(
+        "SELECT gs.id, gs.group_id, t.id, t.host_friendly_name, COALESCE(u.username, ''), gs.permission_type, gs.expires_at, \
+            (SELECT COUNT(*) FROM {S} s WHERE s.group_share_id = gs.id) \
+         FROM {G} gs JOIN authorized_keys_reverseserverauthorizedkeys t ON t.id = gs.tunnel_id LEFT JOIN auth_user u ON u.id = t.user_id \
+         WHERE gs.group_id IN ({marks}) ORDER BY t.host_friendly_name COLLATE NOCASE, gs.id"
+    );
+    let mut q = sqlx::query_as(&sql);
+    for id in group_ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(&db.read).await
 }
 
 /// 群組成員的使用者名稱。/ A group's members by name.
@@ -275,7 +302,7 @@ pub async fn ids_of_group(db: &Db, group_id: i64) -> sqlx::Result<Vec<i64>> {
 /// 我經由群組拿到的通道 → 群組名稱。/ Tunnels I hold through a group → the group's name.
 pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, String>> {
     let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
-        "SELECT s.tunnel_id, g.name FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.shared_with_id = ?"
+        "SELECT s.tunnel_id, {LABEL} FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.shared_with_id = ?"
     ))
     .bind(user_id)
     .fetch_all(&db.read)
@@ -286,7 +313,7 @@ pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, Strin
 /// 這條通道上每筆經由群組的分享列 → (群組分享 id, 群組 id, 群組名稱)。/ Each group-made row on a tunnel → its group.
 pub async fn row_groups(db: &Db, tunnel_id: i64) -> sqlx::Result<HashMap<i64, (i64, i64, String)>> {
     let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!(
-        "SELECT s.id, gs.id, g.id, g.name FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.tunnel_id = ?"
+        "SELECT s.id, gs.id, g.id, {LABEL} FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.tunnel_id = ?"
     ))
     .bind(tunnel_id)
     .fetch_all(&db.read)
@@ -297,8 +324,8 @@ pub async fn row_groups(db: &Db, tunnel_id: i64) -> sqlx::Result<HashMap<i64, (i
 /// 這條通道上、這個人所屬群組的群組分享（還沒到期的）→ 群組名稱。/ Live group shares on a tunnel covering this person.
 pub async fn covering(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(&format!(
-        "SELECT g.name FROM {G} gs JOIN telepy_user_group g ON g.id = gs.group_id JOIN telepy_user_group_member m ON m.group_id = gs.group_id \
-         WHERE gs.tunnel_id = ? AND m.user_id = ? AND (gs.expires_at IS NULL OR gs.expires_at > ?) ORDER BY g.name COLLATE NOCASE"
+        "SELECT {LABEL} FROM {G} gs JOIN telepy_user_group g ON g.id = gs.group_id JOIN telepy_user_group_member m ON m.group_id = gs.group_id \
+         WHERE gs.tunnel_id = ? AND m.user_id = ? AND (gs.expires_at IS NULL OR gs.expires_at > ?) ORDER BY {LABEL} COLLATE NOCASE"
     ))
     .bind(tunnel_id)
     .bind(user_id)

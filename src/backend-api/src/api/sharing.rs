@@ -154,10 +154,14 @@ fn requested_expiry(body: &Value) -> ApiResult<Option<Option<String>>> {
 async fn refuse_via_group(state: &AppState, sharing: &db::sharing::Sharing, own: bool) -> ApiResult<()> {
     let Some(gs) = sharing.group_share_id else { return Ok(()) };
     let group = match db::group_shares::get(&state.db, gs).await? {
-        Some(g) => db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default(),
-        None => String::new(),
+        Some(g) => db::features::any_group(&state.db, g.group_id).await?,
+        None => None,
     };
-    let msg = if own {
+    let personal = group.as_ref().is_some_and(|g| g.is_personal());
+    let group = group.map(|g| g.label().to_string()).unwrap_or_default();
+    let msg = if own && personal {
+        format!("You have this tunnel through the personal group \"{group}\". Its owner can take you out of it, or the tunnel's owner can stop sharing it with the group.")
+    } else if own {
         format!("You have this tunnel through the group \"{group}\". An admin can take you out of the group, or the tunnel's owner can stop sharing it with the group.")
     } else {
         format!("This access comes from the group \"{group}\". Change the group's share, or share with this person directly to set their access on its own.")
@@ -257,6 +261,8 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
             db::sharing::add_allowed_usernames(&state.db, sharing.id, t.id, &ids).await?;
         }
     }
+    // 新拿到 ADMIN 的人，他的個人群組分享可能恢復。/ A new ADMIN may resume their personal groups' shares.
+    crate::group_shares::kick(&state);
     Ok((StatusCode::CREATED, Json(json!({ "message": "Tunnel shared successfully" }))))
 }
 
@@ -274,10 +280,9 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
     end_share(&state, &t, &sharing, Some(me.id), reason).await?;
     // 還在某個分享給這條通道的群組裡：群組會再給他一筆（說出來，免得以為已經拿掉了）。
     // Still in a group the tunnel is shared with: the group gives them a row again (say so, so it isn't mistaken for gone).
+    // 他分享給個人群組的那幾筆也可能因此暫停：一律重新比對。/ Their personal groups' shares may pause too: always reconcile.
     let groups = db::group_shares::covering(&state.db, t.id, uid).await?;
-    if !groups.is_empty() {
-        crate::group_shares::kick(&state);
-    }
+    crate::group_shares::kick(&state);
     Ok(Json(json!({ "message": "Tunnel unshared successfully", "still_via_groups": groups })))
 }
 
@@ -300,6 +305,8 @@ async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser
     // ADMIN ↔ 其他等級會改變可用的 OS 帳號。/ The level changes which accounts their keys go into.
     state.device_keys.kick(t.id);
     crate::access_recheck::kick(&state, Some(t.id), Some(uid));
+    // 拿到 / 失去 ADMIN 會讓他的個人群組分享恢復 / 暫停。/ Gaining or losing ADMIN resumes or pauses their personal groups' shares.
+    crate::group_shares::kick(&state);
     let target_name = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_default();
     let display = perm.display();
     state.hub.notify_user(
@@ -434,32 +441,44 @@ fn id_list(body: &Value) -> ApiResult<Option<Vec<i64>>> {
     }
 }
 
-/// 這條通道分享給哪些使用者群組；能管分享的人另外拿到成員名稱與可選的群組。
-/// The user groups a tunnel is shared with; those who manage sharing also get member names and the groups to pick from.
-async fn group_shares_json(state: &AppState, t: &Tunnel, can_manage: bool) -> ApiResult<Value> {
-    let groups = db::group_shares::groups_with_counts(&state.db).await?;
-    let counts: std::collections::HashMap<i64, (String, i64)> = groups.iter().map(|(id, n, c)| (*id, (n.clone(), *c))).collect();
+/// 這條通道分享給哪些群組；能管分享的人另外拿到成員名稱與自己能選的群組（自己的個人群組 + 開放分享的組織群組）。
+/// The groups a tunnel is shared with; those who manage sharing also get member names and the groups they may pick
+/// (their own personal groups + organization groups open to sharing).
+async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bool) -> ApiResult<Value> {
     let rows = db::sharing::for_tunnel(&state.db, t.id).await?;
+    let active = crate::group_shares::active_shares(state).await?;
     let mut shares = Vec::new();
     let mut shared = std::collections::HashSet::new();
     for g in db::group_shares::for_tunnel(&state.db, t.id).await? {
         shared.insert(g.group_id);
+        let Some(group) = db::features::any_group(&state.db, g.group_id).await? else { continue };
         let members = db::group_shares::member_names(&state.db, g.group_id).await?;
         let through = rows.iter().filter(|r| r.group_share_id == Some(g.id)).count();
         let direct = members.iter().filter(|(uid, _)| rows.iter().any(|r| r.shared_with_id == *uid && r.group_share_id.is_none())).count();
+        // 經由另一個群組分享拿到的成員（那一筆給的權限比較高或比較早）。/ Members holding it through another group share.
+        let elsewhere = members.iter().filter(|(uid, _)| rows.iter().any(|r| r.shared_with_id == *uid && r.group_share_id.is_some_and(|x| x != g.id))).count();
         let by = match g.shared_by_id {
             Some(id) => db::users::by_id(&state.db, id).await?.map(|u| u.username),
             None => None,
         };
-        let (name, count) = counts.get(&g.group_id).cloned().unwrap_or_default();
+        let owner = match group.owner_id {
+            Some(id) => db::users::by_id(&state.db, id).await?.map(|u| u.username),
+            None => None,
+        };
         shares.push(json!({
             "id": g.id,
             "group_id": g.group_id,
-            "name": name,
-            "members": count,
+            "name": group.label(),
+            "kind": group.kind(),
+            "owner": owner,
+            "mine": group.owner_id == Some(me),
+            "active": active.contains(&g.id),
+            "members": members.len(),
             "member_names": if can_manage { json!(members.iter().map(|(_, n)| n).collect::<Vec<_>>()) } else { Value::Null },
             "through": through,
             "direct": direct,
+            "elsewhere": elsewhere,
+            "owner_in": members.iter().any(|(uid, _)| *uid == t.user_id),
             "permission_type": g.permission_type,
             "expires_at": g.expires_at.as_deref().map(crate::util::db_to_iso_utc_z),
             "shared_by": by,
@@ -468,7 +487,11 @@ async fn group_shares_json(state: &AppState, t: &Tunnel, can_manage: bool) -> Ap
         }));
     }
     let choices: Vec<Value> = if can_manage {
-        groups.iter().map(|(id, n, c)| json!({ "id": id, "name": n, "members": c, "shared": shared.contains(id) })).collect()
+        db::group_shares::share_choices(&state.db, me)
+            .await?
+            .into_iter()
+            .map(|(id, n, c, kind)| json!({ "id": id, "name": n, "members": c, "kind": kind, "shared": shared.contains(&id) }))
+            .collect()
     } else {
         vec![]
     };
@@ -487,7 +510,7 @@ async fn list_group_shares(State(state): State<AppState>, AuthUser(me): AuthUser
         return Err(ApiError::forbidden("You do not have permission to view sharing for this tunnel"));
     }
     let can_manage = permissions::check_share_access(&state.db, me.id, &t).await?;
-    Ok(Json(group_shares_json(&state, &t, can_manage).await?))
+    Ok(Json(group_shares_json(&state, &t, me.id, can_manage).await?))
 }
 
 /// 分享給一個使用者群組：成員各自拿到一筆分享，之後跟著群組成員增減（owner / ADMIN）。
@@ -499,7 +522,8 @@ async fn create_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
         return Err(ApiError::forbidden("You do not have permission to share this tunnel"));
     }
     let group_id = json_i64(&body, "group_id").ok_or_else(|| ApiError::field("group_id", "Pick a user group."))?;
-    let group = db::features::group(&state.db, group_id).await?.ok_or_else(|| ApiError::not_found("Group not found"))?;
+    // 只能選自己的個人群組或開放分享的組織群組；其他的一律當作不存在。/ Only your own personal groups or shareable organization groups.
+    let group = db::features::any_group(&state.db, group_id).await?.filter(|g| g.shareable_by(me.id)).ok_or_else(|| ApiError::not_found("Group not found"))?;
     if db::group_shares::by_tunnel_group(&state.db, t.id, group.id).await?.is_some() {
         return Err(ApiError::field("group_id", "This tunnel is already shared with that group."));
     }
@@ -510,16 +534,16 @@ async fn create_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
     if let Some(ids) = id_list(&body)? {
         db::group_shares::set_usernames(&state.db, gsid, t.id, &ids).await?;
     }
-    state.gateway.event("group_share", None, None, Some(t.id), format!("{} shared \"{}\" with the group \"{}\" ({})", me.username, t.host_friendly_name, group.name, perm.as_str())).await;
+    state.gateway.event("group_share", None, None, Some(t.id), format!("{} shared \"{}\" with the {} \"{}\" ({})", me.username, t.host_friendly_name, group_noun(&group), group.label(), perm.as_str())).await;
     crate::group_shares::reconcile(&state, &std::collections::HashMap::new()).await?;
     if t.user_id != me.id {
         state.hub.notify_user(
             t.user_id,
-            &json!({ "action": "TUNNEL-SHARED", "details": format!("{} shared your tunnel \"{}\" with the group \"{}\"", me.username, t.host_friendly_name, group.name), "tunnel_id": t.id }),
+            &json!({ "action": "TUNNEL-SHARED", "details": format!("{} shared your tunnel \"{}\" with the {} \"{}\"", me.username, t.host_friendly_name, group_noun(&group), group.label()), "tunnel_id": t.id }),
         );
     }
     state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-SHARED", "tunnel_id": t.id }));
-    Ok((StatusCode::CREATED, Json(group_shares_json(&state, &t, true).await?)))
+    Ok((StatusCode::CREATED, Json(group_shares_json(&state, &t, me.id, true).await?)))
 }
 
 /// 改群組分享的權限、帳號或期限；成員的分享跟著改（owner / ADMIN）。/ Change a group share; members' shares follow.
@@ -540,7 +564,7 @@ async fn update_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
     if let Some(ids) = &ids {
         db::group_shares::set_usernames(&state.db, g.id, t.id, ids).await?;
     }
-    let name = db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default();
+    let name = db::features::any_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
     let mut what = Vec::new();
     if let Some(p) = perm {
         what.push(format!("permission {}", p.as_str()));
@@ -554,7 +578,7 @@ async fn update_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
     state.gateway.event("group_share", None, None, Some(t.id), format!("{} changed the share of \"{}\" with the group \"{name}\": {}", me.username, t.host_friendly_name, what.join(", "))).await;
     crate::group_shares::reconcile(&state, &std::collections::HashMap::new()).await?;
     state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-PERMISSION-UPDATED", "tunnel_id": t.id }));
-    Ok(Json(group_shares_json(&state, &t, true).await?))
+    Ok(Json(group_shares_json(&state, &t, me.id, true).await?))
 }
 
 /// 不再分享給這個群組：經由它拿到的人都結束（直接分享的人不受影響；owner / ADMIN）。
@@ -566,12 +590,21 @@ async fn delete_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
         return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
     }
     let g = group_share_of(&state, &t, gsid).await?;
-    let name = db::features::group(&state.db, g.group_id).await?.map(|g| g.name).unwrap_or_default();
+    let name = db::features::any_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
     db::group_shares::delete(&state.db, g.id).await?;
     state.gateway.event("group_share", None, None, Some(t.id), format!("{} stopped sharing \"{}\" with the group \"{name}\"", me.username, t.host_friendly_name)).await;
     crate::group_shares::reconcile(&state, &std::collections::HashMap::from([(g.id, name)])).await?;
     state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
     // 刪的人自己可能也是經由這個群組拿到的（ADMIN）：那就看不到了。/ The deleter may have held it through this group.
     let can_manage = permissions::check_share_access(&state.db, me.id, &t).await?;
-    Ok(Json(group_shares_json(&state, &t, can_manage).await?))
+    Ok(Json(group_shares_json(&state, &t, me.id, can_manage).await?))
+}
+
+/// 稽核事件裡的群組種類。/ The group's kind in audit wording.
+fn group_noun(g: &db::features::Group) -> &'static str {
+    if g.is_personal() {
+        "personal group"
+    } else {
+        "group"
+    }
 }

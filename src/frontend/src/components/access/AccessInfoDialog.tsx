@@ -3,11 +3,13 @@
 /**
  * 「存取」分頁的說明圖：兩條分開的線，講清楚使用者在意的那個差別。
  *  A「這個人可以用哪些工具？」= 預設 → 所有人 → 群組 → 這個人（最終端）→ 結果，選一個人和一個功能就即時顯示是哪一層決定的；
- *  B「他能連到哪些隧道？」= 隧道分享（VIEW / EDIT / ADMIN）+ 允許的帳號，標「不變，每條隧道各自設定」。
- * 兩道門都要過：功能先、隧道權限後。直線與直角，積木是 components/flow/PathFlow。
+ *  B「他能連到哪些通道？」= 通道分享（VIEW / EDIT / ADMIN）+ 允許的帳號，每條通道各自設定；可以分享的組織群組也決定
+ *  誰拿到分享給它的通道，個人群組從不影響功能。
+ * 兩道門都要過：功能先、通道權限後。直線與直角，積木是 components/flow/PathFlow。
  * The Access tab's explainer: two separate lanes. A "Which tools may this person use?" = default → everyone → groups →
  * this person (final) → result, live for the picked person and feature; B "Which tunnels may they reach?" = tunnel
- * sharing + allowed accounts, marked unchanged. Both gates apply, the feature first.
+ * sharing + allowed accounts, set per tunnel; a shareable organization group also decides who gets the tunnels shared
+ * with it, and personal groups never touch features. Both gates apply, the feature first.
  */
 import React, { useMemo, useState } from "react";
 import { Ban, Check, Globe, KeyRound, Server, Settings2, Share2, User, Users, Wrench } from "lucide-react";
@@ -140,7 +142,7 @@ export function AccessInfoDialog({ isOpen, onClose, policy, userId, feature }: {
                     {!person && <Callout tone="info">{t("access.info.noPeople")}</Callout>}
                 </section>
 
-                {/* B：隧道分享（每條隧道各自設定，這裡不變）。/ Lane B: tunnel sharing (per tunnel, unchanged here). */}
+                {/* B：通道分享（每條通道各自設定）。/ Lane B: tunnel sharing (per tunnel). */}
                 <section className="space-y-3 border-t border-border pt-6">
                     <SectionHeading icon={<Share2 />} title={t("access.info.laneB")} description={t("access.info.laneBHint")} action={<Chip>{t("access.info.unchanged")}</Chip>} />
                     <FlowPath stretch>
@@ -152,6 +154,7 @@ export function AccessInfoDialog({ isOpen, onClose, policy, userId, feature }: {
                         <FlowLink label={t("access.info.b.linkLogin")} />
                         <FlowNode icon={Server} title={wrap(t("access.info.b.device"))} sub={t("access.info.b.deviceSub")} stateText={t("access.info.perTunnel")} />
                     </FlowPath>
+                    <p className="text-xs leading-relaxed text-muted-foreground">{t("access.info.b.groups")}</p>
                 </section>
 
                 <Callout tone="tip" title={t("access.info.bothTitle")}>
