@@ -90,7 +90,7 @@ export function ShareExpiryControl({
     const [busy, setBusy] = useState(false);
 
     const text = (
-        <span className="inline-flex items-center gap-1 text-xs">
+        <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs">
             <Clock size={12} className="shrink-0 text-muted-foreground" aria-hidden />
             <ShareExpiryText expiresAt={expiresAt} showNone />
         </span>
