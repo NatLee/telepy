@@ -187,17 +187,25 @@ pub async fn create_row(db: &Db, tunnel_id: i64, shared_by: i64, user_id: i64, p
 
 /// 把成員那筆列對齊群組分享。暫時提升（存取申請）還在時改的是它結束後回去的權限。
 /// Bring a member's row in line; while a temporary raise runs, the permission it returns to is what changes.
-pub async fn update_row(db: &Db, id: i64, permission: &str, raised: bool, expires_at: Option<&str>, group_share_id: i64) -> sqlx::Result<()> {
-    let col = if raised { "base_permission" } else { "permission_type" };
-    sqlx::query(&format!("UPDATE {S} SET {col} = ?, expires_at = ?, group_share_id = ?, updated_at = ? WHERE id = ?"))
-        .bind(permission)
-        .bind(expires_at)
-        .bind(group_share_id)
-        .bind(now_db())
-        .bind(id)
-        .execute(&db.write)
-        .await?;
-    Ok(())
+pub async fn update_row(db: &Db, id: i64, permission: &str, expires_at: Option<&str>, group_share_id: i64) -> sqlx::Result<bool> {
+    // 寫的那一刻才看：暫時提升中（base_permission 有值）就改它結束後回去的權限，否則改現在的權限；已經改成直接分享的列不碰。
+    // SQLite 的 SET 讀的都是更新前的值，所以兩個 CASE 看到的是同一個狀態。
+    // Decided at write time: during a raise (base_permission set) the permission it returns to, else the current one;
+    // a row made direct meanwhile is left alone. SQLite's SET reads the old values, so both CASEs see the same state.
+    let done = sqlx::query(&format!(
+        "UPDATE {S} SET base_permission = CASE WHEN base_permission IS NOT NULL THEN ? ELSE NULL END, \
+         permission_type = CASE WHEN base_permission IS NULL THEN ? ELSE permission_type END, \
+         expires_at = ?, group_share_id = ?, updated_at = ? WHERE id = ? AND group_share_id IS NOT NULL"
+    ))
+    .bind(permission)
+    .bind(permission)
+    .bind(expires_at)
+    .bind(group_share_id)
+    .bind(now_db())
+    .bind(id)
+    .execute(&db.write)
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// 永久帳號換成 `ids`；存取申請給的暫時帳號不動（同一個帳號群組也給了，就變永久）。

@@ -143,3 +143,75 @@ async fn a_group_share_follows_the_group_and_a_direct_share_wins() {
     let events: Vec<&str> = r.json.as_array().map(|a| a.iter().filter_map(|e| e["event"].as_str()).collect()).unwrap_or_default();
     assert!(events.iter().filter(|e| **e == "group_share").count() >= 5, "{}", r.text);
 }
+
+/// 有 ADMIN 的人把通道分享給自己也在的群組：他自己不從那筆拿到東西，所以他的 ADMIN 被收回就真的沒了；
+/// 群組的寫入在寫的那一刻才看列的狀態（暫時提升中、已改成直接分享）。
+/// An ADMIN sharee sharing with a group they're in gets nothing from it, so losing their ADMIN really ends it;
+/// group writes look at the row when they write (a raise in progress, a row made direct meanwhile).
+#[tokio::test]
+async fn a_sharer_gets_nothing_from_their_own_group_share_and_writes_follow_the_row() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let dave = lab.user("dave").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let group = |name: &'static str, members: Vec<i64>| {
+        let lab = &lab;
+        async move {
+            let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": name, "members": members})).await;
+            assert!(r.status.is_success(), "{}", r.text);
+            r.json["created_id"].as_i64().unwrap()
+        }
+    };
+    let ops = group("ops", vec![bob.id]).await;
+    let team = group("team", vec![bob.id, dave.id]).await;
+    let url = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
+    let r = lab.app.post(&url, Some(&alice.token), json!({"group_id": ops, "permission_type": "admin", "allowed_target_username_ids": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    settle(&lab).await;
+    let ops_share = db::sharing::get(&lab.app.state.db, dev.tunnel_id, bob.id).await.unwrap().unwrap().group_share_id;
+
+    // bob（經由 ops 有 ADMIN）分享給 team（他自己也在）。/ bob (ADMIN through ops) shares with team, which he is in.
+    let r = lab.app.post(&url, Some(&bob.token), json!({"group_id": team, "permission_type": "admin", "allowed_target_username_ids": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    settle(&lab).await;
+    let b = db::sharing::get(&lab.app.state.db, dev.tunnel_id, bob.id).await.unwrap().unwrap();
+    assert_eq!(b.group_share_id, ops_share, "bob still holds it only through ops");
+    assert!(db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().is_some(), "dave gets it through team");
+
+    // 管理員把 bob 移出 ops：他的存取就結束，不會被自己的 team 分享接住。/ Out of ops: bob's access ends.
+    let r = lab.app.patch(&format!("/api/access/groups/{ops}"), Some(&lab.admin_token), json!({"members": []})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    settle(&lab).await;
+    assert!(db::sharing::get(&lab.app.state.db, dev.tunnel_id, bob.id).await.unwrap().is_none(), "bob lost it");
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_none());
+    assert!(lab.terminal(&bob, &dev, "ubuntu").await.is_err());
+
+    // 暫時提升中的群組列：群組只改它結束後回去的權限，現在的權限不動。/ A raised group row: only the permission it returns to changes.
+    let d = db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().unwrap();
+    let gs = d.group_share_id.unwrap();
+    sqlx::query("UPDATE tunnels_tunnelsharing SET base_permission = 'view', permission_type = 'admin', permission_until = '2099-01-01 00:00:00' WHERE id = ?")
+        .bind(d.id)
+        .execute(&lab.app.state.db.write)
+        .await
+        .unwrap();
+    assert!(db::group_shares::update_row(&lab.app.state.db, d.id, "edit", None, gs).await.unwrap());
+    let d2 = db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().unwrap();
+    assert_eq!((d2.permission_type.as_str(), d2.base_permission.as_deref()), ("admin", Some("edit")));
+    // 提升結束後（基準清掉）才寫：改的是現在的權限。/ Written after the raise ended: the current permission changes.
+    sqlx::query("UPDATE tunnels_tunnelsharing SET base_permission = NULL, permission_until = NULL, permission_type = 'view' WHERE id = ?")
+        .bind(d.id)
+        .execute(&lab.app.state.db.write)
+        .await
+        .unwrap();
+    assert!(db::group_shares::update_row(&lab.app.state.db, d.id, "edit", None, gs).await.unwrap());
+    let d3 = db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().unwrap();
+    assert_eq!((d3.permission_type.as_str(), d3.base_permission.as_deref()), ("edit", None));
+    // 已經改成直接分享的列：群組的寫入不碰它。/ A row made direct meanwhile: a group write leaves it alone.
+    db::group_shares::make_direct(&lab.app.state.db, d.id).await.unwrap();
+    assert!(!db::group_shares::update_row(&lab.app.state.db, d.id, "admin", None, gs).await.unwrap());
+    let d4 = db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().unwrap();
+    assert_eq!((d4.permission_type.as_str(), d4.group_share_id), ("edit", None));
+}

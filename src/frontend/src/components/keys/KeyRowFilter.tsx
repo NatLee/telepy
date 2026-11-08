@@ -98,7 +98,7 @@ export function RowFilterBar({ filter }: { filter: RowFilterState }) {
                 />
             </div>
             {filter.names.length > 1 && (
-                <NativeSelect value={filter.account} onChange={(e) => filter.setAccount(e.target.value)} aria-label={t("keys.rows.account")} className="w-auto [&>select]:h-8">
+                <NativeSelect value={filter.account} onChange={(e) => filter.setAccount(e.target.value)} aria-label={t("keys.rows.account")} className="w-auto h-8">
                     <option value="">{t("keys.rows.allAccounts")}</option>
                     {filter.names.map((n) => (
                         <option key={n} value={n}>

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FEATURES, featureForPath, featuresForPath, laneFor, cellValue, deniedCount, featureKey, filterUsers, grantBody, hasFeature, overrideCount, resolveFeature, type AccessPolicy } from "./features.ts";
+import { FEATURES, featureForPath, featuresForPath, laneFor, cellValue, deniedCount, featureKey, filterGroups, filterUsers, grantBody, hasFeature, overrideCount, resolveFeature, type AccessPolicy } from "./features.ts";
 
 const policy: AccessPolicy = {
     features: FEATURES.map((f) => ({ id: f.id, default: true })),
@@ -63,6 +63,8 @@ test("the profile check: admins and older backends have everything", () => {
     assert.equal(hasFeature(null, "files"), false);
     assert.equal(featureKey("mcp.connect"), "mcp");
     assert.equal(filterUsers(policy.users, "EXAMPLE").length, 1);
+    assert.equal(filterGroups(policy.groups, "").length, policy.groups.length);
+    assert.deepEqual(filterGroups(policy.groups, policy.groups[0].name.toUpperCase()).map((g) => g.id), [policy.groups[0].id]);
 });
 
 test("pages that belong to a feature", () => {

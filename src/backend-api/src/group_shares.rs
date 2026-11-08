@@ -73,7 +73,9 @@ pub fn wants(rules: &[Rule]) -> BTreeMap<(i64, i64), Want> {
     sorted.sort_by_key(|r| r.id);
     for r in sorted {
         for &u in &r.members {
-            if u == r.owner_id {
+            // 主人不需要；分享的人也不從自己的群組分享拿到（不然他被收回 ADMIN 後還留著）。
+            // The owner needs none; the sharer gets nothing from their own group share (else they'd keep it after losing ADMIN).
+            if u == r.owner_id || u == r.shared_by {
                 continue;
             }
             match out.get_mut(&(r.tunnel_id, u)) {
@@ -133,6 +135,12 @@ pub fn plan(rules: &[Rule], rows: &[Row]) -> Vec<Step> {
 }
 
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 會改到群組列的地方（改成直接分享）跟 `reconcile` 輪流來，不讓比對到一半的計畫蓋掉它。
+/// Taken by writers of group rows (making one direct) so a half-applied reconcile plan never overwrites them.
+pub async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
+    LOCK.lock().await
+}
 
 /// 背景跑一次比對（成員或群組分享變了之後）。/ Reconcile in the background (after members or group shares changed).
 pub fn kick(state: &AppState) {
@@ -217,24 +225,33 @@ pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResu
         .collect();
     let raised: HashMap<i64, bool> = rows.iter().map(|r| (r.id, r.raised)).collect();
     for step in plan(&rules, &rows) {
-        let tunnel_id = match &step {
-            Step::Create(w) | Step::Update { want: w, .. } => w.tunnel_id,
-            Step::Remove { tunnel_id, .. } => *tunnel_id,
-        };
-        let Some(t) = cached_tunnel(state, &mut tunnels, tunnel_id).await? else { continue };
-        match step {
-            Step::Create(w) => create(state, &t, &w, share_group.get(&w.group_share_id).map(String::as_str).unwrap_or_default()).await?,
-            Step::Update { row, want, old_permission, permission_changed, accounts_changed } => {
-                let group = share_group.get(&want.group_share_id).map(String::as_str).unwrap_or_default();
-                update(state, &t, row, raised.get(&row).copied().unwrap_or(false), &want, &old_permission, permission_changed, accounts_changed, group).await?
-            }
-            Step::Remove { user_id, group_share_id, .. } => {
-                let group = share_group.get(&group_share_id).cloned().unwrap_or_default();
-                if let Some(s) = db::sharing::get(&state.db, t.id, user_id).await? {
-                    crate::api::sharing::end_share(state, &t, &s, None, crate::api::sharing::EndReason::Group { group: &group }).await?;
-                    let user = username(state, user_id).await?;
-                    state.gateway.event("group_share", None, None, Some(t.id), format!("{user} no longer has access to \"{}\" through the group \"{group}\"", t.host_friendly_name)).await;
-                }
+        // 一步失敗只記下來，後面的照做（下次 tick 再試這一步）。/ A failed step is logged; the rest still run.
+        if let Err(e) = apply(state, &mut tunnels, &share_group, &raised, step).await {
+            tracing::warn!(error = ?e, "group share step failed");
+        }
+    }
+    Ok(())
+}
+
+async fn apply(state: &AppState, tunnels: &mut HashMap<i64, Tunnel>, share_group: &HashMap<i64, String>, raised: &HashMap<i64, bool>, step: Step) -> ApiResult<()> {
+    let tunnel_id = match &step {
+        Step::Create(w) | Step::Update { want: w, .. } => w.tunnel_id,
+        Step::Remove { tunnel_id, .. } => *tunnel_id,
+    };
+    let Some(t) = cached_tunnel(state, tunnels, tunnel_id).await? else { return Ok(()) };
+    match step {
+        Step::Create(w) => create(state, &t, &w, share_group.get(&w.group_share_id).map(String::as_str).unwrap_or_default()).await?,
+        Step::Update { row, want, old_permission, permission_changed, accounts_changed } => {
+            let group = share_group.get(&want.group_share_id).map(String::as_str).unwrap_or_default();
+            update(state, &t, row, raised.get(&row).copied().unwrap_or(false), &want, &old_permission, permission_changed, accounts_changed, group).await?
+        }
+        Step::Remove { row, user_id, group_share_id, .. } => {
+            let group = share_group.get(&group_share_id).cloned().unwrap_or_default();
+            // 還是同一筆、還是經由群組才收：剛改成直接分享的不動。/ Only the same row, still from a group: a just-made direct share stays.
+            if let Some(s) = db::sharing::get(&state.db, t.id, user_id).await?.filter(|s| s.id == row && s.group_share_id.is_some()) {
+                crate::api::sharing::end_share(state, &t, &s, None, crate::api::sharing::EndReason::Group { group: &group }).await?;
+                let user = username(state, user_id).await?;
+                state.gateway.event("group_share", None, None, Some(t.id), format!("{user} no longer has access to \"{}\" through the group \"{group}\"", t.host_friendly_name)).await;
             }
         }
     }
@@ -287,7 +304,9 @@ async fn create(state: &AppState, t: &Tunnel, w: &Want, group: &str) -> ApiResul
 
 #[allow(clippy::too_many_arguments)]
 async fn update(state: &AppState, t: &Tunnel, row: i64, raised: bool, w: &Want, old: &str, permission_changed: bool, accounts_changed: bool, group: &str) -> ApiResult<()> {
-    db::group_shares::update_row(&state.db, row, w.permission.as_str(), raised, w.expires_at.as_deref(), w.group_share_id).await?;
+    if !db::group_shares::update_row(&state.db, row, w.permission.as_str(), w.expires_at.as_deref(), w.group_share_id).await? {
+        return Ok(());
+    }
     if accounts_changed {
         db::group_shares::set_permanent_accounts(&state.db, row, t.id, &w.accounts).await?;
     }
@@ -343,6 +362,13 @@ mod tests {
         let steps = plan(&[rule(7, 10, Permission::View, &[3], &[1, 2, 4], None)], &[]);
         let made: Vec<i64> = steps.iter().filter_map(|s| if let Step::Create(w) = s { Some(w.user_id) } else { None }).collect();
         assert_eq!(made, vec![2, 4]);
+    }
+
+    #[test]
+    fn the_sharer_gets_nothing_from_their_own_group_share() {
+        let mut r = rule(7, 10, Permission::Admin, &[], &[2, 5], None);
+        r.shared_by = 5;
+        assert_eq!(wants(&[r]).keys().map(|k| k.1).collect::<Vec<_>>(), vec![2]);
     }
 
     #[test]

@@ -43,6 +43,7 @@ export function MemberPicker({
     current,
     title,
     hint,
+    showFree = true,
 }: {
     items: MemberItem[];
     selected: number[];
@@ -51,6 +52,9 @@ export function MemberPicker({
     current: number | null;
     title: string;
     hint: string;
+    /** 「不在任何群組」分類（一個項目可以同時在好幾組時用不到，例如使用者群組）。
+     *  The "in no group" bucket (off where an item can be in several groups, e.g. user groups). */
+    showFree?: boolean;
 }) {
     const { t } = useI18n();
     const [query, setQuery] = useState("");
@@ -72,7 +76,7 @@ export function MemberPicker({
     const buckets: { value: PickerBucket; label: string }[] = [
         { value: "all", label: `${t("groups.picker.all")} (${view.counts.all})` },
         { value: "selected", label: `${t("groups.picker.selected")} (${view.counts.selected})` },
-        { value: "free", label: `${t("groups.picker.free")} (${view.counts.free})` },
+        ...(showFree ? [{ value: "free" as const, label: `${t("groups.picker.free")} (${view.counts.free})` }] : []),
     ];
 
     return (

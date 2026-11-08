@@ -44,16 +44,20 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/Modal";
-import { NativeSelect } from "@/components/ui/native-select";
+import { Pagination } from "@/components/ui/pagination";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useAccessPage } from "@/hooks/useAccessPage";
+import { usePagination } from "@/hooks/usePagination";
+import { pageSlice } from "@/lib/pagination";
+import { MemberPicker } from "@/components/groups/MemberPicker";
 import {
     FEATURES,
     cellValue,
     deniedCount,
+    filterGroups,
     filterUsers,
     resolveFeature,
     type AccessGroup,
@@ -219,13 +223,27 @@ function OffBadge({ count }: { count: number }) {
     );
 }
 
+/** 群組加人超過這個數才有搜尋。/ The search shows from this many groups + people on. */
+const SEARCH_FROM = 8;
+
 function SubjectList({ policy, current, onPick, onCreate }: { policy: AccessPolicy; current: Subject; onPick: (s: Subject) => void; onCreate: () => void }) {
     const { t } = useI18n();
     const [query, setQuery] = useState("");
+    // 一個搜尋同時找群組與人；兩邊各自分頁（每頁筆數記在瀏覽器）。/ One search over groups and people; each list pages on its own.
+    const groups = filterGroups(policy.groups, query);
     const people = filterUsers(policy.users, query);
+    const groupPager = usePagination(groups.length, { storageKey: "telepy.accessGroupsPageSize", resetKey: query });
+    const peoplePager = usePagination(people.length, { storageKey: "telepy.accessPeoplePageSize", resetKey: query });
+    const searching = query.trim() !== "";
     return (
         <nav className="space-y-5 rounded-xl border border-border bg-card p-3 shadow-card" aria-label={t("access.subjectsAria")}>
-            <div>
+            <div className="space-y-2">
+                {policy.groups.length + policy.users.length >= SEARCH_FROM && (
+                    <div className="relative px-1">
+                        <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                        <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("access.searchSubjects")} className="h-8 pl-8" aria-label={t("access.searchSubjects")} />
+                    </div>
+                )}
                 <SubjectRow
                     active={current.kind === "everyone"}
                     icon={<Globe size={16} />}
@@ -238,13 +256,16 @@ function SubjectList({ policy, current, onPick, onCreate }: { policy: AccessPoli
 
             <div className="space-y-1">
                 <div className="flex items-center justify-between px-2.5">
-                    <span className="text-xs text-muted-foreground">{t("access.groups")}</span>
+                    <span className="text-xs text-muted-foreground">
+                        {t("access.groups")} <span className="tabular-nums">({searching ? `${groups.length}/${policy.groups.length}` : policy.groups.length})</span>
+                    </span>
                     <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={onCreate}>
                         <Plus size={14} /> {t("access.newGroupShort")}
                     </Button>
                 </div>
                 {policy.groups.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noGroups")}</p>}
-                {policy.groups.map((g) => (
+                {policy.groups.length > 0 && groups.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
+                {pageSlice(groups, groupPager.page, groupPager.size).map((g) => (
                     <SubjectRow
                         key={g.id}
                         active={sameSubject(current, { kind: "group", id: g.id })}
@@ -255,17 +276,15 @@ function SubjectList({ policy, current, onPick, onCreate }: { policy: AccessPoli
                         onClick={() => onPick({ kind: "group", id: g.id })}
                     />
                 ))}
+                <Pagination pager={groupPager} compact className="justify-center pt-1" />
             </div>
 
             <div className="space-y-1">
-                <span className="block px-2.5 text-xs text-muted-foreground">{t("access.people")}</span>
-                {policy.users.length > 7 && (
-                    <div className="relative px-1 pb-1">
-                        <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
-                        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("access.searchPeople")} className="h-8 pl-8" aria-label={t("access.searchPeople")} />
-                    </div>
-                )}
-                {people.map((u) => (
+                <span className="block px-2.5 text-xs text-muted-foreground">
+                    {t("access.people")} <span className="tabular-nums">({searching ? `${people.length}/${policy.users.length}` : policy.users.length})</span>
+                </span>
+                {people.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
+                {pageSlice(people, peoplePager.page, peoplePager.size).map((u) => (
                     <SubjectRow
                         key={u.id}
                         active={sameSubject(current, { kind: "user", id: u.id })}
@@ -276,6 +295,7 @@ function SubjectList({ policy, current, onPick, onCreate }: { policy: AccessPoli
                         onClick={() => onPick({ kind: "user", id: u.id })}
                     />
                 ))}
+                <Pagination pager={peoplePager} compact className="justify-center pt-1" />
             </div>
         </nav>
     );
@@ -454,52 +474,49 @@ function FeatureRow({ policy, subject, feature, fkey, saving, onGrant, onInfo }:
     );
 }
 
-function MembersEditor({ policy, group, saving, onChange }: { policy: AccessPolicy; group: AccessGroup; saving: boolean; onChange: (members: number[]) => void }) {
+function MembersEditor({ policy, group, saving, onChange }: { policy: AccessPolicy; group: AccessGroup; saving: boolean; onChange: (members: number[]) => Promise<unknown> }) {
     const { t } = useI18n();
-    const members = useMemo(() => policy.users.filter((u) => group.members.includes(u.id)), [policy.users, group.members]);
-    const others = policy.users.filter((u) => !group.members.includes(u.id));
+    // 先在這裡改、按儲存才送出：一次勾很多人（全選這 N 個）也只送一次，連點也不會互相蓋掉。
+    // Edits stay here until Save: ticking many at once ("select these N") sends once, and quick clicks can't overwrite each other.
+    const [draft, setDraft] = useState<number[]>(group.members);
+    const [base, setBase] = useState(group.members);
+    if (base !== group.members) {
+        setBase(group.members);
+        setDraft(group.members);
+    }
     // 單一登入給的成員：標出來，手動拿掉只維持到他下次登入。/ Members from single sign-on: marked; removing one lasts until their next sign-in.
     const sso = new Map((group.sso_members ?? []).map((m) => [m.user_id, m.provider] as const));
+    const items = useMemo(
+        () =>
+            policy.users.map((u) => ({
+                id: u.id,
+                label: u.username,
+                text: [u.username, u.email],
+                group: null,
+                icon: u.is_superuser ? <Shield size={14} className="shrink-0 text-muted-foreground" aria-hidden /> : <User size={14} className="shrink-0 text-muted-foreground" aria-hidden />,
+                meta: sso.has(u.id) ? <Building2 size={14} className="shrink-0 text-muted-foreground" aria-label={t("access.viaSso", { provider: sso.get(u.id) ?? "" })} /> : u.is_superuser ? <Chip>{t("access.adminChip")}</Chip> : undefined,
+                title: sso.has(u.id) ? t("access.viaSso", { provider: sso.get(u.id) ?? "" }) : u.email || u.username,
+            })),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [policy.users, group.sso_members, t],
+    );
+    const before = new Set(group.members);
+    const after = new Set(draft);
+    const added = draft.filter((id) => !before.has(id)).length;
+    const removed = group.members.filter((id) => !after.has(id)).length;
+    const dirty = added + removed > 0;
     return (
         <div className="space-y-2">
-            <SectionHeading title={t("access.members")} description={t("access.membersHint")} />
-            <div className="flex flex-wrap items-center gap-1.5">
-                {members.length === 0 && <span className="text-sm text-muted-foreground">{t("access.noMembers")}</span>}
-                {members.map((u) => (
-                    <Chip key={u.id} className="pr-0.5" title={sso.has(u.id) ? t("access.viaSso", { provider: sso.get(u.id) ?? "" }) : undefined}>
-                        {u.is_superuser ? <Shield aria-hidden /> : <User aria-hidden />}
-                        {u.username}
-                        {sso.has(u.id) && <Building2 aria-label={t("access.viaSso", { provider: sso.get(u.id) ?? "" })} />}
-                        <button
-                            type="button"
-                            disabled={saving}
-                            onClick={() => onChange(group.members.filter((id) => id !== u.id))}
-                            className="grid size-4 place-items-center rounded-sm hover:bg-foreground/10"
-                            aria-label={t("access.removeMember", { name: u.username })}
-                            title={t("access.removeMember", { name: u.username })}
-                        >
-                            <X size={11} />
-                        </button>
-                    </Chip>
-                ))}
-            </div>
+            <MemberPicker items={items} selected={draft} onChange={setDraft} current={group.id} title={t("access.members")} hint={t("access.membersHint")} showFree={false} />
             {sso.size > 0 && <p className="text-xs text-muted-foreground">{t("access.ssoMembersHint")}</p>}
-            {others.length > 0 && (
-                <NativeSelect
-                    className="h-8 w-full sm:w-64"
-                    value=""
-                    disabled={saving}
-                    aria-label={t("access.addMember")}
-                    onChange={(e) => {
-                        const id = Number(e.target.value);
-                        if (id) onChange([...group.members, id]);
-                    }}
-                >
-                    <option value="">{t("access.addMember")}</option>
-                    {others.map((u) => (
-                        <option key={u.id} value={u.id}>{u.username}{u.is_superuser ? ` (${t("access.adminChip")})` : ""}</option>
-                    ))}
-                </NativeSelect>
+            {dirty && (
+                <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-card px-3 py-2 shadow-pop ring-1 ring-border">
+                    <span className="text-sm text-foreground">{t("access.membersChanged", { added, removed })}</span>
+                    <span className="flex gap-2">
+                        <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => setDraft(group.members)}>{t("access.membersDiscard")}</Button>
+                        <Button type="button" size="sm" disabled={saving} onClick={() => void onChange(draft)}>{t("access.membersSave")}</Button>
+                    </span>
+                </div>
             )}
         </div>
     );
