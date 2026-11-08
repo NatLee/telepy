@@ -93,7 +93,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                         const others = otherMembers(g);
                         return (
                             <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3">
-                                <div className="flex min-w-0 flex-1 items-center gap-3">
+                                <div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
                                     <span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden>
                                         <Users size={16} />
                                     </span>
@@ -107,7 +107,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                         <ShareExpiryControl expiresAt={g.expires_at} editable={canAdd} onChange={(v) => update(g.id, { expires_at: v })} />
                                     </span>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-2">
+                                <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                                     {g.member_names && (
                                         <Popover>
                                             <PopoverTrigger asChild>

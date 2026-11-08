@@ -84,7 +84,9 @@ export function ShareModalSharedList({
                     const canEditTargets = !readOnly && !locked && tunnelUsernames.length > 0 && !via;
                     return (
                         <li key={sharedUser.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3 transition-colors hover:bg-surface">
-                            <div className="flex min-w-0 flex-1 items-center gap-3">
+                            {/* 名字與期限至少 14rem：放不下時按鈕整組換到下一行，不會把它們擠成一字一行。
+                                Name and end get at least 14rem: on a phone the buttons move to the next line instead of squeezing them. */}
+                            <div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
                                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-foreground text-sm text-background uppercase" aria-hidden>
                                     {sharedUser.username.slice(0, 1)}
                                 </span>
@@ -112,7 +114,7 @@ export function ShareModalSharedList({
                                     />
                                 </span>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="ml-auto flex shrink-0 items-center gap-2">
                                 <button
                                     type="button"
                                     disabled={!canEditTargets}
