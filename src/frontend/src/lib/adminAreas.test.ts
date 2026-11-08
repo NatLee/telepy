@@ -27,6 +27,7 @@ test("a path finds its area and page", () => {
     assert.equal(adminAreaOf("/tunnels/admin/sessions")?.area.id, "activity");
     assert.equal(adminAreaOf("/tunnels/admin/sessions")?.page.href, "/tunnels/admin/sessions");
     assert.equal(adminAreaOf("/tunnels/admin/access")?.area.id, "people");
+    assert.equal(adminAreaOf("/tunnels/admin/groups")?.area.id, "people");
     assert.equal(adminAreaOf("/tunnels/admin/notifications")?.area.id, "rules");
     assert.equal(adminAreaOf("/tunnels/settings")?.area.id, "settings");
     assert.equal(adminAreaOf("/tunnels/admin/health")?.area.id, "health");

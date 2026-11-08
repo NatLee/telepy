@@ -172,6 +172,8 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
         ("POST", ["api", "reverse", "server", _, "group-shares"]) => TunnelsShare,
         ("PATCH", ["api", "reverse", "server", _, "group-shares", _]) => TunnelsShare,
         ("POST", ["api", "reverse", "access-requests", _, "approve"]) => TunnelsShare,
+        // 個人群組只用來分享；刪掉不擋（收回永遠可以做）。/ Personal groups exist for sharing; deleting one stays open.
+        ("GET" | "POST" | "PATCH", ["api", "user", "groups", ..]) => TunnelsShare,
 
         // 工具箱：新增 / 改 / 刪片段（用片段 = 打進終端機，要「網頁終端機」）。/ Toolbox: snippet writes (running one needs the terminal).
         ("POST", ["api", "snippets"]) => Toolbox,
@@ -526,6 +528,12 @@ mod tests {
             ("PATCH", "/api/reverse/server/4/group-shares/9", Some(TunnelsShare)),
             ("DELETE", "/api/reverse/server/4/group-shares/9", None),
             ("GET", "/api/reverse/server/4/group-shares", None),
+            ("GET", "/api/user/groups", Some(TunnelsShare)),
+            ("POST", "/api/user/groups", Some(TunnelsShare)),
+            ("PATCH", "/api/user/groups/3", Some(TunnelsShare)),
+            ("POST", "/api/user/groups/3/preview", Some(TunnelsShare)),
+            ("DELETE", "/api/user/groups/3", None),
+            ("GET", "/api/user/users", None),
             ("POST", "/api/reverse/access-requests/5/approve", Some(TunnelsShare)),
             ("POST", "/api/reverse/access-requests/5/deny", None),
             ("POST", "/api/snippets", Some(Toolbox)),

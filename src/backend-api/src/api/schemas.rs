@@ -1389,6 +1389,16 @@ pub struct GroupShare {
     pub id: i64,
     pub group_id: i64,
     pub name: String,
+    /// org（組織群組）| personal（個人群組）/ org | personal
+    #[schema(example = "org")]
+    pub kind: String,
+    /// 個人群組的主人。/ A personal group's owner.
+    pub owner: Option<String>,
+    /// 看的人自己的個人群組。/ The viewer's own personal group.
+    pub mine: bool,
+    /// false = 暫停：個人群組的主人已經管不到這條通道（或帳號停用），成員經由它拿不到東西。
+    /// false = paused: a personal group whose owner no longer manages the tunnel (or is disabled); members get nothing through it.
+    pub active: bool,
     /// 群組有幾個人。/ How many people the group has.
     pub members: i64,
     /// 成員名稱（只給能管分享的人）。/ Members by name (only for those who manage sharing).
@@ -1396,6 +1406,10 @@ pub struct GroupShare {
     /// 經由這筆拿到存取的人數；另有直接分享的人照自己的。/ Members holding access through it; ones with a direct share keep theirs.
     pub through: i64,
     pub direct: i64,
+    /// 經由另一個群組分享拿到的成員數。/ Members holding it through another group share.
+    pub elsewhere: i64,
+    /// 通道擁有者也在這個群組裡。/ The tunnel's owner is in the group.
+    pub owner_in: bool,
     pub permission_type: String,
     pub expires_at: Option<String>,
     pub shared_by: Option<String>,
@@ -1408,6 +1422,8 @@ pub struct GroupChoice {
     pub id: i64,
     pub name: String,
     pub members: i64,
+    /// org | personal
+    pub kind: String,
     pub shared: bool,
 }
 
@@ -1415,7 +1431,8 @@ pub struct GroupChoice {
 pub struct GroupShares {
     pub can_manage: bool,
     pub shares: Vec<GroupShare>,
-    /// 可以分享給的使用者群組（只給能管分享的人）。/ User groups to share with (only for those who manage sharing).
+    /// 看的人能選的群組：自己的個人群組，再來是開放分享的組織群組（只給能管分享的人）。
+    /// The groups the viewer may pick: their personal groups, then organization groups open to sharing (managers only).
     pub groups: Vec<GroupChoice>,
 }
 
@@ -4415,6 +4432,97 @@ pub struct AccessGroup {
     /// feature id → true (allow) / false (deny); missing = inherit
     #[schema(example = json!({"terminal": false}))]
     pub grants: std::collections::HashMap<String, bool>,
+    /// 能出現在分享對話框。/ May be picked in share dialogs.
+    pub shareable: bool,
+    /// 分享給這個群組的通道。/ The tunnels shared with this group.
+    pub shares: Vec<AccessGroupShare>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessGroupShare {
+    /// Group share id
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub tunnel_name: String,
+    /// The tunnel's owner
+    pub owner: String,
+    pub permission_type: String,
+    /// Members holding access through it
+    pub through: i64,
+    pub expires_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct GroupPreviewRequest {
+    /// 換成這份成員名單會怎樣。/ What this member list would do.
+    pub members: Option<Vec<i64>>,
+    /// 刪掉群組會怎樣。/ What deleting the group would do.
+    pub delete: Option<bool>,
+    /// false = 不再開放分享會怎樣（組織群組）。/ false = what closing an organization group to sharing would do.
+    pub shareable: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct PreviewTunnel {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct PreviewPerson {
+    pub user_id: i64,
+    pub username: String,
+    pub tunnels: Vec<PreviewTunnel>,
+}
+
+#[derive(ToSchema)]
+pub struct GroupPreview {
+    /// 會多拿到通道的人（自己另有分享或經由別的群組的不算）。/ People who would gain tunnels (not those holding them another way).
+    pub gain: Vec<PreviewPerson>,
+    /// 會失去通道的人。/ People who would lose tunnels.
+    pub lose: Vec<PreviewPerson>,
+    /// 會結束的群組分享數（刪群組 / 不再開放分享）。/ Group shares that would end (delete / closed to sharing).
+    pub shares: i64,
+}
+
+#[derive(ToSchema)]
+pub struct PersonalGroupShare {
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub tunnel_name: String,
+    pub permission_type: String,
+    /// false = paused (you no longer manage that tunnel)
+    pub active: bool,
+}
+
+#[derive(ToSchema)]
+pub struct PersonalGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    /// User ids
+    pub members: Vec<i64>,
+    pub member_names: Vec<String>,
+    pub shares: Vec<PersonalGroupShare>,
+    pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct PersonalGroups {
+    pub groups: Vec<PersonalGroup>,
+    /// 能加進來的人：其他還在用的帳號。/ Who can be added: other active accounts.
+    pub users: Vec<AvailableUser>,
+    pub limit: i64,
+    pub max_members: i64,
+}
+
+#[derive(ToSchema)]
+pub struct PersonalGroupWrite {
+    /// 1–64 characters, unique among your personal groups (case-insensitive); required on create
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Replaces the member list (user ids of other active accounts, ≤ 200)
+    pub members: Option<Vec<i64>>,
 }
 
 #[derive(ToSchema)]
@@ -4451,6 +4559,8 @@ pub struct AccessGroupWrite {
     pub description: Option<String>,
     /// Replaces the member list (user ids)
     pub members: Option<Vec<i64>>,
+    /// May be picked in share dialogs; false on a shared group ends its tunnel shares
+    pub shareable: Option<bool>,
 }
 
 #[derive(ToSchema)]

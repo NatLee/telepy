@@ -7,13 +7,19 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
+import { parseImpact, type Impact } from "@/lib/peopleGroups";
 import { grantBody, type AccessPolicy, type GrantValue, type Subject } from "@/lib/features";
 
 export interface GroupDraft {
     name?: string;
     description?: string;
     members?: number[];
+    /** 組織群組可以出現在分享視窗。/ The organization group shows up in share dialogs. */
+    shareable?: boolean;
 }
+
+/** 預覽一個改變（三選一）。/ One change to preview (exactly one of these). */
+export type GroupPreviewBody = { members: number[] } | { delete: true } | { shareable: false };
 
 export function useAccessPage() {
     const { t } = useI18n();
@@ -80,5 +86,24 @@ export function useAccessPage() {
     const updateGroup = useCallback((id: number, draft: GroupDraft) => write(`/api/access/groups/${id}`, "PATCH", draft), [write]);
     const deleteGroup = useCallback((id: number) => write(`/api/access/groups/${id}`, "DELETE"), [write]);
 
-    return { policy, loading, saving, reload: load, setGrant, createGroup, updateGroup, deleteGroup };
+    /** 這個改變會讓誰多 / 少哪些通道（不寫入）；失敗 = null（已顯示錯誤）。/ Who would gain / lose which tunnels; null on failure. */
+    const previewGroup = useCallback(
+        async (id: number, body: GroupPreviewBody): Promise<Impact | null> => {
+            try {
+                const res = await apiFetch(`/api/access/groups/${id}/preview`, { method: "POST", body: JSON.stringify(body) });
+                const data = await readJson(res);
+                if (!res.ok) {
+                    showError(responseError(res, data, t("orgGroups.previewFailed")));
+                    return null;
+                }
+                return parseImpact(data);
+            } catch (e) {
+                showError(e instanceof Error ? e.message : t("orgGroups.previewFailed"));
+                return null;
+            }
+        },
+        [showError, t],
+    );
+
+    return { policy, loading, saving, reload: load, setGrant, createGroup, updateGroup, deleteGroup, previewGroup };
 }

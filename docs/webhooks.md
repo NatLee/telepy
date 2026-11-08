@@ -39,7 +39,7 @@ Admins control personal webhooks under **Site settings → Notifications**:
 - **Allow private network targets** (`notify_private_targets`, off by default): lets personal webhooks reach private networks, localhost and cloud metadata.
 - **Webhooks per person** (`notify_max_webhooks`, default 10, 0–100).
 
-Admins can also turn the **Personal webhooks** feature off for certain people or a user group under **Users & access → Feature permissions**. That person's Webhooks page then shows an explanation, and `/api/webhooks*` answers 403 `feature_disabled`. The two routes for opting out of site-wide webhooks keep working.
+Admins can also turn the **Personal webhooks** feature off for certain people or an organization group under **Users & access → Feature permissions**. That person's Webhooks page then shows an explanation, and `/api/webhooks*` answers 403 `feature_disabled`. The two routes for opting out of site-wide webhooks keep working.
 
 When an account is disabled, its personal webhooks stop sending.
 

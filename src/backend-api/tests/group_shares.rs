@@ -1,8 +1,11 @@
-//! 分享給使用者群組：成員各自拿到一筆分享（真的用允許的帳號登得進裝置），跟著群組成員增減；直接分享的人優先；
-//! 經由群組的分享不能單獨改或離開；改群組分享、到期、刪群組都會收回。
-//! Sharing with a user group: each member gets a share (and really logs in to the device as an allowed account),
-//! which follows the group's members; a direct share wins; a share through a group can't be changed or left on its
-//! own; changing the group share, its end and deleting the group all take access back.
+//! 分享給群組：成員各自拿到一筆分享（真的用允許的帳號登得進裝置），跟著群組成員增減；直接分享的人優先；
+//! 經由群組的分享不能單獨改或離開；改群組分享、到期、刪群組都會收回。組織群組要打開「可以被分享」才選得到；
+//! 個人群組任何人都能建、只有自己看得到，它的分享只在主人還管得到那條通道時算。
+//! Sharing with a group: each member gets a share (and really logs in to the device as an allowed account), which
+//! follows the group's members; a direct share wins; a share through a group can't be changed or left on its own;
+//! changing the group share, its end and deleting the group all take access back. An organization group must be open
+//! to sharing to be picked; anyone may make personal groups, seen only by them, whose shares count only while their
+//! owner still manages the tunnel.
 mod common;
 
 use std::collections::HashMap;
@@ -37,7 +40,7 @@ async fn a_group_share_follows_the_group_and_a_direct_share_wins() {
     lab.share(&alice, &dev, &carol, "edit", &[root]).await;
 
     // 管理員建群組 ops = bob + carol。/ The admin makes the group ops = bob + carol.
-    let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": "ops", "members": [bob.id, carol.id]})).await;
+    let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": "ops", "members": [bob.id, carol.id], "shareable": true})).await;
     assert!(r.status.is_success(), "{}", r.text);
     let ops = r.json["created_id"].as_i64().unwrap();
 
@@ -160,7 +163,7 @@ async fn a_sharer_gets_nothing_from_their_own_group_share_and_writes_follow_the_
     let group = |name: &'static str, members: Vec<i64>| {
         let lab = &lab;
         async move {
-            let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": name, "members": members})).await;
+            let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": name, "members": members, "shareable": true})).await;
             assert!(r.status.is_success(), "{}", r.text);
             r.json["created_id"].as_i64().unwrap()
         }
@@ -214,4 +217,175 @@ async fn a_sharer_gets_nothing_from_their_own_group_share_and_writes_follow_the_
     assert!(!db::group_shares::update_row(&lab.app.state.db, d.id, "admin", None, gs).await.unwrap());
     let d4 = db::sharing::get(&lab.app.state.db, dev.tunnel_id, dave.id).await.unwrap().unwrap();
     assert_eq!((d4.permission_type.as_str(), d4.group_share_id), ("edit", None));
+}
+
+/// 組織群組要管理員打開「可以被分享」才選得到；關掉 = 分享給它的通道結束（先預告得到誰會少什麼）。
+/// An organization group can be picked only once an admin opens it to sharing; closing it ends its shares (previewed first).
+#[tokio::test]
+async fn organization_groups_are_shared_only_when_open_to_sharing() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": "No terminal", "members": [bob.id]})).await;
+    let quiet = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == quiet).unwrap()["shareable"], false, "{}", r.text);
+
+    // 沒開放分享：通道主人看不到它、也分享不了。/ Not open to sharing: invisible to the tunnel's owner and refused.
+    let url = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
+    let r = lab.app.get(&url, Some(&alice.token)).await;
+    assert!(r.json["groups"].as_array().unwrap().is_empty(), "{}", r.text);
+    assert_eq!(lab.app.post(&url, Some(&alice.token), json!({"group_id": quiet})).await.status, StatusCode::NOT_FOUND);
+
+    // 管理員打開：選得到（org），分享後 bob 拿到。/ Opened: pickable (org); bob gets the tunnel.
+    let r = lab.app.patch(&format!("/api/access/groups/{quiet}"), Some(&lab.admin_token), json!({"shareable": true})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let r = lab.app.get(&url, Some(&alice.token)).await;
+    assert_eq!((r.json["groups"][0]["id"].as_i64(), r.json["groups"][0]["kind"].as_str()), (Some(quiet), Some("org")), "{}", r.text);
+    let r = lab.app.post(&url, Some(&alice.token), json!({"group_id": quiet, "allowed_target_username_ids": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!((r.json["shares"][0]["kind"].as_str(), r.json["shares"][0]["active"].as_bool(), r.json["shares"][0]["owner"].is_null()), (Some("org"), Some(true), true), "{}", r.text);
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_some());
+
+    // 管理頁看得到分享給它的通道。/ The admin page lists the tunnels shared with it.
+    let r = lab.app.get("/api/access", Some(&lab.admin_token)).await;
+    let g = r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == quiet).unwrap().clone();
+    assert_eq!((g["shares"][0]["tunnel_id"].as_i64(), g["shares"][0]["owner"].as_str(), g["shares"][0]["through"].as_i64()), (Some(dev.tunnel_id), Some("alice"), Some(1)), "{g}");
+
+    // 預告：關掉分享 = bob 少了這條；換掉成員 = bob 少、alice 不算（她是主人）。/ Previews.
+    let pv = format!("/api/access/groups/{quiet}/preview");
+    let r = lab.app.post(&pv, Some(&lab.admin_token), json!({"shareable": false})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["lose"][0]["user_id"].as_i64(), r.json["lose"][0]["tunnels"][0]["id"].as_i64(), r.json["shares"].as_i64()), (Some(bob.id), Some(dev.tunnel_id), Some(1)), "{}", r.text);
+    assert!(r.json["gain"].as_array().unwrap().is_empty());
+    let r = lab.app.post(&pv, Some(&lab.admin_token), json!({"members": [alice.id]})).await;
+    assert_eq!((r.json["lose"].as_array().unwrap().len(), r.json["gain"].as_array().unwrap().len()), (1, 0), "{}", r.text);
+    assert_eq!(lab.app.post(&pv, Some(&alice.token), json!({"delete": true})).await.status, StatusCode::FORBIDDEN, "admins only");
+    assert_eq!(lab.app.post(&pv, Some(&lab.admin_token), json!({})).await.status, StatusCode::BAD_REQUEST);
+    assert!(group_shares::active_shares(&lab.app.state).await.unwrap().len() == 1, "a preview writes nothing");
+
+    // 關掉：分享結束，bob 沒了。/ Closed: the share ends, bob loses it.
+    let r = lab.app.patch(&format!("/api/access/groups/{quiet}"), Some(&lab.admin_token), json!({"shareable": false})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    settle(&lab).await;
+    assert!(db::group_shares::for_tunnel(&lab.app.state.db, dev.tunnel_id).await.unwrap().is_empty());
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_none());
+}
+
+/// 個人群組：任何人都能建、只有自己看得到；只用在分享，功能權限不看它；它的分享只在主人還管得到那條通道時算
+/// （經由別人的個人群組拿到的 ADMIN 不算），主人停用也暫停。
+/// Personal groups: anyone makes them, only they see them; used only for sharing, never for features; their shares
+/// count only while the owner still manages the tunnel (ADMIN through someone's personal group doesn't count) and
+/// pause while the owner is disabled.
+#[tokio::test]
+async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let dave = lab.user("dave").await;
+    let eve = lab.user("eve").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let url = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
+
+    // alice 建「pals」= carol。不能放自己、不能重名；別人可以用同一個名字。/ alice makes "pals"; rules for members and names.
+    assert_eq!(lab.app.post("/api/user/groups", Some(&alice.token), json!({"name": "pals", "members": [alice.id]})).await.status, StatusCode::BAD_REQUEST);
+    let r = lab.app.post("/api/user/groups", Some(&alice.token), json!({"name": "pals", "members": [carol.id]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let pals = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(r.json["groups"][0]["member_names"], json!(["carol"]), "{}", r.text);
+    assert!(r.json["users"].as_array().unwrap().iter().all(|u| u["id"] != alice.id), "the picker leaves me out");
+    assert_eq!(lab.app.post("/api/user/groups", Some(&alice.token), json!({"name": "PALS"})).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(lab.app.post("/api/user/groups", Some(&bob.token), json!({"name": "pals"})).await.status, StatusCode::CREATED);
+
+    // 只有自己看得到、改得到；管理頁和功能權限都沒有它。/ Only alice sees it; the admin page and features never do.
+    let r = lab.app.get("/api/user/groups", Some(&dave.token)).await;
+    assert!(r.json["groups"].as_array().unwrap().is_empty(), "{}", r.text);
+    assert_eq!(lab.app.patch(&format!("/api/user/groups/{pals}"), Some(&dave.token), json!({"name": "mine"})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(lab.app.delete(&format!("/api/user/groups/{pals}"), Some(&lab.admin_token)).await.status, StatusCode::NOT_FOUND);
+    let r = lab.app.get("/api/access", Some(&lab.admin_token)).await;
+    assert!(r.json["groups"].as_array().unwrap().iter().all(|g| g["id"] != pals), "{}", r.text);
+    let r = lab.app.put("/api/access/grants", Some(&lab.admin_token), json!({"subject": "group", "id": pals, "feature": "terminal", "value": "deny"})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
+    assert!(db::features::groups_of(&lab.app.state.db, carol.id).await.unwrap().is_empty());
+
+    // alice 分享給 pals：carol 拿到；dave 不能拿 alice 的群組去分享自己的通道。/ alice shares with pals; carol gets it.
+    let r = lab.app.get(&url, Some(&alice.token)).await;
+    assert_eq!((r.json["groups"][0]["id"].as_i64(), r.json["groups"][0]["kind"].as_str()), (Some(pals), Some("personal")), "{}", r.text);
+    let r = lab.app.post(&url, Some(&alice.token), json!({"group_id": pals, "permission_type": "admin", "allowed_target_username_ids": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let s = &r.json["shares"][0];
+    assert_eq!((s["kind"].as_str(), s["owner"].as_str(), s["mine"].as_bool(), s["active"].as_bool()), (Some("personal"), Some("alice"), Some(true), Some(true)), "{}", r.text);
+    assert_eq!(item(&lab, &carol.token, dev.tunnel_id).await.expect("carol sees it")["share_group"], "pals");
+    assert!(lab.terminal(&carol, &dev, "ubuntu").await.is_ok());
+    let dboxm = lab.machine("dbox", &[("ubuntu", &[&lab.service])], false).await;
+    let ddev = lab.device(&dave, "dbox", &dboxm).await;
+    let r = lab.app.post(&format!("/api/reverse/server/{}/group-shares", ddev.tunnel_id), Some(&dave.token), json!({"group_id": pals})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
+
+    // 預告 + 改成員：dave 會拿到。/ Preview, then add dave.
+    let r = lab.app.post(&format!("/api/user/groups/{pals}/preview"), Some(&alice.token), json!({"members": [carol.id, dave.id]})).await;
+    assert_eq!((r.json["gain"][0]["user_id"].as_i64(), r.json["gain"][0]["tunnels"][0]["name"].as_str()), (Some(dave.id), Some("box")), "{}", r.text);
+    let r = lab.app.patch(&format!("/api/user/groups/{pals}"), Some(&alice.token), json!({"members": [carol.id, dave.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(item(&lab, &dave.token, dev.tunnel_id).await.is_some(), "dave joined pals");
+
+    // 經由別人的個人群組拿到 ADMIN 的 carol：她自己的個人群組分享不算（暫停）。/ ADMIN through a personal group doesn't pass on.
+    let r = lab.app.post("/api/user/groups", Some(&carol.token), json!({"name": "carols", "members": [eve.id]})).await;
+    let carols = r.json["created_id"].as_i64().unwrap();
+    let r = lab.app.post(&url, Some(&carol.token), json!({"group_id": carols})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let share = r.json["shares"].as_array().unwrap().iter().find(|s| s["group_id"] == carols).unwrap().clone();
+    assert_eq!(share["active"], false, "{share}");
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_none(), "eve gets nothing through carol's group");
+
+    // bob 有直接的 ADMIN：他的個人群組分享算；降成 VIEW 就暫停，回到 ADMIN 又恢復。/ bob's direct ADMIN; losing it pauses.
+    lab.share(&alice, &dev, &bob, "admin", &[ubuntu]).await;
+    let r = lab.app.post("/api/user/groups", Some(&bob.token), json!({"name": "bobs", "members": [eve.id]})).await;
+    let bobs = r.json["created_id"].as_i64().unwrap();
+    let r = lab.app.post(&url, Some(&bob.token), json!({"group_id": bobs})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(item(&lab, &eve.token, dev.tunnel_id).await.expect("eve through bobs")["share_group"], "bobs");
+    let set = |perm: &'static str| {
+        let (lab, alice, bob) = (&lab, &alice, &bob);
+        async move {
+            let r = lab.app.patch(&format!("/tunnels/update-permission/{}/{}", dev.tunnel_id, bob.id), Some(&alice.token), json!({"permission_type": perm})).await;
+            assert!(r.status.is_success(), "{}", r.text);
+            settle(lab).await;
+        }
+    };
+    set("view").await;
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_none(), "paused once bob no longer manages it");
+    let r = lab.app.get(&url, Some(&alice.token)).await;
+    let share = r.json["shares"].as_array().unwrap().iter().find(|s| s["group_id"] == bobs).unwrap().clone();
+    assert_eq!((share["active"].as_bool(), share["mine"].as_bool(), share["owner"].as_str()), (Some(false), Some(false), Some("bob")), "{share}");
+    set("admin").await;
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_some(), "resumed");
+
+    // bob 停用：暫停；重新啟用：恢復。/ bob disabled: paused; enabled again: resumed.
+    let active = |on: bool| {
+        let (lab, bob) = (&lab, &bob);
+        async move {
+            let r = lab.app.post(&format!("/api/user/users/{}", bob.id), Some(&lab.admin_token), json!({"is_active": on})).await;
+            assert!(r.status.is_success(), "{}", r.text);
+            settle(lab).await;
+        }
+    };
+    active(false).await;
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_none(), "paused while bob is disabled");
+    active(true).await;
+    assert!(item(&lab, &eve.token, dev.tunnel_id).await.is_some());
+
+    // 刪掉 pals：預告 carol、dave 會少；刪了就真的沒了。/ Deleting pals: previewed, then carol and dave lose it.
+    let r = lab.app.post(&format!("/api/user/groups/{pals}/preview"), Some(&alice.token), json!({"delete": true})).await;
+    let lost: Vec<i64> = r.json["lose"].as_array().unwrap().iter().filter_map(|p| p["user_id"].as_i64()).collect();
+    assert_eq!((lost, r.json["shares"].as_i64()), (vec![carol.id, dave.id], Some(1)), "{}", r.text);
+    let r = lab.app.delete(&format!("/api/user/groups/{pals}"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(item(&lab, &carol.token, dev.tunnel_id).await.is_none());
+    assert!(item(&lab, &dave.token, dev.tunnel_id).await.is_none());
 }

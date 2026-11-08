@@ -341,6 +341,10 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     if is_active == Some(true) && !target.is_active {
         crate::access_recheck::kick_device_keys(&state, id).await?;
     }
+    // 他的個人群組分享跟著帳號暫停 / 恢復。/ Their personal groups' shares pause / resume with the account.
+    if is_active.is_some_and(|a| a != target.is_active) {
+        crate::group_shares::kick(&state);
+    }
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
         db::users::settings_update(&state.db, id, SettingsPatch { language: Some(lang), ..SettingsPatch::default() }).await?;

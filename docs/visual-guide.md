@@ -122,7 +122,7 @@ The chain is Telepy users ─ the allow-list ─ OS accounts ─ the device's ss
 
 Find it: **Admin → Users & access → Feature permissions → How it works**.
 
-There are two independent gates, and both apply. One decides which tools a person may use: default → everyone → user groups → the person, who has the last word. The other is sharing, which decides which tunnels they reach.
+There are two independent gates, and both apply. One decides which tools a person may use: default → everyone → organization groups → the person, who has the last word. The other is sharing, which decides which tunnels they reach.
 
 ![Feature permissions vs sharing: two gates, both apply](images/en/access-lanes.png)
 

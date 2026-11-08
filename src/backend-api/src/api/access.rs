@@ -1,9 +1,13 @@
-//! `/api/access*`：功能權限的管理（管理員專用）——群組、成員、每個功能對「所有人 / 群組 / 使用者」的允許或拒絕。
+//! `/api/access*`：組織群組與功能權限的管理（管理員專用）——群組、成員、每個功能對「所有人 / 群組 / 使用者」的允許或拒絕。
 //! 每個寫入都回整份設定（很小），改完立即生效（快取作廢）並結束那些人已經不能用的進行中 session。
-//! 跟隧道分享無關：分享決定「哪些隧道」，這裡決定「哪些功能」。
-//! Feature-permission administration (admins only): groups, members and allow / deny per feature for everyone, a group
-//! or a user. Every write answers the whole policy (it is small), applies at once (cache invalidated) and ends the live
-//! sessions their users just lost. Unrelated to tunnel sharing.
+//! 功能權限決定「哪些功能」，分享決定「哪些通道」；兩者只在一個地方交會：打開「可以被分享」的組織群組，它的成員
+//! 也決定誰拿到分享給它的通道，所以改成員、刪群組、關掉分享前可以先預告（`…/preview`）。個人群組不在這裡。
+//! Organization groups and feature permissions (admins only): groups, members and allow / deny per feature for
+//! everyone, a group or a user. Every write answers the whole policy (it is small), applies at once (cache
+//! invalidated) and ends the live sessions their users just lost. Features decide *which tools*, sharing decides
+//! *which tunnels*; they meet in one place: the members of an organization group open to sharing also decide who gets
+//! the tunnels shared with it, so a member change, a delete or closing sharing can be previewed first (`…/preview`).
+//! Personal groups never show up here.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -25,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_policy))
         .routes(routes!(create_group))
         .routes(routes!(update_group, delete_group))
+        .routes(routes!(preview_group))
         .routes(routes!(set_grant))
 }
 
@@ -71,6 +76,18 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
         members.entry(*g).or_default().push(*u);
     }
     let tz = state.config.tz_offset_minutes;
+    let mut shares: HashMap<i64, Vec<Value>> = HashMap::new();
+    for (id, g, tunnel_id, tunnel_name, owner, perm, expires, through) in db::group_shares::shares_of_groups(&state.db, &groups.iter().map(|g| g.id).collect::<Vec<_>>()).await? {
+        shares.entry(g).or_default().push(json!({
+            "id": id,
+            "tunnel_id": tunnel_id,
+            "tunnel_name": tunnel_name,
+            "owner": owner,
+            "permission_type": perm,
+            "through": through,
+            "expires_at": expires.as_deref().map(crate::util::db_to_iso_utc_z),
+        }));
+    }
     Ok(json!({
         "features": Feature::ALL.iter().map(|f| json!({ "id": f.id(), "default": f.default_allowed() })).collect::<Vec<_>>(),
         "everyone": grants_json(Some(&policy.everyone)),
@@ -82,6 +99,8 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
             "members": members.get(&g.id).cloned().unwrap_or_default(),
             "sso_members": sso_members.get(&g.id).cloned().unwrap_or_default(),
             "grants": grants_json(policy.groups.get(&g.id)),
+            "shareable": g.shareable,
+            "shares": shares.remove(&g.id).unwrap_or_default(),
         })).collect::<Vec<_>>(),
         "users": users.iter().map(|u| {
             let effective: Map<String, Value> = Feature::ALL.iter().map(|f| (f.id().to_string(), policy.resolve(u.id, u.is_superuser, *f).json())).collect();
@@ -115,7 +134,7 @@ async fn after_write(state: &AppState, me: &User, kind: &str, message: String) {
     });
 }
 
-fn parse_name(body: &Value) -> ApiResult<Option<String>> {
+pub fn parse_name(body: &Value) -> ApiResult<Option<String>> {
     match body.get("name") {
         None => Ok(None),
         Some(Value::String(s)) => {
@@ -129,7 +148,7 @@ fn parse_name(body: &Value) -> ApiResult<Option<String>> {
     }
 }
 
-fn parse_description(body: &Value) -> ApiResult<Option<String>> {
+pub fn parse_description(body: &Value) -> ApiResult<Option<String>> {
     match body.get("description") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) if s.trim().chars().count() <= MAX_DESCRIPTION => Ok(Some(s.trim().to_string())),
@@ -139,7 +158,7 @@ fn parse_description(body: &Value) -> ApiResult<Option<String>> {
 }
 
 /// `members`：使用者 id 陣列（要存在）。/ `members`: an array of existing user ids.
-async fn parse_members(state: &AppState, body: &Value) -> ApiResult<Option<Vec<i64>>> {
+pub async fn parse_members(state: &AppState, body: &Value) -> ApiResult<Option<Vec<i64>>> {
     let Some(v) = body.get("members") else { return Ok(None) };
     let Some(arr) = v.as_array() else { return Err(ApiError::field("members", "Must be a list of user ids.")) };
     let mut ids: Vec<i64> = Vec::new();
@@ -155,6 +174,14 @@ async fn parse_members(state: &AppState, body: &Value) -> ApiResult<Option<Vec<i
     }
     ids.sort_unstable();
     Ok(Some(ids))
+}
+
+fn parse_shareable(body: &Value) -> ApiResult<Option<bool>> {
+    match body.get("shareable") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(ApiError::field("shareable", "Must be true or false.")),
+    }
 }
 
 async fn usernames(state: &AppState, ids: &[i64]) -> ApiResult<String> {
@@ -174,6 +201,7 @@ async fn create_group(State(state): State<AppState>, AuthUser(me): AuthUser, App
     let name = parse_name(&body)?.ok_or_else(|| ApiError::field("name", "This field is required."))?;
     let description = parse_description(&body)?.unwrap_or_default();
     let members = parse_members(&state, &body).await?;
+    let shareable = parse_shareable(&body)?.unwrap_or(false);
     if db::features::groups(&state.db).await?.len() >= MAX_GROUPS {
         return Err(ApiError::bad_request(format!("At most {MAX_GROUPS} groups.")));
     }
@@ -182,6 +210,10 @@ async fn create_group(State(state): State<AppState>, AuthUser(me): AuthUser, App
     }
     let id = db::features::create_group(&state.db, &name, &description).await?;
     let mut msg = format!("{} created the group \"{name}\"", me.username);
+    if shareable {
+        db::features::set_shareable(&state.db, id, true).await?;
+        msg.push_str(" (can be shared)");
+    }
     if let Some(m) = &members {
         db::features::set_members(&state.db, id, m).await?;
         if !m.is_empty() {
@@ -201,6 +233,7 @@ async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     let name = parse_name(&body)?;
     let description = parse_description(&body)?;
     let members = parse_members(&state, &body).await?;
+    let shareable = parse_shareable(&body)?;
     if let Some(n) = &name {
         if db::features::name_taken(&state.db, n, Some(id)).await? {
             return Err(ApiError::field("name", "A group with this name already exists."));
@@ -226,10 +259,55 @@ async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
             changes.push(format!("removed {}", usernames(&state, &removed).await?));
         }
     }
+    let mut gone = HashMap::new();
+    if let Some(on) = shareable.filter(|on| *on != group.shareable) {
+        db::features::set_shareable(&state.db, id, on).await?;
+        if on {
+            changes.push("opened it to sharing".into());
+        } else {
+            // 不再開放分享：分享給它的通道全部結束（成員自己的分享不受影響）。/ Closed to sharing: every share with it ends.
+            let shares = db::group_shares::shares_of_groups(&state.db, &[id]).await?;
+            gone = crate::group_shares::gone_for_group(&state, id, &group.name).await?;
+            db::group_shares::forget_group(&state.db, id).await?;
+            for (_, _, tunnel_id, tunnel_name, ..) in &shares {
+                state
+                    .gateway
+                    .event("group_share", None, None, Some(*tunnel_id), format!("The share of \"{tunnel_name}\" with the group \"{}\" ended: {} closed the group to sharing", group.name, me.username))
+                    .await;
+            }
+            changes.push(format!("closed it to sharing ({} tunnel shares ended)", shares.len()));
+        }
+    }
     if !changes.is_empty() {
         after_write(&state, &me, "user_group", format!("{} changed the group \"{}\": {}", me.username, group.name, changes.join("; "))).await;
     }
+    if !gone.is_empty() {
+        crate::group_shares::kick_with(&state, gone);
+    }
     Ok(Json(policy_json(&state).await?))
+}
+
+/// 預告：改成員、刪群組或不再開放分享，誰會多了 / 少了哪些通道（什麼都不寫）。body 三選一：
+/// `{members: [ids]}`、`{delete: true}`、`{shareable: false}`。
+/// Preview what a member change, a delete or closing sharing would do to tunnel access (writes nothing). The body is
+/// one of `{members: [ids]}`, `{delete: true}`, `{shareable: false}`.
+#[utoipa::path(post, path = "/api/access/groups/{id}/preview", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::GroupPreviewRequest, responses((status = 200, body = super::schemas::GroupPreview), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn preview_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin(&me)?;
+    db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
+    let change = preview_change(&state, &body).await?;
+    Ok(Json(crate::group_shares::preview(&state, id, &change).await?))
+}
+
+/// 預告的 body → 改動（組織群組與個人群組共用）。/ A preview body → the change (shared with personal groups).
+pub async fn preview_change(state: &AppState, body: &Value) -> ApiResult<crate::group_shares::Change> {
+    if let Some(m) = parse_members(state, body).await? {
+        return Ok(crate::group_shares::Change::Members(m));
+    }
+    if body.get("delete") == Some(&Value::Bool(true)) || body.get("shareable") == Some(&Value::Bool(false)) {
+        return Ok(crate::group_shares::Change::Unshared);
+    }
+    Err(ApiError::bad_request("Send one of: members, delete: true, shareable: false."))
 }
 
 #[utoipa::path(delete, path = "/api/access/groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), responses((status = 200, body = super::schemas::AccessPolicy), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]

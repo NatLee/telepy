@@ -1,13 +1,22 @@
-//! 分享給使用者群組：每位成員各自拿到一筆「經由群組」的分享列（`tunnels_tunnelsharing.group_share_id`），
+//! 分享給群組（組織群組或個人群組）：每位成員各自拿到一筆「經由群組」的分享列（`tunnels_tunnelsharing.group_share_id`），
 //! 所以權限檢查、允許帳號、裝置金鑰、通知與失去存取時的收尾都照舊走同一條路。`plan`（純函式）比對群組分享 × 成員
 //! 與現有的列；`reconcile` 套用它。直接分享給這個人的列優先，群組不碰。
 //!
-//! A tunnel shared with a user group: each member gets a share row marked with the group share, so permission checks,
-//! allowed accounts, device keys, notifications and the access-loss clean-up all keep working unchanged. `plan` (pure)
-//! compares group shares × members with the rows that exist; `reconcile` applies it. A row shared with the person
-//! directly wins; groups never touch it.
+//! 哪些群組分享算數：組織群組要打開「可以被分享」；個人群組的成員由它的主人決定，所以只在主人還管得到那條通道時算
+//! （他是通道擁有者，或經由自己那筆或組織群組拿到 ADMIN —— 經由別人的個人群組不算，不然兩個人可以互相保住對方）。
+//! `diff`（純函式）算「改了之後誰多了 / 少了哪些通道」，給改成員、刪群組前的預告用。
+//!
+//! A tunnel shared with a group (organization or personal): each member gets a share row marked with the group share,
+//! so permission checks, allowed accounts, device keys, notifications and the access-loss clean-up all keep working
+//! unchanged. `plan` (pure) compares group shares × members with the rows that exist; `reconcile` applies it. A row
+//! shared with the person directly wins; groups never touch it.
+//!
+//! Which group shares count: an organization group must be open to sharing; a personal group's members are picked by
+//! its owner, so its shares count only while that owner still manages the tunnel (owns it, or holds ADMIN through
+//! their own share or an organization group's — not through someone's personal group, or two people could keep each
+//! other in). `diff` (pure) says who would gain or lose which tunnels, for the preview before a change.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::json;
 
@@ -21,6 +30,7 @@ use crate::webhooks::{Event, Kind};
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub id: i64,
+    pub group_id: i64,
     pub tunnel_id: i64,
     pub owner_id: i64,
     pub shared_by: i64,
@@ -134,6 +144,60 @@ pub fn plan(rules: &[Rule], rows: &[Row]) -> Vec<Step> {
     steps
 }
 
+/// 一筆個人群組的分享算不算數：主人的帳號還在用，而且他擁有這條通道，或他在這條通道上的那筆（`held` = 現在的
+/// 權限、是不是經由個人群組來的）是 ADMIN 且不是經由個人群組。
+/// Whether a personal group's share counts: its owner's account is active and they own the tunnel, or their own row
+/// there (`held` = the permission in force and whether it came through a personal group) is ADMIN and not from a
+/// personal group.
+pub fn personal_share_counts(tunnel_owner: i64, group_owner: i64, owner_active: bool, held: Option<(Permission, bool)>) -> bool {
+    owner_active && (group_owner == tunnel_owner || matches!(held, Some((Permission::Admin, false))))
+}
+
+/// 一個人多了 / 少了哪些通道。/ Which tunnels each person gains or loses.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Diff {
+    pub gain: BTreeMap<i64, BTreeSet<i64>>,
+    pub lose: BTreeMap<i64, BTreeSet<i64>>,
+}
+
+/// 規則從 `before` 換成 `after` 之後，誰經由群組多了 / 少了哪條通道。`direct` = 已經有直接分享的 (通道, 人)：他們
+/// 照自己那筆，群組怎麼改都不算。
+/// Who gains or loses which tunnel through groups when the rules go from `before` to `after`. `direct` = (tunnel,
+/// person) pairs with a direct share of their own: groups change nothing for them.
+pub fn diff(before: &[Rule], after: &[Rule], direct: &HashSet<(i64, i64)>) -> Diff {
+    let had: BTreeSet<(i64, i64)> = wants(before).into_keys().filter(|k| !direct.contains(k)).collect();
+    let has: BTreeSet<(i64, i64)> = wants(after).into_keys().filter(|k| !direct.contains(k)).collect();
+    let mut out = Diff::default();
+    for (t, u) in has.difference(&had) {
+        out.gain.entry(*u).or_default().insert(*t);
+    }
+    for (t, u) in had.difference(&has) {
+        out.lose.entry(*u).or_default().insert(*t);
+    }
+    out
+}
+
+/// 預告的改動。/ A change to preview.
+#[derive(Debug, Clone)]
+pub enum Change {
+    /// 換掉成員名單。/ Replace the member list.
+    Members(Vec<i64>),
+    /// 群組的分享全部結束（刪群組、組織群組不再開放分享）。/ Every share with it ends (deleted, or no longer shareable).
+    Unshared,
+}
+
+/// 把一個群組的改動套在規則上（純函式）。/ Apply a change to one group to the rules (pure).
+pub fn changed(rules: &[Rule], group_id: i64, change: &Change) -> Vec<Rule> {
+    rules
+        .iter()
+        .filter(|r| r.group_id != group_id || matches!(change, Change::Members(_)))
+        .map(|r| match change {
+            Change::Members(m) if r.group_id == group_id => Rule { members: m.clone(), ..r.clone() },
+            _ => r.clone(),
+        })
+        .collect()
+}
+
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// 會改到群組列的地方（改成直接分享）跟 `reconcile` 輪流來，不讓比對到一半的計畫蓋掉它。
@@ -176,29 +240,61 @@ pub async fn tick(state: &AppState) -> ApiResult<()> {
 }
 
 async fn group_name(state: &AppState, group_id: i64) -> ApiResult<String> {
-    Ok(db::features::group(&state.db, group_id).await?.map(|g| g.name).unwrap_or_default())
+    Ok(db::features::any_group(&state.db, group_id).await?.map(|g| g.label().to_string()).unwrap_or_default())
 }
 
-/// 把所有成員的分享列對齊群組分享。`gone` = 剛收掉的群組分享 → 群組名稱（說明用）。
-/// Bring every member's row in line with the group shares. `gone` = just-removed group shares → group names (for wording).
-pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResult<()> {
-    let _held = LOCK.lock().await;
+/// 比對要用的一切：算數的群組分享、現有的列、群組分享 → 名稱。/ Everything a reconcile needs.
+struct Loaded {
+    rules: Vec<Rule>,
+    rows: Vec<Row>,
+    share_group: HashMap<i64, String>,
+    tunnels: HashMap<i64, Tunnel>,
+}
+
+async fn load(state: &AppState) -> ApiResult<Loaded> {
     let shares = db::group_shares::live(&state.db).await?;
     let accounts = db::group_shares::all_username_ids(&state.db).await?;
     let mut members: HashMap<i64, Vec<i64>> = HashMap::new();
-    for (g, u) in db::features::memberships(&state.db).await? {
+    for (g, u) in db::features::all_memberships(&state.db).await? {
         members.entry(g).or_default().push(u);
     }
-    let names: HashMap<i64, String> = db::features::groups(&state.db).await?.into_iter().map(|g| (g.id, g.name)).collect();
+    let groups: HashMap<i64, db::features::Group> = db::features::all_groups(&state.db).await?.into_iter().map(|g| (g.id, g)).collect();
+    let sharing = db::group_shares::rows(&state.db).await?;
+    let personal_share: HashSet<i64> = shares.iter().filter(|g| groups.get(&g.group_id).is_some_and(|g| g.is_personal())).map(|g| g.id).collect();
+    // 每個人在每條通道上那筆的權限，與它是不是經由個人群組來的。/ Each person's permission per tunnel, and whether it came from a personal group.
+    let held: HashMap<(i64, i64), (Permission, bool)> = sharing
+        .iter()
+        .filter_map(|s| Permission::parse(s.permission()).map(|p| ((s.tunnel_id, s.shared_with_id), (p, s.group_share_id.is_some_and(|g| personal_share.contains(&g))))))
+        .collect();
+    let mut active: HashMap<i64, bool> = HashMap::new();
     let mut tunnels: HashMap<i64, Tunnel> = HashMap::new();
-    let mut share_group: HashMap<i64, String> = gone.clone();
     let mut rules = Vec::new();
+    let mut share_group = HashMap::new();
     for g in &shares {
         let Some(t) = cached_tunnel(state, &mut tunnels, g.tunnel_id).await? else { continue };
         let Some(perm) = Permission::parse(&g.permission_type) else { continue };
-        share_group.insert(g.id, names.get(&g.group_id).cloned().unwrap_or_default());
+        let Some(group) = groups.get(&g.group_id) else { continue };
+        share_group.insert(g.id, group.label().to_string());
+        let counts = match group.owner_id {
+            None => group.shareable,
+            Some(owner) => {
+                let on = match active.get(&owner) {
+                    Some(on) => *on,
+                    None => {
+                        let on = db::users::by_id(&state.db, owner).await?.is_some_and(|u| u.is_active);
+                        active.insert(owner, on);
+                        on
+                    }
+                };
+                personal_share_counts(t.user_id, owner, on, held.get(&(t.id, owner)).copied())
+            }
+        };
+        if !counts {
+            continue;
+        }
         rules.push(Rule {
             id: g.id,
+            group_id: g.group_id,
             tunnel_id: g.tunnel_id,
             owner_id: t.user_id,
             shared_by: g.shared_by_id.unwrap_or(t.user_id),
@@ -209,8 +305,7 @@ pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResu
         });
     }
     let permanent = db::group_shares::permanent_accounts(&state.db).await?;
-    let rows: Vec<Row> = db::group_shares::rows(&state.db)
-        .await?
+    let rows: Vec<Row> = sharing
         .into_iter()
         .map(|s| Row {
             id: s.id,
@@ -223,6 +318,49 @@ pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResu
             accounts: permanent.get(&s.id).cloned().unwrap_or_default(),
         })
         .collect();
+    Ok(Loaded { rules, rows, share_group, tunnels })
+}
+
+/// 群組分享現在算不算數（暫停的個人群組分享 = 不算）。/ Which group shares count right now (paused personal ones don't).
+pub async fn active_shares(state: &AppState) -> ApiResult<HashSet<i64>> {
+    Ok(load(state).await?.rules.iter().map(|r| r.id).collect())
+}
+
+/// 預告一個群組的改動：誰會多了 / 少了哪些通道（什麼都不寫）。/ Preview a change to one group (writes nothing).
+pub async fn preview(state: &AppState, group_id: i64, change: &Change) -> ApiResult<serde_json::Value> {
+    let loaded = load(state).await?;
+    let direct: HashSet<(i64, i64)> = loaded.rows.iter().filter(|r| r.group_share_id.is_none()).map(|r| (r.tunnel_id, r.user_id)).collect();
+    let d = diff(&loaded.rules, &changed(&loaded.rules, group_id, change), &direct);
+    let ids: Vec<i64> = d.gain.keys().chain(d.lose.keys()).copied().collect();
+    let names = db::users::usernames_for(&state.db, &ids).await?;
+    let tunnels = loaded.tunnels;
+    let side = |m: &BTreeMap<i64, BTreeSet<i64>>| -> Vec<serde_json::Value> {
+        m.iter()
+            .map(|(u, ts)| {
+                json!({
+                    "user_id": u,
+                    "username": names.get(u).cloned().unwrap_or_else(|| format!("#{u}")),
+                    "tunnels": ts.iter().map(|t| json!({ "id": t, "name": tunnels.get(t).map(|t| t.host_friendly_name.clone()).unwrap_or_default() })).collect::<Vec<_>>(),
+                })
+            })
+            .collect()
+    };
+    let gain = side(&d.gain);
+    let lose = side(&d.lose);
+    let shares = match change {
+        Change::Unshared => db::group_shares::ids_of_group(&state.db, group_id).await?.len(),
+        Change::Members(_) => 0,
+    };
+    Ok(json!({ "gain": gain, "lose": lose, "shares": shares }))
+}
+
+/// 把所有成員的分享列對齊群組分享。`gone` = 剛收掉的群組分享 → 群組名稱（說明用）。
+/// Bring every member's row in line with the group shares. `gone` = just-removed group shares → group names (for wording).
+pub async fn reconcile(state: &AppState, gone: &HashMap<i64, String>) -> ApiResult<()> {
+    let _held = LOCK.lock().await;
+    let Loaded { rules, rows, share_group: names, mut tunnels } = load(state).await?;
+    let mut share_group: HashMap<i64, String> = gone.clone();
+    share_group.extend(names);
     let raised: HashMap<i64, bool> = rows.iter().map(|r| (r.id, r.raised)).collect();
     for step in plan(&rules, &rows) {
         // 一步失敗只記下來，後面的照做（下次 tick 再試這一步）。/ A failed step is logged; the rest still run.
@@ -343,6 +481,7 @@ mod tests {
     fn rule(id: i64, tunnel: i64, perm: Permission, accounts: &[i64], members: &[i64], expires: Option<&str>) -> Rule {
         Rule {
             id,
+            group_id: id * 100,
             tunnel_id: tunnel,
             owner_id: 1,
             shared_by: 1,
@@ -406,5 +545,35 @@ mod tests {
         let mut r = row(50, 10, 2, Some(7), "view", &[]);
         r.raised = true;
         assert!(plan(&[rule(7, 10, Permission::View, &[], &[2], None)], &[r]).is_empty());
+    }
+
+    #[test]
+    fn a_personal_groups_share_counts_only_while_its_owner_manages_the_tunnel() {
+        // 主人自己的通道。/ The owner's own tunnel.
+        assert!(personal_share_counts(1, 1, true, None));
+        // 直接分享或組織群組給的 ADMIN 算；經由個人群組的、比 ADMIN 低的都不算。/ Direct / org ADMIN counts; the rest doesn't.
+        assert!(personal_share_counts(1, 2, true, Some((Permission::Admin, false))));
+        assert!(!personal_share_counts(1, 2, true, Some((Permission::Admin, true))));
+        assert!(!personal_share_counts(1, 2, true, Some((Permission::Edit, false))));
+        assert!(!personal_share_counts(1, 2, true, None));
+        // 停用的帳號什麼都不算，連自己的通道。/ A disabled owner counts for nothing, own tunnel included.
+        assert!(!personal_share_counts(1, 1, false, None));
+    }
+
+    #[test]
+    fn a_preview_lists_who_gains_and_loses_but_not_people_with_a_share_of_their_own() {
+        let rules = vec![rule(7, 10, Permission::View, &[], &[2, 3], None), rule(8, 11, Permission::View, &[], &[3], None)];
+        let direct: HashSet<(i64, i64)> = [(10, 4)].into_iter().collect();
+        // 群組 700（= 規則 7 的群組）換成 3 + 4 + 5：2 少了 10；4 自己有分享不算；5 多了 10。
+        // Group 700 (rule 7's) becomes 3 + 4 + 5: 2 loses 10; 4 has their own share; 5 gains 10.
+        let d = diff(&rules, &changed(&rules, 700, &Change::Members(vec![3, 4, 5])), &direct);
+        assert_eq!(d.lose, [(2, [10].into_iter().collect())].into_iter().collect());
+        assert_eq!(d.gain, [(5, [10].into_iter().collect())].into_iter().collect());
+        // 群組 700 的分享全部結束：3 還經由群組 800 留著 11，只少了 10。/ Unshared: 3 keeps 11 through group 800.
+        let d = diff(&rules, &changed(&rules, 700, &Change::Unshared), &direct);
+        assert_eq!(d.lose, [(2, [10].into_iter().collect()), (3, [10].into_iter().collect())].into_iter().collect());
+        assert!(d.gain.is_empty());
+        // 別的通道也經由同一個群組分享的話，3 不會因為還在群組 800 就不算。/ Another group's tunnel isn't touched.
+        assert!(changed(&rules, 700, &Change::Unshared).iter().all(|r| r.group_id == 800));
     }
 }

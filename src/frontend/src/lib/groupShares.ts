@@ -6,6 +6,9 @@ import type { SpotState } from "./flow.ts";
 
 export type SharePermission = "view" | "edit" | "admin";
 
+/** org = 組織群組（管理員 / 單一登入管）；personal = 某個人自己的個人群組。/ org = an organization group; personal = someone's own. */
+export type GroupKind = "org" | "personal";
+
 export interface GroupShare {
     id: number;
     group_id: number;
@@ -18,11 +21,22 @@ export interface GroupShare {
     through: number;
     /** 另有直接分享、照自己那筆的人數。/ Members with a direct share of their own. */
     direct: number;
+    /** 經由另一個群組分享拿到的人數（那一筆給的權限比較高）。/ Members holding it through another group share. */
+    elsewhere: number;
+    /** 通道擁有者也在群組裡（他不需要分享）。/ The tunnel's owner is in the group (needs no share). */
+    owner_in: boolean;
     permission_type: SharePermission;
     expires_at: string | null;
     shared_by: string | null;
     created_at: string;
     allowed_target_usernames: { id: number; username: string }[];
+    kind: GroupKind;
+    /** 個人群組的主人（組織群組 = null）。/ A personal group's owner (null for organization groups). */
+    owner: string | null;
+    /** 看的人自己的個人群組。/ A personal group owned by the viewer. */
+    mine: boolean;
+    /** false = 暫停：個人群組的主人已經不管這條通道，成員經由它拿不到東西。/ false = paused. */
+    active: boolean;
 }
 
 export interface GroupChoice {
@@ -30,6 +44,7 @@ export interface GroupChoice {
     name: string;
     members: number;
     shared: boolean;
+    kind: GroupKind;
 }
 
 export interface GroupShareList {
@@ -62,6 +77,8 @@ export function parseGroupShares(v: unknown): GroupShareList {
                 member_names: Array.isArray(r.member_names) ? r.member_names.filter((n): n is string => typeof n === "string") : null,
                 through: num(r.through),
                 direct: num(r.direct),
+                elsewhere: num(r.elsewhere),
+                owner_in: r.owner_in === true,
                 permission_type: perm,
                 expires_at: typeof r.expires_at === "string" ? r.expires_at : null,
                 shared_by: typeof r.shared_by === "string" ? r.shared_by : null,
@@ -72,12 +89,22 @@ export function parseGroupShares(v: unknown): GroupShareList {
                           .filter((a) => typeof a.id === "number")
                           .map((a) => ({ id: a.id as number, username: typeof a.username === "string" ? a.username : `#${a.id}` }))
                     : [],
+                kind: r.kind === "personal" ? ("personal" as const) : ("org" as const),
+                owner: typeof r.owner === "string" ? r.owner : null,
+                mine: r.mine === true,
+                active: r.active !== false,
             };
         }),
         groups: groups
             .map((g) => (g ?? {}) as Record<string, unknown>)
             .filter((g) => typeof g.id === "number")
-            .map((g) => ({ id: g.id as number, name: typeof g.name === "string" ? g.name : "", members: num(g.members), shared: g.shared === true })),
+            .map((g) => ({
+                id: g.id as number,
+                name: typeof g.name === "string" ? g.name : "",
+                members: num(g.members),
+                shared: g.shared === true,
+                kind: g.kind === "personal" ? ("personal" as const) : ("org" as const),
+            })),
     };
 }
 
@@ -86,14 +113,33 @@ export function pickableGroups(list: GroupShareList): GroupChoice[] {
     return list.groups.filter((g) => !g.shared);
 }
 
+/** 新增表單的選項分兩組：自己的個人群組、可以分享的組織群組（各自照名稱）。/ The add form's choices by kind, each by name. */
+export function choicesByKind(list: GroupShareList): { personal: GroupChoice[]; org: GroupChoice[] } {
+    const byName = (a: GroupChoice, b: GroupChoice) => a.name.localeCompare(b.name);
+    const open = pickableGroups(list);
+    return { personal: open.filter((g) => g.kind === "personal").sort(byName), org: open.filter((g) => g.kind === "org").sort(byName) };
+}
+
+/** 分享列上的種類標籤：自己的個人群組 / 別人的個人群組 / 組織群組。/ The kind label on a share row. */
+export function shareKindLabel(share: Pick<GroupShare, "kind" | "mine" | "owner">): { kind: "mine" | "personal" | "org"; owner: string | null } {
+    if (share.kind === "org") return { kind: "org", owner: null };
+    return share.mine ? { kind: "mine", owner: null } : { kind: "personal", owner: share.owner };
+}
+
 /** 成員裡沒算進「經由群組」或「自己的分享」的人：通道主人自己在群組裡。/ Members counted in neither: the owner in the group. */
-export function otherMembers(share: GroupShare): number {
-    return Math.max(0, share.members - share.through - share.direct);
+/** 群組人數那一行的各段（只列有人的）。/ The parts of the member-count line (only non-empty ones). */
+export function memberParts(share: GroupShare): ("direct" | "elsewhere" | "owner")[] {
+    const out: ("direct" | "elsewhere" | "owner")[] = [];
+    if (share.direct > 0) out.push("direct");
+    if (share.elsewhere > 0) out.push("elsewhere");
+    if (share.owner_in) out.push("owner");
+    return out;
 }
 
 /** 說明圖各點的狀態：群組有人、分享在、有人經由它拿到。/ The diagram's states: the group has people, the share exists, someone holds it. */
 export function groupShareSpots(share: GroupShare | null): { group: SpotState; share: SpotState; members: SpotState } {
     if (!share) return { group: "waiting", share: "waiting", members: "waiting" };
+    if (!share.active) return { group: share.members > 0 ? "ok" : "waiting", share: "failed", members: "waiting" };
     return {
         group: share.members > 0 ? "ok" : "waiting",
         share: "ok",

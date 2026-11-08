@@ -1,20 +1,23 @@
 "use client";
 
 /**
- * 分享彈窗的「群組」分頁：通道分享給哪些使用者群組（每個群組的權限、帳號、期限、成員）與新增；資訊鈕打開群組分享的說明圖。
- * The share dialog's Groups tab: the user groups a tunnel is shared with (permission, accounts, end, members) and the
- * add form; the info button opens the group sharing diagram.
+ * 分享彈窗的「群組」分頁：通道分享給哪些群組（組織群組或個人群組；每個的權限、帳號、期限、成員、暫停狀態）與新增；
+ * 自己的個人群組也在這裡新增、編輯、刪除（改成員 / 刪除前先預覽影響）。資訊鈕打開群組分享的說明圖。
+ * The share dialog's Groups tab: the groups a tunnel is shared with (organization or personal; permission, accounts,
+ * end, members, paused state) and the add form. Your own personal groups are made, edited and deleted here too
+ * (members / delete preview the impact first). The info button opens the group sharing diagram.
  */
 import React, { useState } from "react";
-import Link from "next/link";
-import { Building2, CircleHelp, Pencil, Share2, UserCog, Users, UsersRound, X } from "lucide-react";
+import { Building2, CircleHelp, CirclePause, Pencil, Plus, Share2, Trash2, User, UserCog, Users, UsersRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Section } from "@/components/ui/section";
+import { Segmented } from "@/components/ui/segmented";
+import { Chip, Section } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/pagination";
 import { usePagination } from "@/hooks/usePagination";
@@ -23,9 +26,14 @@ import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { ShareExpiryChoice, ShareExpiryControl } from "@/components/tunnels/ShareExpiry";
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
 import { useGroupShares } from "@/hooks/useGroupShares";
+import { usePersonalGroups } from "@/hooks/usePersonalGroups";
+import { useImpactConfirm } from "@/components/groups/ImpactConfirm";
+import { PersonalGroupDialog, type PersonalGroupForm } from "@/components/groups/PersonalGroupDialog";
+import { hasFeature } from "@/lib/features";
+import { filterNamedGroups, memberDiff, type PersonalGroup } from "@/lib/peopleGroups";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { groupShareSpots, otherMembers, pickableGroups, type GroupShare, type SharePermission } from "@/lib/groupShares";
+import { choicesByKind, groupShareSpots, memberParts, shareKindLabel, type GroupShare, type SharePermission } from "@/lib/groupShares";
 import { shareExpiryValue, type ShareExpiryPreset } from "@/lib/shareExpiry";
 import type { ReverseServerUsername } from "@/types/tunnel";
 import type { TranslationKey } from "@/locales/en";
@@ -45,8 +53,16 @@ interface Props {
 
 export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, locked, onChanged }: Props) {
     const { t } = useI18n();
-    const isAdmin = !!useAuth().user?.is_superuser;
-    const { list, busy, share, update, remove } = useGroupShares(tunnelId, isOpen, onChanged);
+    const user = useAuth().user;
+    const { list, busy, share, update, remove, reload } = useGroupShares(tunnelId, isOpen, onChanged);
+    // 個人群組要有「分享通道」功能（後端沒有就 403）。/ Personal groups need the share feature (the backend answers 403 otherwise).
+    const personalOn = hasFeature(user, "tunnels.share");
+    const personal = usePersonalGroups(isOpen && personalOn, () => {
+        void reload();
+        onChanged();
+    });
+    const [groupDialog, setGroupDialog] = useState<PersonalGroup | "new" | null>(null);
+    const gate = useImpactConfirm();
     const [pick, setPick] = useState("");
     const [perm, setPerm] = useState<SharePermission>("view");
     const [accounts, setAccounts] = useState<number[]>([]);
@@ -60,7 +76,9 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
     if (!list) return null;
     const manage = list.can_manage && !readOnly;
     const canAdd = manage && !locked;
-    const choices = pickableGroups(list);
+    const choices = choicesByKind(list);
+    const choiceCount = choices.personal.length + choices.org.length;
+    const canPersonal = canAdd && personalOn && personal.list !== null;
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -90,11 +108,18 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                         <UsersRound size={20} />
                     </span>
                     <p className="text-sm text-muted-foreground">{t("share.group.none")}</p>
+                    {canPersonal && choiceCount === 0 && (
+                        <>
+                            <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("share.group.noGroupsPersonal")}</p>
+                            <Button type="button" size="sm" className="mt-3" onClick={() => setGroupDialog("new")}>
+                                <Plus size={14} /> {t("personalGroups.new")}
+                            </Button>
+                        </>
+                    )}
                 </div>
             ) : (
                 <ul className="divide-y divide-border/70 overflow-hidden rounded-xl ring-1 ring-inset ring-border/80" data-refresh-list>
                     {pageSlice(list.shares, pager.page, pager.size).map((g) => {
-                        const others = otherMembers(g);
                         return (
                             <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3">
                                 <div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
@@ -102,11 +127,24 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                         <Users size={16} />
                                     </span>
                                     <span className="flex min-w-0 flex-col items-start gap-0.5">
-                                        <span className="max-w-full truncate text-sm text-foreground">{g.name}</span>
+                                        <span className="flex max-w-full flex-wrap items-center gap-1.5">
+                                            <span className="min-w-0 truncate text-sm text-foreground">{g.name}</span>
+                                            <KindChip share={g} />
+                                        </span>
+                                        {!g.active && (
+                                            <span className="flex items-start gap-1 text-xs leading-snug text-warning">
+                                                <CirclePause size={13} className="mt-px shrink-0" aria-hidden />
+                                                {t("share.group.paused", { owner: g.owner ?? "?" })}
+                                            </span>
+                                        )}
                                         <span className="text-xs text-muted-foreground">
                                             {t("share.group.counts", { members: g.members, through: g.through })}
-                                            {g.direct > 0 && <> · {t("share.group.direct", { count: g.direct })}</>}
-                                            {others > 0 && <> · {t("share.group.others", { count: others })}</>}
+                                            {memberParts(g).map((part) => (
+                                                <React.Fragment key={part}>
+                                                    {" · "}
+                                                    {part === "direct" ? t("share.group.direct", { count: g.direct }) : part === "elsewhere" ? t("share.group.elsewhere", { count: g.elsewhere }) : t("share.group.ownerIn")}
+                                                </React.Fragment>
+                                            ))}
                                         </span>
                                         <ShareExpiryControl expiresAt={g.expires_at} editable={canAdd} onChange={(v) => update(g.id, { expires_at: v })} />
                                     </span>
@@ -178,15 +216,20 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
 
             {canAdd &&
                 (list.groups.length === 0 ? (
-                    <Callout tone="info" title={t("share.group.noGroups")}>
-                        {isAdmin ? (
-                            <Link href="/tunnels/admin/access" className="underline underline-offset-2">
-                                {t("share.group.makeGroups")}
-                            </Link>
-                        ) : (
-                            t("share.group.askAdmin")
-                        )}
-                    </Callout>
+                    canPersonal ? (
+                        list.shares.length > 0 && (
+                            <Callout tone="info" title={t("share.group.noGroups")}>
+                                <p>{t("share.group.noGroupsPersonal")}</p>
+                                <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setGroupDialog("new")}>
+                                    <Plus size={14} /> {t("personalGroups.new")}
+                                </Button>
+                            </Callout>
+                        )
+                    ) : (
+                        <Callout tone="info" title={t("share.group.noGroups")}>
+                            {t("share.group.askAdmin")}
+                        </Callout>
+                    )
                 ) : (
                     <form onSubmit={submit} className="space-y-3 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80">
                         <p className="flex items-center gap-2 text-sm">
@@ -194,13 +237,26 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                         </p>
                         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
                             <Field label={t("share.group.pick")}>
-                                <NativeSelect value={pick} onChange={(e) => setPick(e.target.value)} disabled={choices.length === 0}>
-                                    <option value="">{choices.length === 0 ? t("share.group.allShared") : t("share.group.pickPlaceholder")}</option>
-                                    {choices.map((g) => (
-                                        <option key={g.id} value={g.id}>
-                                            {t("share.group.choice", { name: g.name, count: g.members })}
-                                        </option>
-                                    ))}
+                                <NativeSelect value={pick} onChange={(e) => setPick(e.target.value)} disabled={choiceCount === 0}>
+                                    <option value="">{choiceCount === 0 ? t("share.group.allShared") : t("share.group.pickPlaceholder")}</option>
+                                    {choices.personal.length > 0 && (
+                                        <optgroup label={t("share.group.optPersonal")}>
+                                            {choices.personal.map((g) => (
+                                                <option key={g.id} value={g.id}>
+                                                    {t("share.group.choice", { name: g.name, count: g.members })}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    {choices.org.length > 0 && (
+                                        <optgroup label={t("share.group.optOrg")}>
+                                            {choices.org.map((g) => (
+                                                <option key={g.id} value={g.id}>
+                                                    {t("share.group.choice", { name: g.name, count: g.members })}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
                                 </NativeSelect>
                             </Field>
                             <Field label={t("share.thPermission")}>
@@ -240,6 +296,54 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                 ))}
             {!readOnly && locked && list.can_manage && <Callout tone="warning">{t("access.shareOff")}</Callout>}
 
+            {canPersonal && personal.list && (
+                <PersonalGroupsSection
+                    groups={personal.list.groups}
+                    limit={personal.list.limit}
+                    busy={personal.busy}
+                    onNew={() => setGroupDialog("new")}
+                    onEdit={(g) => setGroupDialog(g)}
+                    onDelete={(g) =>
+                        void gate.ask({
+                            preview: g.shares.length > 0 ? () => personal.preview(g.id, { delete: true }) : undefined,
+                            run: () => personal.remove(g.id),
+                            title: t("personalGroups.deleteTitle", { name: g.name }),
+                            confirmText: t("personalGroups.delete"),
+                            alwaysAsk: t("personalGroups.deleteMessage", { name: g.name, count: g.shares.length }),
+                            destructive: true,
+                        })
+                    }
+                />
+            )}
+            {groupDialog !== null && personal.list && (
+                <PersonalGroupDialog
+                    group={groupDialog === "new" ? null : groupDialog}
+                    users={personal.list.users}
+                    maxMembers={personal.list.max_members}
+                    saving={personal.busy || gate.checking}
+                    onClose={() => setGroupDialog(null)}
+                    onSave={(form: PersonalGroupForm) => {
+                        if (groupDialog === "new") {
+                            void personal.create(form).then((r) => {
+                                if (r !== null) setGroupDialog(null);
+                            });
+                            return;
+                        }
+                        const g = groupDialog;
+                        const changed = memberDiff(g.members, form.members);
+                        void gate.ask({
+                            preview: g.shares.length > 0 && changed.added + changed.removed > 0 ? () => personal.preview(g.id, { members: form.members }) : undefined,
+                            run: async () => {
+                                if ((await personal.update(g.id, form)) !== null) setGroupDialog(null);
+                            },
+                            title: t("personalGroups.confirmMembers", { name: g.name }),
+                            confirmText: t("common.save"),
+                        });
+                    }}
+                />
+            )}
+            {gate.dialog}
+
             <ShareModalEditTargetUsersModal
                 isOpen={editing !== null}
                 username={editing?.name ?? null}
@@ -269,33 +373,142 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
     );
 }
 
-const RULES: TranslationKey[] = ["share.group.flow.rule1", "share.group.flow.rule2", "share.group.flow.rule3", "share.group.flow.rule4", "share.group.flow.rule5"];
+/** 分享列上的種類：個人 · 你的 / 個人 · 某人 / 組織。/ The kind on a share row. */
+function KindChip({ share }: { share: GroupShare }) {
+    const { t } = useI18n();
+    const k = shareKindLabel(share);
+    if (k.kind === "org") return <Chip><Building2 aria-hidden />{t("share.group.kindOrg")}</Chip>;
+    return (
+        <Chip>
+            <User aria-hidden />
+            {k.kind === "mine" ? t("share.group.kindMine") : t("share.group.kindPersonal", { owner: k.owner ?? "?" })}
+        </Chip>
+    );
+}
 
-/** 群組分享怎麼運作：身分提供者的群組 ─ Telepy 使用者群組 ─ 分享 ─ 每位成員。/ How group sharing works. */
+/** 你的個人群組：每個的人數與用在哪些通道，新增 / 編輯 / 刪除。/ Your personal groups: members, tunnels using them, new / edit / delete. */
+function PersonalGroupsSection({
+    groups,
+    limit,
+    busy,
+    onNew,
+    onEdit,
+    onDelete,
+}: {
+    groups: PersonalGroup[];
+    limit: number;
+    busy: boolean;
+    onNew: () => void;
+    onEdit: (g: PersonalGroup) => void;
+    onDelete: (g: PersonalGroup) => void;
+}) {
+    const { t } = useI18n();
+    const [query, setQuery] = useState("");
+    const shown = filterNamedGroups(groups, query);
+    const pager = usePagination(shown.length, { storageKey: "telepy.personalGroupsPageSize", resetKey: query });
+    return (
+        <Section
+            icon={<User />}
+            title={t("personalGroups.yours")}
+            description={t("personalGroups.yoursHint")}
+            action={
+                <Button type="button" size="sm" variant="outline" disabled={busy || groups.length >= limit} onClick={onNew} title={groups.length >= limit ? t("personalGroups.limit", { limit }) : undefined}>
+                    <Plus size={14} /> {t("personalGroups.newShort")}
+                </Button>
+            }
+        >
+            {groups.length >= 7 && (
+                <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("personalGroups.search")} aria-label={t("personalGroups.search")} className="h-8" />
+            )}
+            {groups.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("personalGroups.none")}</p>
+            ) : shown.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("access.noMatch")}</p>
+            ) : (
+                <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
+                    {pageSlice(shown, pager.page, pager.size).map((g) => {
+                        const paused = g.shares.filter((s) => !s.active).length;
+                        return (
+                            <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5">
+                                <span className="flex min-w-0 flex-1 basis-48 flex-col">
+                                    <span className="truncate text-sm text-foreground" title={g.description || undefined}>{g.name}</span>
+                                    <span className="text-xs text-muted-foreground" title={g.shares.map((s) => s.tunnel_name).join(", ") || undefined}>
+                                        {t("access.memberCount", { count: g.members.length })} · {t("personalGroups.usedBy", { count: g.shares.length })}
+                                        {paused > 0 && <span className="text-warning"> · {t("personalGroups.pausedCount", { count: paused })}</span>}
+                                    </span>
+                                </span>
+                                <span className="flex gap-1">
+                                    <Button type="button" variant="ghost" size="icon-sm" disabled={busy} onClick={() => onEdit(g)} aria-label={t("personalGroups.edit")} title={t("personalGroups.edit")}>
+                                        <Pencil />
+                                    </Button>
+                                    <Button type="button" variant="ghost" size="icon-sm" disabled={busy} className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={() => onDelete(g)} aria-label={t("personalGroups.delete")} title={t("personalGroups.delete")}>
+                                        <Trash2 />
+                                    </Button>
+                                </span>
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+            <Pagination pager={pager} compact className="justify-center" />
+        </Section>
+    );
+}
+
+const RULES: TranslationKey[] = [
+    "share.group.flow.rule1",
+    "share.group.flow.rule2",
+    "share.group.flow.rule3",
+    "share.group.flow.rule4",
+    "share.group.flow.rule5",
+    "share.group.flow.rule6",
+];
+
+/** 群組分享怎麼運作：組織群組（身分提供者 / 管理員管）或個人群組（你管）─ 這條通道 ─ 每位成員。
+ *  How group sharing works: an organization group (identity provider / admins) or a personal group (you) ─ this
+ *  tunnel ─ each member. */
 export function GroupShareInfoDialog({ isOpen, onClose, share }: { isOpen: boolean; onClose: () => void; share: GroupShare | null }) {
     const { t } = useI18n();
-    const spots = groupShareSpots(share);
-    const perm = share ? t(PERM_KEY[share.permission_type]) : t("share.permView");
-    const accounts = share ? share.allowed_target_usernames.map((a) => a.username).join(", ") || t("share.group.noAccounts") : "ubuntu";
+    const [picked, setPicked] = useState<"org" | "personal" | null>(null);
+    const kind = picked ?? share?.kind ?? "org";
+    // 選的種類跟這筆分享不同時，用範例畫。/ When the picked kind differs from the share, draw an example.
+    const real = share && share.kind === kind ? share : null;
+    const spots = groupShareSpots(real);
+    const perm = real ? t(PERM_KEY[real.permission_type]) : t("share.permView");
+    const accounts = real ? real.allowed_target_usernames.map((a) => a.username).join(", ") || t("share.group.noAccounts") : "ubuntu";
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={t("share.group.flow.title")} description={t("share.group.flow.description")} icon={<Users />} size="5xl">
             <div className="space-y-5">
+                <Segmented<"org" | "personal">
+                    size="sm"
+                    aria-label={t("share.group.flow.kind")}
+                    value={kind}
+                    onChange={setPicked}
+                    options={[
+                        { value: "org", label: t("orgGroups.title"), icon: <Building2 size={13} /> },
+                        { value: "personal", label: t("personalGroups.title"), icon: <User size={13} /> },
+                    ]}
+                />
                 <FlowPath>
-                    <FlowNode icon={Building2} title={t("share.group.flow.provider")} sub={t("share.group.flow.providerSub")} state="waiting" stateText={t("share.group.flow.optional")} />
-                    <FlowLink compact label={t("share.group.flow.sync")} state="waiting" />
+                    {kind === "org" ? (
+                        <FlowNode icon={Building2} title={t("share.group.flow.provider")} sub={t("share.group.flow.providerSub")} state="waiting" stateText={t("share.group.flow.optional")} />
+                    ) : (
+                        <FlowNode icon={User} title={t("share.group.flow.you")} sub={real?.owner && !real.mine ? real.owner : t("share.group.flow.youSub")} state={real ? (real.active ? "ok" : "failed") : "waiting"} stateText={real && !real.active ? t("share.group.flow.notManaging") : undefined} />
+                    )}
+                    <FlowLink compact label={kind === "org" ? t("share.group.flow.sync") : t("share.group.flow.picks")} state={kind === "org" ? "waiting" : spots.group} />
                     <FlowNode
                         icon={Users}
-                        title={share ? share.name : t("share.group.flow.group")}
-                        sub={share ? t("share.group.flow.groupCount", { count: share.members }) : t("share.group.flow.groupSub")}
+                        title={real ? real.name : kind === "org" ? t("share.group.flow.group") : t("personalGroups.title")}
+                        sub={real ? t("share.group.flow.groupCount", { count: real.members }) : kind === "org" ? t("share.group.flow.groupSub") : t("share.group.flow.personalSub")}
                         state={spots.group}
                     />
                     <FlowLink compact label={t("share.group.flow.shared")} state={spots.share} />
-                    <FlowNode icon={Share2} title={t("share.group.flow.share")} sub={t("share.group.flow.shareSub", { permission: perm, accounts })} state={spots.share} />
+                    <FlowNode icon={Share2} title={t("share.group.flow.share")} sub={t("share.group.flow.shareSub", { permission: perm, accounts })} state={spots.share} stateText={real && !real.active ? t("share.group.flow.pausedState") : undefined} />
                     <FlowLink compact label={t("share.group.flow.each")} state={spots.members} />
                     <FlowNode
                         icon={UsersRound}
                         title={t("share.group.flow.members")}
-                        sub={share ? t("share.group.flow.membersCount", { through: share.through, direct: share.direct }) : t("share.group.flow.membersSub")}
+                        sub={real ? t("share.group.flow.membersCount", { through: real.through, direct: real.direct }) : t("share.group.flow.membersSub")}
                         state={spots.members}
                     />
                 </FlowPath>

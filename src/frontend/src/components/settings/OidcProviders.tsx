@@ -576,7 +576,7 @@ function ProviderDialog({
                             {userGroups.length === 0 && (
                                 <p className="text-xs text-muted-foreground">
                                     {t("sso.roles.noUserGroups")}{" "}
-                                    <Link href="/tunnels/admin/access" className="text-foreground underline underline-offset-2">
+                                    <Link href="/tunnels/admin/groups" className="text-foreground underline underline-offset-2">
                                         {t("sso.roles.manageGroups")}
                                     </Link>
                                 </p>
