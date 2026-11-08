@@ -154,7 +154,9 @@ export const RECIPES: RecipeDef[] = [
         forwarding: false,
     },
     {
-        // 整個網段：telepy vpn（內建或 sshuttle）；ssh 跑法用系統的 sshuttle。/ A whole network: telepy vpn; the ssh ways use sshuttle.
+        // 整個網段：只有 telepy vpn 做得到（ssh 只轉單一埠或給 SOCKS；整個網段要這台電腦上的虛擬網卡），裝置上不跑任何東西。
+        // A whole network: only telepy vpn does it (ssh forwards one port or gives SOCKS; a whole network needs a network
+        // device on this computer); nothing runs on the device.
         id: "vpn",
         group: "reach",
         flag: "VPN",
@@ -502,19 +504,9 @@ export function buildSegments(id: RecipeId, params: RecipeParams, target: Connec
             out.push({ tokens: [tok(`${shq(user)}@${h}`, "target")], explain: { key: "sheet.explain.lanTarget", vars: { user, host: h } } });
             return out;
         }
-        case "vpn": {
-            // sshuttle 自己開 ssh：alias 跑法讀 ~/.ssh/config；直接跑法用 -e 帶 -J。/ sshuttle opens ssh itself.
-            const net = text(params, "network", def);
-            const out: Segment[] = [{ tokens: [tok("sshuttle", "cmd")], explain: { key: "sheet.explain.sshuttle" } }];
-            if (target.mode === "alias") {
-                out.push({ tokens: [tok("-r", "flag"), tok(target.alias, "value")], explain: { key: "sheet.explain.sshuttleAlias", vars: { alias: target.alias } } });
-            } else {
-                out.push({ tokens: [tok("-r", "flag"), tok(`${target.username}@localhost:${target.reversePort}`, "value")], explain: { key: "sheet.explain.sshuttleDirect", vars: { user: target.username, port: target.reversePort } } });
-                out.push({ tokens: [tok("-e", "flag"), tok(`"ssh -J ${jumpServerSpec(target)}"`, "value")], explain: { key: "sheet.explain.sshuttleJump" } });
-            }
-            out.push({ tokens: [tok(shq(net), "value")], explain: { key: "sheet.explain.vpnNetwork", vars: { net } } });
-            return out;
-        }
+        case "vpn":
+            // 三種跑法都是同一個 telepy 指令。/ The same telepy command in every way.
+            return telepySegments(id, params, target);
         case "copy": {
             const upload = (params.direction ?? def.defaults.direction) !== "download";
             const rsync = (params.tool ?? def.defaults.tool) === "rsync";
@@ -588,10 +580,6 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.telepyHop": "sheet.part.telepyHop",
     "sheet.explain.telepyVpn": "sheet.part.telepyVpn",
     "sheet.explain.vpnNetwork": "sheet.part.vpnNetwork",
-    "sheet.explain.sshuttle": "sheet.part.sshuttle",
-    "sheet.explain.sshuttleAlias": "sheet.part.alias",
-    "sheet.explain.sshuttleDirect": "sheet.part.directTarget",
-    "sheet.explain.sshuttleJump": "sheet.part.jumpServer",
 };
 
 export function segmentsToString(segments: Segment[]): string {

@@ -395,24 +395,23 @@ telepy ssh box -N -R 9000:localhost:3000      # 逆方向：デバイスの loca
 ```sh
 telepy vpn box 192.168.1.0/24                          # そのネットワークのすべてのマシンに、それぞれのアドレスで
 telepy vpn box                                         # Telepy が知っているデバイスのネットワーク（自分と重なるものは除外）
-telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan の名前はデバイス側で引く
-telepy vpn box --engine sshuttle --dns                 # sshuttle 経由。すべての名前解決をデバイス経由に
+telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # corp.lan の名前も。名前はデバイスが引く
 ```
 
-`telepy vpn` は、Ctrl+C を押すまで、デバイスの向こうのネットワークにこのコンピューターから届くようにします。`ssh`、ブラウザー、データベースクライアントなど TCP を使うものなら何でも、そのネットワークにいるのと同じように `192.168.1.20` に接続できます。このコンピューターのルーティングを変えるため、sudo でパスワードを聞かれます。
+`telepy vpn` は、Ctrl+C を押すまで、デバイスの向こうのネットワークにこのコンピューターから届くようにします。`ssh`、ブラウザー、データベースクライアントなど TCP を使うものなら何でも、そのネットワークにいるのと同じように `192.168.1.20` に接続できます。このコンピューターにネットワークデバイスとルートを追加するため、sudo でパスワードを聞かれます（macOS と Linux）。
 
-エンジンは 2 つあり、既定の `--engine auto` が選びます。
+**デバイスには手を出しません。** デバイスには何もインストール、コピー、実行しません。シェルもスクリプトも Python もありません。各接続は、デバイスの sshd が `ssh -L` や `ssh -D` のためにもともと行っている TCP 転送と同じものです。TCP 転送を許可している sshd なら動きます（ルーターの Dropbear でも）。デバイスのログに残るのは、転送付きの SSH ログイン 1 回だけです。よく似た sshuttle はデバイスで小さな Python プログラムを動かしますが、`telepy vpn` は動かしません。
 
-| | 内蔵 | sshuttle |
-| --- | --- | --- |
-| このコンピューター | macOS か Linux。追加のインストールは不要 | `sshuttle` がインストール済み（Linux、macOS） |
-| デバイス側 | 何も不要。TCP 転送を許可している sshd なら、ルーターの Dropbear でも可 | `python3` |
-| 仕組み | コンピューターにネットワークデバイスを作り、各接続を `ssh -D` 経由にしてデバイスの sshd が開く | sshuttle のファイアウォールルールと、デバイス上の小さな Python ヘルパー |
-| 名前 | `--dns-domain <ドメイン>`：そのドメインの名前をデバイス自身の DNS サーバーに問い合わせます（macOS は `/etc/resolver`、Linux は systemd-resolved） | `--dns`：すべての名前解決がデバイス経由 |
+| | 何が起きるか |
+| --- | --- |
+| このコンピューター | ネットワークデバイス（`utun` / `tun`）と、ネットワークごとのルート。`--dns-domain` を使うときは `/etc/resolver/<ドメイン>`（macOS）またはそのデバイスの systemd-resolved 設定（Linux）も。Ctrl+C ですべて削除します。 |
+| その間 | Telepy を通る SSH 接続 1 本（127.0.0.1 の `ssh -D`）。切れたら `telepy vpn` が 1、2、4…最大 30 秒おきにつなぎ直し、その間もネットワークデバイスは残ります。 |
+| デバイス | その sshd が、ログインしたアカウントで各接続を開きます |
+| 名前（`--dns-domain`） | このコンピューターが、ドメインの名前に 198.18.128.0/17 の代わりのアドレスで答えます。そのアドレスへの接続は名前のままデバイスに渡り、デバイスの sshd がデバイス自身の方法（`/etc/hosts`、その DNS サーバー…）で名前を引きます |
 
-`auto` は、このコンピューターに sshuttle があり、デバイスに python3 があれば sshuttle を、なければ内蔵エンジンを使います。ネットワークを指定しないと、Telepy がデバイスから知ったネットワークを使い、このコンピューター自身も属しているものは除外します（自分の LAN をよそへ向けると切れてしまうため）。どうしても向けたい場合は指定してください。Telepy サーバー自身を含むネットワークは拒否します。VPN が自分の接続を自分に向けてしまうからです。
+ネットワークを指定しないと、Telepy がデバイスから知ったネットワークを使い、このコンピューター自身も属しているものは除きます（自分の LAN をよそへ向けると切れてしまうため）。それでも向けたいときは指定してください。Telepy サーバー自身を含むネットワークは拒否します。VPN が自分の接続を自分の中に向けてしまうからです。
 
-転送されるのは TCP と、指定した名前の DNS だけです。SSH が運ぶのは TCP だからです。ping、UDP のサービス、その他のプロトコルはローカルのままです。アクセスのルールは `telepy ssh` と同じで、`tunnels:read`、個人の SSH 鍵、そのデバイスで使えるアカウントが必要です。内蔵エンジンでは、さらにデバイスの sshd が TCP 転送を許可している必要があります。実行中、Telepy はこのトンネル上であなたを SSH セッションとして表示します。sshuttle は CLI なしでも使えます。`~/.ssh/config` に Telepy のブロックがあれば `sshuttle -r <Host エイリアス> 192.168.1.0/24` で動きます。Web のコマンドシートもこの行を組み立てます。
+転送されるのは TCP だけです。SSH が運ぶのは TCP だからです。ping、UDP のサービス、その他のプロトコル、`--dns-domain` 以外の名前はローカルのままです。デバイスが Mac のときは `--dns-domain` を使えません。Apple の sshd は名前への接続を頼まれると SSH 接続全体を切ってしまうので、そこではアドレスを使うか（`telepy lan ls box` で一覧できます）、名前をこのコンピューターの `/etc/hosts` に書いてください。アクセスのルールは `telepy ssh` と同じで、`tunnels:read`、個人の SSH 鍵、そのデバイスで使えるアカウントが必要です。デバイスの sshd は TCP 転送を許可している必要があります。動いている間、Telepy はあなたをこのトンネルの SSH セッションとして表示します。
 
 ### デバイスのネットワーク上のブラウザー
 
@@ -454,7 +453,7 @@ telepy browse close "$ID"
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy rsync [rsync のオプション…] <from>… <to>` | 同じ ssh で rsync 同期。`--identity`、`--ssh-opt`、`--via`、`--fallback` は rsync のオプションより前に | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy forward <target> <host>[:port]` | デバイスの向こうのポートをこのコンピューターに転送（`ssh -L`）。`--open`、`--local`、`--https` | `tunnels:read` + 自分の SSH 鍵 |
-| `telepy vpn <target> [<network>…]` | Ctrl+C までデバイスの向こうのネットワーク全体に届くようにします（TCP と、`--dns-domain` / `--dns` の DNS）。`--engine auto\|builtin\|sshuttle`。sudo でパスワードを聞かれます | `tunnels:read` + あなたの SSH 鍵 |
+| `telepy vpn <target> [<network>…]` | Ctrl+C までデバイスの向こうのネットワーク全体に届くようにします（TCP と、`--dns-domain` の名前）。デバイスでは何も実行しません。切れたら自動でつなぎ直します。sudo でパスワードを聞かれます | `tunnels:read` + あなたの SSH 鍵 |
 | `telepy config install` | Telepy のブロックを `~/.ssh/config` に入れる。トンネル名か `--all`、`--print`、`--file` | `tunnels:read` |
 | `telepy config fallback` | Web ポートに届かないときの動作を表示・設定：`ask`、`always`、`never` | — |
 | `telepy config tidy` | ssh の設定を簡略化。`--check`、`--wildcards`、`--yes`、`--file`。サインイン不要 | — |

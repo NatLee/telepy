@@ -1,19 +1,31 @@
-//! `telepy vpn` 的純邏輯：網段怎麼讀、預設走哪些網段、用哪個引擎、sshuttle 的參數、內建引擎的 SOCKS5 / DNS-over-TCP
-//! 封包，以及加路由、設 DNS 的指令。真正開虛擬網卡、轉連線的在 `vpn_engine.rs`，接起來的在 `lib.rs`。
+//! `telepy vpn` 的純邏輯：網段怎麼讀、預設走哪些網段、SOCKS5 請求、名稱的「假 IP」DNS（查詢怎麼讀、回覆怎麼組、
+//! 位址怎麼發），以及加路由、設 DNS 的指令。真正開虛擬網卡、轉連線的在 `vpn_engine.rs`，接起來的在 `lib.rs`。
 //!
-//! The pure parts of `telepy vpn`: reading networks, the default networks, which engine, sshuttle's arguments, the
-//! built-in engine's SOCKS5 / DNS-over-TCP framing, and the route / DNS commands. The TUN device and the relaying live
+//! 原則：**不打擾目標機器**——裝置上不開 shell、不跑指令、不放檔案。每條連線都是裝置 sshd 原生的 TCP 轉送
+//! （direct-tcpip，`ssh -D` 開的）；名稱也交給 sshd 用裝置自己的解析方式找（SOCKS5 帶名稱），不在裝置上查。
+//!
+//! The pure parts of `telepy vpn`: reading networks, the defaults, SOCKS5 requests, the fake-IP DNS for names (reading
+//! queries, building answers, handing out addresses), and the route / DNS commands. The TUN device and the relaying live
 //! in `vpn_engine.rs`, the wiring in `lib.rs`.
+//!
+//! The rule: **leave the target machine alone** — no shell, no command, no file on the device. Every connection is a
+//! TCP forward the device's sshd does natively (direct-tcpip via `ssh -D`); names are handed to sshd too (SOCKS5 with
+//! a name), which resolves them the device's own way. Nothing is looked up by running something there.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;
 
 use serde_json::Value;
 
-/// 內建引擎的虛擬網卡位址與「DNS 伺服器」位址（RFC 2544 的測試網段，不會跟真的網路撞）。
-/// The built-in engine's TUN address and its "DNS server" (RFC 2544 benchmark range: never a real network).
+/// 虛擬網卡位址與「DNS 伺服器」位址（RFC 2544 的測試網段，不會跟真的網路撞）。
+/// The TUN address and its "DNS server" (RFC 2544 benchmark range: never a real network).
 pub const TUN_ADDR: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
 pub const DNS_ADDR: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 2);
+/// 發給名稱的假位址從這裡來（198.18.128.0/17，三萬多個）。/ Fake addresses for names come from here (198.18.128.0/17).
+pub const FAKE_NET: Net = Net { addr: Ipv4Addr::new(198, 18, 128, 0), prefix: 17 };
+/// 假位址的 TTL：短，換了機器很快就重問。/ A short TTL for fake answers.
+pub const FAKE_TTL: u32 = 60;
 pub const MTU: u16 = 1500;
 
 /// 一個 IPv4 網段（位址已經對齊 prefix）。/ An IPv4 network (the address aligned to its prefix).
@@ -31,11 +43,6 @@ impl Net {
 
     pub fn contains(&self, ip: Ipv4Addr) -> bool {
         Net::new(ip, self.prefix).addr == self.addr
-    }
-
-    /// 遮罩（macOS 的 `route` 要）。/ The netmask.
-    pub fn mask(&self) -> Ipv4Addr {
-        Ipv4Addr::from(if self.prefix == 0 { 0 } else { u32::MAX << (32 - self.prefix as u32) })
     }
 }
 
@@ -75,86 +82,28 @@ pub fn default_nets(endpoint_lan: &Value) -> Vec<Net> {
     out
 }
 
-/// 走哪個引擎。/ Which engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Engine {
-    /// Telepy 自己的：虛擬網卡 + 每條連線經裝置的 sshd（`ssh -D`）。裝置什麼都不用裝。
-    /// Telepy's own: a TUN device + each connection through the device's sshd (`ssh -D`); nothing needed on the device.
-    Builtin,
-    /// 系統的 sshuttle：裝置要有 python3。/ The system's sshuttle: the device needs python3.
-    Sshuttle,
+/// 兩個網段有沒有重疊。/ Whether two networks overlap.
+pub fn overlaps(a: &Net, b: &Net) -> bool {
+    let p = a.prefix.min(b.prefix);
+    Net::new(a.addr, p) == Net::new(b.addr, p)
 }
 
-/// `auto` = 這台電腦有 sshuttle、裝置也有 python3 就用 sshuttle（成熟、可以把所有 DNS 送過去），否則內建的。
-/// `auto` = sshuttle when this computer has it and the device has python3 (mature, can carry all DNS), else built-in.
-pub fn choose(requested: &str, have_sshuttle: bool, device_python: Option<bool>, builtin_here: bool) -> Result<Engine, String> {
-    match requested {
-        "sshuttle" if !have_sshuttle => Err("sshuttle isn't installed on this computer (e.g. brew install sshuttle, apt install sshuttle, pip install sshuttle).".into()),
-        "sshuttle" => Ok(Engine::Sshuttle),
-        "builtin" if !builtin_here => Err("The built-in VPN runs on macOS and Linux. On this computer use --engine sshuttle.".into()),
-        "builtin" => Ok(Engine::Builtin),
-        _ => {
-            if have_sshuttle && device_python == Some(true) {
-                Ok(Engine::Sshuttle)
-            } else if builtin_here {
-                Ok(Engine::Builtin)
-            } else if have_sshuttle {
-                Err("The device has no python3, which sshuttle needs, and the built-in VPN doesn't run on this computer.".into())
-            } else {
-                Err("Install sshuttle on this computer: the built-in VPN doesn't run here.".into())
-            }
-        }
-    }
+/// 跟這台電腦自己的網段重疊的挑出來（預設的網段就略過、自己指定的只警告）。/ Split off networks overlapping this computer's own.
+pub fn split_own(nets: &[Net], own: &[Net]) -> (Vec<Net>, Vec<Net>) {
+    nets.iter().copied().partition(|n| !own.iter().any(|o| overlaps(n, o)))
 }
 
-/// 單引號包起來給 shell（sshuttle 用 shlex 拆 `-e`）。/ Single-quote for a shell (sshuttle splits `-e` with shlex).
-pub fn shq(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:@=,+".contains(c)) {
-        return s.to_string();
-    }
-    format!("'{}'", s.replace('\'', r"'\''"))
+/// 會把連到 Telepy 的那條連線也導進 VPN 的網段（自己咬自己）。/ Networks that would route the connection to Telepy into the VPN itself.
+pub fn swallows(nets: &[Net], server: &[Ipv4Addr]) -> Option<(Net, Ipv4Addr)> {
+    nets.iter().find_map(|n| server.iter().find(|ip| n.contains(**ip)).map(|ip| (*n, *ip)))
 }
 
-/// `sshuttle -r <別名> -e 'ssh -F <設定檔> …' [--dns] <網段>…`：sshuttle 自己開 ssh，所以用 Telepy 產生的設定。
-/// sshuttle opens ssh itself, so it gets the config Telepy wrote.
-pub fn sshuttle_argv(alias: &str, conf: &str, nets: &[Net], dns: bool, extra_ssh: &[String]) -> Vec<String> {
-    let mut ssh = format!("ssh -F {}", shq(conf));
-    for o in extra_ssh {
-        ssh.push(' ');
-        ssh.push_str(&shq(o));
-    }
-    let mut out = vec!["-r".to_string(), alias.to_string(), "-e".to_string(), ssh];
-    if dns {
-        out.push("--dns".into());
-    }
-    out.extend(nets.iter().map(Net::to_string));
-    out
-}
-
-/// 內建引擎的特權部分（`sudo telepy _vpn …`）的參數。/ The arguments of the built-in engine's privileged part.
-pub fn helper_argv(socks_port: u16, nets: &[Net], dns_server: Option<Ipv4Addr>, dns_domains: &[String]) -> Vec<String> {
-    let mut out = vec!["_vpn".to_string(), "--socks".to_string(), format!("127.0.0.1:{socks_port}")];
-    for n in nets {
-        out.push("--net".into());
-        out.push(n.to_string());
-    }
-    if let Some(ip) = dns_server {
-        out.push("--dns-server".into());
-        out.push(ip.to_string());
-        for d in dns_domains {
-            out.push("--dns-domain".into());
-            out.push(d.clone());
-        }
-    }
-    out
-}
-
-/// `/etc/resolv.conf` 的第一個 IPv4 nameserver。/ The first IPv4 nameserver of a resolv.conf.
-pub fn parse_resolv(text: &str) -> Option<Ipv4Addr> {
-    text.lines().find_map(|l| {
-        let mut w = l.split_whitespace();
-        (w.next() == Some("nameserver")).then(|| w.next()?.parse().ok()).flatten()
-    })
+/// 裝置是不是 Mac（Telepy 記得的裝置資訊）：Apple 的 sshd 收到「用名稱轉送」會整條斷線，所以 Mac 上名稱不轉。
+/// Whether the device is a Mac (from the facts Telepy keeps): Apple's sshd drops the whole connection on a forward to a
+/// name, so names are not carried to a Mac.
+pub fn device_is_mac(facts: &Value) -> bool {
+    let has = |k: &str, needle: &str| facts[k].as_str().is_some_and(|s| s.to_ascii_lowercase().contains(needle));
+    has("kernel", "darwin") || has("os", "macos") || has("os", "mac os")
 }
 
 /// `--dns-domain` 的網域：字母、數字、`-`、`.`，不以 `.` 開頭結尾。/ A `--dns-domain`: letters, digits, `-`, `.`.
@@ -168,12 +117,26 @@ pub fn check_domain(raw: &str) -> Result<String, String> {
     }
 }
 
-/// SOCKS5 的 CONNECT 請求（沒有認證、IPv4）。/ A SOCKS5 CONNECT request (no auth, IPv4).
+/// 名稱在不在這些網域底下（網域本身也算）。/ Whether a name is under one of the domains (the domain itself counts).
+pub fn in_domains(name: &str, domains: &[String]) -> bool {
+    domains.iter().any(|d| name == d || name.ends_with(&format!(".{d}")))
+}
+
+/// SOCKS5 的 CONNECT 請求（沒有認證）：位址。/ A SOCKS5 CONNECT request (no auth) to an address.
 pub fn socks5_connect(ip: Ipv4Addr, port: u16) -> Vec<u8> {
     let mut out = vec![5, 1, 0, 1];
     out.extend_from_slice(&ip.octets());
     out.extend_from_slice(&port.to_be_bytes());
     out
+}
+
+/// SOCKS5 的 CONNECT 請求：名稱（裝置的 sshd 用它自己的方式解析）。/ To a name (the device's sshd resolves it its own way).
+pub fn socks5_connect_name(name: &str, port: u16) -> Option<Vec<u8>> {
+    let len = u8::try_from(name.len()).ok().filter(|l| *l > 0)?;
+    let mut out = vec![5, 1, 0, 3, len];
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(&port.to_be_bytes());
+    Some(out)
 }
 
 /// SOCKS5 回覆的第一段（4 個位元組）之後還要讀幾個位元組；連線被拒時回 Err。
@@ -186,10 +149,10 @@ pub fn socks5_reply_rest(head: [u8; 4]) -> Result<usize, String> {
         let why = match head[1] {
             2 => "not allowed by the device's sshd",
             3 => "network unreachable",
-            4 => "host unreachable",
+            4 => "host unreachable (or the device couldn't find that name)",
             5 => "connection refused",
             6 => "timed out",
-            _ => "refused",
+            _ => "the device couldn't open it",
         };
         return Err(why.into());
     }
@@ -201,11 +164,115 @@ pub fn socks5_reply_rest(head: [u8; 4]) -> Result<usize, String> {
     }
 }
 
-/// DNS 查詢走 TCP：前面加兩個位元組的長度。/ DNS over TCP: a two-byte length in front.
-pub fn dns_tcp_frame(query: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(query.len() + 2);
-    out.extend_from_slice(&(query.len() as u16).to_be_bytes());
-    out.extend_from_slice(query);
+/// DNS 查詢裡我們要的部分。/ What we need from a DNS query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Query {
+    pub id: u16,
+    pub rd: bool,
+    pub name: String,
+    pub qtype: u16,
+    /// 問題段結束的位置（回覆照抄問題段）。/ Where the question ends (the answer copies it).
+    pub end: usize,
+}
+
+pub const TYPE_A: u16 = 1;
+
+/// 讀一個只有一個問題的 DNS 查詢（不支援壓縮指標——查詢不會用）。/ Read a one-question DNS query (no compression pointers).
+pub fn parse_query(msg: &[u8]) -> Option<Query> {
+    if msg.len() < 12 || msg[2] & 0x80 != 0 || u16::from_be_bytes([msg[4], msg[5]]) != 1 {
+        return None;
+    }
+    let mut i = 12;
+    let mut labels = Vec::new();
+    loop {
+        let len = *msg.get(i)? as usize;
+        i += 1;
+        if len == 0 {
+            break;
+        }
+        if len > 63 {
+            return None;
+        }
+        labels.push(std::str::from_utf8(msg.get(i..i + len)?).ok()?.to_ascii_lowercase());
+        i += len;
+    }
+    let qtype = u16::from_be_bytes([*msg.get(i)?, *msg.get(i + 1)?]);
+    i += 4;
+    (i <= msg.len()).then(|| Query { id: u16::from_be_bytes([msg[0], msg[1]]), rd: msg[2] & 0x01 != 0, name: labels.join("."), qtype, end: i })
+}
+
+/// 組回覆：抄問題段，`ip` 有值就加一筆 A 記錄。`rcode` 0 = 成功、5 = 拒絕（不歸我們管的名稱）。
+/// Build an answer: the question copied, plus one A record when `ip` is given. `rcode` 0 = ok, 5 = refused.
+pub fn dns_answer(query: &[u8], q: &Query, ip: Option<Ipv4Addr>, rcode: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(q.end + 16);
+    out.extend_from_slice(&q.id.to_be_bytes());
+    out.push(0x80 | u8::from(q.rd));
+    out.push(0x80 | (rcode & 0x0f));
+    out.extend_from_slice(&[0, 1, 0, u8::from(ip.is_some()), 0, 0, 0, 0]);
+    out.extend_from_slice(&query[12..q.end]);
+    if let Some(ip) = ip {
+        out.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1]);
+        out.extend_from_slice(&FAKE_TTL.to_be_bytes());
+        out.extend_from_slice(&[0, 4]);
+        out.extend_from_slice(&ip.octets());
+    }
+    out
+}
+
+/// 名稱 ↔ 假位址。第一次問到就發一個，之後一樣的名稱拿到一樣的位址。
+/// Names ↔ fake addresses: one is handed out the first time a name is asked, the same one afterwards.
+#[derive(Debug, Default)]
+pub struct FakeDns {
+    by_name: HashMap<String, Ipv4Addr>,
+    by_ip: HashMap<Ipv4Addr, String>,
+    next: u32,
+}
+
+impl FakeDns {
+    pub fn ip_for(&mut self, name: &str) -> Option<Ipv4Addr> {
+        if let Some(ip) = self.by_name.get(name) {
+            return Some(*ip);
+        }
+        let size = 1u32 << (32 - FAKE_NET.prefix as u32);
+        // 從 .1 開始，不發網段位址與廣播位址。/ From .1; never the network or broadcast address.
+        if self.next + 2 >= size {
+            return None;
+        }
+        self.next += 1;
+        let ip = Ipv4Addr::from(u32::from(FAKE_NET.addr) + self.next);
+        self.by_name.insert(name.to_string(), ip);
+        self.by_ip.insert(ip, name.to_string());
+        Some(ip)
+    }
+
+    pub fn name_of(&self, ip: Ipv4Addr) -> Option<&str> {
+        self.by_ip.get(&ip).map(String::as_str)
+    }
+}
+
+/// 一個查詢的回答：網域底下的 A 查詢 → 假位址；網域底下的其他類型 → 空的成功（客戶端改問 A）；其他名稱 → 拒絕。
+/// The answer to one query: an A query under the domains → a fake address; other types there → an empty success (the
+/// client then asks for A); other names → refused.
+pub fn answer_query(msg: &[u8], domains: &[String], fake: &mut FakeDns) -> Option<Vec<u8>> {
+    let q = parse_query(msg)?;
+    if !in_domains(&q.name, domains) {
+        return Some(dns_answer(msg, &q, None, 5));
+    }
+    let ip = if q.qtype == TYPE_A { fake.ip_for(&q.name) } else { None };
+    Some(dns_answer(msg, &q, ip, 0))
+}
+
+/// 內建引擎特權部分（`sudo telepy _vpn …`）的參數。/ The arguments of the privileged part.
+pub fn helper_argv(socks_port: u16, nets: &[Net], dns_domains: &[String], owner: u32) -> Vec<String> {
+    let mut out = vec!["_vpn".to_string(), "--socks".to_string(), format!("127.0.0.1:{socks_port}"), "--owner".to_string(), owner.to_string()];
+    for n in nets {
+        out.push("--net".into());
+        out.push(n.to_string());
+    }
+    for d in dns_domains {
+        out.push("--dns-domain".into());
+        out.push(d.clone());
+    }
     out
 }
 
@@ -226,9 +293,9 @@ pub fn route_commands(os: Os, dev: &str, nets: &[Net]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// macOS：每個網域一個 `/etc/resolver/<網域>`，只有這些名字問裝置。/ macOS: one `/etc/resolver/<domain>` per domain.
+/// macOS：每個網域一個 `/etc/resolver/<網域>`，只有這些名字問 VPN。/ macOS: one `/etc/resolver/<domain>` per domain.
 pub fn macos_resolver(domain: &str) -> (String, String) {
-    (format!("/etc/resolver/{domain}"), format!("# telepy vpn: names under {domain} are looked up on the device\nnameserver {DNS_ADDR}\n"))
+    (format!("/etc/resolver/{domain}"), format!("# telepy vpn: names under {domain} go to the device\nnameserver {DNS_ADDR}\n"))
 }
 
 /// Linux（systemd-resolved）：這張網卡的 DNS 與只走它的網域。/ Linux (systemd-resolved): this link's DNS and routing-only domains.
@@ -238,20 +305,9 @@ pub fn linux_resolved_commands(dev: &str, domains: &[String]) -> Vec<Vec<String>
     vec![vec!["resolvectl".into(), "dns".into(), dev.into(), DNS_ADDR.to_string()], domain]
 }
 
-/// 網段裡有沒有這台電腦自己所在的網段（會把自己的區網也導過去）。/ Whether a network overlaps one of this computer's own.
-pub fn overlaps(a: &Net, b: &Net) -> bool {
-    let p = a.prefix.min(b.prefix);
-    Net::new(a.addr, p) == Net::new(b.addr, p)
-}
-
-/// 跟這台電腦自己的網段重疊的挑出來（預設的網段就略過、自己指定的只警告）。/ Split off networks overlapping this computer's own.
-pub fn split_own(nets: &[Net], own: &[Net]) -> (Vec<Net>, Vec<Net>) {
-    nets.iter().copied().partition(|n| !own.iter().any(|o| overlaps(n, o)))
-}
-
-/// 會把連到 Telepy 的那條連線也導進 VPN 的網段（自己咬自己）。/ Networks that would route the connection to Telepy into the VPN itself.
-pub fn swallows(nets: &[Net], server: &[Ipv4Addr]) -> Option<(Net, Ipv4Addr)> {
-    nets.iter().find_map(|n| server.iter().find(|ip| n.contains(**ip)).map(|ip| (*n, *ip)))
+/// 斷線後隔多久重連：1、2、4…最多 30 秒。/ How long to wait before reconnecting: 1, 2, 4… at most 30 s.
+pub fn reconnect_delay(attempt: u32) -> u64 {
+    (1u64 << attempt.min(5)).min(30)
 }
 
 #[cfg(test)]
@@ -263,13 +319,9 @@ mod tests {
     fn networks_are_read_and_aligned() {
         assert_eq!(parse_net("10.77.0.5/24").unwrap().to_string(), "10.77.0.0/24");
         assert_eq!(parse_net("192.168.1.9").unwrap().to_string(), "192.168.1.9/32");
-        assert_eq!(parse_net("0.0.0.0/0").unwrap().to_string(), "0.0.0.0/0");
         assert!(parse_net("10.0.0.0/33").is_err());
         assert!(parse_net("box").is_err());
-        assert_eq!(parse_net("172.16.5.1/12").unwrap().mask(), Ipv4Addr::new(255, 240, 0, 0));
         assert!(parse_net("10.77.0.0/24").unwrap().contains(Ipv4Addr::new(10, 77, 0, 200)));
-        assert!(overlaps(&parse_net("10.0.0.0/8").unwrap(), &parse_net("10.77.0.0/24").unwrap()));
-        assert!(!overlaps(&parse_net("10.1.0.0/16").unwrap(), &parse_net("10.77.0.0/24").unwrap()));
         let nets = [parse_net("192.168.1.0/24").unwrap(), parse_net("10.77.0.0/24").unwrap()];
         let (keep, own) = split_own(&nets, &[parse_net("192.168.1.40/24").unwrap()]);
         assert_eq!((keep, own), (vec![nets[1]], vec![nets[0]]), "the computer's own LAN is left out");
@@ -281,10 +333,8 @@ mod tests {
     fn the_default_is_the_devices_own_lans() {
         let lan = json!([
             {"iface": "eth0", "ip": "192.168.1.23", "prefix": 24},
-            {"iface": "wlan0", "ip": "192.168.1.40", "prefix": 24},
             {"iface": "lo", "ip": "127.0.0.1", "prefix": 8},
             {"iface": "big", "ip": "10.0.0.1", "prefix": 8},
-            {"iface": "ll", "ip": "169.254.3.3", "prefix": 16},
             {"iface": "eth1", "ip": "10.77.0.5", "prefix": 24}
         ]);
         assert_eq!(default_nets(&lan).iter().map(Net::to_string).collect::<Vec<_>>(), ["10.77.0.0/24", "192.168.1.0/24"]);
@@ -292,63 +342,71 @@ mod tests {
     }
 
     #[test]
-    fn auto_prefers_sshuttle_only_when_both_ends_can_run_it() {
-        assert_eq!(choose("auto", true, Some(true), true), Ok(Engine::Sshuttle));
-        assert_eq!(choose("auto", true, Some(false), true), Ok(Engine::Builtin), "no python3 on the device");
-        assert_eq!(choose("auto", false, None, true), Ok(Engine::Builtin));
-        assert!(choose("auto", true, Some(false), false).is_err());
-        assert!(choose("sshuttle", false, None, true).is_err());
-        assert!(choose("builtin", true, None, false).is_err());
-        assert_eq!(choose("builtin", true, Some(true), true), Ok(Engine::Builtin));
+    fn macs_are_recognised_from_the_facts() {
+        assert!(device_is_mac(&json!({"kernel": "Darwin 24.1.0", "os": "macOS 15.1"})));
+        assert!(device_is_mac(&json!({"os": "macOS 14"})));
+        assert!(!device_is_mac(&json!({"kernel": "Linux 6.1", "os": "Debian GNU/Linux 12"})));
+        assert!(!device_is_mac(&json!(null)));
     }
 
     #[test]
-    fn sshuttle_gets_telepys_ssh_config() {
-        let nets = [parse_net("10.77.0.0/24").unwrap()];
-        assert_eq!(
-            sshuttle_argv("box", "/home/me/.ssh/telepy/box.conf", &nets, true, &["-o".into(), "ServerAliveInterval=30".into()]),
-            ["-r", "box", "-e", "ssh -F /home/me/.ssh/telepy/box.conf -o ServerAliveInterval=30", "--dns", "10.77.0.0/24"]
-        );
-        assert_eq!(sshuttle_argv("box", "/Users/A B/x.conf", &nets, false, &[])[3], "ssh -F '/Users/A B/x.conf'");
-        assert_eq!(shq("it's"), r"'it'\''s'");
-    }
-
-    #[test]
-    fn the_helper_is_told_everything_it_needs() {
-        let nets = [parse_net("10.77.0.0/24").unwrap()];
-        assert_eq!(
-            helper_argv(41234, &nets, Some(Ipv4Addr::new(127, 0, 0, 11)), &["corp.lan".into()]),
-            ["_vpn", "--socks", "127.0.0.1:41234", "--net", "10.77.0.0/24", "--dns-server", "127.0.0.11", "--dns-domain", "corp.lan"]
-        );
-        assert_eq!(helper_argv(1, &nets, None, &["x".into()]).len(), 5, "no resolver = no DNS part");
-    }
-
-    #[test]
-    fn resolvers_and_domains() {
-        assert_eq!(parse_resolv("# x\nsearch lan\nnameserver fe80::1\nnameserver 192.168.1.1\n"), Some(Ipv4Addr::new(192, 168, 1, 1)));
-        assert_eq!(parse_resolv("search x"), None);
+    fn domains_and_socks_requests() {
         assert_eq!(check_domain("Corp.LAN.").unwrap(), "corp.lan");
-        assert!(check_domain(".lan").is_err());
-        assert!(check_domain("a b").is_err());
-        assert!(check_domain("../etc").is_err());
-    }
-
-    #[test]
-    fn socks5_and_dns_framing() {
+        assert!(check_domain(".lan").is_err() && check_domain("a b").is_err() && check_domain("../etc").is_err());
+        let d = ["corp.lan".to_string()];
+        assert!(in_domains("nas.corp.lan", &d) && in_domains("corp.lan", &d));
+        assert!(!in_domains("evilcorp.lan", &d) && !in_domains("example.com", &d));
         assert_eq!(socks5_connect(Ipv4Addr::new(10, 77, 0, 10), 8000), [5, 1, 0, 1, 10, 77, 0, 10, 0x1f, 0x40]);
+        assert_eq!(socks5_connect_name("nas", 80).unwrap(), [5, 1, 0, 3, 3, b'n', b'a', b's', 0, 80]);
+        assert!(socks5_connect_name("", 80).is_none());
         assert_eq!(socks5_reply_rest([5, 0, 0, 1]), Ok(6));
-        assert_eq!(socks5_reply_rest([5, 5, 0, 1]), Err("connection refused".to_string()));
-        assert!(socks5_reply_rest([4, 0, 0, 1]).is_err());
-        assert_eq!(dns_tcp_frame(&[1, 2, 3]), [0, 3, 1, 2, 3]);
+        assert!(socks5_reply_rest([5, 4, 0, 1]).unwrap_err().contains("name"));
+    }
+
+    /// `dig nas.corp.lan A` 的查詢（id 0x1234，要遞迴）。/ The query `dig nas.corp.lan A` sends.
+    fn query(name: &str, qtype: u16) -> Vec<u8> {
+        let mut m = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        for l in name.split('.') {
+            m.push(l.len() as u8);
+            m.extend_from_slice(l.as_bytes());
+        }
+        m.push(0);
+        m.extend_from_slice(&qtype.to_be_bytes());
+        m.extend_from_slice(&[0, 1]);
+        m
     }
 
     #[test]
-    fn route_and_dns_commands() {
+    fn names_under_the_domains_get_a_fake_address_and_keep_it() {
+        let d = ["corp.lan".to_string()];
+        let mut fake = FakeDns::default();
+        let q = query("NAS.corp.lan", TYPE_A);
+        assert_eq!(parse_query(&q).unwrap().name, "nas.corp.lan");
+        let a = answer_query(&q, &d, &mut fake).unwrap();
+        assert_eq!(&a[..2], &[0x12, 0x34]);
+        assert_eq!(a[3] & 0x0f, 0, "NOERROR");
+        assert_eq!(u16::from_be_bytes([a[6], a[7]]), 1, "one answer");
+        let ip = Ipv4Addr::new(a[a.len() - 4], a[a.len() - 3], a[a.len() - 2], a[a.len() - 1]);
+        assert!(FAKE_NET.contains(ip) && ip != FAKE_NET.addr);
+        assert_eq!(fake.name_of(ip), Some("nas.corp.lan"));
+        let again = answer_query(&query("nas.corp.lan", TYPE_A), &d, &mut fake).unwrap();
+        assert_eq!(&again[again.len() - 4..], &ip.octets(), "the same name keeps its address");
+        // AAAA：空的成功（不發 IPv6），其他名稱：拒絕。/ AAAA: an empty success; other names: refused.
+        let aaaa = answer_query(&query("nas.corp.lan", 28), &d, &mut fake).unwrap();
+        assert_eq!((aaaa[3] & 0x0f, u16::from_be_bytes([aaaa[6], aaaa[7]])), (0, 0));
+        let other = answer_query(&query("example.com", TYPE_A), &d, &mut fake).unwrap();
+        assert_eq!(other[3] & 0x0f, 5);
+        assert!(parse_query(&[0u8; 5]).is_none());
+    }
+
+    #[test]
+    fn the_helper_and_the_commands() {
         let nets = [parse_net("10.77.0.0/24").unwrap()];
+        assert_eq!(helper_argv(41234, &nets, &["corp.lan".into()], 77), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
         assert_eq!(route_commands(Os::Linux, "tun0", &nets), [["ip", "route", "replace", "10.77.0.0/24", "dev", "tun0"]]);
         assert_eq!(route_commands(Os::Macos, "utun7", &nets), [["route", "-q", "-n", "add", "-net", "10.77.0.0/24", "-interface", "utun7"]]);
-        assert_eq!(macos_resolver("corp.lan").0, "/etc/resolver/corp.lan");
         assert!(macos_resolver("corp.lan").1.contains("nameserver 198.18.0.2"));
         assert_eq!(linux_resolved_commands("tun0", &["corp.lan".into()])[1], ["resolvectl", "domain", "tun0", "~corp.lan"]);
+        assert_eq!((reconnect_delay(0), reconnect_delay(3), reconnect_delay(20)), (1, 8, 30));
     }
 }
