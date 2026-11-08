@@ -397,24 +397,33 @@ telepy vpn box 192.168.1.0/24                          # every machine on that n
 telepy vpn box                                         # the device's own networks Telepy knows (yours left out)
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # names under corp.lan too, found by the device
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1   # …or asked of the network's DNS server
+telepy vpn box 192.168.1.0/24 --carrier                # ping and UDP too, through the Telepy carrier already on the device
 ```
 
 `telepy vpn` makes the networks behind a device reachable from this computer until Ctrl+C: `ssh`, a browser, a database client or anything else that speaks TCP connects to `192.168.1.20` as if you were on that network. It adds a network device and routes on this computer, so it asks for your password through sudo (macOS and Linux).
 
-**It leaves the device alone.** Nothing is installed, copied or run there: no shell, no script, no Python. Each connection is the same TCP forward the device's sshd already makes for `ssh -L` and `ssh -D`, so any sshd that allows TCP forwarding works (Dropbear on a router too), and the device's logs show one SSH login with forwards. sshuttle, the tool this resembles, runs a small Python program on the device; `telepy vpn` doesn't.
+**It leaves the device alone.** Nothing is installed, copied or run there: no shell, no script, no Python. Each connection is the same TCP forward the device's sshd already makes for `ssh -L` and `ssh -D`, so any sshd that allows TCP forwarding works (Dropbear on a router too), and the device's logs show one SSH login with forwards. sshuttle, the tool this resembles, runs a small Python program on the device; `telepy vpn` doesn't — unless you ask for `--carrier` (below), which starts Telepy's own carrier that is already there.
 
 | | What happens |
 | --- | --- |
 | On this computer | a network device (`utun` / `tun`) and a route per network; with `--dns-domain` also `/etc/resolver/<domain>` (macOS) or that device's systemd-resolved settings (Linux). Ctrl+C removes them all. |
 | In between | one SSH connection through Telepy (`ssh -D` on 127.0.0.1). If it drops, `telepy vpn` reconnects after 1, 2, 4… up to 30 seconds, and the network device stays up meanwhile. |
-| On the device | its sshd opens each connection, as the account you logged in with |
+| On the device | its sshd opens each connection, as the account you logged in with; with `--carrier` also the carrier's `vpn-agent`, only while the VPN runs |
 | Names (`--dns-domain`) | this computer answers a name under the domain with a stand-in address from 198.18.128.0/17; a connection to that address goes to the device by name, and the device's sshd looks the name up the device's own way (`/etc/hosts`, its DNS server…) |
 | Names (`--dns-server`) | names under the domain are asked of that DNS server instead, over TCP through the device: real answers (every record type), and it works for a Mac device too |
 | Connecting | the VPN connects from the device first and lets your program's connection through only once that worked, so a closed port answers "connection refused" at once instead of looking open |
 
 Without networks on the command line, `telepy vpn` takes the device's own networks Telepy learned from it, and leaves out any this computer is on too (routing your own LAN away would cut it); name one to route it anyway. A network that contains the Telepy server itself is refused: the VPN would route its own connection into itself.
 
-TCP goes through, and so does DNS: a lookup sent to any DNS server behind the device (UDP port 53) is carried to it as TCP, which every DNS server also speaks. Ping and other UDP don't go through, because SSH carries TCP only; they get "packet filtered" at once instead of a silent timeout, and `telepy vpn` says so the first time. Names outside `--dns-domain` stay local. On a Mac device `--dns-domain` needs `--dns-server`: Apple's sshd ends the whole SSH connection when asked to reach a name, so use the network's DNS server, addresses (`telepy lan ls box` lists them) or this computer's `/etc/hosts`. An idle connection stays open as long as both ends keep it (an SSH session left alone for an hour is fine). Access follows the same rules as `telepy ssh`: you need `tunnels:read`, your personal SSH key and an account you may use on the device, and the device's sshd must allow TCP forwarding (`telepy vpn` tells you when it doesn't). Telepy shows you as an SSH session on the tunnel while it runs.
+TCP goes through, and so does DNS: a lookup sent to any DNS server behind the device (UDP port 53) is carried to it as TCP, which every DNS server also speaks. Without `--carrier`, ping and other UDP don't go through, because SSH carries TCP only; they get "packet filtered" at once instead of a silent timeout, and `telepy vpn` says so the first time. Names outside `--dns-domain` stay local. On a Mac device `--dns-domain` needs `--dns-server` or `--carrier`: Apple's sshd ends the whole SSH connection when asked to reach a name, so use the network's DNS server, addresses (`telepy lan ls box` lists them) or this computer's `/etc/hosts`. An idle connection stays open as long as both ends keep it (an SSH session left alone for an hour is fine). Access follows the same rules as `telepy ssh`: you need `tunnels:read`, your personal SSH key and an account you may use on the device, and the device's sshd must allow TCP forwarding (`telepy vpn` tells you when it doesn't). Telepy shows you as an SSH session on the tunnel while it runs.
+
+**Ping and UDP with `--carrier`.** Devices added the automatic or web-port way (and those using the built-in SSH client) already have Telepy's carrier in the login account's `~/.ssh`. With `--carrier`, `telepy vpn` opens a second SSH session and starts that carrier's `vpn-agent` there for as long as the VPN runs; it works only through that session's input and output, writes no files, needs no root, and ends with the session (Ctrl+C, a dropped connection, a killed `telepy`). It adds:
+
+- **ping**, where the account may ping without root (Linux: `net.ipv4.ping_group_range`; macOS: always);
+- **every kind of UDP** (NTP, SNMP, syslog, a LAN DNS server over UDP…), from the device's address;
+- **names looked up by the device** for `--dns-domain`, also on a Mac device.
+
+Nothing is installed for it: when the device has no carrier, or one from an earlier release, `telepy vpn` says so and carries TCP and DNS as before. A device gets a current carrier when its service is set up again (the tunnel page's How it connects tab). On this computer the engine reaches that session through a local port on 127.0.0.1 that only answers a one-time token kept in a file only you can read.
 
 ### A browser on the device's network
 
@@ -456,7 +465,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
 | `telepy rsync [rsync options…] <from>… <to>` | Sync with rsync over the same ssh; `--identity`, `--ssh-opt`, `--via`, `--fallback` go before rsync's options | `tunnels:read` + your SSH key |
 | `telepy forward <target> <host>[:port]` | Bring a port behind the device to this computer (`ssh -L`); `--open`, `--local`, `--https` | `tunnels:read` + your SSH key |
-| `telepy vpn <target> [<network>…]` | Reach whole networks behind the device until Ctrl+C (TCP and DNS, names under `--dns-domain`, optionally from `--dns-server`); nothing runs on the device; reconnects by itself; asks for sudo | `tunnels:read` + your SSH key |
+| `telepy vpn <target> [<network>…]` | Reach whole networks behind the device until Ctrl+C (TCP and DNS, names under `--dns-domain`, optionally from `--dns-server`; ping and UDP with `--carrier`); nothing runs on the device unless `--carrier`; reconnects by itself; asks for sudo | `tunnels:read` + your SSH key |
 | `telepy config install` | Put Telepy's blocks into `~/.ssh/config`; tunnels or `--all`, `--print`, `--file` | `tunnels:read` |
 | `telepy config fallback` | Show or set what to do when the web port can't be reached: `ask`, `always`, `never` | — |
 | `telepy config tidy` | Simplify an ssh config; `--check`, `--wildcards`, `--yes`, `--file`; no sign-in needed | — |

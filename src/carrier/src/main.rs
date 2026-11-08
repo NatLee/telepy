@@ -1,8 +1,16 @@
-//! `telepy-carrier` 的進入點：`tunnel` / `keygen` 子指令（內建的 SSH client），其餘是 ssh 的 ProxyCommand（參數跟以前
-//! 一樣，裝好的裝置的包裝腳本照舊能用）。/ Entry point: the `tunnel` / `keygen` subcommands (the built-in SSH client);
-//! anything else is the ssh ProxyCommand, with the same arguments as before (installed wrappers keep working).
+//! `telepy-carrier` 的進入點：`vpn-agent`（`telepy vpn --carrier` 的幫手）、`tunnel` / `keygen` 子指令（內建的 SSH
+//! client），其餘是 ssh 的 ProxyCommand（參數跟以前一樣，裝好的裝置的包裝腳本照舊能用）。/ Entry point: `vpn-agent`
+//! (the helper of `telepy vpn --carrier`), the `tunnel` / `keygen` subcommands (the built-in SSH client); anything else
+//! is the ssh ProxyCommand, with the same arguments as before (installed wrappers keep working).
 fn main() {
     let mut args = std::env::args().skip(1).peekable();
+    if args.peek().map(String::as_str) == Some("vpn-agent") {
+        // `telepy vpn --carrier`：經 SSH 的 stdin / stdout 幫 VPN 送 UDP、ping、查名稱，stdin 關掉就結束。
+        // `telepy vpn --carrier`: UDP, ping and names for the VPN over the SSH session's stdin / stdout, until stdin closes.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
+        let done = rt.block_on(telepy_carrier::agent::serve(tokio::io::stdin(), tokio::io::stdout(), telepy_carrier::VERSION));
+        std::process::exit(if done.is_ok() { 0 } else { 1 });
+    }
     #[cfg(feature = "client")]
     match args.peek().map(String::as_str) {
         Some("tunnel") => {
