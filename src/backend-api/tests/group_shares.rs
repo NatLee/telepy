@@ -233,6 +233,10 @@ async fn organization_groups_are_shared_only_when_open_to_sharing() {
     let quiet = r.json["created_id"].as_i64().unwrap();
     assert_eq!(r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == quiet).unwrap()["shareable"], false, "{}", r.text);
 
+    // 只為功能規則存在的組織群組，成員自己的「我所在的群組」也不列（那是管理員的分類）。/ Hidden from its own members too.
+    let r = lab.app.get("/api/user/groups", Some(&bob.token)).await;
+    assert!(r.json["member_of"].as_array().unwrap().is_empty(), "{}", r.text);
+
     // 沒開放分享：通道主人看不到它、也分享不了。/ Not open to sharing: invisible to the tunnel's owner and refused.
     let url = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
     let r = lab.app.get(&url, Some(&alice.token)).await;
@@ -248,6 +252,11 @@ async fn organization_groups_are_shared_only_when_open_to_sharing() {
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
     assert_eq!((r.json["shares"][0]["kind"].as_str(), r.json["shares"][0]["active"].as_bool(), r.json["shares"][0]["owner"].is_null()), (Some("org"), Some(true), true), "{}", r.text);
     assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_some());
+    // 開放之後，bob 的「我所在的群組」列出它，以及他經由它拿到的通道。/ Opened: bob sees it, with the tunnel he holds through it.
+    let r = lab.app.get("/api/user/groups", Some(&bob.token)).await;
+    let m = &r.json["member_of"][0];
+    assert_eq!((m["id"].as_i64(), m["kind"].as_str(), m["owner"].is_null()), (Some(quiet), Some("org"), true), "{}", r.text);
+    assert_eq!((m["tunnels"][0]["id"].as_i64(), m["tunnels"][0]["through"].as_bool()), (Some(dev.tunnel_id), Some(true)), "{}", r.text);
 
     // 管理頁看得到分享給它的通道。/ The admin page lists the tunnels shared with it.
     let r = lab.app.get("/api/access", Some(&lab.admin_token)).await;
@@ -338,6 +347,10 @@ async fn personal_groups_share_only_while_their_owner_manages_the_tunnel() {
     assert_eq!((s["kind"].as_str(), s["owner"].as_str(), s["mine"].as_bool(), s["active"].as_bool()), (Some("personal"), Some("alice"), Some(true), Some(true)), "{}", r.text);
     assert_eq!(item(&lab, &carol.token, dev.tunnel_id).await.expect("carol sees it")["share_group"], "pals");
     assert!(lab.terminal(&carol, &dev, "ubuntu").await.is_ok());
+    // carol 的「我所在的群組」：alice 的個人群組 pals，經由它拿到 box。/ carol's groups: alice's pals, holding box through it.
+    let r = lab.app.get("/api/user/groups", Some(&carol.token)).await;
+    let m = r.json["member_of"].as_array().unwrap().iter().find(|g| g["id"] == pals).cloned().expect("pals listed");
+    assert_eq!((m["kind"].as_str(), m["owner"].as_str(), m["tunnels"][0]["name"].as_str(), m["tunnels"][0]["through"].as_bool()), (Some("personal"), Some("alice"), Some("box"), Some(true)), "{m}");
     let dboxm = lab.machine("dbox", &[("ubuntu", &[&lab.service])], false).await;
     let ddev = lab.device(&dave, "dbox", &dboxm).await;
     let r = lab.app.post(&format!("/api/reverse/server/{}/group-shares", ddev.tunnel_id), Some(&dave.token), json!({"group_id": pals})).await;

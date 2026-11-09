@@ -312,6 +312,22 @@ pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, (Stri
     Ok(rows.into_iter().map(|(t, name, id, owner)| (t, (name, id, owner))).collect())
 }
 
+/// 這個人所在、他看得到的群組：別人的個人群組，以及開放分享的組織群組（只為功能規則存在的組織群組不列，那是
+/// 管理員內部的分類）。/ The groups this person is in that they may see: other people's personal groups and organization
+/// groups open to sharing (organization groups kept only for feature rules stay hidden — that is the admins' own filing).
+pub async fn member_of(db: &Db, user_id: i64) -> sqlx::Result<Vec<super::features::Group>> {
+    sqlx::query_as(
+        "SELECT g.id, g.name, g.description, g.created_at, g.owner_id, g.display_name, g.shareable FROM telepy_user_group g \
+         JOIN telepy_user_group_member m ON m.group_id = g.id \
+         WHERE m.user_id = ? AND ((g.owner_id IS NOT NULL AND g.owner_id != ?) OR (g.owner_id IS NULL AND g.shareable)) \
+         ORDER BY g.owner_id IS NULL, COALESCE(g.display_name, g.name) COLLATE NOCASE, g.id",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(&db.read)
+    .await
+}
+
 /// 這個人能不能管至少一條通道的分享（擁有者或 ADMIN）——跟「可分享的人」名單同一道門檻。
 /// Whether this person manages sharing on at least one tunnel (owner or ADMIN) — the bar the available-users list uses.
 pub async fn manages_any(db: &Db, user_id: i64) -> sqlx::Result<bool> {

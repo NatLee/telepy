@@ -65,6 +65,8 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
                     { key: "keys.devices", href: "/tunnels/keys/devices" },
                 ],
             },
+            // 分享用的「人」的群組：自己的個人群組與自己所在的群組。/ People groups for sharing: mine and the ones I'm in.
+            { key: "nav.peopleGroups", href: "/tunnels/groups", icon: <UsersRound size={18} /> },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
             { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} />, feature: "webhooks.personal" },
         ],

@@ -55,7 +55,22 @@ test("personal groups parse defensively", () => {
     assert.equal(l.can_share, true, "an older backend without the field = may share");
     assert.equal(parsePersonalGroups({ can_share: false }).can_share, false);
     // 已經看不到的通道沒有名字：顯示編號。/ A tunnel you can no longer see has no name: shown by id.
-    assert.equal(parsePersonalGroups({ groups: [{ id: 1, shares: [{ id: 2, tunnel_id: 7, tunnel_name: null }] }] }).groups[0].shares[0].tunnel_name, "#7");
+    const hidden = parsePersonalGroups({ groups: [{ id: 1, shares: [{ id: 2, tunnel_id: 7, tunnel_name: null }] }] }).groups[0].shares[0];
+    assert.deepEqual([hidden.tunnel_name, hidden.hidden], ["#7", true]);
+    assert.equal(l.groups[0].shares[0].hidden, false);
+    // 我所在的群組：種類只認 personal / org，主人只給字串，通道的 through 只認 true。
+    // Groups I'm in: kind is personal or org, owner only a string, a tunnel's through only true.
+    const m = parsePersonalGroups({
+        member_of: [
+            { id: 3, name: "Pals", kind: "personal", owner: "alice", tunnels: [{ id: 9, name: "web-1", permission_type: "edit", through: true }, { id: 10, through: "yes" }, { name: "x" }] },
+            { id: 4, name: "Ops", kind: "weird", owner: 5 },
+            { name: "no id" },
+        ],
+    }).member_of;
+    assert.equal(m.length, 2);
+    assert.deepEqual([m[0].kind, m[0].owner, m[0].tunnels.length, m[0].tunnels[0].through, m[0].tunnels[1].through, m[0].tunnels[1].name], ["personal", "alice", 2, true, false, "#10"]);
+    assert.deepEqual([m[1].kind, m[1].owner, m[1].tunnels], ["org", null, []]);
+    assert.deepEqual(parsePersonalGroups(undefined).member_of, []);
     assert.deepEqual(parsePersonalGroups(undefined).groups, []);
 });
 
