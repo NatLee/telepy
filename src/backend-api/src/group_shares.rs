@@ -1,20 +1,22 @@
-//! 分享給群組（組織群組或個人群組）：每位成員各自拿到一筆「經由群組」的分享列（`tunnels_tunnelsharing.group_share_id`），
-//! 所以權限檢查、允許帳號、裝置金鑰、通知與失去存取時的收尾都照舊走同一條路。`plan`（純函式）比對群組分享 × 成員
-//! 與現有的列；`reconcile` 套用它。直接分享給這個人的列優先，群組不碰。
+//! 分享給群組（管理員維護的群組或個人群組；角色永遠不算）：每位成員各自拿到一筆「經由群組」的分享列
+//! （`tunnels_tunnelsharing.group_share_id`），所以權限檢查、允許帳號、裝置金鑰、通知與失去存取時的收尾都照舊走同一條路。
+//! `plan`（純函式）比對群組分享 × 成員與現有的列；`reconcile` 套用它。直接分享給這個人的列優先，群組不碰。
 //!
-//! 哪些群組分享算數：組織群組要打開「可以被分享」；個人群組的成員由它的主人決定，所以只在主人還管得到那條通道時算
-//! （他是通道擁有者，或經由自己那筆或組織群組拿到 ADMIN —— 經由別人的個人群組不算，不然兩個人可以互相保住對方）。
+//! 哪些群組分享算數：管理員維護的群組一律算；角色一律不算（保險：指向角色的分享不該存在，比對直接跳過）；個人群組的
+//! 成員由它的主人決定，所以只在主人還管得到那條通道時算（他是通道擁有者，或經由自己那筆或管理員維護的群組拿到 ADMIN
+//! —— 經由別人的個人群組不算，不然兩個人可以互相保住對方）。
 //! `diff`（純函式）算「改了之後誰多了 / 少了哪些通道」，給改成員、刪群組前的預告用。
 //!
-//! A tunnel shared with a group (organization or personal): each member gets a share row marked with the group share,
-//! so permission checks, allowed accounts, device keys, notifications and the access-loss clean-up all keep working
-//! unchanged. `plan` (pure) compares group shares × members with the rows that exist; `reconcile` applies it. A row
-//! shared with the person directly wins; groups never touch it.
+//! A tunnel shared with a group (admin-kept or personal; a role never counts): each member gets a share row marked
+//! with the group share, so permission checks, allowed accounts, device keys, notifications and the access-loss
+//! clean-up all keep working unchanged. `plan` (pure) compares group shares × members with the rows that exist;
+//! `reconcile` applies it. A row shared with the person directly wins; groups never touch it.
 //!
-//! Which group shares count: an organization group must be open to sharing; a personal group's members are picked by
-//! its owner, so its shares count only while that owner still manages the tunnel (owns it, or holds ADMIN through
-//! their own share or an organization group's — not through someone's personal group, or two people could keep each
-//! other in). `diff` (pure) says who would gain or lose which tunnels, for the preview before a change.
+//! Which group shares count: an admin-kept group's always do; a role's never do (defence in depth: no share should point
+//! at a role, and the reconcile skips one); a personal group's members are picked by its owner, so its shares count only
+//! while that owner still manages the tunnel (owns it, or holds ADMIN through their own share or an admin-kept group's
+//! — not through someone's personal group, or two people could keep each other in). `diff` (pure) says who would gain
+//! or lose which tunnels, for the preview before a change.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -151,7 +153,7 @@ pub fn personal_share_counts(tunnel_owner: i64, group_owner: i64, owner_active: 
     owner_active && (group_owner == tunnel_owner || held == Some(Permission::Admin))
 }
 
-/// 一筆群組分享，加上它的群組是誰建的（None = 組織群組）。/ A group share plus who made its group (None = organization).
+/// 一筆群組分享，加上它的群組是誰建的（None = 管理員維護的群組）。/ A group share plus who made its group (None = admin-kept).
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub rule: Rule,
@@ -168,13 +170,13 @@ pub struct Held {
     pub raised: HashMap<(i64, i64), Permission>,
 }
 
-/// 哪些群組分享算數。組織群組的都算；個人群組的看主人：直接分享優先，否則取組織群組給他的（照 `wants` 算，跟
-/// 比對結果一樣）與暫時提升的較高者。一次算完，不看資料庫裡現有的群組列 —— 所以主人剛被移出組織群組時，他的個人
+/// 哪些群組分享算數。管理員維護的群組的都算；個人群組的看主人：直接分享優先，否則取管理員維護的群組給他的（照 `wants` 算，跟
+/// 比對結果一樣）與暫時提升的較高者。一次算完，不看資料庫裡現有的群組列 —— 所以主人剛被移出管理員維護的群組時，他的個人
 /// 群組分享在同一次比對、同一次預告裡就停，不必等下一輪。
-/// Which group shares count. Organization groups' always do; a personal group's depends on its maker: their direct row
-/// first, else the higher of what organization groups give them (computed with `wants`, exactly as the reconcile will
+/// Which group shares count. Admin-kept groups' always do; a personal group's depends on its maker: their direct row
+/// first, else the higher of what admin-kept groups give them (computed with `wants`, exactly as the reconcile will
 /// hold it) and a raise in force. One pass that never reads the existing group rows, so a maker just taken out of an
-/// organization group stops counting in the same reconcile and the same preview, not a round later.
+/// admin-kept group stops counting in the same reconcile and the same preview, not a round later.
 pub fn counting(candidates: &[Candidate], held: &Held) -> Vec<Rule> {
     let org: Vec<Rule> = candidates.iter().filter(|c| c.maker.is_none()).map(|c| c.rule.clone()).collect();
     let from_org = wants(&org);
@@ -221,7 +223,7 @@ pub fn diff(before: &[Rule], after: &[Rule], direct: &HashSet<(i64, i64)>) -> Di
 pub enum Change {
     /// 換掉成員名單。/ Replace the member list.
     Members(Vec<i64>),
-    /// 群組的分享全部結束（刪群組、組織群組不再開放分享）。/ Every share with it ends (deleted, or no longer shareable).
+    /// 群組的分享全部結束（刪群組）。/ Every share with it ends (the group is deleted).
     Unshared,
 }
 
@@ -280,7 +282,7 @@ pub async fn tick(state: &AppState) -> ApiResult<()> {
 }
 
 async fn group_name(state: &AppState, group_id: i64) -> ApiResult<String> {
-    Ok(db::features::any_group(&state.db, group_id).await?.map(|g| g.label().to_string()).unwrap_or_default())
+    Ok(db::features::sharing_group(&state.db, group_id).await?.map(|g| g.label().to_string()).unwrap_or_default())
 }
 
 /// 比對要用的一切：算數的群組分享、現有的列、群組分享 → 名稱。/ Everything a reconcile needs.
@@ -321,11 +323,11 @@ async fn load(state: &AppState) -> ApiResult<Loaded> {
         let Some(t) = cached_tunnel(state, &mut tunnels, g.tunnel_id).await? else { continue };
         let Some(perm) = Permission::parse(&g.permission_type) else { continue };
         let Some(group) = groups.get(&g.group_id) else { continue };
-        share_group.insert(g.id, group.label().to_string());
-        // 沒開放分享的組織群組完全不算（關掉時它的分享已經刪了，這是保險）。/ A closed organization group never counts.
-        if group.owner_id.is_none() && !group.shareable {
+        // 角色永遠不給通道（指向角色的分享不該存在，這是保險）。/ A role never grants a tunnel (defence in depth).
+        if !group.is_admin_kept() && !group.is_personal() {
             continue;
         }
+        share_group.insert(g.id, group.label().to_string());
         let maker_active = match group.owner_id {
             None => true,
             Some(owner) => match active.get(&owner) {
@@ -611,8 +613,8 @@ mod tests {
     }
 
     #[test]
-    fn a_makers_admin_comes_from_their_own_row_or_organization_groups_never_personal_ones() {
-        // 通道 10（主人 1）：組織群組 7 給 2 ADMIN；2 的個人群組 8 = 5；3 的個人群組 9 = 6，3 只經由 2 的個人群組有 ADMIN。
+    fn a_makers_admin_comes_from_their_own_row_or_admin_kept_groups_never_personal_ones() {
+        // 通道 10（主人 1）：管理員維護的群組 7 給 2 ADMIN；2 的個人群組 8 = 5；3 的個人群組 9 = 6，3 只經由 2 的個人群組有 ADMIN。
         // Tunnel 10 (owner 1): org group 7 gives 2 ADMIN; 2's personal group 8 = 5; 3's personal group 9 = 6, and 3 holds
         // ADMIN only through 2's personal group.
         let org = cand(rule(7, 10, Permission::Admin, &[], &[2], None), None);
@@ -623,7 +625,7 @@ mod tests {
         let all = vec![org, cand(p2, Some(2)), cand(p3, Some(3))];
         let ids = |rs: Vec<Rule>| rs.iter().map(|r| r.id).collect::<Vec<_>>();
         assert_eq!(ids(counting(&all, &Held::default())), vec![7, 8], "3's group doesn't count: ADMIN through a personal group");
-        // 2 被移出組織群組：他的個人群組在同一次就不算。/ 2 leaves the org group: their personal group stops at once.
+        // 2 被移出管理員維護的群組：他的個人群組在同一次就不算。/ 2 leaves the org group: their personal group stops at once.
         let after = changed(&all, 700, &Change::Members(vec![]));
         assert_eq!(ids(counting(&after, &Held::default())), vec![7]);
         // 但 2 有直接的 ADMIN（或還在效期內的暫時提升）就照樣算。/ A direct ADMIN, or a raise in force, keeps it.
@@ -631,7 +633,7 @@ mod tests {
         assert_eq!(ids(counting(&after, &direct)), vec![7, 8]);
         let raised = Held { raised: [((10, 2), Permission::Admin)].into_iter().collect(), ..Held::default() };
         assert_eq!(ids(counting(&after, &raised)), vec![7, 8]);
-        // 直接分享優先：直接那筆只有 VIEW，組織群組給 ADMIN 也不算（群組不碰直接分享）。/ A direct VIEW wins over the org group.
+        // 直接分享優先：直接那筆只有 VIEW，管理員維護的群組給 ADMIN 也不算（群組不碰直接分享）。/ A direct VIEW wins over the org group.
         let view = Held { direct: [((10, 2), Permission::View)].into_iter().collect(), ..Held::default() };
         assert_eq!(ids(counting(&all, &view)), vec![7]);
         // 預告也看得到連帶的影響：5 會失去 10。/ The preview sees the knock-on effect: 5 loses tunnel 10.

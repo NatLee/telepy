@@ -66,7 +66,11 @@ After the account is decided, the usual rules apply: a disabled account stays ou
 Your provider already knows who is in which team. Telepy can use that, under **Groups and roles** in the provider's settings:
 
 - **Only these groups may sign in**: people outside every listed group are turned away at this provider's button. Empty = anyone the provider lets in.
-- **Group → Telepy role**: a provider group can make someone an **administrator**, or put them in a Telepy **organization group** (the ones on Users & access → Organization groups, whose feature rules decide who may use the terminal, files, the remote desktop and so on). Several rules may point at the same role; a person gets the roles of every group they are in.
+- **Provider group → Telepy**: a provider group can make someone an **administrator**, give them a Telepy **role**, or put them in a Telepy **group**. The two are kept apart on purpose:
+  - A **role** (Users & access → Roles) carries feature rules: who may use the terminal, files, the remote desktop and so on. A role never appears in share dialogs and never gives anyone a tunnel.
+  - A **group** (Users & access → Groups) is for sharing: tunnel owners see it in their share dialog, and every member gets the tunnels shared with it. A group never turns a feature on or off.
+
+  Several rules may point at the same role or group; a person gets everything the groups they are in call for.
 
 The rules are applied every time someone signs in with that provider, and they follow a few rules of their own:
 
@@ -76,7 +80,7 @@ The rules are applied every time someone signs in with that provider, and they f
 - The last active administrator is never demoted, so the site can't end up with nobody in charge.
 - The person's own Telepy two-step sign-in still runs after the roles are applied.
 
-On Feature permissions, members and administrators that came from a provider are marked with a building icon. Removing one there lasts only until their next sign-in, so change the group at the provider instead. **Test sign-in** shows the groups the provider sent and what would change, before anything does.
+On Roles, Groups and Feature permissions, members and administrators that came from a provider are marked with a building icon. Removing one there lasts only until their next sign-in, so change the group at the provider instead. **Test sign-in** shows the groups the provider sent and what would change, before anything does.
 
 ### Sending groups from each provider
 
@@ -91,14 +95,16 @@ On Feature permissions, members and administrators that came from a provider are
 
 ## Sharing tunnels with a group
 
-Groups can also open tunnels. On a tunnel's share dialog, the **Groups** tab shares it with a group, with a permission, the accounts members may log in as, and an optional end date, just like sharing with a person. Everyone in the group then has the tunnel, each with their own share, and that follows the group: people who join it get the tunnel, people who leave it lose it and their open sessions end. Because single sign-on rules and SCIM keep organization groups in step with your provider, an identity provider group ends up deciding who reaches which tunnel.
+Groups can also open tunnels. On a tunnel's share dialog, the **Groups** tab shares it with a group, with a permission, the accounts members may log in as, and an optional end date, just like sharing with a person. Everyone in the group then has the tunnel, each with their own share, and that follows the group: people who join it get the tunnel, people who leave it lose it and their open sessions end. Because single sign-on rules and SCIM can keep groups in step with your provider, an identity provider group ends up deciding who reaches which tunnel.
+
+Roles never come into it. A role decides which tools people may use and is never offered in a share dialog, so making a role for contractors without the terminal doesn't put it in front of every tunnel owner. Being in a group, in turn, never changes anyone's features.
 
 There are two kinds of group:
 
-- **Organization groups** are kept by admins, single sign-on rules or SCIM, and carry feature rules. One shows up in share dialogs only after an admin turns on **Can be shared** on Users & access → Organization groups, so a group made for feature rules (contractors without the terminal, say) stays out of everyone's sight. Turning it off ends every tunnel share with that group. Before that, and before a member change or a delete, the page lists who would gain or lose which tunnels.
-- **Personal groups** are made by anyone who may share tunnels, on the sidebar's **Groups** page or right in the share dialog's **Groups** tab. Only their maker sees them, and they never change what anyone may use. A share with one counts only while its maker still owns the tunnel or holds Admin on it through their own share or an organization group. Otherwise the share is paused and its members get nothing through it until that changes, so losing Admin really ends what you shared. Anyone can add you to their personal group, so you can always leave one: the **Groups** page lists the groups you are in with **Leave the group**, and so does the tunnel page's **Access** tab. Adding people needs a tunnel you own or administer.
+- **Groups admins keep** are made on Users & access → Groups, and their members are kept there by admins, or filled by single sign-on rules or SCIM. Every tunnel owner can share with them, and such a share always counts. Before a member change or a delete, the page lists who would gain or lose which tunnels; deleting one ends every tunnel share with it.
+- **Personal groups** are made by anyone who may share tunnels, on the sidebar's **Groups** page or right in the share dialog's **Groups** tab. Only their maker sees them, and they never change what anyone may use. A share with one counts only while its maker still owns the tunnel or holds Admin on it through their own share or a group. Otherwise the share is paused and its members get nothing through it until that changes, so losing Admin really ends what you shared. Anyone can add you to their personal group, so you can always leave one: the **Groups** page lists the groups you are in with **Leave the group**, and so does the tunnel page's **Access** tab. Adding people needs a tunnel you own or administer.
 
-Outside the admin area people never see these two words: every group just says who keeps its members — you, someone else, admins, or your company accounts (single sign-on or SCIM).
+Outside the admin area people never see this split: every group just says who keeps its members — you, someone else, admins, or your company accounts (single sign-on or SCIM).
 
 - **Someone shared with directly keeps their own share.** The group never changes it. **Set this person on their own** turns a share that came through a group into their own.
 - **Several groups add up.** Someone in two groups the tunnel is shared with gets the higher permission, every account of both, and the later end date.
@@ -141,7 +147,7 @@ What the provider can do:
 - **Change accounts.** Name and email follow the provider.
 - **Switch accounts off.** `active: false` does what disabling the account here does: web sign-ins and live sessions end, MCP agent sessions close, and the keys Telepy installed leave the devices. Switching it back on restores access. The last active admin is never switched off.
 - **Delete accounts.** A delete switches the account off instead of removing it, so recordings, logs and tunnels stay. If the provider later creates the same person again, they get the same account back.
-- **Push groups.** Each group becomes a Telepy organization group, the kind **Feature access** uses, with the members the provider sends. Like any new organization group, it is not open to sharing until an admin turns that on. People the provider didn't create are never taken out of those groups, a name that an existing Telepy group already has is refused, and a group the provider deletes is deleted here too.
+- **Push groups.** The SCIM tab's **Groups the provider pushes become** decides what each pushed group turns into: a Telepy **role** (feature rules, the default) or a Telepy **group** (tunnel owners can share with it). Pick roles when the provider's groups stand for job functions and groups when they stand for teams. Changing the choice only affects groups pushed afterwards; ones SCIM already made stay what they are. Either way the members are the ones the provider sends, people the provider didn't create are never taken out, a name an existing Telepy role (or group) already has is refused, and a group the provider deletes is deleted here too.
 
 When someone the provider created signs in through single sign-on for the first time, Telepy links that sign-in to their account (same email or username), whether or not linking by verified email is on.
 

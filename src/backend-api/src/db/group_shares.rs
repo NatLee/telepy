@@ -1,6 +1,6 @@
-//! 分享給群組（組織群組或個人群組；`telepy_group_share` + 允許的帳號），以及成員各自那筆「經由群組」的分享列
+//! 分享給群組（管理員維護的群組或個人群組，永遠不是角色；`telepy_group_share` + 允許的帳號），以及成員各自那筆「經由群組」的分享列
 //! （`tunnels_tunnelsharing.group_share_id`）。哪些列該有由 `crate::group_shares` 決定。
-//! Tunnels shared with groups (organization or personal) and the share row each member gets from one;
+//! Tunnels shared with groups (admin-kept or personal, never a role) and the share row each member gets from one;
 //! `crate::group_shares` decides which rows should exist.
 
 use std::collections::{BTreeSet, HashMap};
@@ -249,14 +249,15 @@ pub async fn make_direct(db: &Db, sharing_id: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
-/// 這個人能拿來分享的群組：他自己的個人群組在前，再來是打開分享的組織群組（各自依名稱）→ (id, 名稱, 人數, 種類)。
-/// The groups this person may share with: their own personal groups first, then organization groups open to sharing
-/// (each by name) → (id, name, members, kind).
+/// 這個人能拿來分享的群組：他自己的個人群組在前，再來是每個管理員維護的群組（各自依名稱）→ (id, 名稱, 人數, 種類)。
+/// 角色永遠不在裡面。種類 `org` = 管理員維護的群組（沿用舊的值）。
+/// The groups this person may share with: their own personal groups first, then every admin-kept group (each by name)
+/// → (id, name, members, kind). Roles are never in it. Kind `org` = an admin-kept group (the wire value is kept).
 pub async fn share_choices(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, String, i64, String)>> {
     sqlx::query_as(&format!(
         "SELECT g.id, {LABEL}, (SELECT COUNT(*) FROM telepy_user_group_member m WHERE m.group_id = g.id), \
             CASE WHEN g.owner_id IS NULL THEN 'org' ELSE 'personal' END \
-         FROM telepy_user_group g WHERE g.owner_id = ? OR (g.owner_id IS NULL AND g.shareable) \
+         FROM telepy_user_group g WHERE g.purpose = 'group' AND (g.owner_id = ? OR g.owner_id IS NULL) \
          ORDER BY g.owner_id IS NULL, {LABEL} COLLATE NOCASE, g.id"
     ))
     .bind(user_id)
@@ -264,12 +265,14 @@ pub async fn share_choices(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, Stri
     .await
 }
 
-/// 成員由身分提供者同步的組織群組：SCIM 推送的，或單一登入規則會把人放進去的。給使用者看「誰維護成員」。
-/// Organization groups whose members an identity provider keeps: pushed by SCIM, or targeted by a single sign-on rule.
-/// Shown to people as who keeps the members.
+/// 成員由身分提供者同步的管理員維護群組：SCIM 推送的，或單一登入規則會把人放進去的。給使用者看「誰維護成員」。
+/// 角色不算（它們從不出現在分享裡）。/ Admin-kept groups whose members an identity provider keeps: pushed by SCIM, or
+/// targeted by a single sign-on rule. Shown to people as who keeps the members. Roles never count (they never appear in sharing).
 pub async fn synced_groups(db: &Db) -> sqlx::Result<std::collections::HashSet<i64>> {
     let ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT group_id FROM telepy_scim_group UNION SELECT group_id FROM telepy_oidc_group_rule WHERE target = 'group' AND group_id IS NOT NULL",
+        "SELECT g.id FROM telepy_user_group g WHERE g.owner_id IS NULL AND g.purpose = 'group' AND ( \
+            g.id IN (SELECT group_id FROM telepy_scim_group) \
+            OR g.id IN (SELECT group_id FROM telepy_oidc_group_rule WHERE target = 'group' AND group_id IS NOT NULL))",
     )
     .fetch_all(&db.read)
     .await?;
@@ -311,12 +314,12 @@ pub async fn ids_of_group(db: &Db, group_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(&format!("SELECT id FROM {G} WHERE group_id = ?")).bind(group_id).fetch_all(&db.read).await
 }
 
-/// 我經由群組拿到的通道 → (群組名稱, 群組 id, 個人群組的主人；組織群組 = None)。
-/// Tunnels I hold through a group → (the group's name, its id, a personal group's owner; None for organization groups).
+/// 我經由群組拿到的通道 → (群組名稱, 群組 id, 個人群組的主人；管理員維護的群組 = None)。
+/// Tunnels I hold through a group → (the group's name, its id, a personal group's owner; None for admin-kept groups).
 pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, (String, i64, Option<String>)>> {
     let rows: Vec<(i64, String, i64, Option<String>)> = sqlx::query_as(&format!(
         "SELECT s.tunnel_id, {LABEL}, g.id, o.username FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id \
-         LEFT JOIN auth_user o ON o.id = g.owner_id WHERE s.shared_with_id = ?"
+         LEFT JOIN auth_user o ON o.id = g.owner_id WHERE s.shared_with_id = ? AND g.purpose = 'group'"
     ))
     .bind(user_id)
     .fetch_all(&db.read)
@@ -324,14 +327,14 @@ pub async fn my_groups(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, (Stri
     Ok(rows.into_iter().map(|(t, name, id, owner)| (t, (name, id, owner))).collect())
 }
 
-/// 這個人所在、他看得到的群組：別人的個人群組，以及開放分享的組織群組（只為功能規則存在的組織群組不列，那是
-/// 管理員內部的分類）。/ The groups this person is in that they may see: other people's personal groups and organization
-/// groups open to sharing (organization groups kept only for feature rules stay hidden — that is the admins' own filing).
+/// 這個人所在、他看得到的群組：別人的個人群組，以及管理員維護的群組。角色永遠不列（那是管理員的功能權限分類）。
+/// The groups this person is in that they may see: other people's personal groups and admin-kept groups. Roles are never
+/// listed (they are the admins' feature-permission filing).
 pub async fn member_of(db: &Db, user_id: i64) -> sqlx::Result<Vec<super::features::Group>> {
     sqlx::query_as(
-        "SELECT g.id, g.name, g.description, g.created_at, g.owner_id, g.display_name, g.shareable FROM telepy_user_group g \
+        "SELECT g.id, g.name, g.description, g.created_at, g.owner_id, g.display_name, g.purpose FROM telepy_user_group g \
          JOIN telepy_user_group_member m ON m.group_id = g.id \
-         WHERE m.user_id = ? AND ((g.owner_id IS NOT NULL AND g.owner_id != ?) OR (g.owner_id IS NULL AND g.shareable)) \
+         WHERE m.user_id = ? AND g.purpose = 'group' AND (g.owner_id IS NULL OR g.owner_id != ?) \
          ORDER BY g.owner_id IS NULL, COALESCE(g.display_name, g.name) COLLATE NOCASE, g.id",
     )
     .bind(user_id)
@@ -356,7 +359,7 @@ pub async fn manages_any(db: &Db, user_id: i64) -> sqlx::Result<bool> {
 /// 這條通道上每筆經由群組的分享列 → (群組分享 id, 群組 id, 群組名稱)。/ Each group-made row on a tunnel → its group.
 pub async fn row_groups(db: &Db, tunnel_id: i64) -> sqlx::Result<HashMap<i64, (i64, i64, String)>> {
     let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!(
-        "SELECT s.id, gs.id, g.id, {LABEL} FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.tunnel_id = ?"
+        "SELECT s.id, gs.id, g.id, {LABEL} FROM {S} s JOIN {G} gs ON gs.id = s.group_share_id JOIN telepy_user_group g ON g.id = gs.group_id WHERE s.tunnel_id = ? AND g.purpose = 'group'"
     ))
     .bind(tunnel_id)
     .fetch_all(&db.read)
@@ -368,7 +371,7 @@ pub async fn row_groups(db: &Db, tunnel_id: i64) -> sqlx::Result<HashMap<i64, (i
 pub async fn covering(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(&format!(
         "SELECT {LABEL} FROM {G} gs JOIN telepy_user_group g ON g.id = gs.group_id JOIN telepy_user_group_member m ON m.group_id = gs.group_id \
-         WHERE gs.tunnel_id = ? AND m.user_id = ? AND (gs.expires_at IS NULL OR gs.expires_at > ?) ORDER BY {LABEL} COLLATE NOCASE"
+         WHERE gs.tunnel_id = ? AND m.user_id = ? AND g.purpose = 'group' AND (gs.expires_at IS NULL OR gs.expires_at > ?) ORDER BY {LABEL} COLLATE NOCASE"
     ))
     .bind(tunnel_id)
     .bind(user_id)

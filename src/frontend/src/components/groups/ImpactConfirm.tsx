@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * 改群組成員、刪群組、關掉「可以分享」之前先問後端「這會讓誰多 / 少哪些通道」，有影響才跳這個確認窗（誰多了、誰少了，
- * 名單長就分頁）；沒影響就直接存。刪除一律要確認。組織群組頁與分享視窗的個人群組共用。
- * Before saving members, deleting a group or switching sharing off, ask the backend who would gain / lose which
+ * 改群組成員或刪群組之前先問後端「這會讓誰多 / 少哪些通道」，有影響才跳這個確認窗（誰多了、誰少了，
+ * 名單長就分頁）；沒影響就直接存。刪除一律要確認。管理區的群組頁與分享視窗的個人群組共用。
+ * Before saving members or deleting a group, ask the backend who would gain / lose which
  * tunnels; only when someone would, show this confirmation (gainers and losers, paged when long); otherwise save
- * straight away. Deleting always asks. Shared by the organization groups page and the share dialog's personal groups.
+ * straight away. Deleting always asks. Shared by the admin Groups page and the share dialog's personal groups.
  */
 import React, { useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Server, User } from "lucide-react";

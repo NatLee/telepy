@@ -2,11 +2,12 @@
 
 /**
  * 管理區「功能權限」頁（以前是設定頁的「存取」分頁）：誰可以用哪些 Telepy 功能（跟通道分享是兩回事）。左邊選對象（所有人 / 群組 / 人），右邊是那個對象的
- * 功能矩陣：每列一個功能，格子 = 沿用 / 允許 / 拒絕；「沿用」顯示會拿到什麼、從哪一層來。組織群組的建立、改名、刪除
- * 與成員在「組織群組」頁（這裡只連過去）。資訊按鈕打開兩條線的說明圖（AccessInfoDialog）。解析規則在 lib/features.ts（跟後端一樣、有測試）。
+ * 功能矩陣：每列一個功能，格子 = 沿用 / 允許 / 拒絕；「沿用」顯示會拿到什麼、從哪一層來。這裡的「群組」是角色
+ * （政策 JSON 的 `groups`）：建立、改名、刪除與成員在「角色」頁（這裡只連過去）。分享用的群組從不出現在這裡。資訊按鈕打開兩條線的說明圖（AccessInfoDialog）。解析規則在 lib/features.ts（跟後端一樣、有測試）。
  * The admin Feature access page (formerly the Settings page's Access tab): who may use which Telepy features (separate from tunnel sharing). Pick a subject on
  * the left (everyone / a group / a person); the right side is its feature matrix (inherit / allow / deny per row,
- * "inherit" shows what it yields and from where). Groups are made and given members on the Organization groups page (linked from here). The info
+ * "inherit" shows what it yields and from where). The policy's `groups` are roles, made and given members on the
+ * Roles page (linked from here); groups for sharing never appear here. The info
  * button opens the two-lane explainer. Resolution lives in lib/features.ts (same rules as the backend, tested).
  */
 import React, { useState } from "react";
@@ -35,7 +36,7 @@ import {
     Webhook,
     Wrench,
     X,
-    type LucideIcon, KeySquare } from "lucide-react";
+    type LucideIcon, KeySquare, BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
@@ -89,7 +90,7 @@ export function AccessTab({
     header,
 }: {
     initialUser?: number | null;
-    /** 先選這個組織群組（`?group=`）。/ Start on this organization group (`?group=`). */
+    /** 先選這個角色（`?group=`）。/ Start on this role (`?group=`). */
     initialGroup?: number | null;
     /** 頁首（拿到打開說明的函式）；給了就不畫上面的說明框。/ The page header (gets the explainer opener); replaces the banner. */
     header?: (openInfo: () => void) => React.ReactNode;
@@ -239,7 +240,7 @@ function SubjectList({ policy, current, onPick }: { policy: AccessPolicy; curren
                         {t("access.groups")} <span className="tabular-nums">({searching ? `${groups.length}/${policy.groups.length}` : policy.groups.length})</span>
                     </span>
                     <Button asChild variant="ghost" size="sm" className="h-7 px-2">
-                        <Link href="/tunnels/admin/groups?new=1" title={t("access.newGroupOnPage")}>
+                        <Link href="/tunnels/admin/roles?new=1" title={t("access.newGroupOnPage")}>
                             <Plus size={14} /> {t("access.newGroupShort")}
                         </Link>
                     </Button>
@@ -250,7 +251,7 @@ function SubjectList({ policy, current, onPick }: { policy: AccessPolicy; curren
                     <SubjectRow
                         key={g.id}
                         active={sameSubject(current, { kind: "group", id: g.id })}
-                        icon={<Users size={16} />}
+                        icon={<BadgeCheck size={16} />}
                         label={g.name}
                         sub={t("access.memberCount", { count: g.members.length })}
                         badge={<OffBadge count={deniedCount(policy, { kind: "group", id: g.id })} />}
@@ -310,7 +311,7 @@ function SubjectPanel({
     const admin = !!person?.is_superuser;
 
     const title = subject.kind === "everyone" ? t("access.everyone") : group ? group.name : person?.username ?? "";
-    const icon = subject.kind === "everyone" ? <Globe /> : group ? <Users /> : admin ? <Shield /> : <User />;
+    const icon = subject.kind === "everyone" ? <Globe /> : group ? <BadgeCheck /> : admin ? <Shield /> : <User />;
     const description =
         subject.kind === "everyone"
             ? t("access.everyoneHint")
@@ -332,8 +333,8 @@ function SubjectPanel({
                 action={
                     group ? (
                         <Button asChild variant="outline" size="sm">
-                            <Link href={`/tunnels/admin/groups?group=${group.id}`}>
-                                <Users size={14} /> {t("access.editOnGroups")}
+                            <Link href={`/tunnels/admin/roles?role=${group.id}`}>
+                                <BadgeCheck size={14} /> {t("access.editOnGroups")}
                             </Link>
                         </Button>
                     ) : undefined
@@ -355,7 +356,7 @@ function SubjectPanel({
                     {person.groups.length === 0 && <span className="text-muted-foreground">{t("access.noGroupsForUser")}</span>}
                     {policy.groups.filter((g) => person.groups.includes(g.id)).map((g) => (
                         <button key={g.id} type="button" onClick={() => onPick({ kind: "group", id: g.id })} className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            <Chip className="hover:bg-muted/70"><Users aria-hidden />{g.name}</Chip>
+                            <Chip className="hover:bg-muted/70"><BadgeCheck aria-hidden />{g.name}</Chip>
                         </button>
                     ))}
                 </div>

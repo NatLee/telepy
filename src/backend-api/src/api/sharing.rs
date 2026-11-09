@@ -154,7 +154,7 @@ fn requested_expiry(body: &Value) -> ApiResult<Option<Option<String>>> {
 async fn refuse_via_group(state: &AppState, sharing: &db::sharing::Sharing, own: bool) -> ApiResult<()> {
     let Some(gs) = sharing.group_share_id else { return Ok(()) };
     let group = match db::group_shares::get(&state.db, gs).await? {
-        Some(g) => db::features::any_group(&state.db, g.group_id).await?,
+        Some(g) => db::features::sharing_group(&state.db, g.group_id).await?,
         None => None,
     };
     let personal = group.as_ref().is_some_and(|g| g.is_personal());
@@ -442,9 +442,11 @@ fn id_list(body: &Value) -> ApiResult<Option<Vec<i64>>> {
     }
 }
 
-/// 這條通道分享給哪些群組；能管分享的人另外拿到成員名稱與自己能選的群組（自己的個人群組 + 開放分享的組織群組）。
+/// 這條通道分享給哪些群組；能管分享的人另外拿到成員名稱與自己能選的群組（自己的個人群組 + 每個管理員維護的群組）。
+/// 角色永遠不出現（`sharing_group` 找不到它）。`kind`：`org` = 管理員維護的群組、`personal` = 個人群組。
 /// The groups a tunnel is shared with; those who manage sharing also get member names and the groups they may pick
-/// (their own personal groups + organization groups open to sharing).
+/// (their own personal groups + every admin-kept group). Roles never appear (`sharing_group` doesn't find them).
+/// `kind`: `org` = an admin-kept group, `personal` = a personal group.
 async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bool) -> ApiResult<Value> {
     let rows = db::sharing::for_tunnel(&state.db, t.id).await?;
     let active = crate::group_shares::active_shares(state).await?;
@@ -453,7 +455,7 @@ async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bo
     let mut shared = std::collections::HashSet::new();
     for g in db::group_shares::for_tunnel(&state.db, t.id).await? {
         shared.insert(g.group_id);
-        let Some(group) = db::features::any_group(&state.db, g.group_id).await? else { continue };
+        let Some(group) = db::features::sharing_group(&state.db, g.group_id).await? else { continue };
         let members = db::group_shares::member_names(&state.db, g.group_id).await?;
         let through = rows.iter().filter(|r| r.group_share_id == Some(g.id)).count();
         let direct = members.iter().filter(|(uid, _)| rows.iter().any(|r| r.shared_with_id == *uid && r.group_share_id.is_none())).count();
@@ -525,8 +527,9 @@ async fn create_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
         return Err(ApiError::forbidden("You do not have permission to share this tunnel"));
     }
     let group_id = json_i64(&body, "group_id").ok_or_else(|| ApiError::field("group_id", "Pick a user group."))?;
-    // 只能選自己的個人群組或開放分享的組織群組；其他的一律當作不存在。/ Only your own personal groups or shareable organization groups.
-    let group = db::features::any_group(&state.db, group_id).await?.filter(|g| g.shareable_by(me.id)).ok_or_else(|| ApiError::not_found("Group not found"))?;
+    // 只能選自己的個人群組或管理員維護的群組；角色、別人的個人群組一律當作不存在。
+    // Only your own personal groups or admin-kept groups; roles and others' personal groups don't exist here.
+    let group = db::features::sharing_group(&state.db, group_id).await?.filter(|g| g.shareable_by(me.id)).ok_or_else(|| ApiError::not_found("Group not found"))?;
     if db::group_shares::by_tunnel_group(&state.db, t.id, group.id).await?.is_some() {
         return Err(ApiError::field("group_id", "This tunnel is already shared with that group."));
     }
@@ -567,7 +570,7 @@ async fn update_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
     if let Some(ids) = &ids {
         db::group_shares::set_usernames(&state.db, g.id, t.id, ids).await?;
     }
-    let name = db::features::any_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
+    let name = db::features::sharing_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
     let mut what = Vec::new();
     if let Some(p) = perm {
         what.push(format!("permission {}", p.as_str()));
@@ -593,7 +596,7 @@ async fn delete_group_share(State(state): State<AppState>, AuthUser(me): AuthUse
         return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
     }
     let g = group_share_of(&state, &t, gsid).await?;
-    let name = db::features::any_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
+    let name = db::features::sharing_group(&state.db, g.group_id).await?.map(|g| g.label().to_string()).unwrap_or_default();
     db::group_shares::delete(&state.db, g.id).await?;
     state.gateway.event("group_share", None, None, Some(t.id), format!("{} stopped sharing \"{}\" with the group \"{name}\"", me.username, t.host_friendly_name)).await;
     crate::group_shares::reconcile(&state, &std::collections::HashMap::from([(g.id, name)])).await?;

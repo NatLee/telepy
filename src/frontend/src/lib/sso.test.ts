@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { badDomain, canUnlink, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, orderedClaims, ruleValue, tidyRules, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
+import { badDomain, canUnlink, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, orderedClaims, parseNamed, parseScimGroupsAs, ruleTargetKind, ruleValue, tidyRules, parseDomains, parseSsoButtons, providerName, readSsoReturn, slugify, ssoErrorKey, ssoStartUrl, withoutSsoParams } from "./sso.ts";
 
 test("buttons come from the public endpoint; anything odd is dropped", () => {
     assert.deepEqual(parseSsoButtons([{ slug: "okta", name: "Okta" }, { slug: "Bad Slug", name: "x" }, { slug: "kc", name: " " }, 3, null]), [
@@ -75,4 +75,23 @@ test("group lists and rules are tidied before saving", () => {
 test("the post-logout URL comes from the callback base", () => {
     assert.equal(postLogoutUrl("https://telepy.example/api/auth/oidc/"), "https://telepy.example/login");
     assert.equal(postLogoutUrl("http://localhost:3123/api/auth/oidc"), "http://localhost:3123/login");
+});
+
+test("a rule targets a role or a group, never a personal group", () => {
+    const roles = [{ id: 1 }, { id: 2 }];
+    const groups = [{ id: 7 }];
+    assert.equal(ruleTargetKind(2, roles, groups), "role");
+    assert.equal(ruleTargetKind(7, roles, groups), "group");
+    assert.equal(ruleTargetKind(9, roles, groups), null, "a deleted (or personal) group is not offered");
+    assert.equal(ruleTargetKind(null, roles, groups), null);
+    assert.equal(ruleValue({ target: "group", group_id: 7 }), "group:7", "roles and groups share one value format");
+});
+
+test("what SCIM groups become, read defensively", () => {
+    assert.equal(parseScimGroupsAs("group"), "group");
+    assert.equal(parseScimGroupsAs("role"), "role");
+    assert.equal(parseScimGroupsAs(undefined), "role", "an older backend pushed roles");
+    assert.equal(parseScimGroupsAs("weird"), "role");
+    assert.deepEqual(parseNamed([{ id: 3, name: "Ops" }, { id: 4 }, { name: "x" }, null]), [{ id: 3, name: "Ops" }, { id: 4, name: "#4" }]);
+    assert.deepEqual(parseNamed(undefined), []);
 });

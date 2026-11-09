@@ -1,10 +1,10 @@
 /**
- * 兩種人的群組：組織群組（管理員 / 單一登入 / SCIM 管，用在功能權限；打開「可以分享」才會出現在分享視窗）與
- * 個人群組（每個人自己做，只有自己看得到，只用來分享通道）。這裡是資料的解析、搜尋與「這個改變會讓誰多 / 少哪些
- * 通道」的整理。純函式，有測試。
- * Two kinds of people groups: organization groups (admins / single sign-on / SCIM; used for feature permissions,
- * shown in share dialogs only once "Can be shared" is on) and personal groups (anyone makes them, only they see them,
- * used only for sharing tunnels). Parsing, search and the "who gains / loses which tunnels" summary. Pure, tested.
+ * 人的群組只用來分享通道：管理員維護的群組（管理員 / 單一登入規則 / SCIM 放成員）與個人群組（每個人自己做，只有
+ * 自己看得到）。角色（決定功能）是另一回事，從不出現在這裡的分享資料。這裡是資料的解析、搜尋與「這個改變會讓誰
+ * 多 / 少哪些通道」的整理。純函式，有測試。
+ * People groups are only for sharing tunnels: admin-kept groups (admins / SSO rules / SCIM keep the members) and
+ * personal groups (anyone makes them, only they see them). Roles (which decide features) are something else and never
+ * show up in this sharing data. Parsing, search and the "who gains / loses which tunnels" summary. Pure, tested.
  */
 
 export type GroupPermission = "view" | "edit" | "admin";
@@ -27,9 +27,10 @@ function perm(v: unknown): GroupPermission {
     return PERMS.includes(v as GroupPermission) ? (v as GroupPermission) : "view";
 }
 
-/* ── 組織群組的分享 / An organization group's shares ───────────── */
+/* ── 管理員維護的群組（分享用）/ Admin-kept groups (for sharing) ── */
 
-export interface OrgGroupShare {
+/** 分享給一個管理員維護的群組的一條通道。/ A tunnel shared with an admin-kept group. */
+export interface AdminGroupShare {
     id: number;
     tunnel_id: number;
     tunnel_name: string;
@@ -40,26 +41,84 @@ export interface OrgGroupShare {
     expires_at: string | null;
 }
 
-/** `GET /api/access` 的群組多了 `shareable` / `shares`；舊後端沒有 = 不能分享、沒有分享。
- *  The policy's groups gain `shareable` / `shares`; an older backend = not shareable, no shares. */
-export function orgSharing(group: unknown): { shareable: boolean; shares: OrgGroupShare[] } {
-    const g = obj(group);
-    const shares = Array.isArray(g.shares) ? g.shares : [];
-    return {
-        shareable: g.shareable === true,
-        shares: shares
-            .map(obj)
-            .filter((s) => typeof s.id === "number")
-            .map((s) => ({
-                id: num(s.id),
-                tunnel_id: num(s.tunnel_id),
-                tunnel_name: str(s.tunnel_name) || `#${num(s.tunnel_id)}`,
-                owner: str(s.owner),
-                permission_type: perm(s.permission_type),
-                through: num(s.through),
-                expires_at: typeof s.expires_at === "string" ? s.expires_at : null,
-            })),
-    };
+/**
+ * 管理員（或 SCIM / 單一登入規則）維護成員的群組：只用來分享通道，從不決定功能（那是角色的事）。
+ * A group whose members admins (or SCIM / SSO rules) keep: only for sharing tunnels, never for features (roles do that).
+ */
+export interface AdminGroup {
+    id: number;
+    name: string;
+    description: string;
+    created_at: string;
+    members: number[];
+    /** 單一登入規則放進來的成員。/ Members an SSO group rule added. */
+    sso_members: { user_id: number; provider: string }[];
+    /** 由 SCIM 推送，或被單一登入規則指到（成員從公司帳號同步）。/ Pushed by SCIM or targeted by an SSO rule. */
+    synced: boolean;
+    /** 由 SCIM 推送。/ Pushed by SCIM. */
+    scim: boolean;
+    shares: AdminGroupShare[];
+}
+
+function parseShares(v: unknown): AdminGroupShare[] {
+    return (Array.isArray(v) ? v : [])
+        .map(obj)
+        .filter((s) => typeof s.id === "number")
+        .map((s) => ({
+            id: num(s.id),
+            tunnel_id: num(s.tunnel_id),
+            tunnel_name: str(s.tunnel_name) || `#${num(s.tunnel_id)}`,
+            owner: str(s.owner),
+            permission_type: perm(s.permission_type),
+            through: num(s.through),
+            expires_at: typeof s.expires_at === "string" ? s.expires_at : null,
+        }));
+}
+
+/**
+ * `GET /api/access` 的 `share_groups` → 型別（缺欄位給安全預設；舊後端沒有這個欄位 = 空清單）。
+ * The policy's `share_groups` → typed (safe defaults; an older backend without it = none).
+ */
+export function parseShareGroups(policy: unknown): AdminGroup[] {
+    const list = obj(policy).share_groups;
+    return (Array.isArray(list) ? list : [])
+        .map(obj)
+        .filter((g) => typeof g.id === "number")
+        .map((g) => {
+            const description = str(g.description);
+            const scim = g.scim === true || scimManaged(description);
+            const sso = (Array.isArray(g.sso_members) ? g.sso_members : [])
+                .map(obj)
+                .filter((m) => typeof m.user_id === "number")
+                .map((m) => ({ user_id: num(m.user_id), provider: str(m.provider) }));
+            return {
+                id: num(g.id),
+                name: str(g.name) || `#${num(g.id)}`,
+                description,
+                created_at: str(g.created_at),
+                members: ids(g.members),
+                sso_members: sso,
+                synced: g.synced === true || scim,
+                scim,
+                shares: parseShares(g.shares),
+            };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** 管理員維護的群組的搜尋：名稱、說明、分享給它的通道名稱。/ Search admin-kept groups: name, description, shared tunnel names. */
+export function filterAdminGroups(groups: AdminGroup[], query: string): AdminGroup[] {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return groups;
+    return groups.filter((g) => {
+        const hay = [g.name, g.description, ...g.shares.map((s) => s.tunnel_name)].join("\n").toLowerCase();
+        return words.every((w) => hay.includes(w));
+    });
+}
+
+/** 經由這個群組拿到通道的人次（每條通道各算一次）。/ Access held through the group, counted per tunnel. */
+export function throughTotal(g: Pick<AdminGroup, "shares">): number {
+    return g.shares.reduce((n, s) => n + s.through, 0);
 }
 
 /** SCIM 建的群組：說明是「Managed by … (SCIM)」。/ A group SCIM made: its description says "Managed by … (SCIM)". */
@@ -100,15 +159,15 @@ export interface MemberOfTunnel {
     through: boolean;
 }
 
-/** 我所在的群組：別人的個人群組（可以退出），或開放分享的組織群組（唯讀）。/ A group I'm in. */
+/** 我所在的群組：別人的個人群組（可以退出），或管理員維護的群組（`kind: "org"`，唯讀）。/ A group I'm in. */
 export interface MemberOfGroup {
     id: number;
     name: string;
     description: string;
     kind: "org" | "personal";
-    /** 個人群組的主人；組織群組 = null。/ A personal group's owner; null for organization groups. */
+    /** 個人群組的主人；管理員維護的群組 = null。/ A personal group's owner; null for admin-kept groups. */
     owner: string | null;
-    /** 組織群組的成員由公司帳號同步。/ An organization group whose members are synced from company accounts. */
+    /** 管理員維護的群組，成員由公司帳號同步。/ An admin-kept group whose members are synced from company accounts. */
     synced: boolean;
     tunnels: MemberOfTunnel[];
 }
@@ -232,9 +291,10 @@ export function foldList<T>(items: T[], max: number): { shown: T[]; more: number
 
 /**
  * 一般使用者只需要知道「群組的成員是誰在維護」：你、做這個群組的人、管理員，或從公司帳號同步。
- * 「組織群組 / 個人群組」這兩個詞只留在管理區。
+ * 線上的 `kind: "org"` = 管理員維護的群組（不是角色；角色從不出現在分享資料）。
  * All an ordinary user needs to know about a group is who keeps its members: you, the person who made it, admins,
- * or synced from company accounts. "Organization group" / "personal group" stay in the admin area.
+ * or synced from company accounts. On the wire `kind: "org"` = an admin-kept group (never a role; roles never appear
+ * in sharing data).
  */
 export type GroupKeeperKind = "you" | "owner" | "admins" | "synced";
 

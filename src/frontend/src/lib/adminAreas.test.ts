@@ -28,6 +28,12 @@ test("a path finds its area and page", () => {
     assert.equal(adminAreaOf("/tunnels/admin/sessions")?.page.href, "/tunnels/admin/sessions");
     assert.equal(adminAreaOf("/tunnels/admin/access")?.area.id, "people");
     assert.equal(adminAreaOf("/tunnels/admin/groups")?.area.id, "people");
+    assert.equal(adminAreaOf("/tunnels/admin/roles")?.area.id, "people");
+    assert.deepEqual(
+        ADMIN_AREAS.find((a) => a.id === "people")?.pages.map((p) => p.href),
+        ["/tunnels/admin/users", "/tunnels/admin/roles", "/tunnels/admin/groups", "/tunnels/admin/access"],
+        "roles (features) and groups (sharing) are separate pages",
+    );
     assert.equal(adminAreaOf("/tunnels/admin/notifications")?.area.id, "rules");
     assert.equal(adminAreaOf("/tunnels/settings")?.area.id, "settings");
     assert.equal(adminAreaOf("/tunnels/admin/health")?.area.id, "health");

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+    filterAdminGroups,
     filterMemberOf,
     filterNamedGroups,
     filterNames,
@@ -10,25 +11,46 @@ import {
     impactSummary,
     memberDiff,
     nameProblem,
-    orgSharing,
     parseImpact,
+    parseShareGroups,
     parsePersonalGroups,
     ruleCounts,
     scimManaged,
+    throughTotal,
     tunnelList,
 } from "./peopleGroups.ts";
 
-test("organization group sharing is read with safe defaults", () => {
-    assert.deepEqual(orgSharing({ id: 1 }), { shareable: false, shares: [] }, "an older backend = not shareable");
-    const s = orgSharing({
-        shareable: true,
-        shares: [{ id: 7, tunnel_id: 3, tunnel_name: "web-1", owner: "alice", permission_type: "boss", through: 4, expires_at: null }, { tunnel_id: 9 }],
+test("admin-kept groups are read with safe defaults", () => {
+    assert.deepEqual(parseShareGroups({ groups: [{ id: 1, name: "Role" }] }), [], "an older backend without share_groups = none; roles never count");
+    assert.deepEqual(parseShareGroups(null), []);
+    const gs = parseShareGroups({
+        share_groups: [
+            {
+                id: 7,
+                name: "Ops",
+                members: [1, "x", 2],
+                sso_members: [{ user_id: 2, provider: "Okta" }, { provider: "bad" }],
+                shares: [{ id: 7, tunnel_id: 3, tunnel_name: "web-1", owner: "alice", permission_type: "boss", through: 4, expires_at: null }, { tunnel_id: 9 }, { id: 8, tunnel_id: 5, through: 1 }],
+            },
+            { id: 3, name: "Contractors", description: "Managed by Okta (SCIM)" },
+            { name: "no id" },
+        ],
     });
-    assert.equal(s.shareable, true);
-    assert.equal(s.shares.length, 1);
-    assert.equal(s.shares[0].permission_type, "view", "unknown permissions read as view");
-    assert.equal(s.shares[0].through, 4);
-    assert.equal(orgSharing(null).shareable, false);
+    assert.deepEqual(gs.map((g) => g.name), ["Contractors", "Ops"], "sorted by name, rows without an id dropped");
+    const ops = gs[1];
+    assert.deepEqual(ops.members, [1, 2]);
+    assert.deepEqual(ops.sso_members, [{ user_id: 2, provider: "Okta" }]);
+    assert.equal(ops.shares.length, 2);
+    assert.equal(ops.shares[0].permission_type, "view", "unknown permissions read as view");
+    assert.equal(ops.shares[1].tunnel_name, "#5");
+    assert.equal(throughTotal(ops), 5);
+    assert.equal(ops.synced, false);
+    assert.equal(gs[0].scim, true, "an older SCIM description still reads as SCIM");
+    assert.equal(gs[0].synced, true);
+    assert.equal(parseShareGroups({ share_groups: [{ id: 4, name: "x", synced: true }] })[0].synced, true);
+    assert.deepEqual(filterAdminGroups(gs, "web").map((g) => g.id), [7], "tunnel names match");
+    assert.deepEqual(filterAdminGroups(gs, "okta scim").map((g) => g.id), [3]);
+    assert.equal(filterAdminGroups(gs, "  ").length, 2);
 });
 
 test("SCIM groups and feature rules", () => {

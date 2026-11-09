@@ -1,7 +1,8 @@
 //! 個人群組（`/api/user/groups*`）：任何人都能自己建一群人，一次把通道分享給他們。只有建立的人看得到、改得到；
-//! 只用在分享 —— 功能權限永遠不看它（那是管理員的組織群組，見 `api::access`）。
+//! 只用在分享 —— 功能權限永遠不看它（那是管理員的角色，見 `api::access`）。每個處理函式只碰 `owner_id = 我` 的列，
+//! 角色與管理員維護的群組一律 404。
 //! - `GET /api/user/groups` → `{groups, member_of, can_share, users, limit, max_members}`（`users` = 能加進來的人：
-//!   其他還在用的帳號；`member_of` = 我所在的群組。誰都能讀，沒有「分享通道」功能的人也要能看到、退出自己所在的群組）
+//!   其他還在用的帳號；`member_of` = 我所在的群組：別人的個人群組與管理員維護的群組，角色永遠不列。誰都能讀，沒有「分享通道」功能的人也要能看到、退出自己所在的群組）
 //! - `POST /api/user/groups`、`PATCH/DELETE /api/user/groups/{id}` → 同上（建立多一個 `created_id`）
 //! - `POST /api/user/groups/{id}/preview` `{members}` | `{delete: true}` → 誰會多了 / 少了哪些通道
 //! - `DELETE /api/user/groups/{id}/membership` → 退出別人的個人群組（任何人都能把你加進去，所以你一定能自己退出）
@@ -14,8 +15,8 @@
 //! 別人的群組一律 404。
 //!
 //! Personal groups: anyone may make a group of people to share tunnels with at once. Only its maker sees and edits it;
-//! it is used only for sharing — feature permissions never read it (those are the admins' organization groups, see
-//! `api::access`). Tunnels shared with one follow its members while its owner still manages the tunnel (see
+//! it is used only for sharing — feature permissions never read it (those are the admins' roles, see `api::access`).
+//! Every handler touches only rows with `owner_id = me`; roles and admin-kept groups are a 404. Tunnels shared with one follow its members while its owner still manages the tunnel (see
 //! `crate::group_shares`). Someone else's group is a 404.
 
 use std::collections::HashMap;
@@ -254,14 +255,14 @@ async fn preview(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id)
     Ok(Json(crate::group_shares::preview(&state, id, &change).await?))
 }
 
-/// 退出別人的個人群組：經由它拿到的通道收回（自己另有的分享不受影響）。只限個人群組，組織群組由管理員管。
-/// Leave someone else's personal group: tunnels held through it go (shares of your own stay). Personal groups only;
-/// organization groups are kept by admins.
+/// 退出別人的個人群組：經由它拿到的通道收回（自己另有的分享不受影響）。只限個人群組：管理員維護的群組由管理員 /
+/// 身分提供者管（404），角色也是 404。/ Leave someone else's personal group: tunnels held through it go (shares of your own
+/// stay). Personal groups only: admin-kept groups are kept by admins / the identity provider (404), and so is a role.
 #[utoipa::path(delete, path = "/api/user/groups/{id}/membership", tag = "Personal Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), responses((status = 200, body = super::schemas::GroupLeft), (status = 404, body = super::schemas::ErrorBody)))]
 async fn leave(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    let group = db::features::any_group(&state.db, id)
+    let group = db::features::sharing_group(&state.db, id)
         .await?
-        .filter(|g| g.owner_id.is_some_and(|o| o != me.id))
+        .filter(|g| g.is_personal() && g.owner_id.is_some_and(|o| o != me.id))
         .ok_or_else(|| ApiError::not_found("Group not found."))?;
     if !db::features::members_of(&state.db, id).await?.contains(&me.id) {
         return Err(ApiError::not_found("Group not found."));

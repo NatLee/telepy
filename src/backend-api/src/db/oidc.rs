@@ -6,7 +6,7 @@ use crate::db::users::User;
 use crate::util::now_db;
 
 const T: &str = "telepy_oidc_provider";
-const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session, scim_token, scim_token_prefix, scim_token_created, scim_last_used";
+const COLS: &str = "id, slug, name, issuer, client_id, client_secret, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session, scim_token, scim_token_prefix, scim_token_created, scim_last_used, scim_groups_as";
 const SESSION: &str = "telepy_oidc_session";
 const RULE: &str = "telepy_oidc_group_rule";
 const GRANT: &str = "telepy_oidc_grant";
@@ -39,6 +39,8 @@ pub struct Provider {
     pub scim_token_prefix: String,
     pub scim_token_created: Option<String>,
     pub scim_last_used: Option<String>,
+    /// SCIM 推來的群組變成什麼：`role`（功能權限）或 `group`（分享）。/ What SCIM-pushed groups become: `role` | `group`.
+    pub scim_groups_as: String,
 }
 
 impl Provider {
@@ -71,6 +73,8 @@ pub struct NewProvider<'a> {
     /// JSON 陣列。/ A JSON array.
     pub required_groups: &'a str,
     pub end_session: bool,
+    /// role | group
+    pub scim_groups_as: &'a str,
 }
 
 pub async fn list(db: &Db) -> sqlx::Result<Vec<Provider>> {
@@ -91,7 +95,7 @@ pub async fn by_slug(db: &Db, slug: &str) -> sqlx::Result<Option<Provider>> {
 
 pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
     let now = now_db();
-    Ok(sqlx::query(&format!("INSERT INTO {T} (slug, name, issuer, client_id, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+    Ok(sqlx::query(&format!("INSERT INTO {T} (slug, name, issuer, client_id, scopes, username_from, allowed_domains, create_users, link_by_email, enabled, created_at, updated_at, groups_claim, required_groups, end_session, scim_groups_as) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
         .bind(p.slug)
         .bind(p.name)
         .bind(p.issuer)
@@ -107,6 +111,7 @@ pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
         .bind(p.groups_claim)
         .bind(p.required_groups)
         .bind(p.end_session)
+        .bind(p.scim_groups_as)
         .execute(&db.write)
         .await?
         .last_insert_rowid())
@@ -114,7 +119,7 @@ pub async fn create(db: &Db, p: &NewProvider<'_>) -> sqlx::Result<i64> {
 
 /// 整列換掉（secret 另外存）。/ Replace the row (the secret is stored separately).
 pub async fn update(db: &Db, id: i64, p: &NewProvider<'_>) -> sqlx::Result<()> {
-    sqlx::query(&format!("UPDATE {T} SET slug = ?, name = ?, issuer = ?, client_id = ?, scopes = ?, username_from = ?, allowed_domains = ?, create_users = ?, link_by_email = ?, enabled = ?, updated_at = ?, groups_claim = ?, required_groups = ?, end_session = ? WHERE id = ?"))
+    sqlx::query(&format!("UPDATE {T} SET slug = ?, name = ?, issuer = ?, client_id = ?, scopes = ?, username_from = ?, allowed_domains = ?, create_users = ?, link_by_email = ?, enabled = ?, updated_at = ?, groups_claim = ?, required_groups = ?, end_session = ?, scim_groups_as = ? WHERE id = ?"))
         .bind(p.slug)
         .bind(p.name)
         .bind(p.issuer)
@@ -129,6 +134,7 @@ pub async fn update(db: &Db, id: i64, p: &NewProvider<'_>) -> sqlx::Result<()> {
         .bind(p.groups_claim)
         .bind(p.required_groups)
         .bind(p.end_session)
+        .bind(p.scim_groups_as)
         .bind(id)
         .execute(&db.write)
         .await?;
@@ -275,7 +281,7 @@ pub async fn forget(db: &Db, provider_id: i64, user_id: i64, target: Target) -> 
     Ok(())
 }
 
-/// 使用者群組刪掉了：指向它的規則與紀錄一起走。/ A user group was deleted: its rules and grant records go too.
+/// 角色或管理員維護的群組刪掉了：指向它的規則與紀錄一起走。/ A role or an admin-kept group was deleted: its rules and grant records go too.
 pub async fn forget_user_group(db: &Db, group_id: i64) -> sqlx::Result<()> {
     sqlx::query(&format!("DELETE FROM {RULE} WHERE target = 'group' AND group_id = ?")).bind(group_id).execute(&db.write).await?;
     sqlx::query(&format!("DELETE FROM {GRANT} WHERE target = 'group' AND group_id = ?")).bind(group_id).execute(&db.write).await?;

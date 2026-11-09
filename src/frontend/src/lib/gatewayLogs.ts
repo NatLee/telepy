@@ -87,6 +87,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     webhook: { key: "logs.event.webhook", tone: "outline", category: "change" },
     webhook_optout: { key: "logs.event.webhook_optout", tone: "outline", category: "change" },
     user_group: { key: "logs.event.user_group", tone: "outline", category: "change" },
+    share_group: { key: "logs.event.share_group", tone: "outline", category: "change" },
     feature_grant: { key: "logs.event.feature_grant", tone: "outline", category: "change" },
     notify_default: { key: "logs.event.notify_default", tone: "outline", category: "change" },
     health_ack: { key: "logs.event.health_ack", tone: "outline", category: "change" },

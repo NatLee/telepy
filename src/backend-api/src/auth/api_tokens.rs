@@ -330,6 +330,28 @@ impl TokenCache {
 mod tests {
     use super::*;
 
+    /// 角色與管理員維護的群組只給網頁登入的管理員：token 一律走不到，功能權限表也不擋它們（處理函式自己檢查 admin）。
+    /// Roles and admin-kept groups are for web-signed-in admins only: no token reaches them, and the feature table leaves
+    /// them alone (the handlers check admin themselves).
+    #[test]
+    fn roles_and_admin_kept_groups_are_never_open_to_tokens() {
+        for (m, p) in [
+            ("GET", "/api/access"),
+            ("POST", "/api/access/groups"),
+            ("PATCH", "/api/access/groups/3"),
+            ("DELETE", "/api/access/groups/3"),
+            ("PUT", "/api/access/grants"),
+            ("POST", "/api/access/share-groups"),
+            ("PATCH", "/api/access/share-groups/3"),
+            ("DELETE", "/api/access/share-groups/3"),
+            ("POST", "/api/access/share-groups/3/preview"),
+            ("POST", "/api/access/groups/3/preview"),
+        ] {
+            assert!(rest_route(m, p).is_none(), "{m} {p} must not be on the token allow-list");
+            assert_eq!(crate::features::for_route(m, p), None, "{m} {p}");
+        }
+    }
+
     #[test]
     fn scopes_are_checked_and_ordered() {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();

@@ -6,7 +6,7 @@ import type { SpotState } from "./flow.ts";
 
 export type SharePermission = "view" | "edit" | "admin";
 
-/** org = 組織群組（管理員 / 單一登入管）；personal = 某個人自己的個人群組。/ org = an organization group; personal = someone's own. */
+/** org = 管理員維護的群組（管理員 / 單一登入 / SCIM 放成員；從不是角色）；personal = 某個人自己的個人群組。/ org = an admin-kept group (never a role); personal = someone's own. */
 export type GroupKind = "org" | "personal";
 
 export interface GroupShare {
@@ -31,13 +31,13 @@ export interface GroupShare {
     created_at: string;
     allowed_target_usernames: { id: number; username: string }[];
     kind: GroupKind;
-    /** 個人群組的主人（組織群組 = null）。/ A personal group's owner (null for organization groups). */
+    /** 個人群組的主人（管理員維護的群組 = null）。/ A personal group's owner (null for admin-kept groups). */
     owner: string | null;
     /** 看的人自己的個人群組。/ A personal group owned by the viewer. */
     mine: boolean;
     /** false = 暫停：個人群組的主人已經不管這條通道，成員經由它拿不到東西。/ false = paused. */
     active: boolean;
-    /** 組織群組的成員由公司帳號（單一登入 / SCIM）同步。/ An organization group whose members are synced from company accounts. */
+    /** 管理員維護的群組，成員由公司帳號（單一登入 / SCIM）同步。/ An admin-kept group whose members are synced from company accounts. */
     synced: boolean;
 }
 
@@ -47,7 +47,7 @@ export interface GroupChoice {
     members: number;
     shared: boolean;
     kind: GroupKind;
-    /** 成員由公司帳號同步（只有組織群組會是 true）。/ Members synced from company accounts (organization groups only). */
+    /** 成員由公司帳號同步（只有管理員維護的群組會是 true）。/ Members synced from company accounts (admin-kept groups only). */
     synced: boolean;
 }
 

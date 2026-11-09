@@ -394,8 +394,16 @@ fn claim_groups(p: &Provider, claims: &Claims) -> Option<Vec<String>> {
     roles::claim_groups(&full_claims(claims), &p.groups_claim)
 }
 
+/// 規則能指向的列 → 給人看的名稱：角色與管理員維護的群組（永遠不含個人群組）。
+/// What rules may point at → shown names: roles and admin-kept groups (never personal groups).
 async fn group_names(state: &AppState) -> sqlx::Result<std::collections::HashMap<i64, String>> {
-    Ok(db::features::groups(&state.db).await?.into_iter().map(|g| (g.id, g.name)).collect())
+    Ok(db::features::sso_targets(&state.db).await?.into_iter().map(|g| (g.id, g.label().to_string())).collect())
+}
+
+/// 規則能指向的管理員維護群組的 id（動到它們就要比對群組分享）。/ The admin-kept group ids rules may point at
+/// (touching one means reconciling group shares).
+async fn share_group_ids(state: &AppState) -> sqlx::Result<std::collections::HashSet<i64>> {
+    Ok(db::features::share_groups(&state.db).await?.into_iter().map(|g| g.id).collect())
 }
 
 /// 這個提供者的規則，指向已經不存在的群組的那些不算。/ The provider's rules, minus ones whose group is gone.
@@ -406,7 +414,8 @@ async fn live_rules(state: &AppState, provider_id: i64) -> sqlx::Result<Vec<Rule
 
 async fn current(state: &AppState, p: &Provider, user: &User) -> sqlx::Result<Current> {
     Ok(Current {
-        member_of: db::features::groups_of(&state.db, user.id).await?,
+        // 角色與管理員維護的群組（規則能指向的兩種）。/ Roles and admin-kept groups (the two kinds rules target).
+        member_of: db::features::sso_groups_of(&state.db, user.id).await?,
         is_admin: user.is_superuser,
         granted: db::oidc::granted(&state.db, p.id, user.id).await?,
         other_admins: db::oidc::other_admins(&state.db, user.id).await? > 0,
@@ -463,8 +472,11 @@ async fn apply_roles(state: &AppState, p: &Provider, user: &User, claims: &Claim
         db::oidc::forget(&state.db, p.id, user.id, *t).await?;
     }
     state.features.invalidate();
-    // 分享給這些群組的通道跟著走。/ Tunnels shared with these groups follow.
-    crate::group_shares::kick(state);
+    // 動到管理員維護的群組：分享給它的通道立刻跟著走。/ An admin-kept group touched: its tunnels follow at once.
+    let shared = share_group_ids(state).await?;
+    if sync.join.iter().chain(sync.leave.iter()).any(|id| shared.contains(id)) {
+        crate::group_shares::kick(state);
+    }
     let names = group_names(state).await?;
     let quoted = |ids: &[i64]| ids.iter().map(|id| format!("\"{}\"", names.get(id).cloned().unwrap_or_else(|| format!("#{id}")))).collect::<Vec<_>>().join(", ");
     let mut parts = Vec::new();
@@ -796,6 +808,8 @@ fn provider_json(p: &Provider, base: &str, links: i64, rules: &[&db::oidc::RuleR
         "groups_claim": p.groups_claim,
         "required_groups": p.required(),
         "end_session": p.end_session,
+        // SCIM 推來的群組變成角色或群組。/ Whether SCIM-pushed groups become roles or groups.
+        "scim_groups_as": p.scim_groups_as,
         // SCIM 帳號同步：有沒有權杖、前幾碼、最後一次使用、管理幾個帳號與群組。/ SCIM provisioning state.
         "scim": {
             "active": !p.scim_token.is_empty(),
@@ -823,7 +837,8 @@ async fn admin_json(state: &AppState, headers: &HeaderMap) -> ApiResult<Value> {
     let rules = db::oidc::all_rules(&state.db).await?;
     let scim = db::scim::counts(&state.db).await?;
     let groups = db::features::groups(&state.db).await?;
-    let names: std::collections::HashMap<i64, String> = groups.iter().map(|g| (g.id, g.name.clone())).collect();
+    let share_groups = db::features::share_groups(&state.db).await?;
+    let names: std::collections::HashMap<i64, String> = groups.iter().chain(share_groups.iter()).map(|g| (g.id, g.label().to_string())).collect();
     let providers: Vec<Value> = db::oidc::list(&state.db)
         .await?
         .iter()
@@ -838,8 +853,10 @@ async fn admin_json(state: &AppState, headers: &HeaderMap) -> ApiResult<Value> {
         "public_url_set": state.config.public_base().is_some(),
         // SCIM 的基底網址（填到身分提供者那邊）。/ The SCIM base URL to give the provider.
         "scim_base": format!("{base}/api/scim/v2"),
-        // 規則可以指向的使用者群組（功能權限的群組）。/ The user groups rules may point at (feature-access groups).
+        // 規則可以指向的：角色（功能權限）與管理員維護的群組（分享）。個人群組永遠不在。
+        // What rules may point at: roles (feature permissions) and admin-kept groups (sharing). Never personal groups.
         "user_groups": groups.iter().map(|g| json!({ "id": g.id, "name": g.name })).collect::<Vec<_>>(),
+        "share_groups": share_groups.iter().map(|g| json!({ "id": g.id, "name": g.label() })).collect::<Vec<_>>(),
     }))
 }
 
@@ -868,6 +885,7 @@ struct Form {
     /// None = 不動（修改時沒給）。/ None = keep (omitted on update).
     rules: Option<Vec<Rule>>,
     end_session: bool,
+    scim_groups_as: String,
 }
 
 /// 一串群組名稱：去頭尾空白、不空、不重複、不太長。/ A list of group names: trimmed, non-empty, unique, bounded.
@@ -910,7 +928,7 @@ fn parse_rules(v: &Value, known: &std::collections::HashMap<i64, String>) -> Api
             Some("admin") => Target::Admin,
             Some("group") => match it.get("group_id").and_then(Value::as_i64) {
                 Some(id) if known.contains_key(&id) => Target::Group(id),
-                _ => return Err(ApiError::field("group_rules", "Pick a Telepy organization group that exists.")),
+                _ => return Err(ApiError::field("group_rules", "Pick a Telepy role or group that exists.")),
             },
             _ => return Err(ApiError::field("group_rules", "target must be admin or group.")),
         };
@@ -982,6 +1000,11 @@ fn parse_form(body: &Value, old: Option<&Provider>, known_groups: &std::collecti
         Some(v) => parse_group_list(v, "required_groups", roles::MAX_REQUIRED)?,
         None => old.map(|o| o.required()).unwrap_or_default(),
     };
+    let scim_groups_as = match body.get("scim_groups_as") {
+        None => old.map(|o| o.scim_groups_as.clone()).unwrap_or_else(|| "role".into()),
+        Some(Value::String(x)) if x == "role" || x == "group" => x.clone(),
+        Some(_) => return Err(ApiError::field("scim_groups_as", "Must be role or group.")),
+    };
     let rules = match body.get("group_rules") {
         Some(v) => Some(parse_rules(v, known_groups)?),
         None if old.is_none() => Some(vec![]),
@@ -1003,6 +1026,7 @@ fn parse_form(body: &Value, old: Option<&Provider>, known_groups: &std::collecti
         required_groups: serde_json::to_string(&required).unwrap_or_else(|_| "[]".into()),
         rules,
         end_session: b("end_session", old.map(|o| o.end_session).unwrap_or(false)),
+        scim_groups_as,
     })
 }
 
@@ -1022,6 +1046,7 @@ impl Form {
             groups_claim: &self.groups_claim,
             required_groups: &self.required_groups,
             end_session: self.end_session,
+            scim_groups_as: &self.scim_groups_as,
         }
     }
 }

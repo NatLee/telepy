@@ -22,8 +22,16 @@ async fn spec_is_served_and_covers_the_rest_api() {
 
     // 核心路徑都在，而且動詞對得上前端 lib/api.ts 用的那些。/ The key paths and verbs the frontend uses.
     let paths = spec["paths"].as_object().unwrap();
+    // 角色不能被分享，所以角色的預告拿掉了。/ Roles can't be shared with, so the role preview is gone.
+    assert!(!paths.contains_key("/api/access/groups/{id}/preview"));
     for (path, verbs) in [
         ("/api/auth/token", vec!["post"]),
+        ("/api/access", vec!["get"]),
+        ("/api/access/groups", vec!["post"]),
+        ("/api/access/groups/{id}", vec!["patch", "delete"]),
+        ("/api/access/share-groups", vec!["post"]),
+        ("/api/access/share-groups/{id}", vec!["patch", "delete"]),
+        ("/api/access/share-groups/{id}/preview", vec!["post"]),
         ("/api/snippets", vec!["get", "post"]),
         ("/api/snippets/{id}", vec!["patch", "delete"]),
         ("/api/snippets/{id}/used", vec!["post"]),
