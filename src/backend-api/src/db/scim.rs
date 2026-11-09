@@ -116,17 +116,27 @@ pub struct ScimGroupRow {
     pub external_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// 給人看的名稱（角色的 `name`、群組的 `display_name`）。/ The shown name (a role's `name`, a group's `display_name`).
     pub name: String,
+    /// role = 角色（功能權限）、group = 管理員維護的群組（分享）。/ role (features) | group (admin-kept, sharing).
+    pub purpose: String,
 }
 
-const GROUP_COLS: &str = "s.group_id, s.external_id, s.created_at, s.updated_at, g.name";
+impl ScimGroupRow {
+    pub fn is_role(&self) -> bool {
+        self.purpose == "role"
+    }
+}
+
+/// 只有角色與管理員維護的群組會被 SCIM 管（個人群組永遠不會）。/ Only roles and admin-kept groups are SCIM-managed (never personal ones).
+const GROUP_COLS: &str = "s.group_id, s.external_id, s.created_at, s.updated_at, COALESCE(g.display_name, g.name) AS name, g.purpose";
 
 pub async fn groups(db: &Db, provider_id: i64) -> sqlx::Result<Vec<ScimGroupRow>> {
-    sqlx::query_as(&format!("SELECT {GROUP_COLS} FROM {GROUP} s JOIN telepy_user_group g ON g.id = s.group_id WHERE s.provider_id = ? ORDER BY s.group_id")).bind(provider_id).fetch_all(&db.read).await
+    sqlx::query_as(&format!("SELECT {GROUP_COLS} FROM {GROUP} s JOIN telepy_user_group g ON g.id = s.group_id AND g.owner_id IS NULL WHERE s.provider_id = ? ORDER BY s.group_id")).bind(provider_id).fetch_all(&db.read).await
 }
 
 pub async fn group(db: &Db, provider_id: i64, group_id: i64) -> sqlx::Result<Option<ScimGroupRow>> {
-    sqlx::query_as(&format!("SELECT {GROUP_COLS} FROM {GROUP} s JOIN telepy_user_group g ON g.id = s.group_id WHERE s.provider_id = ? AND s.group_id = ?"))
+    sqlx::query_as(&format!("SELECT {GROUP_COLS} FROM {GROUP} s JOIN telepy_user_group g ON g.id = s.group_id AND g.owner_id IS NULL WHERE s.provider_id = ? AND s.group_id = ?"))
         .bind(provider_id)
         .bind(group_id)
         .fetch_optional(&db.read)
@@ -151,7 +161,12 @@ pub async fn touch_group(db: &Db, provider_id: i64, group_id: i64, external_id: 
     Ok(())
 }
 
-/// 使用者群組刪掉了（任何地方）：紀錄一起走。/ A user group was deleted (anywhere): its record goes.
+/// SCIM 推來的列（角色或群組）的 id。/ The ids of rows SCIM pushed (roles or groups).
+pub async fn mapped_groups(db: &Db) -> sqlx::Result<std::collections::HashSet<i64>> {
+    Ok(sqlx::query_scalar::<_, i64>(&format!("SELECT DISTINCT group_id FROM {GROUP}")).fetch_all(&db.read).await?.into_iter().collect())
+}
+
+/// 角色或群組刪掉了（任何地方）：紀錄一起走。/ A user group was deleted (anywhere): its record goes.
 pub async fn forget_group(db: &Db, group_id: i64) -> sqlx::Result<()> {
     sqlx::query(&format!("DELETE FROM {GROUP} WHERE group_id = ?")).bind(group_id).execute(&db.write).await?;
     Ok(())

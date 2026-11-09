@@ -1283,6 +1283,13 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_user_group", "owner_id", "integer NULL"),
     ("telepy_user_group", "display_name", "varchar(64) NULL"),
     ("telepy_user_group", "shareable", "bool NOT NULL DEFAULT 0"),
+    // 角色與群組分開：`role` = 角色（只決定功能權限，永遠不能分享）、`group` = 群組（管理員維護的或個人的，只用來分享）。
+    // `shareable` 從此沒有意義（欄位照規則留著，沒有人讀）。/ Roles and groups split by job: `role` = feature permissions
+    // only, never shared with; `group` = an admin-kept or personal group, sharing only. `shareable` means nothing from
+    // now on (the column stays, as always; nothing reads it).
+    ("telepy_user_group", "purpose", "varchar(8) NOT NULL DEFAULT 'role'"),
+    // SCIM 推來的群組變成什麼：`role` | `group`。/ What SCIM-pushed groups become: `role` | `group`.
+    ("telepy_oidc_provider", "scim_groups_as", "varchar(8) NOT NULL DEFAULT 'role'"),
     // 最後一次有掃描（整網段或「檢查這台」）探過它的時間；`last_seen` 比它早 = 這次沒看到。/ When a scan last covered it.
     ("telepy_lan_host", "checked_at", "datetime NULL"),
     // 使用者寫的備註與標籤（JSON 陣列，跟通道標籤同規則）。/ The person's notes and labels (JSON array, tunnel label rules).
@@ -1583,6 +1590,18 @@ pub const TUNNEL_WAY_IN: &str = "2026-10-30-tunnel-way-in";
 /// on, so existing shares keep working.
 pub const SHAREABLE_GROUPS: &str = "2026-11-08-shareable-organization-groups";
 
+/// 角色與群組分開：被分享的組織群組變成群組。只為分享存在的（沒有功能規則、單一登入規則、SCIM 對應）就地轉成管理員
+/// 維護的群組；同時也當角色用的就複製一個同名群組（成員一樣）、把群組分享改指向它，角色留下它的成員、規則與對應。
+/// 從沒算數過的分享（指向沒開放分享的組織群組）刪掉。個人群組標成群組，`shareable` 全部歸零。誰拿得到哪條通道、
+/// 哪些功能都不變（成員的分享列指的是群組分享 id，那些不變）。
+/// Roles and groups split: organization groups that are shared with become groups. One that exists only for sharing (no
+/// feature grant, no sign-in rule, no SCIM mapping) is converted in place into an admin-kept group; one also used as a
+/// role gets a copy (same name, same members) its group shares move to, and the role keeps its members, grants, rules and
+/// mapping. Shares that never counted (an organization group closed to sharing) are deleted. Personal groups are marked
+/// as groups and `shareable` is cleared everywhere. Nobody gains or loses a tunnel or a feature (members' share rows
+/// point at group share ids, which don't change).
+pub const ROLES_AND_GROUPS: &str = "2026-11-09-roles-and-groups";
+
 /// 網頁 port 的載體（SSH over WebSocket）出貨的時間；在那之前建立的隧道只會走 SSH port。
 /// When the web-port carrier shipped; tunnels created before it can only use the SSH port.
 const WS_CARRIER_SHIPPED: &str = "2026-10-24 19:18:11";
@@ -1607,7 +1626,112 @@ pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     cli_signin_style(pool).await?;
     personal_command_rules(pool).await?;
     tunnel_way_in(pool).await?;
-    shareable_groups(pool).await
+    shareable_groups(pool).await?;
+    roles_and_groups(pool).await
+}
+
+/// 管理員維護的群組裡沒人用的名稱：同名就加「 (shared)」，再撞就加數字。/ A name no admin-kept group uses yet.
+pub fn free_group_name(name: &str, taken: &std::collections::HashSet<String>) -> String {
+    if !taken.contains(&name.to_lowercase()) {
+        return name.to_string();
+    }
+    let shared = format!("{name} (shared)");
+    if !taken.contains(&shared.to_lowercase()) {
+        return shared;
+    }
+    (2..).map(|n| format!("{name} (shared {n})")).find(|c| !taken.contains(&c.to_lowercase())).unwrap_or(shared)
+}
+
+async fn roles_and_groups(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, ROLES_AND_GROUPS).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let shared: Vec<(i64, String, String, bool)> = sqlx::query_as(
+        "SELECT id, name, description, shareable FROM telepy_user_group \
+         WHERE owner_id IS NULL AND purpose = 'role' AND id IN (SELECT group_id FROM telepy_group_share) ORDER BY id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut taken: std::collections::HashSet<String> =
+        sqlx::query_scalar::<_, String>("SELECT lower(COALESCE(display_name, name)) FROM telepy_user_group WHERE owner_id IS NULL AND purpose = 'group'")
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
+    let (mut converted, mut copied, mut dropped) = (0, 0, 0);
+    let mut unsynced: Vec<String> = Vec::new();
+    for (id, name, description, shareable) in shared {
+        if !shareable {
+            // 沒開放分享的組織群組，它的分享從來不算（比對會跳過）：刪掉，誰都不會因此多或少。
+            // Closed to sharing: its shares never counted (the reconcile skipped them), so deleting them changes nothing.
+            sqlx::query("DELETE FROM telepy_group_share_username WHERE group_share_id IN (SELECT id FROM telepy_group_share WHERE group_id = ?)").bind(id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM telepy_group_share WHERE group_id = ?").bind(id).execute(&mut *tx).await?;
+            dropped += 1;
+            continue;
+        }
+        // 只有功能規則才讓它是角色：沒有功能規則的成員資格什麼功能都不決定，所以就地轉成群組不會改到任何人的功能，
+        // 而且單一登入規則、授予紀錄、SCIM 對應都留在同一個 id 上 —— 身分提供者照樣維護它的成員（被移出團隊的人一樣
+        // 會失去通道）。/ Only feature rules make it a role: membership without rules decides no feature, so converting
+        // it in place changes nobody's features, and its sign-in rules, grant records and SCIM mapping stay on the same id —
+        // the identity provider keeps its members as before (someone taken out of the team still loses the tunnel).
+        let used_as_role: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM telepy_feature_grant WHERE subject_kind = 'group' AND subject_id = ?)")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let label = free_group_name(&name, &taken);
+        taken.insert(label.to_lowercase());
+        let placeholder = super::features::placeholder("group");
+        if used_as_role {
+            let new_id = sqlx::query("INSERT INTO telepy_user_group (name, description, created_at, display_name, purpose) VALUES (?, ?, ?, ?, 'group')")
+                .bind(&placeholder)
+                .bind(&description)
+                .bind(crate::util::now_db())
+                .bind(&label)
+                .execute(&mut *tx)
+                .await?
+                .last_insert_rowid();
+            sqlx::query("INSERT OR IGNORE INTO telepy_user_group_member (group_id, user_id) SELECT ?, user_id FROM telepy_user_group_member WHERE group_id = ?")
+                .bind(new_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE telepy_group_share SET group_id = ? WHERE group_id = ?").bind(new_id).bind(id).execute(&mut *tx).await?;
+            // 單一登入規則與授予紀錄也複製一份給新群組：身分提供者把人移出團隊時，這個群組一樣會拿掉他，通道跟著收回。
+            // Copy the sign-in rules and grant records to the new group too: when the identity provider takes someone out
+            // of the team, this group drops them as well and the tunnel goes with it.
+            sqlx::query("INSERT INTO telepy_oidc_group_rule (provider_id, idp_group, target, group_id) SELECT provider_id, idp_group, target, ? FROM telepy_oidc_group_rule WHERE target = 'group' AND group_id = ?")
+                .bind(new_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT OR IGNORE INTO telepy_oidc_grant (provider_id, user_id, target, group_id, created_at) SELECT provider_id, user_id, target, ?, created_at FROM telepy_oidc_grant WHERE target = 'group' AND group_id = ?")
+                .bind(new_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            // SCIM 只認得原本的 id，沒辦法同時維護這份複本：說出來，請管理員看一下。/ SCIM only knows the old id: say so.
+            let scim: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM telepy_scim_group WHERE group_id = ?)").bind(id).fetch_one(&mut *tx).await?;
+            if scim {
+                unsynced.push(label.clone());
+            }
+            copied += 1;
+        } else {
+            sqlx::query("UPDATE telepy_user_group SET purpose = 'group', display_name = ?, name = ? WHERE id = ?").bind(&label).bind(&placeholder).bind(id).execute(&mut *tx).await?;
+            converted += 1;
+        }
+    }
+    sqlx::query("UPDATE telepy_user_group SET purpose = 'group' WHERE owner_id IS NOT NULL").execute(&mut *tx).await?;
+    // 新程式不再讀 `shareable`；管理員維護的群組留 1，萬一退回舊版，舊版的比對也照樣算它們的分享。
+    // Nothing reads `shareable` any more; admin-kept groups keep 1 so a rollback to an older build still counts their shares.
+    sqlx::query("UPDATE telepy_user_group SET shareable = CASE WHEN owner_id IS NULL AND purpose = 'group' THEN 1 ELSE 0 END").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(ROLES_AND_GROUPS).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    tracing::debug!(converted, copied, dropped, "data migration: shared organization groups became groups");
+    if !unsynced.is_empty() {
+        tracing::warn!(groups = ?unsynced, "data migration: these groups were copied from SCIM-pushed roles that also had feature rules; SCIM keeps the roles, not the copies — check the copies' members on the admin Groups page");
+    }
+    Ok(())
 }
 
 async fn shareable_groups(pool: &SqlitePool) -> anyhow::Result<()> {
@@ -1773,6 +1897,15 @@ async fn drop_sharee_usernames(pool: &SqlitePool) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::db::pool::Db;
+
+    #[test]
+    fn migrated_group_names_never_collide_among_admin_kept_groups() {
+        let taken: std::collections::HashSet<String> = ["ops".to_string(), "ops (shared)".to_string()].into_iter().collect();
+        assert_eq!(free_group_name("dev", &taken), "dev");
+        assert_eq!(free_group_name("OPS", &taken), "OPS (shared 2)");
+        let one: std::collections::HashSet<String> = ["ops".to_string()].into_iter().collect();
+        assert_eq!(free_group_name("Ops", &one), "Ops (shared)");
+    }
 
     #[tokio::test]
     async fn fresh_db_gets_full_schema_and_is_idempotent() {

@@ -1,8 +1,8 @@
 /**
  * 群組旁的一行安靜字：成員是誰在維護（你 / 做群組的人 / 管理員 / 公司帳號同步）。一般使用者只看到這個，
- * 不用學「組織群組 / 個人群組」兩個詞。
+ * 不用學「管理員維護的群組 / 個人群組」的分法（角色從不出現在分享）。
  * One quiet line next to a group: who keeps its members (you / the person who made it / admins / synced from company
- * accounts). Ordinary users only see this, never the words "organization group" / "personal group".
+ * accounts). Ordinary users only see this, never the admin-kept / personal split (roles never appear in sharing).
  */
 import React from "react";
 import { Building2, RefreshCw, User } from "lucide-react";

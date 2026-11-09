@@ -1,6 +1,10 @@
 /**
- * 設定頁「存取」分頁：載入整份功能權限（GET /api/access），寫入（群組、成員、允許 / 拒絕）後用回傳的整份取代。
- * The Settings page's Access tab: loads the feature-permission policy and replaces it with what every write answers.
+ * 管理區的功能權限、角色與（管理員維護的）群組三頁共用：載入整份政策（GET /api/access），寫入（角色、群組、成員、
+ * 允許 / 拒絕）後用回傳的整份取代。角色只管功能（`/api/access/groups`）；群組只管分享（`/api/access/share-groups`），
+ * 改群組成員或刪群組前可以先預覽誰會多 / 少哪些通道。
+ * Shared by the admin Feature access, Roles and Groups pages: loads the policy and replaces it with what every write
+ * answers. Roles only decide features (`/api/access/groups`); groups only decide sharing (`/api/access/share-groups`),
+ * with a preview of who gains / loses which tunnels before their members change or they are deleted.
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
@@ -10,16 +14,15 @@ import { useAuth } from "@/lib/auth";
 import { parseImpact, type Impact } from "@/lib/peopleGroups";
 import { grantBody, type AccessPolicy, type GrantValue, type Subject } from "@/lib/features";
 
+/** 角色或群組的欄位（只送有變的）。/ A role's or group's fields (only what changed is sent). */
 export interface GroupDraft {
     name?: string;
     description?: string;
     members?: number[];
-    /** 組織群組可以出現在分享視窗。/ The organization group shows up in share dialogs. */
-    shareable?: boolean;
 }
 
-/** 預覽一個改變（三選一）。/ One change to preview (exactly one of these). */
-export type GroupPreviewBody = { members: number[] } | { delete: true } | { shareable: false };
+/** 預覽一個群組的改變（二選一）。/ One group change to preview (exactly one of these). */
+export type GroupPreviewBody = { members: number[] } | { delete: true };
 
 export function useAccessPage() {
     const { t } = useI18n();
@@ -74,36 +77,61 @@ export function useAccessPage() {
 
     const setGrant = useCallback((subject: Subject, feature: string, value: GrantValue) => write("/api/access/grants", "PUT", grantBody(subject, feature, value)), [write]);
 
-    const createGroup = useCallback(
+    /* ── 角色（功能）/ Roles (features) ── */
+    const createRole = useCallback(
         async (draft: GroupDraft) => {
             const r = await write("/api/access/groups", "POST", draft);
-            if (r) showSuccess(t("access.groupCreated", { name: draft.name ?? "" }));
+            if (r) showSuccess(t("roles.created", { name: draft.name ?? "" }));
             return r?.created_id ?? null;
         },
         [write, showSuccess, t],
     );
+    const updateRole = useCallback((id: number, draft: GroupDraft) => write(`/api/access/groups/${id}`, "PATCH", draft), [write]);
+    const deleteRole = useCallback((id: number) => write(`/api/access/groups/${id}`, "DELETE"), [write]);
 
-    const updateGroup = useCallback((id: number, draft: GroupDraft) => write(`/api/access/groups/${id}`, "PATCH", draft), [write]);
-    const deleteGroup = useCallback((id: number) => write(`/api/access/groups/${id}`, "DELETE"), [write]);
+    /* ── 管理員維護的群組（分享）/ Admin-kept groups (sharing) ── */
+    const createShareGroup = useCallback(
+        async (draft: GroupDraft) => {
+            const r = await write("/api/access/share-groups", "POST", draft);
+            if (r) showSuccess(t("adminGroups.created", { name: draft.name ?? "" }));
+            return r?.created_id ?? null;
+        },
+        [write, showSuccess, t],
+    );
+    const updateShareGroup = useCallback((id: number, draft: GroupDraft) => write(`/api/access/share-groups/${id}`, "PATCH", draft), [write]);
+    const deleteShareGroup = useCallback((id: number) => write(`/api/access/share-groups/${id}`, "DELETE"), [write]);
 
     /** 這個改變會讓誰多 / 少哪些通道（不寫入）；失敗 = null（已顯示錯誤）。/ Who would gain / lose which tunnels; null on failure. */
-    const previewGroup = useCallback(
+    const previewShareGroup = useCallback(
         async (id: number, body: GroupPreviewBody): Promise<Impact | null> => {
             try {
-                const res = await apiFetch(`/api/access/groups/${id}/preview`, { method: "POST", body: JSON.stringify(body) });
+                const res = await apiFetch(`/api/access/share-groups/${id}/preview`, { method: "POST", body: JSON.stringify(body) });
                 const data = await readJson(res);
                 if (!res.ok) {
-                    showError(responseError(res, data, t("orgGroups.previewFailed")));
+                    showError(responseError(res, data, t("impact.previewFailed")));
                     return null;
                 }
                 return parseImpact(data);
             } catch (e) {
-                showError(e instanceof Error ? e.message : t("orgGroups.previewFailed"));
+                showError(e instanceof Error ? e.message : t("impact.previewFailed"));
                 return null;
             }
         },
         [showError, t],
     );
 
-    return { policy, loading, saving, reload: load, setGrant, createGroup, updateGroup, deleteGroup, previewGroup };
+    return {
+        policy,
+        loading,
+        saving,
+        reload: load,
+        setGrant,
+        createRole,
+        updateRole,
+        deleteRole,
+        createShareGroup,
+        updateShareGroup,
+        deleteShareGroup,
+        previewShareGroup,
+    };
 }

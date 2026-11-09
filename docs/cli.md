@@ -539,7 +539,7 @@ The live version of this picture is behind the **Four ways in** button on the AP
 - **It can't add SSH keys.** It can read your key list and put a key you already added on a device's list (with `ssh:exec`), but adding a key happens in the web: `telepy keys add` opens it for you.
 - **Step-up tunnels refuse it.** Tunnels that ask you to confirm it's you refuse tokens, exactly like MCP agents.
 - **It expires.** Every token expires, at most a year after it was created. Revoking takes effect at once.
-- **Admins can switch it off.** Admins can turn the **API tokens** feature off for everyone, an organization group or one person (**Admin → Users & access → Feature permissions**), and that person's tokens stop working. Other features turned off for you (web terminal, file manager, …) are refused to your tokens too, with 403 `feature_disabled`.
+- **Admins can switch it off.** Admins can turn the **API tokens** feature off for everyone, a role or one person (**Admin → Users & access → Feature permissions**), and that person's tokens stop working. Other features turned off for you (web terminal, file manager, …) are refused to your tokens too, with 403 `feature_disabled`.
 - **A disabled account suspends it.** If an admin disables your account, your tokens and CLI sign-ins are suspended, not revoked. They are refused while the account is off and work again once it is enabled.
 
 ### Scopes

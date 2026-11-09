@@ -2,11 +2,11 @@
 
 /**
  * 「群組」頁：上面是「你建立的群組」（跟分享視窗同一套清單與編輯），下面是「你所在的群組」—— 每個只標出成員是誰在
- * 維護（做群組的人可以退出；管理員維護或公司帳號同步的唯讀）。「組織群組 / 個人群組」這兩個詞只留在管理區。
+ * 維護（做群組的人可以退出；管理員維護或公司帳號同步的唯讀）。「管理員維護的群組 / 個人群組」的分法只留在管理區；角色從不出現在這裡。
  * 資訊鈕 = 群組分享的說明圖。有人退出我的群組、通道分享變了就重抓。
  * The Groups page: "Groups you made" on top (the same list and editing as the share dialog), then "Groups you're in"
  * — each labelled only by who keeps its members (a group someone made can be left; ones admins keep or synced from
- * company accounts are read-only). "Organization group" / "personal group" stay in the admin area. The info button
+ * company accounts are read-only). The admin-kept / personal split stays in the admin area; roles never appear here. The info button
  * opens the group sharing diagram. Refetches when someone leaves my group or a tunnel share changes.
  */
 import React, { useCallback, useState } from "react";

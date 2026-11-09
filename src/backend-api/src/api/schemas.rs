@@ -4429,6 +4429,15 @@ pub struct AccessResolved {
     pub group_id: Option<i64>,
 }
 
+/// 單一登入給的成員資格。/ A membership a sign-in provider gave.
+#[derive(ToSchema)]
+pub struct SsoMember {
+    pub user_id: i64,
+    /// 提供者的名字。/ The provider's name.
+    pub provider: String,
+}
+
+/// 角色：只決定功能權限，永遠不能拿來分享通道。/ A role: feature permissions only, never shared with.
 #[derive(ToSchema)]
 pub struct AccessGroup {
     pub id: i64,
@@ -4437,11 +4446,28 @@ pub struct AccessGroup {
     pub created_at: String,
     /// User ids
     pub members: Vec<i64>,
+    pub sso_members: Vec<SsoMember>,
     /// feature id → true (allow) / false (deny); missing = inherit
     #[schema(example = json!({"terminal": false}))]
     pub grants: std::collections::HashMap<String, bool>,
-    /// 能出現在分享對話框。/ May be picked in share dialogs.
-    pub shareable: bool,
+    /// SCIM 推來的。/ Pushed by SCIM.
+    pub scim: bool,
+}
+
+/// 管理員維護的群組：只用來分享通道，功能權限永遠不看它。/ An admin-kept group: sharing only; feature permissions never read it.
+#[derive(ToSchema)]
+pub struct AccessShareGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    /// User ids
+    pub members: Vec<i64>,
+    pub sso_members: Vec<SsoMember>,
+    /// 成員由身分提供者同步（SCIM 推的，或單一登入規則指向它）。/ An identity provider keeps its members (SCIM, or a sign-in rule).
+    pub synced: bool,
+    /// SCIM 推來的。/ Pushed by SCIM.
+    pub scim: bool,
     /// 分享給這個群組的通道。/ The tunnels shared with this group.
     pub shares: Vec<AccessGroupShare>,
 }
@@ -4466,8 +4492,6 @@ pub struct GroupPreviewRequest {
     pub members: Option<Vec<i64>>,
     /// 刪掉群組會怎樣。/ What deleting the group would do.
     pub delete: Option<bool>,
-    /// false = 不再開放分享會怎樣（組織群組）。/ false = what closing an organization group to sharing would do.
-    pub shareable: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -4489,7 +4513,7 @@ pub struct GroupPreview {
     pub gain: Vec<PreviewPerson>,
     /// 會失去通道的人。/ People who would lose tunnels.
     pub lose: Vec<PreviewPerson>,
-    /// 會結束的群組分享數（刪群組 / 不再開放分享）。/ Group shares that would end (delete / closed to sharing).
+    /// 會結束的群組分享數（刪群組）。/ Group shares that would end (delete).
     pub shares: i64,
 }
 
@@ -4530,11 +4554,11 @@ pub struct MemberOfGroup {
     pub id: i64,
     pub name: String,
     pub description: String,
-    /// org | personal
+    /// org = 管理員維護的群組 | personal（角色永遠不列）。/ org = an admin-kept group | personal (roles are never listed).
     pub kind: String,
-    /// 個人群組的主人（可以退出）；組織群組 = null。/ A personal group's owner (you may leave it); null for organization groups.
+    /// 個人群組的主人（可以退出）；管理員維護的群組 = null。/ A personal group's owner (you may leave it); null for admin-kept groups.
     pub owner: Option<String>,
-    /// 組織群組的成員由身分提供者同步。/ An organization group whose members an identity provider keeps.
+    /// 管理員維護的群組，成員由身分提供者同步。/ An admin-kept group whose members an identity provider keeps.
     pub synced: bool,
     /// 分享給它、我看得到的通道。/ Tunnels shared with it that I can see.
     pub tunnels: Vec<MemberOfTunnel>,
@@ -4543,7 +4567,7 @@ pub struct MemberOfGroup {
 #[derive(ToSchema)]
 pub struct PersonalGroups {
     pub groups: Vec<PersonalGroup>,
-    /// 我所在的群組：別人的個人群組，以及開放分享的組織群組。/ Groups I'm in: others' personal groups and organization groups open to sharing.
+    /// 我所在的群組：別人的個人群組，以及管理員維護的群組（角色不列）。/ Groups I'm in: others' personal groups and admin-kept groups (never roles).
     pub member_of: Vec<MemberOfGroup>,
     /// 你至少管得到一條通道的分享（擁有者或 ADMIN）；否則 `users` 是空的、不能放成員。
     /// You manage sharing on at least one tunnel (owner or ADMIN); otherwise `users` is empty and members can't be added.
@@ -4578,35 +4602,49 @@ pub struct AccessUser {
     pub email: String,
     pub is_superuser: bool,
     pub is_active: bool,
-    /// Group ids
+    /// Role ids
     pub groups: Vec<i64>,
-    /// The user's own settings (the leaf that overrides their groups); missing = inherit
+    /// 單一登入給的管理員（提供者名字）。/ Admin rights a sign-in provider gave (its name).
+    pub sso_admin: Option<String>,
+    /// The user's own settings (the leaf that overrides their roles); missing = inherit
     pub grants: std::collections::HashMap<String, bool>,
     /// feature id → effective value
     pub effective: std::collections::HashMap<String, AccessResolved>,
 }
 
 #[derive(ToSchema)]
-#[schema(description = "Feature permissions. Resolution: administrators have everything; else the user's own setting; else their groups (a deny in any group wins, else an allow); else everyone; else the default")]
+#[schema(description = "Feature permissions and admin-kept groups. Resolution: administrators have everything; else the user's own setting; else their roles (a deny in any role wins, else an allow); else everyone; else the default. Groups (`share_groups`) never decide features; roles (`groups`) never appear in sharing")]
 pub struct AccessPolicy {
     pub features: Vec<AccessFeature>,
     /// feature id → allow / deny for everyone; missing = the default
     pub everyone: std::collections::HashMap<String, bool>,
+    /// 角色。/ Roles.
     pub groups: Vec<AccessGroup>,
+    /// 管理員維護的群組。/ Admin-kept groups.
+    pub share_groups: Vec<AccessShareGroup>,
     pub users: Vec<AccessUser>,
-    /// Only on POST /api/access/groups: the new group's id
+    /// Only on POST /api/access/groups and /api/access/share-groups: the new row's id
     pub created_id: Option<i64>,
 }
 
+/// 角色的新增 / 修改。送 `shareable` = 400（角色不能被分享）。/ Create / change a role. Sending `shareable` is a 400 (roles can't be shared with).
 #[derive(ToSchema)]
 pub struct AccessGroupWrite {
-    /// 1–64 characters, unique (case-insensitive); required on create
+    /// 1–64 characters, unique among roles (case-insensitive); required on create
     pub name: Option<String>,
     pub description: Option<String>,
     /// Replaces the member list (user ids)
     pub members: Option<Vec<i64>>,
-    /// May be picked in share dialogs; false on a shared group ends its tunnel shares
-    pub shareable: Option<bool>,
+}
+
+/// 管理員維護群組的新增 / 修改。/ Create / change an admin-kept group.
+#[derive(ToSchema)]
+pub struct ShareGroupWrite {
+    /// 1–64 characters, unique among admin-kept groups (case-insensitive); required on create
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Replaces the member list (user ids of existing accounts)
+    pub members: Option<Vec<i64>>,
 }
 
 #[derive(ToSchema)]
@@ -4614,7 +4652,7 @@ pub struct AccessGrantWrite {
     /// everyone | group | user
     #[schema(example = "group")]
     pub subject: String,
-    /// Group or user id (not for everyone)
+    /// Role or user id (not for everyone); a group id is a 404
     pub id: Option<i64>,
     #[schema(example = "terminal")]
     pub feature: String,
@@ -5714,6 +5752,9 @@ pub struct OidcProvider {
     /// 要在身分提供者那邊登記的登出後回來網址。/ The post-logout redirect URI to register at the provider.
     #[schema(example = "https://telepy.example.com/login")]
     pub post_logout_url: String,
+    /// SCIM 推來的群組變成：role | group。/ What SCIM-pushed groups become: role | group.
+    #[schema(example = "role")]
+    pub scim_groups_as: String,
 }
 
 /// 身分提供者的群組 → Telepy 角色。/ A provider group → Telepy role rule.
@@ -5724,7 +5765,7 @@ pub struct OidcGroupRule {
     pub idp_group: String,
     /// admin | group
     pub target: String,
-    /// target = group 時的功能權限使用者群組。/ The feature-access user group when target = group.
+    /// target = group 時指向的角色或管理員維護的群組（永遠不是個人群組）。/ The role or admin-kept group when target = group (never a personal group).
     pub group_id: Option<i64>,
     /// 群組已刪掉 = null。/ Null when the group is gone.
     pub group_name: Option<String>,
@@ -5739,8 +5780,10 @@ pub struct OidcProviderList {
     pub public_url_set: bool,
     /// 只有新增時有。/ Only after a create.
     pub created_id: Option<i64>,
-    /// 規則可以指向的使用者群組。/ The user groups rules may point at.
+    /// 規則可以指向的角色 `[{id, name}]`。/ The roles rules may point at.
     pub user_groups: Vec<serde_json::Value>,
+    /// 規則可以指向的管理員維護群組 `[{id, name}]`。/ The admin-kept groups rules may point at.
+    pub share_groups: Vec<serde_json::Value>,
 }
 
 /// 新增 / 修改身分提供者；修改時沒給的欄位不變。/ Create / change a provider; missing fields keep their value on PATCH.
@@ -5768,6 +5811,8 @@ pub struct OidcProviderRequest {
     pub group_rules: Option<Vec<OidcGroupRule>>,
     /// 登出 Telepy 時一併登出身分提供者（預設 false）。/ Also sign out at the provider (default false).
     pub end_session: Option<bool>,
+    /// SCIM 推來的群組變成 role（預設）或 group；既有的對應不變。/ What SCIM-pushed groups become: role (default) | group; existing mappings keep their row.
+    pub scim_groups_as: Option<String>,
 }
 
 #[derive(ToSchema)]

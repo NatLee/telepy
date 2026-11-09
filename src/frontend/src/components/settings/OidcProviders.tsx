@@ -27,7 +27,7 @@ import { OidcFlowDialog } from "@/components/sso/OidcFlow";
 import { ScimTab } from "@/components/settings/OidcScim";
 import { useOidcProviders, type Discovery, type FieldErrors, type OidcProvider, type ProviderDraft } from "@/hooks/useOidcProviders";
 import { useI18n } from "@/lib/i18n";
-import { badDomain, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, parseDomains, ruleValue, slugify, tidyRules, type GroupRule } from "@/lib/sso";
+import { badDomain, postLogoutUrl, fromRuleValue, grantsAdmin, groupLines, parseDomains, parseNamed, parseScimGroupsAs, ruleTargetKind, ruleValue, slugify, tidyRules, type GroupRule } from "@/lib/sso";
 
 function CopyButton({ text }: { text: string }) {
     const { t } = useI18n();
@@ -146,7 +146,8 @@ export function OidcProvidersPanel() {
                     scimBase={list.scim_base ?? ""}
                     scim={{ create: createScimToken, remove: removeScimToken, refresh }}
                     callbackBase={list.callback_base}
-                    userGroups={list.user_groups ?? []}
+                    roles={parseNamed(list.user_groups)}
+                    shareGroups={parseNamed(list.share_groups)}
                     onClose={() => setEditing(null)}
                     onSave={async (draft) => {
                         const errors = await save(editing === "new" ? null : editing.id, draft);
@@ -193,6 +194,7 @@ function emptyDraft(): ProviderDraft {
         required_groups: [],
         group_rules: [],
         end_session: false,
+        scim_groups_as: "role",
     };
 }
 
@@ -213,6 +215,7 @@ function draftOf(p: OidcProvider): ProviderDraft {
         // 群組已刪掉的規則留著讓人看到（存檔時要改掉）。/ Rules whose group is gone stay visible until fixed.
         group_rules: (p.group_rules ?? []).map((r) => ({ idp_group: r.idp_group, target: r.target, group_id: r.group_id })),
         end_session: p.end_session ?? false,
+        scim_groups_as: parseScimGroupsAs(p.scim_groups_as),
     };
 }
 
@@ -235,6 +238,7 @@ const FIELD_TAB: Record<keyof ProviderDraft, DialogTab> = {
     required_groups: "groups",
     group_rules: "groups",
     end_session: "connection",
+    scim_groups_as: "scim",
 };
 
 function ProviderDialog({
@@ -243,7 +247,8 @@ function ProviderDialog({
     scimBase,
     scim,
     callbackBase,
-    userGroups,
+    roles,
+    shareGroups,
     onClose,
     onSave,
     discover,
@@ -253,7 +258,8 @@ function ProviderDialog({
     scimBase: string;
     scim: { create: (p: OidcProvider, reauth: unknown) => Promise<Response>; remove: (p: OidcProvider) => Promise<void>; refresh: () => Promise<void> };
     callbackBase: string;
-    userGroups: { id: number; name: string }[];
+    roles: { id: number; name: string }[];
+    shareGroups: { id: number; name: string }[];
     onClose: () => void;
     onSave: (draft: ProviderDraft) => Promise<FieldErrors | null>;
     discover: (issuer: string) => Promise<Discovery | { fieldError: string }>;
@@ -280,7 +286,6 @@ function ProviderDialog({
     const callback = `${callbackBase}${slug || "…"}/callback`;
     const parsedDomains = parseDomains(domains);
     const domainProblem = badDomain(parsedDomains);
-    const groupNames = new Map(userGroups.map((g) => [g.id, g.name] as const));
     const rules = draft.group_rules;
     const setRule = (i: number, patch: Partial<GroupRule>) => set("group_rules", rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
@@ -306,7 +311,7 @@ function ProviderDialog({
     /** 錯誤：記下來並跳到第一個有錯的頁。/ Errors: keep them and jump to the first tab with one. */
     const fail = (errs: FieldErrors) => {
         setErrors(errs);
-        const first = (["connection", "accounts", "groups"] as const).find((d) => (Object.keys(errs) as (keyof ProviderDraft)[]).some((k) => errs[k] && FIELD_TAB[k] === d));
+        const first = (["connection", "accounts", "groups", "scim"] as const).find((d) => (Object.keys(errs) as (keyof ProviderDraft)[]).some((k) => errs[k] && FIELD_TAB[k] === d));
         if (first) setTab(first);
     };
 
@@ -341,7 +346,7 @@ function ProviderDialog({
         { value: "connection" as const, label: t("sso.admin.tabConnection"), icon: <Plug />, hint: flag("connection", t("sso.admin.tabConnectionHint")) },
         { value: "accounts" as const, label: t("sso.admin.accounts"), icon: <Users />, hint: flag("accounts", t(draft.create_users ? "sso.admin.createsAccounts" : "sso.admin.linkedOnly")) },
         { value: "groups" as const, label: t("sso.roles.tab"), icon: <ShieldCheck />, hint: flag("groups", ruleCount ? t("sso.roles.count", { count: ruleCount }) : t("sso.roles.none")) },
-        { value: "scim" as const, label: t("scim.tab"), icon: <RefreshCcw />, hint: t(current?.scim?.active ? "scim.on" : "scim.off") },
+        { value: "scim" as const, label: t("scim.tab"), icon: <RefreshCcw />, hint: flag("scim", t(current?.scim?.active ? "scim.on" : "scim.off")) },
     ];
 
     return (
@@ -553,12 +558,25 @@ function ProviderDialog({
                                                 {t("sso.roles.pick")}
                                             </option>
                                             <option value="admin">{t("sso.roles.admin")}</option>
-                                            {userGroups.map((g) => (
-                                                <option key={g.id} value={`group:${g.id}`}>
-                                                    {t("sso.roles.userGroup", { name: g.name })}
-                                                </option>
-                                            ))}
-                                            {r.target === "group" && r.group_id != null && !groupNames.has(r.group_id) && (
+                                            {roles.length > 0 && (
+                                                <optgroup label={t("sso.roles.rolesGroup")}>
+                                                    {roles.map((g) => (
+                                                        <option key={g.id} value={`group:${g.id}`}>
+                                                            {t("sso.roles.userGroup", { name: g.name })}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            {shareGroups.length > 0 && (
+                                                <optgroup label={t("sso.roles.groupsGroup")}>
+                                                    {shareGroups.map((g) => (
+                                                        <option key={g.id} value={`group:${g.id}`}>
+                                                            {t("sso.roles.shareGroup", { name: g.name })}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            {r.target === "group" && r.group_id != null && ruleTargetKind(r.group_id, roles, shareGroups) === null && (
                                                 <option value={`group:${r.group_id}`} disabled>
                                                     {t("sso.roles.goneGroup")}
                                                 </option>
@@ -570,24 +588,45 @@ function ProviderDialog({
                                     </li>
                                 ))}
                             </ul>
-                            <Button type="button" variant="outline" size="sm" onClick={() => set("group_rules", [...rules, { idp_group: "", target: userGroups.length ? "group" : "admin", group_id: userGroups[0]?.id ?? null }])}>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    const first = roles[0] ?? shareGroups[0];
+                                    set("group_rules", [...rules, { idp_group: "", target: first ? "group" : "admin", group_id: first?.id ?? null }]);
+                                }}
+                            >
                                 <Plus size={14} /> {t("sso.roles.add")}
                             </Button>
-                            {userGroups.length === 0 && (
-                                <p className="text-xs text-muted-foreground">
-                                    {t("sso.roles.noUserGroups")}{" "}
-                                    <Link href="/tunnels/admin/groups" className="text-foreground underline underline-offset-2">
-                                        {t("sso.roles.manageGroups")}
-                                    </Link>
-                                </p>
-                            )}
+                            <p className="text-xs leading-relaxed text-muted-foreground">
+                                {t(roles.length + shareGroups.length === 0 ? "sso.roles.noTargets" : "sso.roles.targetsNote")}{" "}
+                                <Link href="/tunnels/admin/roles" className="text-foreground underline underline-offset-2">
+                                    {t("roles.title")}
+                                </Link>
+                                {" · "}
+                                <Link href="/tunnels/admin/groups" className="text-foreground underline underline-offset-2">
+                                    {t("adminGroups.title")}
+                                </Link>
+                            </p>
                         </div>
                         {grantsAdmin(rules) && <Callout tone="warning">{t("sso.roles.adminWarn")}</Callout>}
                         <Callout tone="info">{t("sso.roles.how")}</Callout>
                     </div>
                 )}
 
-                {tab === "scim" && <ScimTab provider={current} base={scimBase} createToken={scim.create} removeToken={scim.remove} refresh={scim.refresh} />}
+                {tab === "scim" && (
+                    <ScimTab
+                        provider={current}
+                        base={scimBase}
+                        createToken={scim.create}
+                        removeToken={scim.remove}
+                        refresh={scim.refresh}
+                        groupsAs={draft.scim_groups_as}
+                        onGroupsAs={(v) => set("scim_groups_as", v)}
+                        groupsAsError={errors.scim_groups_as}
+                    />
+                )}
             </form>
         </Modal>
     );

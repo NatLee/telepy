@@ -26,12 +26,14 @@ export interface AdminArea {
 
 export const ADMIN_AREAS: readonly AdminArea[] = [
     {
-        // 人：帳號（停用、角色、重設兩步驟）、組織群組與每個人能用哪些功能。/ People: accounts, organization groups and which features each may use.
+        // 人：帳號、角色（決定功能）、群組（決定誰拿到分享的通道）與每個人能用哪些功能。
+        // People: accounts, roles (features), groups (who gets tunnels shared with them) and feature access.
         id: "people",
         key: "nav.areaPeople",
         pages: [
             { key: "settings.tabUsers", href: "/tunnels/admin/users" },
-            { key: "orgGroups.title", href: "/tunnels/admin/groups" },
+            { key: "roles.title", href: "/tunnels/admin/roles" },
+            { key: "adminGroups.title", href: "/tunnels/admin/groups" },
             { key: "access.manageTitle", href: "/tunnels/admin/access" },
         ],
     },

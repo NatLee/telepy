@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * 管理區「使用者與權限 → 組織群組」：管理員（與單一登入 / SCIM）管的群組；成員、能不能分享、分享給它的通道、功能規則。
- * `?group=<id>` 先選那個群組，`?new=1` 直接打開新增。
- * The admin section's Users & access → Organization groups: groups admins (and SSO / SCIM) manage — members, whether
- * they can be shared, the tunnels shared with them, feature rules. `?group=<id>` picks one, `?new=1` opens "new".
+ * 管理區「使用者與權限 → 群組」：管理員維護成員的群組（也可以由 SCIM / 單一登入規則放人），只用來分享通道。
+ * 決定功能的是「角色」頁。`?group=<id>` 先選那個群組，`?new=1` 直接打開新增。
+ * The admin section's Users & access → Groups: groups whose members admins keep (or SCIM / SSO rules fill), used only
+ * for sharing tunnels. Features are the Roles page's job. `?group=<id>` picks one, `?new=1` opens "new".
  */
 import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AdminGate } from "@/components/layout/AdminViews";
-import { OrgGroupsView } from "@/components/groups/OrgGroupsView";
+import { AdminGroupsView } from "@/components/groups/AdminGroupsView";
 
 export default function AdminGroupsPage() {
     return (
@@ -27,7 +27,7 @@ function GroupsPage() {
     const group = Number(params.get("group")) || null;
     return (
         <div className="animate-fade-in-up">
-            <OrgGroupsView initialGroup={group} startNew={params.get("new") === "1"} />
+            <AdminGroupsView initialGroup={group} startNew={params.get("new") === "1"} />
         </div>
     );
 }

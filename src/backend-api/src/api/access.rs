@@ -1,13 +1,16 @@
-//! `/api/access*`：組織群組與功能權限的管理（管理員專用）——群組、成員、每個功能對「所有人 / 群組 / 使用者」的允許或拒絕。
-//! 每個寫入都回整份設定（很小），改完立即生效（快取作廢）並結束那些人已經不能用的進行中 session。
-//! 功能權限決定「哪些功能」，分享決定「哪些通道」；兩者只在一個地方交會：打開「可以被分享」的組織群組，它的成員
-//! 也決定誰拿到分享給它的通道，所以改成員、刪群組、關掉分享前可以先預告（`…/preview`）。個人群組不在這裡。
-//! Organization groups and feature permissions (admins only): groups, members and allow / deny per feature for
-//! everyone, a group or a user. Every write answers the whole policy (it is small), applies at once (cache
-//! invalidated) and ends the live sessions their users just lost. Features decide *which tools*, sharing decides
-//! *which tunnels*; they meet in one place: the members of an organization group open to sharing also decide who gets
-//! the tunnels shared with it, so a member change, a delete or closing sharing can be previewed first (`…/preview`).
-//! Personal groups never show up here.
+//! `/api/access*`：角色、功能權限與管理員維護的群組（管理員專用）。
+//! - 角色（`/api/access/groups*`）：成員 + 每個功能對「所有人 / 角色 / 使用者」的允許或拒絕。只決定功能，永遠不能拿來
+//!   分享通道，所以改角色從不動到誰拿得到哪條通道。
+//! - 管理員維護的群組（`/api/access/share-groups*`）：只用來分享通道（出現在每個人的分享對話框）；改成員、刪掉前可以先
+//!   預告（`…/preview`）誰會多了 / 少了哪些通道。功能權限永遠不看它。
+//! 每個寫入都回整份設定（很小），改完立即生效。個人群組不在這裡（`api::personal_groups`），這裡的路徑碰不到它（404）。
+//! Roles, feature permissions and admin-kept groups (admins only).
+//! - Roles (`/api/access/groups*`): members and allow / deny per feature for everyone, a role or a user. They decide
+//!   features only and can never be shared with, so a role change never touches who reaches which tunnel.
+//! - Admin-kept groups (`/api/access/share-groups*`): sharing only (offered in everyone's share dialog); a member change
+//!   or a delete can be previewed first (`…/preview`). Feature permissions never read them.
+//! Every write answers the whole policy (it is small) and applies at once. Personal groups live in
+//! `api::personal_groups`; the routes here can't reach them (404).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -29,8 +32,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_policy))
         .routes(routes!(create_group))
         .routes(routes!(update_group, delete_group))
-        .routes(routes!(preview_group))
         .routes(routes!(set_grant))
+        .routes(routes!(create_share_group))
+        .routes(routes!(update_share_group, delete_share_group))
+        .routes(routes!(preview_share_group))
 }
 
 pub const MAX_GROUPS: usize = 100;
@@ -56,13 +61,18 @@ fn grants_json(m: Option<&HashMap<Feature, bool>>) -> Value {
     Value::Object(out)
 }
 
-/// 整份設定：功能清單（含預設）、所有人、群組（含成員）、使用者（含所屬群組與各自的有效值）。
-/// The whole policy: features (with defaults), everyone, groups (with members), users (groups + effective values).
+/// 整份設定：功能清單（含預設）、所有人、角色（`groups`，含成員）、使用者（含角色與各自的有效值），以及管理員維護的
+/// 群組（`share_groups`，含成員與分享給它的通道）。/ The whole policy: features (with defaults), everyone, roles
+/// (`groups`, with members), users (roles + effective values), and admin-kept groups (`share_groups`, with members and
+/// the tunnels shared with them).
 async fn policy_json(state: &AppState) -> ApiResult<Value> {
     state.features.invalidate();
     let policy: std::sync::Arc<Policy> = state.features.policy().await?;
     let groups = db::features::groups(&state.db).await?;
-    let memberships = db::features::memberships(&state.db).await?;
+    let share_groups = db::features::share_groups(&state.db).await?;
+    let memberships = db::features::all_memberships(&state.db).await?;
+    let synced = db::group_shares::synced_groups(&state.db).await?;
+    let scim_groups: HashSet<i64> = db::scim::mapped_groups(&state.db).await?;
     // 單一登入給的成員資格與管理員：頁面標出來（手動拿掉的話下次登入又會加回來）。
     // Memberships and admin rights a sign-in provider gave: marked on the page (removing one by hand lasts until the next sign-in).
     let mut sso_members: HashMap<i64, Vec<Value>> = HashMap::new();
@@ -77,7 +87,7 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
     }
     let tz = state.config.tz_offset_minutes;
     let mut shares: HashMap<i64, Vec<Value>> = HashMap::new();
-    for (id, g, tunnel_id, tunnel_name, owner, perm, expires, through) in db::group_shares::shares_of_groups(&state.db, &groups.iter().map(|g| g.id).collect::<Vec<_>>()).await? {
+    for (id, g, tunnel_id, tunnel_name, owner, perm, expires, through) in db::group_shares::shares_of_groups(&state.db, &share_groups.iter().map(|g| g.id).collect::<Vec<_>>()).await? {
         shares.entry(g).or_default().push(json!({
             "id": id,
             "tunnel_id": tunnel_id,
@@ -99,7 +109,17 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
             "members": members.get(&g.id).cloned().unwrap_or_default(),
             "sso_members": sso_members.get(&g.id).cloned().unwrap_or_default(),
             "grants": grants_json(policy.groups.get(&g.id)),
-            "shareable": g.shareable,
+            "scim": scim_groups.contains(&g.id),
+        })).collect::<Vec<_>>(),
+        "share_groups": share_groups.iter().map(|g| json!({
+            "id": g.id,
+            "name": g.label(),
+            "description": g.description,
+            "created_at": crate::util::db_to_iso(&g.created_at, tz),
+            "members": members.get(&g.id).cloned().unwrap_or_default(),
+            "sso_members": sso_members.get(&g.id).cloned().unwrap_or_default(),
+            "synced": synced.contains(&g.id),
+            "scim": scim_groups.contains(&g.id),
             "shares": shares.remove(&g.id).unwrap_or_default(),
         })).collect::<Vec<_>>(),
         "users": users.iter().map(|u| {
@@ -119,11 +139,10 @@ async fn policy_json(state: &AppState) -> ApiResult<Value> {
     }))
 }
 
-/// 寫入之後：快取作廢、結束失去功能的 session、寫稽核事件。/ After a write: invalidate, end lost sessions, audit.
+/// 角色 / 功能的寫入之後：快取作廢、結束失去功能的 session、寫稽核事件。角色不碰通道，所以不比對群組分享。
+/// After a role / grant write: invalidate, end lost sessions, audit. Roles never touch tunnels, so no share reconcile.
 async fn after_write(state: &AppState, me: &User, kind: &str, message: String) {
     state.features.invalidate();
-    // 分享給群組的通道跟著成員走。/ Tunnels shared with a group follow its members.
-    crate::group_shares::kick(state);
     state.gateway.event(kind, None, None, None, message).await;
     let (state, by) = (state.clone(), me.username.clone());
     tokio::spawn(async move {
@@ -176,12 +195,13 @@ pub async fn parse_members(state: &AppState, body: &Value) -> ApiResult<Option<V
     Ok(Some(ids))
 }
 
-fn parse_shareable(body: &Value) -> ApiResult<Option<bool>> {
-    match body.get("shareable") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(_) => Err(ApiError::field("shareable", "Must be true or false.")),
+/// 角色不能被分享：舊的 `shareable` 欄位一律拒絕（別讓人以為它有作用）。/ Roles can't be shared with: the old
+/// `shareable` field is refused (so nobody thinks it did something).
+fn refuse_shareable(body: &Value) -> ApiResult<()> {
+    if body.get("shareable").is_some() {
+        return Err(ApiError::field("shareable", "Roles decide features only and can't be shared with. Make a group (POST /api/access/share-groups) to share tunnels."));
     }
+    Ok(())
 }
 
 async fn usernames(state: &AppState, ids: &[i64]) -> ApiResult<String> {
@@ -198,22 +218,18 @@ async fn get_policy(State(state): State<AppState>, AuthUser(me): AuthUser) -> Ap
 #[utoipa::path(post, path = "/api/access/groups", tag = "Access", security(("bearer" = [])), request_body = super::schemas::AccessGroupWrite, responses((status = 201, description = "The whole policy, plus `created_id`", body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody)))]
 async fn create_group(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     admin(&me)?;
+    refuse_shareable(&body)?;
     let name = parse_name(&body)?.ok_or_else(|| ApiError::field("name", "This field is required."))?;
     let description = parse_description(&body)?.unwrap_or_default();
     let members = parse_members(&state, &body).await?;
-    let shareable = parse_shareable(&body)?.unwrap_or(false);
     if db::features::groups(&state.db).await?.len() >= MAX_GROUPS {
-        return Err(ApiError::bad_request(format!("At most {MAX_GROUPS} groups.")));
+        return Err(ApiError::bad_request(format!("At most {MAX_GROUPS} roles.")));
     }
     if db::features::name_taken(&state.db, &name, None).await? {
-        return Err(ApiError::field("name", "A group with this name already exists."));
+        return Err(ApiError::field("name", "A role with this name already exists."));
     }
     let id = db::features::create_group(&state.db, &name, &description).await?;
-    let mut msg = format!("{} created the group \"{name}\"", me.username);
-    if shareable {
-        db::features::set_shareable(&state.db, id, true).await?;
-        msg.push_str(" (can be shared)");
-    }
+    let mut msg = format!("{} created the role \"{name}\"", me.username);
     if let Some(m) = &members {
         db::features::set_members(&state.db, id, m).await?;
         if !m.is_empty() {
@@ -226,17 +242,23 @@ async fn create_group(State(state): State<AppState>, AuthUser(me): AuthUser, App
     Ok((StatusCode::CREATED, Json(out)))
 }
 
-#[utoipa::path(patch, path = "/api/access/groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::AccessGroupWrite, responses((status = 200, body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+/// 成員名單換掉前後：(加進來的, 拿掉的)。/ Before / after a member list change: (added, removed).
+fn member_changes(before: &[i64], after: &[i64]) -> (Vec<i64>, Vec<i64>) {
+    (after.iter().filter(|u| !before.contains(u)).copied().collect(), before.iter().filter(|u| !after.contains(u)).copied().collect())
+}
+
+#[utoipa::path(patch, path = "/api/access/groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Role id")), request_body = super::schemas::AccessGroupWrite, responses((status = 200, body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     admin(&me)?;
-    let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
+    // 只有角色：管理員維護的群組、個人群組在這裡都是 404。/ Roles only: admin-kept and personal groups are a 404 here.
+    let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Role not found."))?;
+    refuse_shareable(&body)?;
     let name = parse_name(&body)?;
     let description = parse_description(&body)?;
     let members = parse_members(&state, &body).await?;
-    let shareable = parse_shareable(&body)?;
     if let Some(n) = &name {
         if db::features::name_taken(&state.db, n, Some(id)).await? {
-            return Err(ApiError::field("name", "A group with this name already exists."));
+            return Err(ApiError::field("name", "A role with this name already exists."));
         }
     }
     db::features::update_group(&state.db, id, name.as_deref(), description.as_deref()).await?;
@@ -248,10 +270,9 @@ async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
         changes.push("changed its description".into());
     }
     if let Some(m) = &members {
-        let before: Vec<i64> = db::features::memberships(&state.db).await?.into_iter().filter(|(g, _)| *g == id).map(|(_, u)| u).collect();
+        let before = db::features::members_of(&state.db, id).await?;
         db::features::set_members(&state.db, id, m).await?;
-        let added: Vec<i64> = m.iter().filter(|u| !before.contains(u)).copied().collect();
-        let removed: Vec<i64> = before.iter().filter(|u| !m.contains(u)).copied().collect();
+        let (added, removed) = member_changes(&before, m);
         if !added.is_empty() {
             changes.push(format!("added {}", usernames(&state, &added).await?));
         }
@@ -259,68 +280,143 @@ async fn update_group(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
             changes.push(format!("removed {}", usernames(&state, &removed).await?));
         }
     }
-    let mut gone = HashMap::new();
-    if let Some(on) = shareable.filter(|on| *on != group.shareable) {
-        db::features::set_shareable(&state.db, id, on).await?;
-        if on {
-            changes.push("opened it to sharing".into());
-        } else {
-            // 不再開放分享：分享給它的通道全部結束（成員自己的分享不受影響）。/ Closed to sharing: every share with it ends.
-            let shares = db::group_shares::shares_of_groups(&state.db, &[id]).await?;
-            gone = crate::group_shares::gone_for_group(&state, id, &group.name).await?;
-            db::group_shares::forget_group(&state.db, id).await?;
-            for (_, _, tunnel_id, tunnel_name, ..) in &shares {
-                state
-                    .gateway
-                    .event("group_share", None, None, Some(*tunnel_id), format!("The share of \"{tunnel_name}\" with the group \"{}\" ended: {} closed the group to sharing", group.name, me.username))
-                    .await;
-            }
-            changes.push(format!("closed it to sharing ({} tunnel shares ended)", shares.len()));
-        }
-    }
     if !changes.is_empty() {
-        after_write(&state, &me, "user_group", format!("{} changed the group \"{}\": {}", me.username, group.name, changes.join("; "))).await;
-    }
-    if !gone.is_empty() {
-        crate::group_shares::kick_with(&state, gone);
+        after_write(&state, &me, "user_group", format!("{} changed the role \"{}\": {}", me.username, group.name, changes.join("; "))).await;
     }
     Ok(Json(policy_json(&state).await?))
 }
 
-/// 預告：改成員、刪群組或不再開放分享，誰會多了 / 少了哪些通道（什麼都不寫）。body 三選一：
-/// `{members: [ids]}`、`{delete: true}`、`{shareable: false}`。
-/// Preview what a member change, a delete or closing sharing would do to tunnel access (writes nothing). The body is
-/// one of `{members: [ids]}`, `{delete: true}`, `{shareable: false}`.
-#[utoipa::path(post, path = "/api/access/groups/{id}/preview", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::GroupPreviewRequest, responses((status = 200, body = super::schemas::GroupPreview), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn preview_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+#[utoipa::path(delete, path = "/api/access/groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Role id")), responses((status = 200, body = super::schemas::AccessPolicy), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn delete_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     admin(&me)?;
-    db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
+    let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Role not found."))?;
+    db::features::delete_group(&state.db, id).await?;
+    // 單一登入規則、紀錄與 SCIM 對應指向它的一起走。/ Sign-in rules, grant records and the SCIM mapping pointing at it go too.
+    db::oidc::forget_user_group(&state.db, id).await?;
+    db::scim::forget_group(&state.db, id).await?;
+    after_write(&state, &me, "user_group", format!("{} deleted the role \"{}\"", me.username, group.name)).await;
+    Ok(Json(policy_json(&state).await?))
+}
+
+// ---------------------------------------------------------------- admin-kept groups (sharing only)
+
+/// 一個管理員維護的群組最多幾個。/ Admin-kept groups at most.
+pub const MAX_SHARE_GROUPS: usize = 100;
+
+async fn share_group_or_404(state: &AppState, id: i64) -> ApiResult<db::features::Group> {
+    // 只有管理員維護的群組：角色、個人群組在這裡都是 404。/ Admin-kept groups only: roles and personal groups are a 404.
+    db::features::share_group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))
+}
+
+/// 管理員維護的群組寫入之後：稽核（不分通道）+ 比對群組分享（同步，讓存取立刻跟著走）。
+/// After an admin-kept group write: audit (tunnel-less) + reconcile group shares (inline, so access follows at once).
+async fn after_share_write(state: &AppState, message: String, gone: &HashMap<i64, String>) -> ApiResult<()> {
+    state.gateway.event("share_group", None, None, None, message).await;
+    crate::group_shares::reconcile(state, gone).await
+}
+
+#[utoipa::path(post, path = "/api/access/share-groups", tag = "Access", security(("bearer" = [])), request_body = super::schemas::ShareGroupWrite, responses((status = 201, description = "The whole policy, plus `created_id`", body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody)))]
+async fn create_share_group(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+    admin(&me)?;
+    let name = parse_name(&body)?.ok_or_else(|| ApiError::field("name", "This field is required."))?;
+    let description = parse_description(&body)?.unwrap_or_default();
+    let members = parse_members(&state, &body).await?;
+    if db::features::share_groups(&state.db).await?.len() >= MAX_SHARE_GROUPS {
+        return Err(ApiError::bad_request(format!("At most {MAX_SHARE_GROUPS} groups.")));
+    }
+    if db::features::share_group_name_taken(&state.db, &name, None).await? {
+        return Err(ApiError::field("name", "A group with this name already exists."));
+    }
+    let id = db::features::create_share_group(&state.db, &name, &description).await?;
+    let mut msg = format!("{} created the group \"{name}\"", me.username);
+    if let Some(m) = &members {
+        db::features::set_members(&state.db, id, m).await?;
+        if !m.is_empty() {
+            msg.push_str(&format!(" with {}", usernames(&state, m).await?));
+        }
+    }
+    after_share_write(&state, msg, &HashMap::new()).await?;
+    let mut out = policy_json(&state).await?;
+    out["created_id"] = json!(id);
+    Ok((StatusCode::CREATED, Json(out)))
+}
+
+#[utoipa::path(patch, path = "/api/access/share-groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::ShareGroupWrite, responses((status = 200, body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn update_share_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin(&me)?;
+    let group = share_group_or_404(&state, id).await?;
+    let name = parse_name(&body)?;
+    let description = parse_description(&body)?;
+    let members = parse_members(&state, &body).await?;
+    if let Some(n) = &name {
+        if db::features::share_group_name_taken(&state.db, n, Some(id)).await? {
+            return Err(ApiError::field("name", "A group with this name already exists."));
+        }
+    }
+    db::features::update_share_group(&state.db, id, name.as_deref(), description.as_deref()).await?;
+    let mut changes: Vec<String> = Vec::new();
+    if let Some(n) = name.as_deref().filter(|n| *n != group.label()) {
+        changes.push(format!("renamed it to \"{n}\""));
+    }
+    if description.as_deref().is_some_and(|d| d != group.description) {
+        changes.push("changed its description".into());
+    }
+    if let Some(m) = &members {
+        let before = db::features::members_of(&state.db, id).await?;
+        db::features::set_members(&state.db, id, m).await?;
+        let (added, removed) = member_changes(&before, m);
+        if !added.is_empty() {
+            changes.push(format!("added {}", usernames(&state, &added).await?));
+        }
+        if !removed.is_empty() {
+            changes.push(format!("removed {}", usernames(&state, &removed).await?));
+        }
+    }
+    if !changes.is_empty() {
+        after_share_write(&state, format!("{} changed the group \"{}\": {}", me.username, group.label(), changes.join("; ")), &HashMap::new()).await?;
+    }
+    Ok(Json(policy_json(&state).await?))
+}
+
+/// 預告：改成員或刪群組，誰會多了 / 少了哪些通道（什麼都不寫）。body 二選一：`{members: [ids]}`、`{delete: true}`。
+/// Preview what a member change or a delete would do to tunnel access (writes nothing). The body is one of
+/// `{members: [ids]}`, `{delete: true}`.
+#[utoipa::path(post, path = "/api/access/share-groups/{id}/preview", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::GroupPreviewRequest, responses((status = 200, body = super::schemas::GroupPreview), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn preview_share_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin(&me)?;
+    share_group_or_404(&state, id).await?;
     let change = preview_change(&state, &body).await?;
     Ok(Json(crate::group_shares::preview(&state, id, &change).await?))
 }
 
-/// 預告的 body → 改動（組織群組與個人群組共用）。/ A preview body → the change (shared with personal groups).
+/// 預告的 body → 改動。/ A preview body → the change.
 pub async fn preview_change(state: &AppState, body: &Value) -> ApiResult<crate::group_shares::Change> {
     if let Some(m) = parse_members(state, body).await? {
         return Ok(crate::group_shares::Change::Members(m));
     }
-    if body.get("delete") == Some(&Value::Bool(true)) || body.get("shareable") == Some(&Value::Bool(false)) {
+    if body.get("delete") == Some(&Value::Bool(true)) {
         return Ok(crate::group_shares::Change::Unshared);
     }
-    Err(ApiError::bad_request("Send one of: members, delete: true, shareable: false."))
+    Err(ApiError::bad_request("Send one of: members, delete: true."))
 }
 
-#[utoipa::path(delete, path = "/api/access/groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), responses((status = 200, body = super::schemas::AccessPolicy), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn delete_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+#[utoipa::path(delete, path = "/api/access/share-groups/{id}", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), responses((status = 200, body = super::schemas::AccessPolicy), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn delete_share_group(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     admin(&me)?;
-    let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
-    let gone = crate::group_shares::gone_for_group(&state, id, &group.name).await?;
+    let group = share_group_or_404(&state, id).await?;
+    let shares = db::group_shares::shares_of_groups(&state.db, &[id]).await?;
+    let gone = crate::group_shares::gone_for_group(&state, id, group.label()).await?;
     db::features::delete_group(&state.db, id).await?;
-    // 單一登入規則與紀錄指向它的一起走。/ Single sign-on rules and grant records pointing at it go too.
+    // 單一登入規則、紀錄與 SCIM 對應指向它的一起走。/ Sign-in rules, grant records and the SCIM mapping pointing at it go too.
     db::oidc::forget_user_group(&state.db, id).await?;
     db::scim::forget_group(&state.db, id).await?;
-    after_write(&state, &me, "user_group", format!("{} deleted the group \"{}\"", me.username, group.name)).await;
-    crate::group_shares::kick_with(&state, gone);
+    for (_, _, tunnel_id, tunnel_name, ..) in &shares {
+        state
+            .gateway
+            .event("group_share", None, None, Some(*tunnel_id), format!("The share of \"{tunnel_name}\" with the group \"{}\" ended: {} deleted the group", group.label(), me.username))
+            .await;
+    }
+    after_share_write(&state, format!("{} deleted the group \"{}\" ({} tunnel shares ended)", me.username, group.label(), shares.len()), &gone).await?;
     Ok(Json(policy_json(&state).await?))
 }
 
@@ -348,8 +444,9 @@ async fn set_grant(State(state): State<AppState>, AuthUser(me): AuthUser, AppJso
         "everyone" => ("everyone", 0, "everyone".to_string()),
         "group" => {
             let id = body.get("id").and_then(Value::as_i64).ok_or_else(|| ApiError::field("id", "This field is required."))?;
-            let g = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Group not found."))?;
-            ("group", id, format!("the group \"{}\"", g.name))
+            // 只有角色；群組（管理員維護的、個人的）永遠不決定功能 → 404。/ Roles only; groups never decide features → 404.
+            let g = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Role not found."))?;
+            ("group", id, format!("the role \"{}\"", g.name))
         }
         "user" => {
             let id = body.get("id").and_then(Value::as_i64).ok_or_else(|| ApiError::field("id", "This field is required."))?;
@@ -373,7 +470,13 @@ async fn set_grant(State(state): State<AppState>, AuthUser(me): AuthUser, AppJso
 
 #[cfg(test)]
 mod tests {
-    use super::parse_value;
+    use super::{member_changes, parse_value};
+
+    #[test]
+    fn member_changes_say_who_was_added_and_removed() {
+        assert_eq!(member_changes(&[1, 2, 3], &[2, 3, 4]), (vec![4], vec![1]));
+        assert_eq!(member_changes(&[], &[]), (vec![], vec![]));
+    }
     use serde_json::json;
 
     #[test]

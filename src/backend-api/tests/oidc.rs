@@ -678,3 +678,159 @@ async fn scim_provisions_accounts_and_groups_that_sso_then_signs_in_to() {
         assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == kind), "{kind}");
     }
 }
+
+/// 等背景的群組分享比對讓這個人的分享列出現 / 消失（最多 5 秒）。/ Wait for the background reconcile to add / remove a row.
+async fn holds(app: &TestApp, tunnel: i64, user: i64, want: bool) -> bool {
+    for _ in 0..100 {
+        if telepy_server::db::sharing::get(&app.state.db, tunnel, user).await.unwrap().is_some() == want {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    false
+}
+
+async fn admin_tunnel(app: &TestApp) -> i64 {
+    let db = &app.state.db;
+    let admin = telepy_server::db::users::by_username(db, "admin").await.unwrap().unwrap();
+    telepy_server::db::tunnels::create(db, telepy_server::db::tunnels::NewTunnel { user_id: admin.id, host_friendly_name: "box", key: "ssh-ed25519 AAAA box", reverse_port: 31077, description: None, default_username_id: None })
+        .await
+        .unwrap()
+        .id
+}
+
+/// 不變式 4：單一登入規則能指向角色或管理員維護的群組，永遠不能指向個人群組；動到管理員維護的群組，分享給它的通道
+/// 立刻跟著走；收回時只拿掉提供者給過的成員資格（兩種都一樣）。
+/// Invariant 4: sign-in rules may target roles or admin-kept groups, never personal groups; touching an admin-kept group
+/// moves the tunnels shared with it at once; taking away only removes memberships the provider gave (both kinds).
+#[tokio::test]
+async fn sso_rules_target_roles_and_groups_and_shares_follow() {
+    let app = common::spawn().await;
+    let idp = start_idp(Some("s3cret")).await;
+    let issuer = idp.lock().unwrap().issuer.clone();
+    let admin = app.login("admin", "pw").await;
+    let db = &app.state.db;
+    let tunnel = admin_tunnel(&app).await;
+    let ops = app.post("/api/access/groups", Some(&admin), json!({"name": "Ops"})).await.json["created_id"].as_i64().unwrap();
+    let oncall = app.post("/api/access/share-groups", Some(&admin), json!({"name": "Oncall"})).await.json["created_id"].as_i64().unwrap();
+    let mine = app.post("/api/user/groups", Some(&admin), json!({"name": "mine"})).await.json["created_id"].as_i64().unwrap();
+    let base = json!({"name": "Corp", "issuer": issuer, "client_id": "telepy", "client_secret": "s3cret"});
+    let with = |extra: Value| {
+        let mut b = base.clone();
+        b.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        b
+    };
+    // 個人群組不能當目標；`scim_groups_as` 只收 role / group。/ A personal group is no target; `scim_groups_as` is role | group.
+    let r = app.post("/api/site/oidc", Some(&admin), with(json!({"group_rules": [{"idp_group": "x", "target": "group", "group_id": mine}]}))).await;
+    assert_eq!((r.status, r.json["group_rules"].is_array()), (StatusCode::BAD_REQUEST, true), "{}", r.text);
+    let r = app.post("/api/site/oidc", Some(&admin), with(json!({"scim_groups_as": "personal"}))).await;
+    assert_eq!((r.status, r.json["scim_groups_as"].is_array()), (StatusCode::BAD_REQUEST, true), "{}", r.text);
+    let r = app
+        .post("/api/site/oidc", Some(&admin), with(json!({"group_rules": [{"idp_group": "ops", "target": "group", "group_id": ops}, {"idp_group": "oncall", "target": "group", "group_id": oncall}]})))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["user_groups"], json!([{"id": ops, "name": "Ops"}]), "{}", r.text);
+    assert_eq!(r.json["share_groups"], json!([{"id": oncall, "name": "Oncall"}]), "{}", r.text);
+    let p = &r.json["providers"][0];
+    assert_eq!((p["group_rules"][1]["group_name"].as_str(), p["scim_groups_as"].as_str()), (Some("Oncall"), Some("role")), "{p}");
+
+    // 通道分享給 Oncall；grace 第一次登入就進兩邊：角色給功能、群組給通道（背景比對，不必手動）。
+    // The tunnel is shared with Oncall; grace's first sign-in puts her in both: the role for features, the group for the tunnel.
+    let r = app.post(&format!("/api/reverse/server/{tunnel}/group-shares"), Some(&admin), json!({"group_id": oncall})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "email": "grace@corp.example", "groups": ["ops", "oncall"]})).await.unwrap();
+    let grace = telepy_server::db::users::by_username(db, "grace").await.unwrap().unwrap();
+    assert_eq!(telepy_server::db::features::groups_of(db, grace.id).await.unwrap(), std::collections::BTreeSet::from([ops]), "only the role decides features");
+    assert!(telepy_server::db::features::members_of(db, oncall).await.unwrap().contains(&grace.id));
+    assert!(holds(&app, tunnel, grace.id, true).await, "the sign-in reconciled the group share");
+    let r = app.get("/api/access", Some(&admin)).await;
+    let k = r.json["share_groups"].as_array().unwrap().iter().find(|g| g["id"] == oncall).unwrap().clone();
+    assert_eq!((k["sso_members"].clone(), k["synced"].as_bool()), (json!([{"user_id": grace.id, "provider": "Corp"}]), Some(true)), "{k}");
+
+    // 不在 oncall 了：提供者給的成員資格收回，通道跟著走。/ Out of oncall: the given membership goes, the tunnel with it.
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["ops"]})).await.unwrap();
+    assert!(!telepy_server::db::features::members_of(db, oncall).await.unwrap().contains(&grace.id));
+    assert!(holds(&app, tunnel, grace.id, false).await, "losing the group took the tunnel away");
+    // 管理員手動加進 Oncall：提供者沒給的，它就不拿走。/ Added by hand: the provider never takes away what it didn't give.
+    app.patch(&format!("/api/access/share-groups/{oncall}"), Some(&admin), json!({"members": [grace.id]})).await;
+    assert!(holds(&app, tunnel, grace.id, true).await);
+    sign_in(&app, &idp, "corp", json!({"sub": "g-1", "groups": ["ops"]})).await.unwrap();
+    assert!(telepy_server::db::features::members_of(db, oncall).await.unwrap().contains(&grace.id), "a hand-given membership stays");
+
+    // 刪掉 Oncall：指向它的規則一起走。/ Deleting Oncall drops the rule pointing at it.
+    assert_eq!(app.delete(&format!("/api/access/share-groups/{oncall}"), Some(&admin)).await.status, StatusCode::OK);
+    let r = app.get("/api/site/oidc", Some(&admin)).await;
+    assert_eq!(r.json["providers"][0]["group_rules"], json!([{"idp_group": "ops", "target": "group", "group_id": ops, "group_name": "Ops"}]));
+    assert!(holds(&app, tunnel, grace.id, false).await);
+}
+
+/// 不變式 5：SCIM 推來的群組照提供者的設定變成角色或群組；只碰自己對應到的；群組的成員變動讓分享跟著走，角色的讓
+/// 功能重新檢查；名稱各算各的。/ Invariant 5: SCIM-pushed groups become roles or groups per the provider; SCIM touches only
+/// its own mapped rows; a group's member changes move shares, a role's re-check features; names are per kind.
+#[tokio::test]
+async fn scim_pushes_groups_or_roles_as_the_provider_says() {
+    let app = common::spawn().await;
+    let idp = start_idp(Some("s3cret")).await;
+    let issuer = idp.lock().unwrap().issuer.clone();
+    let admin = app.login("admin", "pw").await;
+    let db = &app.state.db;
+    let tunnel = admin_tunnel(&app).await;
+    let r = app.post("/api/site/oidc", Some(&admin), json!({"name": "Corp", "issuer": issuer, "client_id": "telepy", "client_secret": "s3cret", "scim_groups_as": "group"})).await;
+    let id = r.json["created_id"].as_i64().unwrap();
+    assert_eq!(r.json["providers"][0]["scim_groups_as"], "group");
+    let token = app.post(&format!("/api/site/oidc/{id}/scim-token"), Some(&admin), json!({})).await.json["token"].as_str().unwrap().to_string();
+    let alice: i64 = scim(&app, Method::POST, "/Users", &token, Some(json!({"userName": "alice@corp.example", "active": true}))).await.json["id"].as_str().unwrap().parse().unwrap();
+    let team = app.post("/api/access/groups", Some(&admin), json!({"name": "Team"})).await.json["created_id"].as_i64().unwrap();
+    let by_hand = app.post("/api/access/share-groups", Some(&admin), json!({"name": "Hand"})).await.json["created_id"].as_i64().unwrap();
+
+    // 推來的 Ops 是管理員維護的群組（不是角色）；跟角色同名可以，跟群組同名不行。/ Ops becomes an admin-kept group.
+    let r = scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "Ops", "members": [{"value": alice.to_string()}]}))).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let gid: i64 = r.json["id"].as_str().unwrap().parse().unwrap();
+    assert!(telepy_server::db::features::share_group(db, gid).await.unwrap().is_some() && telepy_server::db::features::group(db, gid).await.unwrap().is_none());
+    assert!(telepy_server::db::features::groups_of(db, alice).await.unwrap().is_empty(), "a group never decides features");
+    assert_eq!(scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "Team"}))).await.status, StatusCode::CREATED, "roles are another namespace");
+    assert_eq!(scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "hand"}))).await.json["scimType"], "uniqueness");
+    let r = app.get("/api/access", Some(&admin)).await;
+    let k = r.json["share_groups"].as_array().unwrap().iter().find(|g| g["id"] == gid).unwrap().clone();
+    assert_eq!((k["name"].as_str(), k["scim"].as_bool(), k["synced"].as_bool()), (Some("Ops"), Some(true), Some(true)), "{k}");
+    assert!(r.json["groups"].as_array().unwrap().iter().any(|g| g["id"] == team && g["scim"] == false));
+
+    // 分享給它：alice 拿到；SCIM 拿掉她 = 背景比對收回。/ Shared: alice gets it; SCIM removing her takes it back.
+    assert_eq!(app.post(&format!("/api/reverse/server/{tunnel}/group-shares"), Some(&admin), json!({"group_id": gid})).await.status, StatusCode::CREATED);
+    assert!(holds(&app, tunnel, alice, true).await);
+    let r = scim(&app, Method::PATCH, &format!("/Groups/{gid}"), &token, Some(json!({"Operations": [{"op": "remove", "path": format!("members[value eq \"{alice}\"]")}]}))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(holds(&app, tunnel, alice, false).await, "SCIM's member change reconciled the share");
+    scim(&app, Method::PATCH, &format!("/Groups/{gid}"), &token, Some(json!({"Operations": [{"op": "add", "path": "members", "value": [{"value": alice.to_string()}]}]}))).await;
+    assert!(holds(&app, tunnel, alice, true).await);
+    // 改名只動群組的顯示名稱。/ A rename changes the group's shown name only.
+    let r = scim(&app, Method::PATCH, &format!("/Groups/{gid}"), &token, Some(json!({"Operations": [{"op": "replace", "value": {"displayName": "Operations"}}]}))).await;
+    assert_eq!(r.json["displayName"], "Operations", "{}", r.text);
+    assert_eq!(telepy_server::db::features::share_group(db, gid).await.unwrap().unwrap().label(), "Operations");
+
+    // 只碰自己對應到的：管理員手建的群組、角色都是 404。/ Only its own rows: the admin's group and role are 404.
+    for other in [by_hand, team] {
+        assert_eq!(scim(&app, Method::GET, &format!("/Groups/{other}"), &token, None).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(scim(&app, Method::DELETE, &format!("/Groups/{other}"), &token, None).await.status, StatusCode::NOT_FOUND);
+    }
+
+    // 改成推角色：新的是角色（功能跟著），舊的對應不變。/ Switched to roles: new ones are roles, the old mapping keeps its group.
+    app.patch(&format!("/api/site/oidc/{id}"), Some(&admin), json!({"scim_groups_as": "role"})).await;
+    let r = scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "Leads", "members": [{"value": alice.to_string()}]}))).await;
+    let leads: i64 = r.json["id"].as_str().unwrap().parse().unwrap();
+    assert!(telepy_server::db::features::group(db, leads).await.unwrap().is_some());
+    assert!(telepy_server::db::features::groups_of(db, alice).await.unwrap().contains(&leads), "the role decides features");
+    assert!(telepy_server::db::features::share_group(db, gid).await.unwrap().is_some(), "the earlier group stays a group");
+    let r = app.get(&format!("/api/reverse/server/{tunnel}/group-shares"), Some(&admin)).await;
+    assert!(r.json["groups"].as_array().unwrap().iter().all(|g| g["id"] != leads), "a role pushed by SCIM is never offered for sharing");
+    // 同一個身分提供者不會有兩個同名的對應：改設定之後再推一次 "Operations"（它已經是群組）會被擋。/ No second mapping of the same name.
+    let r = scim(&app, Method::POST, "/Groups", &token, Some(json!({"displayName": "operations"}))).await;
+    assert_eq!((r.status, r.json["scimType"].as_str()), (StatusCode::CONFLICT, Some("uniqueness")), "{}", r.text);
+
+    // SCIM 刪掉群組：分享結束、alice 失去。/ SCIM deleting the group ends its share; alice loses the tunnel.
+    assert_eq!(scim(&app, Method::DELETE, &format!("/Groups/{gid}"), &token, None).await.status, StatusCode::NO_CONTENT);
+    assert!(telepy_server::db::features::share_group(db, gid).await.unwrap().is_none());
+    assert!(holds(&app, tunnel, alice, false).await);
+    assert!(telepy_server::db::group_shares::for_tunnel(db, tunnel).await.unwrap().is_empty());
+}

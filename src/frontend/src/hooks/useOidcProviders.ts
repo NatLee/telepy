@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { rememberSsoButtons } from "@/hooks/useSignInLook";
 import { useI18n } from "@/lib/i18n";
-import type { GroupRule } from "@/lib/sso";
+import type { GroupRule, ScimGroupsAs } from "@/lib/sso";
 import { useToast } from "@/components/ui/Toast";
 
 export interface OidcProvider {
@@ -32,6 +32,8 @@ export interface OidcProvider {
     group_rules: GroupRule[];
     end_session?: boolean;
     post_logout_url?: string;
+    /** SCIM 推送的群組變成角色或群組（舊後端沒有 = 角色）。/ What SCIM-pushed groups become (absent = role). */
+    scim_groups_as?: ScimGroupsAs;
     /** SCIM 帳號同步。/ SCIM provisioning. */
     scim?: { active: boolean; prefix: string; created_at: string | null; last_used_at: string | null; users: number; groups: number };
 }
@@ -40,8 +42,10 @@ export interface OidcList {
     providers: OidcProvider[];
     callback_base: string;
     public_url_set: boolean;
-    /** 規則可以指向的使用者群組。/ The user groups rules may point at. */
+    /** 規則可以指向的角色（欄位名稱沒改）。/ The roles rules may point at (the field kept its name). */
     user_groups?: { id: number; name: string }[];
+    /** 規則可以指向的管理員維護的群組。/ The admin-kept groups rules may point at. */
+    share_groups?: { id: number; name: string }[];
     /** SCIM 的基底網址。/ The SCIM base URL. */
     scim_base?: string;
 }
@@ -75,6 +79,7 @@ export interface ProviderDraft {
     required_groups: string[];
     group_rules: GroupRule[];
     end_session: boolean;
+    scim_groups_as: ScimGroupsAs;
 }
 
 /** 欄位錯誤（`{field: [msg]}`）。/ Field errors. */

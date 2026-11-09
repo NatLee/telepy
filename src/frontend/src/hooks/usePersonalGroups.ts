@@ -78,12 +78,12 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
             const res = await apiFetch(`/api/user/groups/${id}/preview`, { method: "POST", body: JSON.stringify(body) });
             const data = await readJson(res);
             if (!res.ok) {
-                showError(responseError(res, data, t("orgGroups.previewFailed")));
+                showError(responseError(res, data, t("impact.previewFailed")));
                 return null;
             }
             return parseImpact(data);
         } catch (e) {
-            showError(e instanceof Error ? e.message : t("orgGroups.previewFailed"));
+            showError(e instanceof Error ? e.message : t("impact.previewFailed"));
             return null;
         }
     };

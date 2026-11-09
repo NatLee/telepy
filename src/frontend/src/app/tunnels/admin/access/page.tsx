@@ -2,10 +2,10 @@
 
 /**
  * 管理區「使用者與權限 → 功能權限」：每個人可以用哪些 Telepy 功能（所有人 / 群組 / 個人；跟通道分享無關）。以前是
- * 網站設定頁的「存取」分頁；舊的 `/tunnels/settings?tab=access[&user=]` 會轉到這裡，`?user=` 照樣先選那個人，`?group=` 先選那個組織群組（組織群組頁的「設定功能規則」連過來）。
+ * 網站設定頁的「存取」分頁；舊的 `/tunnels/settings?tab=access[&user=]` 會轉到這裡，`?user=` 照樣先選那個人，`?group=` 先選那個角色（角色頁的「設定功能規則」連過來）。
  * The admin section's Users & access → Feature access: which Telepy features each person may use (everyone /
  * groups / one person; not tunnel sharing). Formerly the site settings page's Access tab; the old
- * `/tunnels/settings?tab=access[&user=]` redirects here and `?user=` still picks that person first; `?group=` picks that organization group (linked from the Organization groups page).
+ * `/tunnels/settings?tab=access[&user=]` redirects here and `?user=` still picks that person first; `?group=` picks that role (linked from the Roles page).
  */
 import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";

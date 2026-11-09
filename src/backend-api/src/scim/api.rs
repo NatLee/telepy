@@ -6,7 +6,7 @@
 //! and changes the accounts and groups it created. Not in the OpenAPI document (that is for people and API tokens;
 //! a SCIM token opens nothing else).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -329,7 +329,7 @@ async fn managed_members(state: &AppState, p: &Provider, group_id: i64) -> Resul
 
 /// 換掉這個提供者管理的成員：管理員手動加的（不是它管理的帳號）留著。
 /// Replace the members this provider manages; members it doesn't manage (added by hand) stay.
-async fn set_members(state: &AppState, p: &Provider, group_id: i64, wanted: &BTreeSet<i64>) -> Result<(), ScimError> {
+async fn set_members(state: &AppState, p: &Provider, group_id: i64, role: bool, wanted: &BTreeSet<i64>) -> Result<(), ScimError> {
     let mine: BTreeSet<i64> = db::scim::users(&state.db, p.id).await.map_err(internal)?.iter().map(|r| r.user_id).collect();
     let current: BTreeSet<i64> = db::scim::members(&state.db, group_id).await.map_err(internal)?.into_iter().map(|(id, _)| id).collect();
     let next: Vec<i64> = current.iter().filter(|id| !mine.contains(id)).copied().chain(wanted.iter().filter(|id| mine.contains(id)).copied()).collect::<BTreeSet<i64>>().into_iter().collect();
@@ -337,19 +337,28 @@ async fn set_members(state: &AppState, p: &Provider, group_id: i64, wanted: &BTr
         return Ok(());
     }
     db::features::set_members(&state.db, group_id, &next).await.map_err(internal)?;
-    after_group_change(state, p);
+    after_group_change(state, p, role, HashMap::new());
     Ok(())
 }
 
-/// 功能權限跟著變：快取作廢、結束失去功能的 session。/ Feature access follows: invalidate, end sessions that lost a feature.
-fn after_group_change(state: &AppState, p: &Provider) {
-    state.features.invalidate();
-    // 分享給這些群組的通道跟著成員走。/ Tunnels shared with these groups follow the members.
-    crate::group_shares::kick(state);
-    let (state, by) = (state.clone(), format!("{} (SCIM)", p.name));
-    tokio::spawn(async move {
-        crate::features::end_denied_sessions(&state, &by).await;
-    });
+/// 改了之後：角色 → 功能權限跟著變（快取作廢、結束失去功能的 session）；群組 → 分享給它的通道跟著成員走（比對群組分享）。
+/// After a change: a role → feature access follows (invalidate, end sessions that lost a feature); a group → the
+/// tunnels shared with it follow its members (reconcile group shares).
+fn after_group_change(state: &AppState, p: &Provider, role: bool, gone: HashMap<i64, String>) {
+    if role {
+        state.features.invalidate();
+        let (state, by) = (state.clone(), format!("{} (SCIM)", p.name));
+        tokio::spawn(async move {
+            crate::features::end_denied_sessions(&state, &by).await;
+        });
+    } else {
+        crate::group_shares::kick_with(state, gone);
+    }
+}
+
+/// 這個提供者推來的群組要變成角色還是群組。/ Whether this provider's pushed groups become roles or groups.
+fn pushes_roles(p: &Provider) -> bool {
+    p.scim_groups_as != "group"
 }
 
 async fn managed_group(state: &AppState, p: &Provider, id: i64) -> Result<ScimGroupRow, ScimError> {
@@ -403,13 +412,33 @@ async fn create_group(State(state): State<AppState>, headers: HeaderMap, body: B
     let p = provider(&state, &headers).await?;
     let g = super::group_from_resource(&body_json(&body)?)?;
     check_group_name(&g.display_name)?;
-    if db::features::name_taken(&state.db, &g.display_name, None).await.map_err(internal)? {
-        return Err(ScimError::new(409, Some("uniqueness"), format!("Telepy already has a user group named {}.", g.display_name)));
+    // 角色跟角色比名稱，群組跟管理員維護的群組比。/ Roles are named among roles, groups among admin-kept groups.
+    let role = pushes_roles(&p);
+    let (taken, noun) = if role {
+        (db::features::name_taken(&state.db, &g.display_name, None).await.map_err(internal)?, "role")
+    } else {
+        (db::features::share_group_name_taken(&state.db, &g.display_name, None).await.map_err(internal)?, "group")
+    };
+    if taken {
+        return Err(ScimError::new(409, Some("uniqueness"), format!("Telepy already has a {noun} named {}.", g.display_name)));
     }
-    let id = db::features::create_group(&state.db, &g.display_name, &format!("Managed by {} (SCIM)", p.name)).await.map_err(internal)?;
+    // 同一個身分提供者不會有兩個同名的對應（中途改了「推送成角色 / 群組」也一樣），不然 displayName 篩選會找到兩個。
+    // One provider never maps two groups of the same name (also after switching roles / groups), or a displayName filter
+    // would find two.
+    let wanted = g.display_name.to_lowercase();
+    if db::scim::groups(&state.db, p.id).await.map_err(internal)?.iter().any(|r| r.name.to_lowercase() == wanted) {
+        return Err(ScimError::new(409, Some("uniqueness"), format!("This provider already pushed a group named {}.", g.display_name)));
+    }
+    let description = format!("Managed by {} (SCIM)", p.name);
+    let id = if role {
+        db::features::create_group(&state.db, &g.display_name, &description).await
+    } else {
+        db::features::create_share_group(&state.db, &g.display_name, &description).await
+    }
+    .map_err(internal)?;
     db::scim::insert_group(&state.db, p.id, id, g.external_id.as_deref()).await.map_err(internal)?;
-    set_members(&state, &p, id, &g.members).await?;
-    state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) created the user group \"{}\"", p.name, g.display_name)).await;
+    set_members(&state, &p, id, role, &g.members).await?;
+    state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) created the {noun} \"{}\"", p.name, g.display_name)).await;
     let row = managed_group(&state, &p, id).await?;
     let members = managed_members(&state, &p, id).await?;
     Ok(scim_response(StatusCode::CREATED, group_json(&base(&state, &headers), &row, Some(&members))))
@@ -417,16 +446,29 @@ async fn create_group(State(state): State<AppState>, headers: HeaderMap, body: B
 
 /// PUT / PATCH 之後：改名、externalId、成員。/ After PUT / PATCH: rename, externalId, members.
 async fn store_group(state: &AppState, p: &Provider, row: &ScimGroupRow, g: &ScimGroup) -> Result<(), ScimError> {
+    let role = row.is_role();
+    let noun = if role { "role" } else { "group" };
     if g.display_name != row.name {
         check_group_name(&g.display_name)?;
-        if db::features::name_taken(&state.db, &g.display_name, Some(row.group_id)).await.map_err(internal)? {
-            return Err(ScimError::new(409, Some("uniqueness"), format!("Telepy already has a user group named {}.", g.display_name)));
+        let taken = if role {
+            db::features::name_taken(&state.db, &g.display_name, Some(row.group_id)).await
+        } else {
+            db::features::share_group_name_taken(&state.db, &g.display_name, Some(row.group_id)).await
         }
-        db::features::update_group(&state.db, row.group_id, Some(&g.display_name), None).await.map_err(internal)?;
-        state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) renamed the user group \"{}\" to \"{}\"", p.name, row.name, g.display_name)).await;
+        .map_err(internal)?;
+        if taken {
+            return Err(ScimError::new(409, Some("uniqueness"), format!("Telepy already has a {noun} named {}.", g.display_name)));
+        }
+        if role {
+            db::features::update_group(&state.db, row.group_id, Some(&g.display_name), None).await
+        } else {
+            db::features::update_share_group(&state.db, row.group_id, Some(&g.display_name), None).await
+        }
+        .map_err(internal)?;
+        state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) renamed the {noun} \"{}\" to \"{}\"", p.name, row.name, g.display_name)).await;
     }
     db::scim::touch_group(&state.db, p.id, row.group_id, g.external_id.as_deref()).await.map_err(internal)?;
-    set_members(state, p, row.group_id, &g.members).await
+    set_members(state, p, row.group_id, role, &g.members).await
 }
 
 async fn replace_group(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, body: Bytes) -> Res {
@@ -457,9 +499,9 @@ async fn delete_group(State(state): State<AppState>, headers: HeaderMap, Path(id
     db::features::delete_group(&state.db, row.group_id).await.map_err(internal)?;
     db::oidc::forget_user_group(&state.db, row.group_id).await.map_err(internal)?;
     db::scim::forget_group(&state.db, row.group_id).await.map_err(internal)?;
-    after_group_change(&state, &p);
-    crate::group_shares::kick_with(&state, gone);
-    state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) deleted the user group \"{}\"", p.name, row.name)).await;
+    after_group_change(&state, &p, row.is_role(), gone);
+    let noun = if row.is_role() { "role" } else { "group" };
+    state.gateway.event("scim_group", None, None, None, format!("{} (SCIM) deleted the {noun} \"{}\"", p.name, row.name)).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

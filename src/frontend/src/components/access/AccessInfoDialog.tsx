@@ -2,17 +2,17 @@
 
 /**
  * 「存取」分頁的說明圖：兩條分開的線，講清楚使用者在意的那個差別。
- *  A「這個人可以用哪些工具？」= 預設 → 所有人 → 群組 → 這個人（最終端）→ 結果，選一個人和一個功能就即時顯示是哪一層決定的；
- *  B「他能連到哪些通道？」= 通道分享（VIEW / EDIT / ADMIN）+ 允許的帳號，每條通道各自設定；可以分享的組織群組也決定
- *  誰拿到分享給它的通道，個人群組從不影響功能。
+ *  A「這個人可以用哪些工具？」= 預設 → 所有人 → 角色 → 這個人（最終端）→ 結果，選一個人和一個功能就即時顯示是哪一層決定的；
+ *  B「他能連到哪些通道？」= 通道分享（VIEW / EDIT / ADMIN）+ 允許的帳號，每條通道各自設定；分享給群組時，群組成員
+ *  決定誰拿到通道。角色從不影響通道，群組從不影響功能。
  * 兩道門都要過：功能先、通道權限後。直線與直角，積木是 components/flow/PathFlow。
  * The Access tab's explainer: two separate lanes. A "Which tools may this person use?" = default → everyone → groups →
- * this person (final) → result, live for the picked person and feature; B "Which tunnels may they reach?" = tunnel
- * sharing + allowed accounts, set per tunnel; a shareable organization group also decides who gets the tunnels shared
- * with it, and personal groups never touch features. Both gates apply, the feature first.
+ * this person (final) → result, live for the picked person and feature (the middle layer = roles); B "Which tunnels
+ * may they reach?" = tunnel sharing + allowed accounts, set per tunnel; a group's members decide who gets a tunnel
+ * shared with it. Roles never touch tunnels, groups never touch features. Both gates apply, the feature first.
  */
 import React, { useMemo, useState } from "react";
-import { Ban, Check, Globe, KeyRound, Server, Settings2, Share2, User, Users, Wrench } from "lucide-react";
+import { BadgeCheck, Ban, Check, Globe, KeyRound, Server, Settings2, Share2, User, Wrench } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -108,7 +108,7 @@ export function AccessInfoDialog({ isOpen, onClose, policy, userId, feature }: {
                                 <FlowNode icon={Globe} title={wrap(t("access.everyone"))} state={nodeState(lane.everyone)} stateText={cellText(lane.everyone)} />
                                 <FlowLink label={t("access.info.then")} />
                                 <FlowNode
-                                    icon={Users}
+                                    icon={BadgeCheck}
                                     title={wrap(t("access.info.node.groups"))}
                                     wide
                                     state={lane.groups.some((g) => g.state === "decides") ? nodeState(lane.groups.find((g) => g.state === "decides")!) : "waiting"}

@@ -145,7 +145,12 @@ export interface SsoTestResult {
     would: { action: WouldAction; username?: string; code?: string; roles?: RoleChange };
 }
 
-/** 身分提供者的群組 → Telepy 角色。/ A provider group → Telepy role. */
+/**
+ * 身分提供者的群組 → 管理員權限、一個角色（決定功能）或一個管理員維護的群組（決定分享）。`target: "group"` 的
+ * `group_id` 可以是角色或群組（兩者同一個編號空間），從不是個人群組。
+ * A provider group → the administrator right, a role (features) or an admin-kept group (sharing). With
+ * `target: "group"`, `group_id` is a role or a group (one id space), never a personal group.
+ */
 export interface GroupRule {
     idp_group: string;
     target: "admin" | "group";
@@ -185,6 +190,28 @@ export function grantsAdmin(rules: readonly GroupRule[]): boolean {
 /** 規則選單的值：`admin` 或 `group:<id>`。/ The rule select's value. */
 export function ruleValue(r: Pick<GroupRule, "target" | "group_id">): string {
     return r.target === "admin" ? "admin" : r.group_id == null ? "" : `group:${r.group_id}`;
+}
+
+/** 規則指到的是角色、群組，還是已經不在了（null）。/ Whether a rule's id is a role, a group, or gone (null). */
+export function ruleTargetKind(id: number | null, roles: readonly { id: number }[], groups: readonly { id: number }[]): "role" | "group" | null {
+    if (id == null) return null;
+    if (roles.some((r) => r.id === id)) return "role";
+    if (groups.some((g) => g.id === id)) return "group";
+    return null;
+}
+
+/** SCIM 推送的群組在 Telepy 變成什麼；看不懂 / 舊後端 = 角色（以前的行為）。/ What SCIM-pushed groups become; unknown = role. */
+export type ScimGroupsAs = "role" | "group";
+
+export function parseScimGroupsAs(v: unknown): ScimGroupsAs {
+    return v === "group" ? "group" : "role";
+}
+
+/** `{id, name}` 清單（規則可以指到的角色 / 群組），看不懂的丟掉。/ An `{id, name}` list, junk dropped. */
+export function parseNamed(v: unknown): { id: number; name: string }[] {
+    return (Array.isArray(v) ? v : [])
+        .filter((x): x is { id: number; name?: unknown } => !!x && typeof x === "object" && typeof (x as { id?: unknown }).id === "number")
+        .map((x) => ({ id: x.id, name: typeof x.name === "string" && x.name ? x.name : `#${x.id}` }));
 }
 
 export function fromRuleValue(v: string): Pick<GroupRule, "target" | "group_id"> {

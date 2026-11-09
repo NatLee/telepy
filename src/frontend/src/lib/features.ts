@@ -1,10 +1,12 @@
 /**
  * 功能權限（誰可以用哪些 Telepy 功能）的純函式：功能清單、解析（跟後端 `features.rs` 同一套規則）、profile 檢查。
  * 跟隧道分享是兩件事：分享決定「哪些隧道」（VIEW / EDIT / ADMIN + 允許的帳號），這裡決定「哪些工具」。
- * 解析順序：管理員永遠全部都有 → 使用者自己的設定（最終端）→ 群組（任何一個拒絕就拒絕，否則任何一個允許）→ 所有人 → 預設。
+ * 解析順序：管理員永遠全部都有 → 使用者自己的設定（最終端）→ 角色（任何一個拒絕就拒絕，否則任何一個允許）→ 所有人 → 預設。
+ * 政策 JSON 裡的 `groups` / `kind: "group"` 指的是角色（線上的名字沒改）；分享用的群組從不影響功能。
  * Pure helpers for feature permissions: the feature list, resolution (the same rules as the backend's `features.rs`)
  * and the profile check. Orthogonal to tunnel sharing. Order: admins have everything → the user's own setting (the
- * leaf) → their groups (a deny in any group wins, else an allow) → everyone → the default.
+ * leaf) → their roles (a deny in any role wins, else an allow) → everyone → the default. The policy JSON's `groups` /
+ * `kind: "group"` mean roles (the wire names stayed); groups for sharing never affect features.
  */
 
 export type FeatureId =
@@ -114,8 +116,11 @@ export interface AccessUser {
 export interface AccessPolicy {
     features: { id: string; default: boolean }[];
     everyone: Grants;
+    /** 角色（只決定功能；從不出現在分享）。/ Roles (features only; never in sharing). */
     groups: AccessGroup[];
     users: AccessUser[];
+    /** 管理員維護的群組（只用來分享），用 `parseShareGroups` 讀。/ Admin-kept groups (sharing only); read with `parseShareGroups`. */
+    share_groups?: unknown[];
 }
 
 export type Subject = { kind: "everyone" } | { kind: "group"; id: number } | { kind: "user"; id: number };
