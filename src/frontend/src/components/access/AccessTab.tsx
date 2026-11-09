@@ -43,8 +43,10 @@ import { Input } from "@/components/ui/input";
 import { Pagination } from "@/components/ui/pagination";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
-import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { CompactRow, CountText, ListControls } from "@/components/groups/AdminGroupBits";
+import { GROUP_SORTS, personMatches, pinnedItem, sortGroups, type GroupSort } from "@/lib/peopleMembers";
 import { useAccessPage } from "@/hooks/useAccessPage";
 import { usePagination } from "@/hooks/usePagination";
 import { pageSlice } from "@/lib/pagination";
@@ -53,9 +55,10 @@ import {
     cellValue,
     deniedCount,
     filterGroups,
-    filterUsers,
     resolveFeature,
+    type AccessGroup,
     type AccessPolicy,
+    type AccessUser,
     type FeatureId,
     type GrantValue,
     type Resolution,
@@ -171,27 +174,6 @@ export function AccessTab({
 
 /* ── 左邊：對象清單 / The subject list ─────────────────────────── */
 
-function SubjectRow({ active, icon, label, sub, badge, onClick }: { active: boolean; icon: React.ReactNode; label: React.ReactNode; sub?: React.ReactNode; badge?: React.ReactNode; onClick: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            aria-current={active ? "true" : undefined}
-            className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
-                active ? "bg-muted text-foreground [&>svg]:text-primary" : "text-muted-foreground hover:bg-surface hover:text-foreground",
-            )}
-        >
-            {icon}
-            <span className="min-w-0 flex-1">
-                <span className="block truncate text-foreground">{label}</span>
-                {sub && <span className="block break-words text-xs leading-snug text-muted-foreground">{sub}</span>}
-            </span>
-            {badge}
-        </button>
-    );
-}
-
 function OffBadge({ count }: { count: number }) {
     const { t } = useI18n();
     if (count === 0) return null;
@@ -203,83 +185,150 @@ function OffBadge({ count }: { count: number }) {
     );
 }
 
-/** 群組加人超過這個數才有搜尋。/ The search shows from this many groups + people on. */
-const SEARCH_FROM = 8;
+/** 清單超過這個數才有搜尋。/ The search shows from this many on. */
+const SEARCH_FROM = 7;
 
+type SubjectTab = "roles" | "people";
+const SUBJECT_TABS: readonly SubjectTab[] = ["roles", "people"];
+
+/** 「所有人」釘在最上面，下面分「角色 | 人」兩個分頁，各自搜尋、分頁（分頁記在瀏覽器）。
+ *  Everyone pinned on top, then a Roles | People switch, each with its own search and pages (the tab is remembered). */
 function SubjectList({ policy, current, onPick }: { policy: AccessPolicy; current: Subject; onPick: (s: Subject) => void }) {
     const { t } = useI18n();
-    const [query, setQuery] = useState("");
-    // 一個搜尋同時找群組與人；兩邊各自分頁（每頁筆數記在瀏覽器）。/ One search over groups and people; each list pages on its own.
-    const groups = filterGroups(policy.groups, query);
-    const people = filterUsers(policy.users, query);
-    const groupPager = usePagination(groups.length, { storageKey: "telepy.accessGroupsPageSize", resetKey: query });
-    const peoplePager = usePagination(people.length, { storageKey: "telepy.accessPeoplePageSize", resetKey: query });
-    const searching = query.trim() !== "";
+    const [stored, setStored] = useStoredChoice<SubjectTab>("telepy.accessSubjectTab", SUBJECT_TABS, "roles");
+    // 選中的對象（網址 ?user= / ?group=、矩陣上點角色）決定要看哪個分頁。/ The picked subject decides the tab.
+    const kindTab = (s: Subject): SubjectTab | null => (s.kind === "group" ? "roles" : s.kind === "user" ? "people" : null);
+    const [forced, setForced] = useState<SubjectTab | null>(kindTab(current));
+    const [lastKind, setLastKind] = useState(current.kind);
+    if (lastKind !== current.kind) {
+        setLastKind(current.kind);
+        const k = kindTab(current);
+        if (k) setForced(k);
+    }
+    const tab = forced ?? stored;
+    const setTab = (v: SubjectTab) => {
+        setForced(null);
+        setStored(v);
+    };
     return (
-        <nav className="space-y-5 rounded-xl border border-border bg-card p-3 shadow-card" aria-label={t("access.subjectsAria")}>
-            <div className="space-y-2">
-                {policy.groups.length + policy.users.length >= SEARCH_FROM && (
-                    <div className="relative px-1">
-                        <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
-                        <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("access.searchSubjects")} className="h-8 pl-8" aria-label={t("access.searchSubjects")} />
-                    </div>
-                )}
-                <SubjectRow
-                    active={current.kind === "everyone"}
-                    icon={<Globe size={16} />}
-                    label={t("access.everyone")}
-                    sub={t("access.everyoneSub")}
-                    badge={<OffBadge count={deniedCount(policy, { kind: "everyone" })} />}
-                    onClick={() => onPick({ kind: "everyone" })}
-                />
-            </div>
-
-            <div className="space-y-1">
-                <div className="flex items-center justify-between px-2.5">
-                    <span className="text-xs text-muted-foreground">
-                        {t("access.groups")} <span className="tabular-nums">({searching ? `${groups.length}/${policy.groups.length}` : policy.groups.length})</span>
-                    </span>
-                    <Button asChild variant="ghost" size="sm" className="h-7 px-2">
-                        <Link href="/tunnels/admin/roles?new=1" title={t("access.newGroupOnPage")}>
-                            <Plus size={14} /> {t("access.newGroupShort")}
-                        </Link>
-                    </Button>
-                </div>
-                {policy.groups.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noGroups")}</p>}
-                {policy.groups.length > 0 && groups.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
-                {pageSlice(groups, groupPager.page, groupPager.size).map((g) => (
-                    <SubjectRow
-                        key={g.id}
-                        active={sameSubject(current, { kind: "group", id: g.id })}
-                        icon={<BadgeCheck size={16} />}
-                        label={g.name}
-                        sub={t("access.memberCount", { count: g.members.length })}
-                        badge={<OffBadge count={deniedCount(policy, { kind: "group", id: g.id })} />}
-                        onClick={() => onPick({ kind: "group", id: g.id })}
-                    />
-                ))}
-                <Pagination pager={groupPager} compact className="justify-center pt-1" />
-            </div>
-
-            <div className="space-y-1">
-                <span className="block px-2.5 text-xs text-muted-foreground">
-                    {t("access.people")} <span className="tabular-nums">({searching ? `${people.length}/${policy.users.length}` : policy.users.length})</span>
-                </span>
-                {people.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
-                {pageSlice(people, peoplePager.page, peoplePager.size).map((u) => (
-                    <SubjectRow
-                        key={u.id}
-                        active={sameSubject(current, { kind: "user", id: u.id })}
-                        icon={u.is_superuser ? <Shield size={16} /> : <User size={16} />}
-                        label={u.username}
-                        sub={u.is_superuser ? t("access.adminChip") : u.groups.length > 0 ? policy.groups.filter((g) => u.groups.includes(g.id)).map((g) => g.name).join(", ") : undefined}
-                        badge={u.is_superuser ? undefined : <OffBadge count={deniedCount(policy, { kind: "user", id: u.id })} />}
-                        onClick={() => onPick({ kind: "user", id: u.id })}
-                    />
-                ))}
-                <Pagination pager={peoplePager} compact className="justify-center pt-1" />
-            </div>
+        <nav className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-card" aria-label={t("access.subjectsAria")}>
+            <CompactRow
+                active={current.kind === "everyone"}
+                icon={<Globe size={15} className="shrink-0" />}
+                label={t("access.everyone")}
+                title={t("access.everyoneSub")}
+                badge={<OffBadge count={deniedCount(policy, { kind: "everyone" })} />}
+                onClick={() => onPick({ kind: "everyone" })}
+            />
+            <Segmented<SubjectTab>
+                size="sm"
+                fullWidth
+                aria-label={t("access.subjectsAria")}
+                value={tab}
+                onChange={setTab}
+                options={[
+                    { value: "roles", label: `${t("access.groups")} (${policy.groups.length})` },
+                    { value: "people", label: `${t("access.people")} (${policy.users.length})` },
+                ]}
+            />
+            {tab === "roles" ? <RoleSubjects policy={policy} current={current} onPick={onPick} /> : <PeopleSubjects policy={policy} current={current} onPick={onPick} />}
         </nav>
+    );
+}
+
+function SearchBox({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+    return (
+        <div className="relative px-1">
+            <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Input type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={label} className="h-8 pl-8" aria-label={label} />
+        </div>
+    );
+}
+
+function RoleSubjects({ policy, current, onPick }: { policy: AccessPolicy; current: Subject; onPick: (s: Subject) => void }) {
+    const { t } = useI18n();
+    const [query, setQuery] = useState("");
+    const [sort, setSort] = useStoredChoice<GroupSort>("telepy.accessGroupsPageSize.sort", GROUP_SORTS, "name");
+    const roles = sortGroups(filterGroups(policy.groups, query), sort);
+    const pager = usePagination(roles.length, { storageKey: "telepy.accessGroupsPageSize", resetKey: `${query}|${sort}` });
+    const slice = pageSlice(roles, pager.page, pager.size);
+    const pinned = pinnedItem(roles, slice, current.kind === "group" ? current.id : null);
+    const row = (g: AccessGroup, isPinned = false) => (
+        <CompactRow
+            key={`${isPinned ? "pin-" : ""}${g.id}`}
+            active={sameSubject(current, { kind: "group", id: g.id })}
+            pinned={isPinned}
+            icon={<BadgeCheck size={15} className="shrink-0" />}
+            label={g.name}
+            counts={<CountText icon={Users} count={g.members.length} label={t("access.memberCount", { count: g.members.length })} />}
+            badge={<OffBadge count={deniedCount(policy, { kind: "group", id: g.id })} />}
+            onClick={() => onPick({ kind: "group", id: g.id })}
+        />
+    );
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 px-1">
+                <span className="text-xs text-muted-foreground tabular-nums">{query.trim() ? `${roles.length}/${policy.groups.length}` : ""}</span>
+                <Button asChild variant="ghost" size="sm" className="h-7 px-2">
+                    <Link href="/tunnels/admin/roles?new=1" title={t("access.newGroupOnPage")}>
+                        <Plus size={14} /> {t("access.newGroupShort")}
+                    </Link>
+                </Button>
+            </div>
+            {policy.groups.length >= SEARCH_FROM && <SearchBox value={query} onChange={setQuery} label={t("roles.search")} />}
+            {policy.groups.length >= 2 && <ListControls sort={sort} onSort={setSort} pager={pager} />}
+            {policy.groups.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noGroups")}</p>}
+            {policy.groups.length > 0 && roles.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
+            <div className="space-y-0.5">
+                {pinned && <div className="border-b border-border/70 pb-0.5">{row(pinned, true)}</div>}
+                {slice.map((g) => row(g))}
+            </div>
+            <Pagination pager={pager} compact className="justify-center pt-1" />
+        </div>
+    );
+}
+
+function PeopleSubjects({ policy, current, onPick }: { policy: AccessPolicy; current: Subject; onPick: (s: Subject) => void }) {
+    const { t } = useI18n();
+    const [query, setQuery] = useState("");
+    const people = policy.users.filter((u) => personMatches(u, query));
+    const pager = usePagination(people.length, { storageKey: "telepy.accessPeoplePageSize", resetKey: query });
+    const slice = pageSlice(people, pager.page, pager.size);
+    const pinned = pinnedItem(people, slice, current.kind === "user" ? current.id : null);
+    const row = (u: AccessUser, isPinned = false) => {
+        const roleNames = policy.groups.filter((g) => u.groups.includes(g.id)).map((g) => g.name);
+        return (
+            <CompactRow
+                key={`${isPinned ? "pin-" : ""}${u.id}`}
+                active={sameSubject(current, { kind: "user", id: u.id })}
+                pinned={isPinned}
+                icon={u.is_superuser ? <Shield size={15} className="shrink-0" /> : <User size={15} className="shrink-0" />}
+                label={u.username}
+                title={u.is_superuser ? t("access.adminChip") : roleNames.join(", ") || undefined}
+                counts={
+                    u.is_superuser ? (
+                        <span>{t("access.adminChip")}</span>
+                    ) : roleNames.length > 0 ? (
+                        <CountText icon={BadgeCheck} count={roleNames.length} label={t("members.roleCount", { count: roleNames.length })} />
+                    ) : undefined
+                }
+                badge={u.is_superuser ? undefined : <OffBadge count={deniedCount(policy, { kind: "user", id: u.id })} />}
+                onClick={() => onPick({ kind: "user", id: u.id })}
+            />
+        );
+    };
+    return (
+        <div className="space-y-2">
+            {policy.users.length >= SEARCH_FROM && <SearchBox value={query} onChange={setQuery} label={t("members.searchPeople")} />}
+            {query.trim() && <p className="px-2.5 text-xs text-muted-foreground tabular-nums">{`${people.length}/${policy.users.length}`}</p>}
+            <ListControls pager={pager} />
+            {people.length === 0 && <p className="px-2.5 py-1 text-xs text-muted-foreground">{t("access.noMatch")}</p>}
+            <div className="space-y-0.5">
+                {pinned && <div className="border-b border-border/70 pb-0.5">{row(pinned, true)}</div>}
+                {slice.map((u) => row(u))}
+            </div>
+            <Pagination pager={pager} compact className="justify-center pt-1" />
+        </div>
     );
 }
 

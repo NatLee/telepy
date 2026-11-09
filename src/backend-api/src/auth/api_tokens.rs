@@ -346,10 +346,17 @@ mod tests {
             ("DELETE", "/api/access/share-groups/3"),
             ("POST", "/api/access/share-groups/3/preview"),
             ("POST", "/api/access/groups/3/preview"),
+            ("POST", "/api/access/groups/3/members"),
+            ("POST", "/api/access/share-groups/3/members"),
         ] {
             assert!(rest_route(m, p).is_none(), "{m} {p} must not be on the token allow-list");
             assert_eq!(crate::features::for_route(m, p), None, "{m} {p}");
         }
+    }
+
+    #[test]
+    fn personal_group_member_deltas_are_not_open_to_tokens() {
+        assert!(rest_route("POST", "/api/user/groups/3/members").is_none());
     }
 
     #[test]

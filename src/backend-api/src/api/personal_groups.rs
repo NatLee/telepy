@@ -38,6 +38,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list, create))
         .routes(routes!(update, remove))
         .routes(routes!(preview))
+        .routes(routes!(members))
         .routes(routes!(leave))
 }
 
@@ -253,6 +254,34 @@ async fn preview(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id)
         None => return Err(ApiError::bad_request("Send one of: members, delete: true.")),
     };
     Ok(Json(crate::group_shares::preview(&state, id, &change).await?))
+}
+
+/// 增減成員（不會蓋掉同時的修改）。body `{add?, remove?}`：加人照個人群組的規則（還在用的帳號、不能是自己、
+/// 上限、要管得到通道），拿掉永遠可以。/ Add / remove members as a delta. Adding follows the personal rules (active
+/// accounts, not yourself, the limit, managing a tunnel); removing is always allowed.
+#[utoipa::path(post, path = "/api/user/groups/{id}/members", tag = "Personal Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::MembersDelta, responses((status = 200, body = super::schemas::PersonalGroups), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn members(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    mine(&state, &me, id).await?;
+    let (add, remove) = super::access::parse_delta(&state, &body, true).await?;
+    if add.contains(&me.id) {
+        return Err(ApiError::field("add", "You don't need to be in your own group."));
+    }
+    if !add.is_empty() && !db::group_shares::manages_any(&state.db, me.id).await? {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "Add people once you own or administer a tunnel to share.", "code": "no_tunnels" }),
+        ));
+    }
+    let current = db::features::members_of(&state.db, id).await?;
+    let growth = add.iter().filter(|u| !current.contains(u)).count();
+    if current.len() + growth > MAX_MEMBERS {
+        return Err(ApiError::field("add", format!("At most {MAX_MEMBERS} people in a group.")));
+    }
+    let (added, removed) = db::features::apply_delta(&state.db, id, &add, &remove).await?;
+    if !added.is_empty() || !removed.is_empty() {
+        crate::group_shares::reconcile(&state, &HashMap::new()).await?;
+    }
+    Ok(Json(list_json(&state, &me).await?))
 }
 
 /// 退出別人的個人群組：經由它拿到的通道收回（自己另有的分享不受影響）。只限個人群組：管理員維護的群組由管理員 /

@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Chip, Section, SectionPanels } from "@/components/ui/section";
-import { AdminGroupList, EmptyGroups, GroupNameDialog, MembersEditor, PolicyState, RolesVsGroups } from "@/components/groups/AdminGroupBits";
+import { AdminGroupList, CountText, EmptyGroups, GroupNameDialog, MembersEditor, PolicyState, RolesVsGroups } from "@/components/groups/AdminGroupBits";
 import { RolesInfoDialog } from "@/components/groups/RolesGroupsInfoDialog";
 import { useAccessPage } from "@/hooks/useAccessPage";
 import { filterGroups, type AccessGroup, type AccessPolicy } from "@/lib/features";
@@ -77,7 +77,7 @@ export function RolesView({ initialRole, startNew }: { initialRole: number | nul
                     storageKey="telepy.rolesPageSize"
                     icon={BadgeCheck}
                     ariaLabel={t("roles.title")}
-                    sub={(g) => t("access.memberCount", { count: g.members.length })}
+                    counts={(g) => <CountText icon={Users} count={g.members.length} label={t("access.memberCount", { count: g.members.length })} />}
                 />
                 {role ? (
                     <RolePanel key={role.id} policy={policy} role={role} page={page} onDeleted={() => pick(null)} />
@@ -145,11 +145,11 @@ function RolePanel({ policy, role, page, onDeleted }: { policy: AccessPolicy; ro
                     <Section icon={<UsersRound />} title={t("access.members")} description={t("roles.membersHint")}>
                         <MembersEditor
                             users={policy.users}
-                            groupId={role.id}
                             members={role.members}
                             ssoMembers={role.sso_members}
                             saving={page.saving}
-                            onSave={(members) => page.updateRole(role.id, { members })}
+                            storageKey="telepy.roleMembersPageSize"
+                            onSave={(delta) => page.roleMembers(role.id, delta)}
                         />
                         {ssoCount > 0 && <p className="text-xs text-muted-foreground">{t("access.ssoMembersHint")}</p>}
                     </Section>

@@ -311,13 +311,6 @@ export function nameProblem(name: string): "empty" | "long" | null {
     return null;
 }
 
-/** 成員清單的差別。/ What changed in a member list. */
-export function memberDiff(before: number[], after: number[]): { added: number; removed: number } {
-    const b = new Set(before);
-    const a = new Set(after);
-    return { added: after.filter((id) => !b.has(id)).length, removed: before.filter((id) => !a.has(id)).length };
-}
-
 /* ── 影響預覽 / The impact preview ─────────────────────────────── */
 
 export interface ImpactPerson {

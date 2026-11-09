@@ -7,9 +7,9 @@
  * over every account, then the result is paged (the table used to be one long scroll); the dialog holds the
  * account flags + personal settings and applies changes immediately.
  */
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { Activity, ArrowRight, History, KeySquare, Plug, Search, Shield, ShieldCheck, UserCog } from "lucide-react";
+import { Activity, ArrowRight, BadgeCheck, History, KeySquare, Plug, Search, Shield, ShieldCheck, UserCog, Users } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference, type Translate } from "@/lib/i18n";
 import { Modal } from "@/components/ui/Modal";
@@ -32,6 +32,9 @@ import { CliSignIns } from "@/components/tokens/CliSignIns";
 import { UserActivity } from "@/components/activity/UserActivity";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { USER_BUCKETS, bucketCounts, filterUsers, type UserBucket } from "@/lib/managedUsers";
+import { inMembership, keepVisible, liveFilter, membershipIndex, togglePage, type MemberFilter } from "@/lib/peopleMembers";
+import { useAccessPage } from "@/hooks/useAccessPage";
+import { BulkPickDialog, MembershipCounts, MembershipFilter, MembershipTab, useChoices, useMembershipWrite, type MembershipKind } from "@/components/users/UserMemberships";
 import { pageSlice } from "@/lib/pagination";
 
 /** 帳號超過這麼多才出現搜尋與篩選。/ Search and filters appear from this many accounts. */
@@ -41,18 +44,38 @@ export function UsersList() {
     const { user: currentUser } = useAuth();
     const { t, locale } = useI18n();
     const { users, loading, updateUser, resetMfa } = useUserManagement(true);
+    const access = useAccessPage();
+    const choices = useChoices(access);
+    const write = useMembershipWrite(access);
     const [editing, setEditing] = useState<ManagedUser | null>(null);
     const [query, setQuery] = useState("");
     const [bucket, setBucket] = useState<UserBucket>("all");
+    const [roleFilterRaw, setRoleFilter] = useState<MemberFilter>("any");
+    const [groupFilterRaw, setGroupFilter] = useState<MemberFilter>("any");
+    const [selected, setSelected] = useState<Set<number>>(() => new Set());
+    const [bulk, setBulk] = useState<{ kind: MembershipKind; op: "add" | "remove" } | null>(null);
     const listRef = React.useRef<HTMLDivElement>(null);
+    const index = useMemo(() => membershipIndex(choices.roles, choices.groups), [choices]);
+    const roleNames = useMemo(() => new Map(choices.roles.map((g) => [g.id, g.name])), [choices]);
+    const groupNames = useMemo(() => new Map(choices.groups.map((g) => [g.id, g.name])), [choices]);
+    // 篩選的角色 / 群組被刪了就回到「任何」。/ A deleted role / group filter falls back to "any".
+    const roleFilter = liveFilter(roleFilterRaw, choices.roles.map((g) => g.id));
+    const groupFilter = liveFilter(groupFilterRaw, choices.groups.map((g) => g.id));
 
     // modal 內容跟著列表資料走,更新後即時反映。/ Keep the modal in sync with the list data.
     const editingUser = editing ? users.find((u) => u.id === editing.id) ?? editing : null;
 
-    const counts = bucketCounts(users, query);
-    const found = filterUsers(users, query, bucket);
-    const pager = usePagination(found.length, { storageKey: "telepy.adminUsersPageSize", resetKey: `${query}|${bucket}` });
+    const inFilters = users.filter((u) => inMembership(index.get(u.id), roleFilter, groupFilter));
+    const counts = bucketCounts(inFilters, query);
+    const found = filterUsers(inFilters, query, bucket);
+    const pager = usePagination(found.length, { storageKey: "telepy.adminUsersPageSize", resetKey: `${query}|${bucket}|${roleFilter}|${groupFilter}` });
     const shown = pageSlice(found, pager.page, pager.size);
+    // 只算還在結果裡的勾選：看不到的人不會被批次改到。/ Only ticks still in the result count: hidden people are never changed in bulk.
+    const picked = keepVisible(selected, found.map((u) => u.id));
+    const pageIds = shown.map((u) => u.id);
+    const pageAll = pageIds.length > 0 && pageIds.every((id) => picked.has(id));
+    const pageSome = pageIds.some((id) => picked.has(id));
+    const filtered = roleFilter !== "any" || groupFilter !== "any";
     const showControls = users.length >= CONTROLS_FROM;
     const bucketLabel = (b: UserBucket) => `${t(`settings.usersFilter.${b}`)} (${counts[b]})`;
 
@@ -76,6 +99,31 @@ export function UsersList() {
                     </div>
                 </div>
             )}
+            {access.policy && (choices.roles.length > 0 || choices.groups.length > 0) && (
+                <div className="flex flex-wrap items-center gap-2">
+                    <MembershipFilter kind="role" items={choices.roles} value={roleFilter} onChange={setRoleFilter} />
+                    <MembershipFilter kind="group" items={choices.groups} value={groupFilter} onChange={setGroupFilter} />
+                    {filtered && (
+                        <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => { setRoleFilter("any"); setGroupFilter("any"); }}>
+                            {t("members.clearFilters")}
+                        </Button>
+                    )}
+                </div>
+            )}
+            {pageAll && found.length > shown.length && (
+                <p className="text-sm text-muted-foreground" aria-live="polite">
+                    {picked.size < found.length ? (
+                        <>
+                            {t("members.selectedOnPage", { count: picked.size })}{" "}
+                            <button type="button" className="text-foreground underline underline-offset-2" onClick={() => setSelected(new Set(found.map((u) => u.id)))}>
+                                {t("members.selectAllMatching", { count: found.length })}
+                            </button>
+                        </>
+                    ) : (
+                        t("members.allMatchingSelected", { count: found.length })
+                    )}
+                </p>
+            )}
 
             <div ref={listRef} className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
                 {loading && users.length === 0 ? (
@@ -94,17 +142,43 @@ export function UsersList() {
                         <table className="min-w-full divide-y divide-border/70 text-sm">
                             <thead className="bg-surface">
                                 <tr>
+                                    <th className="w-10 py-3 pl-4 pr-0 text-left">
+                                        <input
+                                            type="checkbox"
+                                            className="size-4 accent-primary align-middle"
+                                            checked={pageAll}
+                                            ref={(el) => {
+                                                if (el) el.indeterminate = !pageAll && pageSome;
+                                            }}
+                                            onChange={() => setSelected(togglePage(picked, pageIds))}
+                                            aria-label={t("members.selectPage")}
+                                        />
+                                    </th>
                                     <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thUsername")}</th>
                                     <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden sm:table-cell">{t("settings.thEmail")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thRole")}</th>
-                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thStatus")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden sm:table-cell">{t("settings.thAccountType")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden sm:table-cell">{t("settings.thStatus")}</th>
                                     <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden md:table-cell">{t("settings.thLastLogin")}</th>
                                     <th className="px-4 py-3 text-right text-xs text-muted-foreground">{t("settings.thActions")}</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border/70" data-refresh-list>
                                 {shown.map((u) => (
-                                    <tr key={u.id} className="hover:bg-surface transition-colors">
+                                    <tr key={u.id} className={`transition-colors hover:bg-surface ${picked.has(u.id) ? "bg-surface" : ""}`}>
+                                        <td className="w-10 py-3 pl-4 pr-0 align-top">
+                                            <input
+                                                type="checkbox"
+                                                className="mt-1 size-4 accent-primary"
+                                                checked={picked.has(u.id)}
+                                                onChange={() => {
+                                                    const next = new Set(picked);
+                                                    if (next.has(u.id)) next.delete(u.id);
+                                                    else next.add(u.id);
+                                                    setSelected(next);
+                                                }}
+                                                aria-label={t("members.selectUser", { name: u.username })}
+                                            />
+                                        </td>
                                         <td className="px-4 py-3 text-foreground">
                                             <span className="mr-2.5 inline-grid size-7 place-items-center rounded-full bg-foreground align-middle text-xs text-background uppercase" aria-hidden>
                                                 {u.username.slice(0, 1)}
@@ -124,9 +198,25 @@ export function UsersList() {
                                                     {t("scim.provisionedBy", { provider: u.provisioned_by })}
                                                 </span>
                                             )}
+                                            {/* 手機上：帳號類型、狀態、email 收在名字下面一行小字，表格只留勾選、名字、管理。
+                                                Phones: account type, status and email go on one quiet line under the name. */}
+                                            <span className="mt-0.5 block pl-[2.375rem] text-xs text-muted-foreground sm:hidden">
+                                                <span className={u.is_superuser ? "text-primary" : undefined}>{u.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}</span>
+                                                {" · "}
+                                                <span className={u.is_active ? "text-success" : "text-destructive"}>{u.is_active ? t("settings.statusActive") : t("settings.statusInactive")}</span>
+                                                {u.email && <span className="block break-all">{u.email}</span>}
+                                            </span>
+                                            {access.policy && (
+                                                <span className="mt-0.5 block pl-[2.375rem]">
+                                                    <MembershipCounts
+                                                        roles={(index.get(u.id)?.roles ?? []).map((id) => roleNames.get(id) ?? `#${id}`)}
+                                                        groups={(index.get(u.id)?.groups ?? []).map((id) => groupNames.get(id) ?? `#${id}`)}
+                                                    />
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{u.email || "—"}</td>
-                                        <td className="px-4 py-3">
+                                        <td className="px-4 py-3 hidden sm:table-cell">
                                             {u.is_superuser ? (
                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
                                                     <Shield size={12} />
@@ -138,7 +228,7 @@ export function UsersList() {
                                                 </span>
                                             )}
                                         </td>
-                                        <td className="px-4 py-3">
+                                        <td className="px-4 py-3 hidden sm:table-cell">
                                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${u.is_active
                                                     ? "bg-success/10 text-success"
                                                     : "bg-destructive/10 text-destructive"
@@ -161,6 +251,46 @@ export function UsersList() {
             </div>
             {found.length > 0 && <Pagination pager={pager} anchor={listRef} />}
 
+            {picked.size > 0 && (
+                <div className="sticky bottom-3 z-10 flex flex-wrap items-center gap-2 rounded-lg bg-card px-3 py-2 shadow-pop ring-1 ring-border" role="region" aria-label={t("members.bulkAria")}>
+                    <span className="mr-auto text-sm text-foreground">{t("members.bulkSelected", { count: picked.size })}</span>
+                    <span className="flex flex-wrap gap-1.5">
+                        <Button type="button" size="sm" variant="outline" disabled={!access.policy} onClick={() => setBulk({ kind: "role", op: "add" })}>
+                            <BadgeCheck size={14} /> {t("members.bulkAddRole")}
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" disabled={!access.policy} onClick={() => setBulk({ kind: "group", op: "add" })}>
+                            <Users size={14} /> {t("members.bulkAddGroup")}
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" disabled={!access.policy} onClick={() => setBulk({ kind: "role", op: "remove" })}>
+                            {t("members.bulkRemoveRole")}
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" disabled={!access.policy} onClick={() => setBulk({ kind: "group", op: "remove" })}>
+                            {t("members.bulkRemoveGroup")}
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                            {t("members.clearSelection")}
+                        </Button>
+                    </span>
+                </div>
+            )}
+
+            {bulk && (
+                <BulkPickDialog
+                    kind={bulk.kind}
+                    op={bulk.op}
+                    items={bulk.kind === "role" ? choices.roles : choices.groups}
+                    selected={[...picked]}
+                    busy={access.saving || write.checking}
+                    onClose={() => setBulk(null)}
+                    onRun={(target) => {
+                        const { kind, op } = bulk;
+                        setBulk(null);
+                        void write.run(kind, op, target, [...picked]);
+                    }}
+                />
+            )}
+            {write.dialog}
+
             {editingUser && (
                 <UserEditModal
                     user={editingUser}
@@ -168,6 +298,7 @@ export function UsersList() {
                     onClose={() => setEditing(null)}
                     updateUser={updateUser}
                     resetMfa={resetMfa}
+                    access={access}
                     t={t}
                 />
             )}
@@ -181,7 +312,7 @@ export function UsersList() {
  *  the side rail like the preferences modal (account / security / sign-in history / connected apps / API tokens /
  *  AI activity), and
  *  fixedHeight keeps the dialog the same size when switching tabs. */
-type UserModalTab = "account" | "security" | "history" | "apps" | "tokens" | "activity";
+type UserModalTab = "account" | "membership" | "security" | "history" | "apps" | "tokens" | "activity";
 
 function UserEditModal({
     user,
@@ -189,9 +320,11 @@ function UserEditModal({
     onClose,
     updateUser,
     resetMfa,
+    access,
     t,
 }: {
     user: ManagedUser;
+    access: ReturnType<typeof useAccessPage>;
     isSelf: boolean;
     onClose: () => void;
     updateUser: (userId: number, patch: ManagedUserPatch) => Promise<boolean>;
@@ -217,6 +350,7 @@ function UserEditModal({
 
     const tabs = [
         { value: "account" as const, label: t("settings.userTabAccount"), hint: t("settings.userTabAccountHint"), icon: <UserCog /> },
+        { value: "membership" as const, label: t("settings.userTabMembership"), hint: t("settings.userTabMembershipHint"), icon: <BadgeCheck /> },
         { value: "security" as const, label: t("settings.userTabSecurity"), hint: t("settings.userTabSecurityHint"), icon: <ShieldCheck /> },
         { value: "history" as const, label: t("settings.userTabHistory"), hint: t("settings.userTabHistoryHint"), icon: <History /> },
         { value: "apps" as const, label: t("settings.userTabApps"), hint: t("settings.userTabAppsHint"), icon: <Plug /> },
@@ -330,6 +464,8 @@ function UserEditModal({
                     </div>
                 </div>
             )}
+
+            {tab === "membership" && <MembershipTab access={access} userId={user.id} isSuperuser={user.is_superuser} onNavigate={onClose} />}
 
             {tab === "security" && (
                 <div className="space-y-6">

@@ -22,7 +22,8 @@ import { useImpactConfirm } from "@/components/groups/ImpactConfirm";
 import { FoldedNames } from "@/components/groups/MemberNames";
 import { PersonalGroupDialog, type PersonalGroupForm } from "@/components/groups/PersonalGroupDialog";
 import type { usePersonalGroups } from "@/hooks/usePersonalGroups";
-import { filterNamedGroups, memberDiff, type PersonalGroup } from "@/lib/peopleGroups";
+import { filterNamedGroups, type PersonalGroup } from "@/lib/peopleGroups";
+import { memberDelta } from "@/lib/peopleMembers";
 import { useI18n } from "@/lib/i18n";
 
 type Personal = ReturnType<typeof usePersonalGroups>;
@@ -52,11 +53,17 @@ export function usePersonalGroupEditor(personal: Personal) {
         }
         const g = editing;
         if (!g) return;
-        const changed = memberDiff(g.members, form.members);
+        // 名稱 / 說明用 PATCH，成員只送增減（不蓋掉別的視窗同時的修改）。/ Name / description by PATCH, members as a delta.
+        const delta = memberDelta(g.members, form.members);
+        const membersChanged = delta.add.length + delta.remove.length > 0;
+        const metaChanged = form.name !== g.name || form.description !== g.description;
         void gate.ask({
-            preview: g.shares.length > 0 && changed.added + changed.removed > 0 ? () => personal.preview(g.id, { members: form.members }) : undefined,
+            preview: g.shares.length > 0 && membersChanged ? () => personal.preview(g.id, { members: form.members }) : undefined,
             run: async () => {
-                if ((await personal.update(g.id, form)) !== null) setEditing(null);
+                let ok = true;
+                if (metaChanged) ok = (await personal.update(g.id, { name: form.name, description: form.description }, membersChanged)) !== null;
+                if (ok && membersChanged) ok = (await personal.members(g.id, delta)) !== null;
+                if (ok) setEditing(null);
             },
             title: t("personalGroups.confirmMembers", { name: g.name }),
             confirmText: t("common.save"),

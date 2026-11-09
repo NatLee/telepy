@@ -32,10 +32,12 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_policy))
         .routes(routes!(create_group))
         .routes(routes!(update_group, delete_group))
+        .routes(routes!(role_members))
         .routes(routes!(set_grant))
         .routes(routes!(create_share_group))
         .routes(routes!(update_share_group, delete_share_group))
         .routes(routes!(preview_share_group))
+        .routes(routes!(share_group_members))
 }
 
 pub const MAX_GROUPS: usize = 100;
@@ -193,6 +195,39 @@ pub async fn parse_members(state: &AppState, body: &Value) -> ApiResult<Option<V
     }
     ids.sort_unstable();
     Ok(Some(ids))
+}
+
+/// 增減成員的 body：`{add?, remove?}`，至少一個非空、id 要存在。回傳去重排序後的 (add, remove)。
+/// A member delta body `{add?, remove?}`: at least one non-empty, ids must exist. Returns (add, remove) de-duplicated.
+pub async fn parse_delta(state: &AppState, body: &Value, active_only: bool) -> ApiResult<(Vec<i64>, Vec<i64>)> {
+    let list = |key: &str| -> ApiResult<Vec<i64>> {
+        let Some(v) = body.get(key) else { return Ok(vec![]) };
+        let Some(arr) = v.as_array() else { return Err(ApiError::field(key, "Must be a list of user ids.")) };
+        let mut ids: Vec<i64> = Vec::new();
+        for x in arr {
+            let Some(id) = x.as_i64() else { return Err(ApiError::field(key, "Must be a list of user ids.")) };
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.sort_unstable();
+        Ok(ids)
+    };
+    let (add, remove) = (list("add")?, list("remove")?);
+    if add.is_empty() && remove.is_empty() {
+        return Err(ApiError::bad_request("Send add and / or remove with at least one user id."));
+    }
+    let users = db::users::all_ordered(&state.db).await?;
+    let known: HashSet<i64> = users.iter().filter(|u| !active_only || u.is_active).map(|u| u.id).collect();
+    let everyone: HashSet<i64> = users.iter().map(|u| u.id).collect();
+    if let Some(bad) = add.iter().find(|id| !known.contains(id)) {
+        return Err(ApiError::field("add", format!("User {bad} does not exist{}.", if active_only { " or is disabled" } else { "" })));
+    }
+    // 拿掉的只要帳號存在就好（停用的也能移出）。/ Removing only needs the account to exist (disabled ones can leave).
+    if let Some(bad) = remove.iter().find(|id| !everyone.contains(id)) {
+        return Err(ApiError::field("remove", format!("User {bad} does not exist.")));
+    }
+    Ok((add, remove))
 }
 
 /// 角色不能被分享：舊的 `shareable` 欄位一律拒絕（別讓人以為它有作用）。/ Roles can't be shared with: the old
@@ -417,6 +452,48 @@ async fn delete_share_group(State(state): State<AppState>, AuthUser(me): AuthUse
             .await;
     }
     after_share_write(&state, format!("{} deleted the group \"{}\" ({} tunnel shares ended)", me.username, group.label(), shares.len()), &gone).await?;
+    Ok(Json(policy_json(&state).await?))
+}
+
+/// 角色成員的增減（不會蓋掉別人同時的修改）。body `{add?, remove?}`；效果同 PATCH `members`。
+/// Add / remove role members as a delta (never overwrites a concurrent edit); same effects as a PATCH of `members`.
+#[utoipa::path(post, path = "/api/access/groups/{id}/members", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Role id")), request_body = super::schemas::MembersDelta, responses((status = 200, body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn role_members(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin(&me)?;
+    let group = db::features::group(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Role not found."))?;
+    let (add, remove) = parse_delta(&state, &body, false).await?;
+    let (added, removed) = db::features::apply_delta(&state.db, id, &add, &remove).await?;
+    let mut changes: Vec<String> = Vec::new();
+    if !added.is_empty() {
+        changes.push(format!("added {}", usernames(&state, &added).await?));
+    }
+    if !removed.is_empty() {
+        changes.push(format!("removed {}", usernames(&state, &removed).await?));
+    }
+    if !changes.is_empty() {
+        after_write(&state, &me, "user_group", format!("{} changed the role \"{}\": {}", me.username, group.name, changes.join("; "))).await;
+    }
+    Ok(Json(policy_json(&state).await?))
+}
+
+/// 管理員維護群組成員的增減；通道分享立刻跟著走。/ Add / remove admin-kept group members as a delta; group shares follow at once.
+#[utoipa::path(post, path = "/api/access/share-groups/{id}/members", tag = "Access", security(("bearer" = [])), params(("id" = i64, Path, description = "Group id")), request_body = super::schemas::MembersDelta, responses((status = 200, body = super::schemas::AccessPolicy), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn share_group_members(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    admin(&me)?;
+    let group = share_group_or_404(&state, id).await?;
+    let (add, remove) = parse_delta(&state, &body, false).await?;
+    let (added, removed) = db::features::apply_delta(&state.db, id, &add, &remove).await?;
+    let mut changes: Vec<String> = Vec::new();
+    if !added.is_empty() {
+        changes.push(format!("added {}", usernames(&state, &added).await?));
+    }
+    if !removed.is_empty() {
+        changes.push(format!("removed {}", usernames(&state, &removed).await?));
+    }
+    if changes.is_empty() {
+        return Ok(Json(policy_json(&state).await?));
+    }
+    after_share_write(&state, format!("{} changed the group \"{}\": {}", me.username, group.label(), changes.join("; ")), &HashMap::new()).await?;
     Ok(Json(policy_json(&state).await?))
 }
 

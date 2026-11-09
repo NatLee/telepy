@@ -21,6 +21,12 @@ export interface GroupDraft {
     members?: number[];
 }
 
+/** 成員的增減（delta 路由的 body；只送有的）。/ A member delta (the delta routes' body). */
+export interface MembersDelta {
+    add?: number[];
+    remove?: number[];
+}
+
 /** 預覽一個群組的改變（二選一）。/ One group change to preview (exactly one of these). */
 export type GroupPreviewBody = { members: number[] } | { delete: true };
 
@@ -88,6 +94,8 @@ export function useAccessPage() {
     );
     const updateRole = useCallback((id: number, draft: GroupDraft) => write(`/api/access/groups/${id}`, "PATCH", draft), [write]);
     const deleteRole = useCallback((id: number) => write(`/api/access/groups/${id}`, "DELETE"), [write]);
+    /** 角色成員的增減（不會蓋掉別的管理員同時的修改）。/ Add / remove role members (never overwrites a concurrent edit). */
+    const roleMembers = useCallback((id: number, delta: MembersDelta) => write(`/api/access/groups/${id}/members`, "POST", delta), [write]);
 
     /* ── 管理員維護的群組（分享）/ Admin-kept groups (sharing) ── */
     const createShareGroup = useCallback(
@@ -100,6 +108,8 @@ export function useAccessPage() {
     );
     const updateShareGroup = useCallback((id: number, draft: GroupDraft) => write(`/api/access/share-groups/${id}`, "PATCH", draft), [write]);
     const deleteShareGroup = useCallback((id: number) => write(`/api/access/share-groups/${id}`, "DELETE"), [write]);
+    /** 群組成員的增減；通道分享立刻跟著走。/ Add / remove group members; group shares follow at once. */
+    const shareGroupMembers = useCallback((id: number, delta: MembersDelta) => write(`/api/access/share-groups/${id}/members`, "POST", delta), [write]);
 
     /** 這個改變會讓誰多 / 少哪些通道（不寫入）；失敗 = null（已顯示錯誤）。/ Who would gain / lose which tunnels; null on failure. */
     const previewShareGroup = useCallback(
@@ -129,9 +139,11 @@ export function useAccessPage() {
         createRole,
         updateRole,
         deleteRole,
+        roleMembers,
         createShareGroup,
         updateShareGroup,
         deleteShareGroup,
+        shareGroupMembers,
         previewShareGroup,
     };
 }

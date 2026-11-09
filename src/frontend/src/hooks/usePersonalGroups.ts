@@ -47,7 +47,7 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
     }, [enabled]);
 
     /** 寫入：成功時用回答取代清單，回傳新建的 id（或 true）；失敗 = null。/ A write; returns the created id (or true), null on failure. */
-    const write = async (url: string, method: string, body: unknown, ok: string, failed: string): Promise<number | true | null> => {
+    const write = async (url: string, method: string, body: unknown, ok: string | null, failed: string): Promise<number | true | null> => {
         setBusy(true);
         try {
             const res = await apiFetch(url, { method, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -58,7 +58,7 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
             }
             const parsed = parsePersonalGroups(data);
             setList({ groups: parsed.groups, member_of: parsed.member_of, users: parsed.users, can_share: parsed.can_share, limit: parsed.limit, max_members: parsed.max_members });
-            showSuccess(ok);
+            if (ok) showSuccess(ok);
             onChanged?.();
             return parsed.created_id ?? true;
         } catch (e) {
@@ -70,7 +70,11 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
     };
 
     const create = (draft: PersonalGroupDraft) => write("/api/user/groups", "POST", draft, t("personalGroups.created", { name: draft.name ?? "" }), t("personalGroups.saveFailed"));
-    const update = (id: number, draft: PersonalGroupDraft) => write(`/api/user/groups/${id}`, "PATCH", draft, t("personalGroups.saved"), t("personalGroups.saveFailed"));
+    const update = (id: number, draft: PersonalGroupDraft, quiet = false) =>
+        write(`/api/user/groups/${id}`, "PATCH", draft, quiet ? null : t("personalGroups.saved"), t("personalGroups.saveFailed"));
+    /** 成員的增減（只送差別，不蓋掉整份）。/ Add / remove members (only the difference is sent). */
+    const members = (id: number, delta: { add?: number[]; remove?: number[] }) =>
+        write(`/api/user/groups/${id}/members`, "POST", delta, t("personalGroups.saved"), t("personalGroups.saveFailed"));
     const remove = (id: number) => write(`/api/user/groups/${id}`, "DELETE", undefined, t("personalGroups.deleted"), t("personalGroups.deleteFailed"));
 
     const preview = async (id: number, body: PersonalPreviewBody): Promise<Impact | null> => {
@@ -88,5 +92,5 @@ export function usePersonalGroups(enabled: boolean, onChanged?: () => void) {
         }
     };
 
-    return { list, busy, reload: load, create, update, remove, preview };
+    return { list, busy, reload: load, create, update, members, remove, preview };
 }

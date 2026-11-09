@@ -9,7 +9,6 @@ import {
     groupKeeper,
     impactEmpty,
     impactSummary,
-    memberDiff,
     nameProblem,
     parseImpact,
     parseShareGroups,
@@ -110,7 +109,6 @@ test("search, names and member changes", () => {
     assert.equal(nameProblem("  "), "empty");
     assert.equal(nameProblem("x".repeat(65)), "long");
     assert.equal(nameProblem("ok"), null);
-    assert.deepEqual(memberDiff([1, 2, 3], [2, 3, 4, 5]), { added: 2, removed: 1 });
 });
 
 test("the impact preview: empty means save straight away, the summary counts tunnels once", () => {
