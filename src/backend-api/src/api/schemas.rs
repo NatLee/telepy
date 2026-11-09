@@ -4486,6 +4486,15 @@ pub struct AccessGroupShare {
     pub expires_at: Option<String>,
 }
 
+/// 成員增減（角色、管理員維護群組、個人群組共用）。/ A member delta (roles, admin-kept and personal groups).
+#[derive(ToSchema)]
+pub struct MembersDelta {
+    /// User ids to add (existing accounts; personal groups: other active accounts)
+    pub add: Option<Vec<i64>>,
+    /// User ids to remove
+    pub remove: Option<Vec<i64>>,
+}
+
 #[derive(ToSchema)]
 pub struct GroupPreviewRequest {
     /// 換成這份成員名單會怎樣。/ What this member list would do.

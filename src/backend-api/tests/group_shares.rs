@@ -684,3 +684,90 @@ async fn the_upgrade_keeps_everyones_tunnels_and_features() {
     let ids: Vec<i64> = r.json["groups"].as_array().unwrap().iter().filter(|g| g["kind"] == "org").filter_map(|g| g["id"].as_i64()).collect();
     assert!(ids.contains(&ops) && ids.contains(&copy) && !ids.contains(&leads), "{}", r.text);
 }
+
+/// 成員增減（delta）：角色改功能、管理員維護群組立刻給 / 收通道、種類不互通、非管理員 403、個人群組規則、
+/// 兩個管理員同時改都留下。
+/// Member deltas: a role changes features, an admin-kept group gives / takes the tunnel at once, kinds never cross,
+/// non-admins get 403, the personal rules hold, and two concurrent edits both survive.
+#[tokio::test]
+async fn member_deltas_apply_by_kind_and_never_overwrite_each_other() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let admin = Some(lab.admin_token.as_str());
+    let gs = format!("/api/reverse/server/{}/group-shares", dev.tunnel_id);
+
+    // 角色：加人 → 功能跟著；移除 → 還原；沒有效果的增減也不出錯。/ Role: add → feature follows; remove → back.
+    let role = lab.app.post("/api/access/groups", admin, json!({"name": "no-term"})).await.json["created_id"].as_i64().unwrap();
+    lab.app.put("/api/access/grants", admin, json!({"subject": "group", "id": role, "feature": "terminal", "value": "deny"})).await;
+    let terminal = |r: &common::Resp, id: i64| r.json["users"].as_array().unwrap().iter().find(|u| u["id"] == id).unwrap()["effective"]["terminal"]["allowed"].as_bool();
+    let r = lab.app.post(&format!("/api/access/groups/{role}/members"), admin, json!({"add": [bob.id, bob.id]})).await;
+    assert_eq!((r.status, terminal(&r, bob.id), terminal(&r, carol.id)), (StatusCode::OK, Some(false), Some(true)), "{}", r.text);
+    let r = lab.app.post(&format!("/api/access/groups/{role}/members"), admin, json!({"add": [bob.id], "remove": [carol.id]})).await;
+    assert_eq!((r.status, terminal(&r, bob.id)), (StatusCode::OK, Some(false)), "{}", r.text);
+    let r = lab.app.post(&format!("/api/access/groups/{role}/members"), admin, json!({"remove": [bob.id]})).await;
+    assert_eq!(terminal(&r, bob.id), Some(true), "{}", r.text);
+    // 空的、壞的、不存在的 id。/ Empty, malformed, unknown.
+    for body in [json!({}), json!({"add": []}), json!({"add": "x"}), json!({"add": [999999]}), json!({"remove": [999999]})] {
+        let r = lab.app.post(&format!("/api/access/groups/{role}/members"), admin, body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body} {}", r.text);
+    }
+    assert_eq!(lab.app.post(&format!("/api/access/groups/{role}/members"), Some(&alice.token), json!({"add": [bob.id]})).await.status, StatusCode::FORBIDDEN);
+
+    // 管理員維護的群組：加 = 通道立刻出現，移除 = 立刻消失。/ Admin-kept: add gives the tunnel at once, remove takes it.
+    let kept = lab.app.post("/api/access/share-groups", admin, json!({"name": "ops"})).await.json["created_id"].as_i64().unwrap();
+    let r = lab.app.post(&gs, Some(&alice.token), json!({"group_id": kept, "allowed_target_username_ids": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_none());
+    let r = lab.app.post(&format!("/api/access/share-groups/{kept}/members"), admin, json!({"add": [bob.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_some(), "added: the tunnel is there at once");
+    // 兩個管理員各自加一個人：兩個都在。/ Two admins each add one person: both stay.
+    let path = format!("/api/access/share-groups/{kept}/members");
+    let (a, b) = tokio::join!(lab.app.post(&path, admin, json!({"add": [carol.id]})), lab.app.post(&path, admin, json!({"add": [alice.id]})));
+    assert_eq!((a.status, b.status), (StatusCode::OK, StatusCode::OK));
+    let members = db::features::members_of(&lab.app.state.db, kept).await.unwrap();
+    assert!(members.contains(&bob.id) && members.contains(&carol.id) && members.contains(&alice.id), "{members:?}");
+    let r = lab.app.post(&format!("/api/access/share-groups/{kept}/members"), admin, json!({"remove": [bob.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(item(&lab, &bob.token, dev.tunnel_id).await.is_none(), "removed: the tunnel is gone at once");
+    assert_eq!(lab.app.post(&format!("/api/access/share-groups/{kept}/members"), Some(&alice.token), json!({"add": [bob.id]})).await.status, StatusCode::FORBIDDEN);
+
+    // 種類不互通：個人群組、角色、管理員維護的群組互相 404。/ Kinds never cross.
+    let pals = lab.app.post("/api/user/groups", Some(&alice.token), json!({"name": "pals"})).await.json["created_id"].as_i64().unwrap();
+    for path in [
+        format!("/api/access/groups/{kept}/members"),
+        format!("/api/access/groups/{pals}/members"),
+        format!("/api/access/share-groups/{role}/members"),
+        format!("/api/access/share-groups/{pals}/members"),
+    ] {
+        assert_eq!(lab.app.post(&path, admin, json!({"add": [bob.id]})).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    for id in [role, kept] {
+        assert_eq!(lab.app.post(&format!("/api/user/groups/{id}/members"), Some(&alice.token), json!({"add": [bob.id]})).await.status, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(lab.app.post(&format!("/api/user/groups/{pals}/members"), Some(&bob.token), json!({"add": [carol.id]})).await.status, StatusCode::NOT_FOUND, "someone else's group");
+
+    // 個人群組：自己、停用的帳號、管不到通道的人（no_tunnels）。/ Personal rules: self, disabled, no tunnel to manage.
+    let pm = format!("/api/user/groups/{pals}/members");
+    let r = lab.app.post(&pm, Some(&alice.token), json!({"add": [alice.id]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    sqlx::query("UPDATE auth_user SET is_active = 0 WHERE id = ?").bind(carol.id).execute(&lab.app.state.db.write).await.unwrap();
+    let r = lab.app.post(&pm, Some(&alice.token), json!({"add": [carol.id]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    sqlx::query("UPDATE auth_user SET is_active = 1 WHERE id = ?").bind(carol.id).execute(&lab.app.state.db.write).await.unwrap();
+    let r = lab.app.post(&pm, Some(&alice.token), json!({"add": [bob.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == pals).unwrap()["members"], json!([bob.id]));
+    // 沒有通道可管的人不能加人，但能拿掉。/ Without a tunnel to manage: no adding.
+    let dave = lab.user("dave").await;
+    let own = lab.app.post("/api/user/groups", Some(&dave.token), json!({"name": "mine"})).await.json["created_id"].as_i64().unwrap();
+    let r = lab.app.post(&format!("/api/user/groups/{own}/members"), Some(&dave.token), json!({"add": [bob.id]})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("no_tunnels")), "{}", r.text);
+    let r = lab.app.post(&format!("/api/user/groups/{own}/members"), Some(&dave.token), json!({"remove": [bob.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+}

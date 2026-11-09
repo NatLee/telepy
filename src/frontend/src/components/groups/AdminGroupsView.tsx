@@ -21,10 +21,10 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Pagination } from "@/components/ui/pagination";
 import { Chip, Section, SectionPanels } from "@/components/ui/section";
-import { AdminGroupList, EmptyGroups, GroupNameDialog, MembersEditor, PolicyState, RolesVsGroups } from "@/components/groups/AdminGroupBits";
+import { AdminGroupList, CountText, EmptyGroups, GroupNameDialog, MembersEditor, PolicyState, RolesVsGroups } from "@/components/groups/AdminGroupBits";
 import { AdminGroupsInfoDialog } from "@/components/groups/RolesGroupsInfoDialog";
 import { useImpactConfirm } from "@/components/groups/ImpactConfirm";
-import { useAccessPage } from "@/hooks/useAccessPage";
+import { useAccessPage, type MembersDelta } from "@/hooks/useAccessPage";
 import { usePagination } from "@/hooks/usePagination";
 import { pageSlice } from "@/lib/pagination";
 import type { AccessPolicy } from "@/lib/features";
@@ -88,10 +88,10 @@ export function AdminGroupsView({ initialGroup, startNew }: { initialGroup: numb
                     storageKey="telepy.adminGroupsPageSize"
                     icon={Users}
                     ariaLabel={t("adminGroups.title")}
-                    sub={(g) => (
+                    counts={(g) => (
                         <>
-                            {t("access.memberCount", { count: g.members.length })}
-                            {g.shares.length > 0 && <> · {t("adminGroups.tunnelCount", { count: g.shares.length })}</>}
+                            <CountText icon={Users} count={g.members.length} label={t("access.memberCount", { count: g.members.length })} />
+                            <CountText icon={Server} count={g.shares.length} label={t("adminGroups.tunnelCount", { count: g.shares.length })} />
                         </>
                     )}
                     badge={(g) => (g.synced ? <Building2 size={14} className="shrink-0 text-muted-foreground" aria-label={t("peopleGroups.keeper.synced")} /> : null)}
@@ -132,10 +132,10 @@ function GroupPanel({ policy, group, page, onDeleted }: { policy: AccessPolicy; 
     const shared = group.shares.length > 0;
 
     // 沒有分享給它的通道時，改成員不影響任何通道：不必問。/ No shares = members change no tunnel access: nothing to preview.
-    const saveMembers = (members: number[]) =>
+    const saveMembers = (delta: MembersDelta, members: number[]) =>
         gate.ask({
             preview: shared ? () => page.previewShareGroup(group.id, { members }) : undefined,
-            run: () => page.updateShareGroup(group.id, { members }),
+            run: () => page.shareGroupMembers(group.id, delta),
             title: t("adminGroups.confirmMembers", { name: group.name }),
             confirmText: t("access.membersSave"),
         });
@@ -181,10 +181,10 @@ function GroupPanel({ policy, group, page, onDeleted }: { policy: AccessPolicy; 
                     <Section icon={<UsersRound />} title={t("access.members")} description={t("adminGroups.membersHint")}>
                         <MembersEditor
                             users={policy.users}
-                            groupId={group.id}
                             members={group.members}
                             ssoMembers={group.sso_members}
                             saving={page.saving || gate.checking}
+                            storageKey="telepy.groupMembersPageSize"
                             onSave={saveMembers}
                         />
                         {group.sso_members.length > 0 && <p className="text-xs text-muted-foreground">{t("access.ssoMembersHint")}</p>}

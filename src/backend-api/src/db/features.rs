@@ -327,6 +327,26 @@ pub async fn set_members(db: &Db, group_id: i64, users: &[i64]) -> sqlx::Result<
     Ok(())
 }
 
+/// 一個交易裡套用成員的增減（已在 / 不在的忽略），回傳 (真的加進的, 真的拿掉的)；兩個管理員同時改不會互相覆蓋。
+/// Applies a member delta in one transaction (already in / not in is ignored); returns (really added, really removed),
+/// so two concurrent edits never overwrite each other like a whole-list replace would.
+pub async fn apply_delta(db: &Db, group_id: i64, add: &[i64], remove: &[i64]) -> sqlx::Result<(Vec<i64>, Vec<i64>)> {
+    let mut tx = db.write.begin().await?;
+    let (mut added, mut removed) = (Vec::new(), Vec::new());
+    for uid in remove {
+        if sqlx::query(&format!("DELETE FROM {MEMBER} WHERE group_id = ? AND user_id = ?")).bind(group_id).bind(uid).execute(&mut *tx).await?.rows_affected() > 0 {
+            removed.push(*uid);
+        }
+    }
+    for uid in add {
+        if sqlx::query(&format!("INSERT OR IGNORE INTO {MEMBER} (group_id, user_id) VALUES (?, ?)")).bind(group_id).bind(uid).execute(&mut *tx).await?.rows_affected() > 0 {
+            added.push(*uid);
+        }
+    }
+    tx.commit().await?;
+    Ok((added, removed))
+}
+
 /// 所有允許 / 拒絕。`group` 那幾列只算指向角色的（保險：群組永遠不決定功能）。
 /// Every allow / deny row. `group` rows count only when they point at a role (defence in depth: groups never decide features).
 pub async fn grants(db: &Db) -> sqlx::Result<Vec<GrantRow>> {

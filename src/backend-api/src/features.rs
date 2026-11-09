@@ -534,6 +534,7 @@ mod tests {
             ("POST", "/api/user/groups", Some(TunnelsShare)),
             ("PATCH", "/api/user/groups/3", Some(TunnelsShare)),
             ("POST", "/api/user/groups/3/preview", Some(TunnelsShare)),
+            ("POST", "/api/user/groups/3/members", Some(TunnelsShare)),
             ("DELETE", "/api/user/groups/3", None),
             ("DELETE", "/api/user/groups/3/membership", None),
             ("GET", "/api/user/users", None),
