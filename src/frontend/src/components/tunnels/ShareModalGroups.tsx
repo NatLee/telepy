@@ -8,12 +8,11 @@
  * (members / delete preview the impact first). The info button opens the group sharing diagram.
  */
 import React, { useState } from "react";
-import { Building2, CircleHelp, CirclePause, Pencil, Plus, Share2, Trash2, User, UserCog, Users, UsersRound, X } from "lucide-react";
+import { Building2, CircleHelp, CirclePause, Pencil, Plus, Share2, User, UserCog, Users, UsersRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Segmented } from "@/components/ui/segmented";
@@ -27,10 +26,8 @@ import { ShareExpiryChoice, ShareExpiryControl } from "@/components/tunnels/Shar
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
 import { useGroupShares } from "@/hooks/useGroupShares";
 import { usePersonalGroups } from "@/hooks/usePersonalGroups";
-import { useImpactConfirm } from "@/components/groups/ImpactConfirm";
-import { PersonalGroupDialog, type PersonalGroupForm } from "@/components/groups/PersonalGroupDialog";
+import { PersonalGroupsSection, usePersonalGroupEditor } from "@/components/groups/PersonalGroupsManager";
 import { hasFeature } from "@/lib/features";
-import { filterNamedGroups, memberDiff, type PersonalGroup } from "@/lib/peopleGroups";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { choicesByKind, groupShareSpots, memberParts, shareKindLabel, type GroupShare, type SharePermission } from "@/lib/groupShares";
@@ -61,8 +58,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
         void reload();
         onChanged();
     });
-    const [groupDialog, setGroupDialog] = useState<PersonalGroup | "new" | null>(null);
-    const gate = useImpactConfirm();
+    const editor = usePersonalGroupEditor(personal);
     const [pick, setPick] = useState("");
     const [perm, setPerm] = useState<SharePermission>("view");
     const [accounts, setAccounts] = useState<number[]>([]);
@@ -111,7 +107,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                     {canPersonal && choiceCount === 0 && (
                         <>
                             <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("share.group.noGroupsPersonal")}</p>
-                            <Button type="button" size="sm" className="mt-3" onClick={() => setGroupDialog("new")}>
+                            <Button type="button" size="sm" className="mt-3" onClick={editor.openNew}>
                                 <Plus size={14} /> {t("personalGroups.new")}
                             </Button>
                         </>
@@ -220,7 +216,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                         list.shares.length > 0 && (
                             <Callout tone="info" title={t("share.group.noGroups")}>
                                 <p>{t("share.group.noGroupsPersonal")}</p>
-                                <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setGroupDialog("new")}>
+                                <Button type="button" size="sm" variant="outline" className="mt-2" onClick={editor.openNew}>
                                     <Plus size={14} /> {t("personalGroups.new")}
                                 </Button>
                             </Callout>
@@ -301,48 +297,12 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                     groups={personal.list.groups}
                     limit={personal.list.limit}
                     busy={personal.busy}
-                    onNew={() => setGroupDialog("new")}
-                    onEdit={(g) => setGroupDialog(g)}
-                    onDelete={(g) =>
-                        void gate.ask({
-                            preview: g.shares.length > 0 ? () => personal.preview(g.id, { delete: true }) : undefined,
-                            run: () => personal.remove(g.id),
-                            title: t("personalGroups.deleteTitle", { name: g.name }),
-                            confirmText: t("personalGroups.delete"),
-                            alwaysAsk: t("personalGroups.deleteMessage", { name: g.name, count: g.shares.length }),
-                            destructive: true,
-                        })
-                    }
+                    onNew={editor.openNew}
+                    onEdit={editor.openEdit}
+                    onDelete={editor.askDelete}
                 />
             )}
-            {groupDialog !== null && personal.list && (
-                <PersonalGroupDialog
-                    group={groupDialog === "new" ? null : groupDialog}
-                    users={personal.list.users}
-                    maxMembers={personal.list.max_members}
-                    saving={personal.busy || gate.checking}
-                    onClose={() => setGroupDialog(null)}
-                    onSave={(form: PersonalGroupForm) => {
-                        if (groupDialog === "new") {
-                            void personal.create(form).then((r) => {
-                                if (r !== null) setGroupDialog(null);
-                            });
-                            return;
-                        }
-                        const g = groupDialog;
-                        const changed = memberDiff(g.members, form.members);
-                        void gate.ask({
-                            preview: g.shares.length > 0 && changed.added + changed.removed > 0 ? () => personal.preview(g.id, { members: form.members }) : undefined,
-                            run: async () => {
-                                if ((await personal.update(g.id, form)) !== null) setGroupDialog(null);
-                            },
-                            title: t("personalGroups.confirmMembers", { name: g.name }),
-                            confirmText: t("common.save"),
-                        });
-                    }}
-                />
-            )}
-            {gate.dialog}
+            {editor.dialogs}
 
             <ShareModalEditTargetUsersModal
                 isOpen={editing !== null}
@@ -383,75 +343,6 @@ function KindChip({ share }: { share: GroupShare }) {
             <User aria-hidden />
             {k.kind === "mine" ? t("share.group.kindMine") : t("share.group.kindPersonal", { owner: k.owner ?? "?" })}
         </Chip>
-    );
-}
-
-/** 你的個人群組：每個的人數與用在哪些通道，新增 / 編輯 / 刪除。/ Your personal groups: members, tunnels using them, new / edit / delete. */
-function PersonalGroupsSection({
-    groups,
-    limit,
-    busy,
-    onNew,
-    onEdit,
-    onDelete,
-}: {
-    groups: PersonalGroup[];
-    limit: number;
-    busy: boolean;
-    onNew: () => void;
-    onEdit: (g: PersonalGroup) => void;
-    onDelete: (g: PersonalGroup) => void;
-}) {
-    const { t } = useI18n();
-    const [query, setQuery] = useState("");
-    const shown = filterNamedGroups(groups, query);
-    const pager = usePagination(shown.length, { storageKey: "telepy.personalGroupsPageSize", resetKey: query });
-    return (
-        <Section
-            icon={<User />}
-            title={t("personalGroups.yours")}
-            description={t("personalGroups.yoursHint")}
-            action={
-                <Button type="button" size="sm" variant="outline" disabled={busy || groups.length >= limit} onClick={onNew} title={groups.length >= limit ? t("personalGroups.limit", { limit }) : undefined}>
-                    <Plus size={14} /> {t("personalGroups.newShort")}
-                </Button>
-            }
-        >
-            {groups.length >= 7 && (
-                <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("personalGroups.search")} aria-label={t("personalGroups.search")} className="h-8" />
-            )}
-            {groups.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("personalGroups.none")}</p>
-            ) : shown.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("access.noMatch")}</p>
-            ) : (
-                <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
-                    {pageSlice(shown, pager.page, pager.size).map((g) => {
-                        const paused = g.shares.filter((s) => !s.active).length;
-                        return (
-                            <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5">
-                                <span className="flex min-w-0 flex-1 basis-48 flex-col">
-                                    <span className="truncate text-sm text-foreground" title={g.description || undefined}>{g.name}</span>
-                                    <span className="text-xs text-muted-foreground" title={g.shares.map((s) => s.tunnel_name).join(", ") || undefined}>
-                                        {t("access.memberCount", { count: g.members.length })} · {t("personalGroups.usedBy", { count: g.shares.length })}
-                                        {paused > 0 && <span className="text-warning"> · {t("personalGroups.pausedCount", { count: paused })}</span>}
-                                    </span>
-                                </span>
-                                <span className="flex gap-1">
-                                    <Button type="button" variant="ghost" size="icon-sm" disabled={busy} onClick={() => onEdit(g)} aria-label={t("personalGroups.edit")} title={t("personalGroups.edit")}>
-                                        <Pencil />
-                                    </Button>
-                                    <Button type="button" variant="ghost" size="icon-sm" disabled={busy} className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={() => onDelete(g)} aria-label={t("personalGroups.delete")} title={t("personalGroups.delete")}>
-                                        <Trash2 />
-                                    </Button>
-                                </span>
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
-            <Pagination pager={pager} compact className="justify-center" />
-        </Section>
     );
 }
 

@@ -4513,8 +4513,32 @@ pub struct PersonalGroup {
 }
 
 #[derive(ToSchema)]
+pub struct MemberOfTunnel {
+    pub id: i64,
+    pub name: String,
+    pub permission_type: String,
+    /// 我是經由這個群組拿到的（否則是自己的分享或別的群組）。/ I hold it through this group (else my own share or another group).
+    pub through: bool,
+}
+
+#[derive(ToSchema)]
+pub struct MemberOfGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    /// org | personal
+    pub kind: String,
+    /// 個人群組的主人（可以退出）；組織群組 = null。/ A personal group's owner (you may leave it); null for organization groups.
+    pub owner: Option<String>,
+    /// 分享給它、我看得到的通道。/ Tunnels shared with it that I can see.
+    pub tunnels: Vec<MemberOfTunnel>,
+}
+
+#[derive(ToSchema)]
 pub struct PersonalGroups {
     pub groups: Vec<PersonalGroup>,
+    /// 我所在的群組：別人的個人群組，以及開放分享的組織群組。/ Groups I'm in: others' personal groups and organization groups open to sharing.
+    pub member_of: Vec<MemberOfGroup>,
     /// 你至少管得到一條通道的分享（擁有者或 ADMIN）；否則 `users` 是空的、不能放成員。
     /// You manage sharing on at least one tunnel (owner or ADMIN); otherwise `users` is empty and members can't be added.
     pub can_share: bool,

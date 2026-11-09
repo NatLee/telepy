@@ -84,9 +84,31 @@ export interface PersonalGroupShare {
     id: number;
     tunnel_id: number;
     tunnel_name: string;
+    /** 你已經看不到這條通道（後端不給名字；`tunnel_name` 是編號）。/ You can no longer see the tunnel (no name; `tunnel_name` is its id). */
+    hidden: boolean;
     permission_type: GroupPermission;
     /** false = 暫停（群組主人已經不管這條通道）。/ false = paused (the group's owner no longer manages the tunnel). */
     active: boolean;
+}
+
+/** 我所在的群組裡、分享給它而我看得到的一條通道。/ A tunnel shared with a group I'm in, that I can see. */
+export interface MemberOfTunnel {
+    id: number;
+    name: string;
+    permission_type: GroupPermission;
+    /** 我是經由這個群組拿到的（否則是自己的分享或別的群組）。/ I hold it through this group (else my own share or another group). */
+    through: boolean;
+}
+
+/** 我所在的群組：別人的個人群組（可以退出），或開放分享的組織群組（唯讀）。/ A group I'm in. */
+export interface MemberOfGroup {
+    id: number;
+    name: string;
+    description: string;
+    kind: "org" | "personal";
+    /** 個人群組的主人；組織群組 = null。/ A personal group's owner; null for organization groups. */
+    owner: string | null;
+    tunnels: MemberOfTunnel[];
 }
 
 export interface PersonalGroup {
@@ -107,6 +129,8 @@ export interface PickableUser {
 
 export interface PersonalGroupList {
     groups: PersonalGroup[];
+    /** 我所在的群組。/ The groups I'm in. */
+    member_of: MemberOfGroup[];
     users: PickableUser[];
     /** 至少管得到一條通道的分享；否則不能放成員。/ Manages sharing on at least one tunnel; otherwise no members can be added. */
     can_share: boolean;
@@ -114,7 +138,7 @@ export interface PersonalGroupList {
     max_members: number;
 }
 
-export const EMPTY_PERSONAL: PersonalGroupList = { groups: [], users: [], can_share: true, limit: 50, max_members: 200 };
+export const EMPTY_PERSONAL: PersonalGroupList = { groups: [], member_of: [], users: [], can_share: true, limit: 50, max_members: 200 };
 
 /** `GET /api/user/groups` → 型別（缺欄位給安全預設）。/ The answer → typed (safe defaults). */
 export function parsePersonalGroups(v: unknown): PersonalGroupList & { created_id: number | null } {
@@ -138,10 +162,25 @@ export function parsePersonalGroups(v: unknown): PersonalGroupList & { created_i
                         id: num(s.id),
                         tunnel_id: num(s.tunnel_id),
                         tunnel_name: str(s.tunnel_name) || `#${num(s.tunnel_id)}`,
+                        hidden: typeof s.tunnel_name !== "string" || s.tunnel_name === "",
                         permission_type: perm(s.permission_type),
                         active: s.active !== false,
                     })),
                 created_at: str(g.created_at),
+            })),
+        member_of: (Array.isArray(o.member_of) ? o.member_of : [])
+            .map(obj)
+            .filter((g) => typeof g.id === "number")
+            .map((g) => ({
+                id: num(g.id),
+                name: str(g.name),
+                description: str(g.description),
+                kind: g.kind === "personal" ? ("personal" as const) : ("org" as const),
+                owner: typeof g.owner === "string" ? g.owner : null,
+                tunnels: (Array.isArray(g.tunnels) ? g.tunnels : [])
+                    .map(obj)
+                    .filter((x) => typeof x.id === "number")
+                    .map((x) => ({ id: num(x.id), name: str(x.name) || `#${num(x.id)}`, permission_type: perm(x.permission_type), through: x.through === true })),
             })),
         users: users
             .map(obj)

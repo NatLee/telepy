@@ -1,6 +1,7 @@
 //! 個人群組（`/api/user/groups*`）：任何人都能自己建一群人，一次把通道分享給他們。只有建立的人看得到、改得到；
 //! 只用在分享 —— 功能權限永遠不看它（那是管理員的組織群組，見 `api::access`）。
-//! - `GET /api/user/groups` → `{groups, users, limit, max_members}`（`users` = 能加進來的人：其他還在用的帳號）
+//! - `GET /api/user/groups` → `{groups, member_of, can_share, users, limit, max_members}`（`users` = 能加進來的人：
+//!   其他還在用的帳號；`member_of` = 我所在的群組。誰都能讀，沒有「分享通道」功能的人也要能看到、退出自己所在的群組）
 //! - `POST /api/user/groups`、`PATCH/DELETE /api/user/groups/{id}` → 同上（建立多一個 `created_id`）
 //! - `POST /api/user/groups/{id}/preview` `{members}` | `{delete: true}` → 誰會多了 / 少了哪些通道
 //! - `DELETE /api/user/groups/{id}/membership` → 退出別人的個人群組（任何人都能把你加進去，所以你一定能自己退出）
@@ -45,7 +46,7 @@ pub const MAX_GROUPS: usize = 50;
 pub const MAX_MEMBERS: usize = 200;
 
 async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
-    let can_share = db::group_shares::manages_any(&state.db, me.id).await?;
+    let can_share = state.features.allowed(me, crate::features::Feature::TunnelsShare).await? && db::group_shares::manages_any(&state.db, me.id).await?;
     let groups = db::features::personal_groups(&state.db, me.id).await?;
     let ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
     let active = crate::group_shares::active_shares(state).await?;
@@ -89,6 +90,7 @@ async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
             "created_at": crate::util::db_to_iso_utc_z(&g.created_at),
         }));
     }
+    let member_of = member_of_json(state, me).await?;
     let pickable: Vec<Value> = if can_share {
         users.iter().filter(|u| u.is_active && u.id != me.id).map(|u| json!({ "id": u.id, "username": u.username, "email": u.email })).collect()
     } else {
@@ -96,11 +98,48 @@ async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
     };
     Ok(json!({
         "groups": out,
+        "member_of": member_of,
         "can_share": can_share,
         "users": pickable,
         "limit": MAX_GROUPS,
         "max_members": MAX_MEMBERS,
     }))
+}
+
+/// 我所在的群組，每個附上分享給它、我看得到的通道（`through` = 我是經由它拿到的）。
+/// The groups I'm in, each with the tunnels shared with it that I can see (`through` = I hold it through this group).
+async fn member_of_json(state: &AppState, me: &User) -> ApiResult<Vec<Value>> {
+    let groups = db::group_shares::member_of(&state.db, me.id).await?;
+    let ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
+    let mut tunnels: HashMap<i64, Vec<Value>> = HashMap::new();
+    for (share_id, g, tunnel_id, tunnel_name, _owner, perm, _expires, _through) in db::group_shares::shares_of_groups(&state.db, &ids).await? {
+        let Some(t) = db::tunnels::by_id(&state.db, tunnel_id).await? else { continue };
+        if crate::permissions::effective_for(&state.db, me.id, &t).await?.is_none() {
+            continue;
+        }
+        tunnels.entry(g).or_default().push(json!({
+            "id": tunnel_id,
+            "name": tunnel_name,
+            "permission_type": perm,
+            "through": db::sharing::get(&state.db, tunnel_id, me.id).await?.and_then(|s| s.group_share_id) == Some(share_id),
+        }));
+    }
+    let mut out = Vec::new();
+    for g in &groups {
+        let owner = match g.owner_id {
+            Some(o) => db::users::by_id(&state.db, o).await?.map(|u| u.username),
+            None => None,
+        };
+        out.push(json!({
+            "id": g.id,
+            "name": g.label(),
+            "description": g.description,
+            "kind": g.kind(),
+            "owner": owner,
+            "tunnels": tunnels.remove(&g.id).unwrap_or_default(),
+        }));
+    }
+    Ok(out)
 }
 
 /// `members`：其他還在用的帳號（不能放自己：自己分享出去的不會回到自己身上）。
