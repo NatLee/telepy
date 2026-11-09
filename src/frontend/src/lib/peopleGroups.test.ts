@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+    filterMemberOf,
     filterNamedGroups,
+    filterNames,
+    foldList,
+    groupKeeper,
     impactEmpty,
     impactSummary,
     memberDiff,
@@ -104,4 +108,29 @@ test("the impact preview: empty means save straight away, the summary counts tun
     assert.deepEqual(tunnelList(i.lose[1]), { names: ["web-1", "db", "a"], more: 1 });
     assert.equal(impactEmpty(parseImpact({ shares: 1 })), false, "a share ending is worth asking about");
     assert.deepEqual(parseImpact(null), { gain: [], lose: [], shares: 0 });
+});
+
+test("who keeps a group's members, and the synced flag reads defensively", () => {
+    assert.equal(groupKeeper({ kind: "personal", mine: true }), "you");
+    assert.equal(groupKeeper({ kind: "personal", mine: false, synced: true }), "owner", "synced only matters for organization groups");
+    assert.equal(groupKeeper({ kind: "org" }), "admins");
+    assert.equal(groupKeeper({ kind: "org", synced: true }), "synced");
+    const m = parsePersonalGroups({ member_of: [{ id: 1, kind: "org", synced: true }, { id: 2, kind: "org", synced: "yes" }, { id: 3, kind: "org" }] }).member_of;
+    assert.deepEqual(m.map((g) => g.synced), [true, false, false]);
+});
+
+test("long lists: search the groups I'm in and member names, fold the rest", () => {
+    const groups = parsePersonalGroups({
+        member_of: [
+            { id: 1, name: "Pals", kind: "personal", owner: "alice", tunnels: [{ id: 9, name: "web-1" }] },
+            { id: 2, name: "Ops", kind: "org", description: "On call", tunnels: [{ id: 10, name: "db" }] },
+        ],
+    }).member_of;
+    assert.deepEqual(filterMemberOf(groups, "alice").map((g) => g.id), [1]);
+    assert.deepEqual(filterMemberOf(groups, "call db").map((g) => g.id), [2]);
+    assert.equal(filterMemberOf(groups, " ").length, 2);
+    assert.deepEqual(filterNames(["Bob", "carol", "bobby"], "BOB"), ["Bob", "bobby"]);
+    assert.deepEqual(filterNames(["a"], ""), ["a"]);
+    assert.deepEqual(foldList([1, 2, 3, 4, 5, 6, 7], 5), { shown: [1, 2, 3, 4, 5], more: 2 });
+    assert.deepEqual(foldList([1], 5), { shown: [1], more: 0 });
 });

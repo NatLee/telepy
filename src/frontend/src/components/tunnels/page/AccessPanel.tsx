@@ -11,6 +11,7 @@ import React from "react";
 import Link from "next/link";
 import { ArrowRight, KeyRound, LockKeyholeOpen, Share2, ShieldCheck, UserRound, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GroupKeeper } from "@/components/groups/GroupKeeper";
 import { LeaveGroupButton } from "@/components/groups/LeaveGroupButton";
 import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { ShareExpiryText } from "@/components/tunnels/ShareExpiry";
@@ -36,7 +37,7 @@ interface Props {
     onShare: () => void;
     onUsers: (readOnly: boolean) => void;
     onRequestAccess: () => void;
-    /** 退出了經由的個人群組（重新載入）。/ Left the personal group it came through (reload). */
+    /** 退出了經由的群組（別人做的；重新載入）。/ Left the group it came through (one someone made; reload). */
     onLeftGroup: () => void;
 }
 
@@ -62,16 +63,9 @@ export function AccessPanel({ tunnel, role, manager, onShare, onUsers, onRequest
                         <Property label={t("share.group.through")}>
                             <span className="flex flex-wrap items-center gap-2">
                                 <span title={t("share.group.viaHintMine", { name: tunnel.share_group })}>{tunnel.share_group}</span>
-                                {tunnel.share_group_owner && (
-                                    <>
-                                        <Chip>
-                                            <UserRound aria-hidden />
-                                            {t("share.group.personalOf", { owner: tunnel.share_group_owner })}
-                                        </Chip>
-                                        {tunnel.share_group_id != null && (
-                                            <LeaveGroupButton groupId={tunnel.share_group_id} name={tunnel.share_group} owner={tunnel.share_group_owner} onLeft={onLeftGroup} />
-                                        )}
-                                    </>
+                                <GroupKeeper group={tunnel.share_group_owner ? { kind: "personal", owner: tunnel.share_group_owner } : { kind: "org" }} />
+                                {tunnel.share_group_owner && tunnel.share_group_id != null && (
+                                    <LeaveGroupButton groupId={tunnel.share_group_id} name={tunnel.share_group} owner={tunnel.share_group_owner} onLeft={onLeftGroup} />
                                 )}
                             </span>
                         </Property>

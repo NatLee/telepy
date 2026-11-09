@@ -1,22 +1,25 @@
 "use client";
 
 /**
- * 分享彈窗的「群組」分頁：通道分享給哪些群組（組織群組或個人群組；每個的權限、帳號、期限、成員、暫停狀態）與新增；
- * 自己的個人群組也在這裡新增、編輯、刪除（改成員 / 刪除前先預覽影響）。資訊鈕打開群組分享的說明圖。
- * The share dialog's Groups tab: the groups a tunnel is shared with (organization or personal; permission, accounts,
- * end, members, paused state) and the add form. Your own personal groups are made, edited and deleted here too
- * (members / delete preview the impact first). The info button opens the group sharing diagram.
+ * 分享彈窗的「群組」分頁：通道分享給哪些群組（每個標出成員是誰在維護；權限、帳號、期限、成員、暫停狀態）與新增
+ * （一張可搜尋、分頁的清單）；你建立的群組也在這裡新增、編輯、刪除（改成員 / 刪除前先預覽影響）。資訊鈕打開群組分享的說明圖。
+ * The share dialog's Groups tab: the groups a tunnel is shared with (each labelled by who keeps its members;
+ * permission, accounts, end, members, paused state) and the add form (one searchable, paged list). The groups you
+ * made are made, edited and deleted here too (members / delete preview the impact first). The info button opens the
+ * group sharing diagram.
  */
 import React, { useState } from "react";
 import { Building2, CircleHelp, CirclePause, Pencil, Plus, Share2, User, UserCog, Users, UsersRound, X } from "lucide-react";
+import { GroupSearchBox, GroupSearchFooter, useGroupSearch } from "@/components/groups/GroupSearch";
+import { GroupKeeper } from "@/components/groups/GroupKeeper";
+import { MemberNamesPopover } from "@/components/groups/MemberNames";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Segmented } from "@/components/ui/segmented";
-import { Chip, Section } from "@/components/ui/section";
+import { Section } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/pagination";
 import { usePagination } from "@/hooks/usePagination";
@@ -30,12 +33,14 @@ import { PersonalGroupsSection, usePersonalGroupEditor } from "@/components/grou
 import { hasFeature } from "@/lib/features";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { choicesByKind, groupShareSpots, memberParts, shareKindLabel, type GroupShare, type SharePermission } from "@/lib/groupShares";
+import { groupShareSpots, memberParts, sortedChoices, type GroupShare, type SharePermission } from "@/lib/groupShares";
 import { shareExpiryValue, type ShareExpiryPreset } from "@/lib/shareExpiry";
 import type { ReverseServerUsername } from "@/types/tunnel";
 import type { TranslationKey } from "@/locales/en";
 
 const PERM_KEY: Record<SharePermission, TranslationKey> = { view: "share.permView", edit: "share.permEdit", admin: "share.permAdmin" };
+
+const CHOICE_ROW = "flex cursor-pointer items-center gap-2.5 rounded-lg bg-card px-3 py-2 ring-1 ring-inset ring-border transition-colors hover:bg-muted/40 has-[:checked]:bg-primary/6 has-[:checked]:ring-primary/30";
 
 interface Props {
     tunnelId: number | null;
@@ -59,7 +64,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
         onChanged();
     });
     const editor = usePersonalGroupEditor(personal);
-    const [pick, setPick] = useState("");
+    const [pick, setPick] = useState<number | null>(null);
     const [perm, setPerm] = useState<SharePermission>("view");
     const [accounts, setAccounts] = useState<number[]>([]);
     const [preset, setPreset] = useState<ShareExpiryPreset>("never");
@@ -68,20 +73,22 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
     const [removing, setRemoving] = useState<GroupShare | null>(null);
     const [info, setInfo] = useState(false);
     const pager = usePagination(list?.shares.length ?? 0, { storageKey: "telepy.groupSharesPageSize" });
+    // 一張清單：自己做的在前；7 個起有搜尋，分頁，選中的那個一定看得到。/ One list, yours first; search from 7, pages, the pick stays visible.
+    const choices = list ? sortedChoices(list) : [];
+    const search = useGroupSearch(choices, pick);
 
     if (!list) return null;
     const manage = list.can_manage && !readOnly;
     const canAdd = manage && !locked;
-    const choices = choicesByKind(list);
-    const choiceCount = choices.personal.length + choices.org.length;
+    const choiceCount = choices.length;
     const canPersonal = canAdd && personalOn && personal.list !== null;
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         const expires = shareExpiryValue(preset, date);
-        if (!pick || expires === undefined) return;
-        if (await share(Number(pick), perm, accounts, expires)) {
-            setPick("");
+        if (pick === null || expires === undefined) return;
+        if (await share(pick, perm, accounts, expires)) {
+            setPick(null);
             setPerm("view");
             setAccounts([]);
             setPreset("never");
@@ -106,7 +113,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                     <p className="text-sm text-muted-foreground">{t("share.group.none")}</p>
                     {canPersonal && choiceCount === 0 && (
                         <>
-                            <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("share.group.noGroupsPersonal")}</p>
+                            <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("share.group.noGroupsMake")}</p>
                             <Button type="button" size="sm" className="mt-3" onClick={editor.openNew}>
                                 <Plus size={14} /> {t("personalGroups.new")}
                             </Button>
@@ -123,9 +130,9 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                         <Users size={16} />
                                     </span>
                                     <span className="flex min-w-0 flex-col items-start gap-0.5">
-                                        <span className="flex max-w-full flex-wrap items-center gap-1.5">
+                                        <span className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5">
                                             <span className="min-w-0 truncate text-sm text-foreground">{g.name}</span>
-                                            <KindChip share={g} />
+                                            <GroupKeeper group={g} />
                                         </span>
                                         {!g.active && (
                                             <span className="flex items-start gap-1 text-xs leading-snug text-warning">
@@ -146,27 +153,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                     </span>
                                 </div>
                                 <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                                    {g.member_names && (
-                                        <Popover>
-                                            <PopoverTrigger asChild>
-                                                <Button type="button" size="sm" variant="ghost" className="text-xs">
-                                                    <Users size={14} /> {t("share.group.members")}
-                                                </Button>
-                                            </PopoverTrigger>
-                                            <PopoverContent align="end" className="w-60 p-3">
-                                                <p className="mb-2 text-xs text-muted-foreground">{t("share.group.membersOf", { name: g.name })} · {g.member_names.length}</p>
-                                                {g.member_names.length === 0 ? (
-                                                    <p className="text-sm text-muted-foreground">{t("share.group.empty")}</p>
-                                                ) : (
-                                                    <ul className="max-h-60 space-y-1 overflow-auto text-sm">
-                                                        {g.member_names.map((n) => (
-                                                            <li key={n} className="truncate">{n}</li>
-                                                        ))}
-                                                    </ul>
-                                                )}
-                                            </PopoverContent>
-                                        </Popover>
-                                    )}
+                                    {g.member_names && <MemberNamesPopover title={t("share.group.membersOf", { name: g.name })} names={g.member_names} />}
                                     <button
                                         type="button"
                                         disabled={!canAdd || tunnelUsernames.length === 0}
@@ -215,7 +202,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                     canPersonal ? (
                         list.shares.length > 0 && (
                             <Callout tone="info" title={t("share.group.noGroups")}>
-                                <p>{t("share.group.noGroupsPersonal")}</p>
+                                <p>{t("share.group.noGroupsMake")}</p>
                                 <Button type="button" size="sm" variant="outline" className="mt-2" onClick={editor.openNew}>
                                     <Plus size={14} /> {t("personalGroups.new")}
                                 </Button>
@@ -231,30 +218,28 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                         <p className="flex items-center gap-2 text-sm">
                             <Share2 size={15} className="text-muted-foreground" aria-hidden /> {t("share.group.add")}
                         </p>
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
-                            <Field label={t("share.group.pick")}>
-                                <NativeSelect value={pick} onChange={(e) => setPick(e.target.value)} disabled={choiceCount === 0}>
-                                    <option value="">{choiceCount === 0 ? t("share.group.allShared") : t("share.group.pickPlaceholder")}</option>
-                                    {choices.personal.length > 0 && (
-                                        <optgroup label={t("share.group.optPersonal")}>
-                                            {choices.personal.map((g) => (
-                                                <option key={g.id} value={g.id}>
-                                                    {t("share.group.choice", { name: g.name, count: g.members })}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                    {choices.org.length > 0 && (
-                                        <optgroup label={t("share.group.optOrg")}>
-                                            {choices.org.map((g) => (
-                                                <option key={g.id} value={g.id}>
-                                                    {t("share.group.choice", { name: g.name, count: g.members })}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                </NativeSelect>
-                            </Field>
+                        <div className="grid items-start gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+                            <fieldset className="min-w-0 space-y-1.5">
+                                <legend className="mb-1.5 text-xs text-muted-foreground">{t("share.group.pick")}</legend>
+                                {choiceCount === 0 ? (
+                                    <p className="text-sm text-muted-foreground">{t("share.group.allShared")}</p>
+                                ) : (
+                                    <>
+                                        <GroupSearchBox s={search} />
+                                        {search.visible.map((g) => (
+                                            <label key={g.id} className={CHOICE_ROW}>
+                                                <input type="radio" name="group-share-pick" checked={pick === g.id} onChange={() => setPick(g.id)} className="size-4 shrink-0 accent-primary" />
+                                                <span className="flex min-w-0 flex-1 flex-col">
+                                                    <span className="truncate text-sm text-foreground" title={g.name}>{g.name}</span>
+                                                    <GroupKeeper group={{ kind: g.kind, mine: g.kind === "personal", synced: g.synced }} />
+                                                </span>
+                                                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{t("access.memberCount", { count: g.members })}</span>
+                                            </label>
+                                        ))}
+                                        <GroupSearchFooter s={search} />
+                                    </>
+                                )}
+                            </fieldset>
                             <Field label={t("share.thPermission")}>
                                 <NativeSelect value={perm} onChange={(e) => setPerm(e.target.value as SharePermission)}>
                                     {(Object.keys(PERM_KEY) as SharePermission[]).map((p) => (
@@ -263,7 +248,7 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                 </NativeSelect>
                             </Field>
                         </div>
-                        {pick && tunnelUsernames.length > 0 && (
+                        {pick !== null && tunnelUsernames.length > 0 && (
                             <div>
                                 <p className="mb-2 text-xs text-muted-foreground">{t("share.group.allowLabel")}</p>
                                 <div className="flex flex-wrap gap-2">
@@ -281,10 +266,10 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
                                 </div>
                             </div>
                         )}
-                        {pick && <ShareExpiryChoice preset={preset} date={date} onPreset={setPreset} onDate={setDate} />}
+                        {pick !== null && <ShareExpiryChoice preset={preset} date={date} onPreset={setPreset} onDate={setDate} />}
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-xs text-muted-foreground">{t("share.group.followsNote")}</p>
-                            <Button type="submit" disabled={!pick || busy || (preset === "date" && !date)}>
+                            <Button type="submit" disabled={pick === null || busy || (preset === "date" && !date)}>
                                 <Users size={15} /> {t("share.group.share")}
                             </Button>
                         </div>
@@ -333,19 +318,6 @@ export function ShareModalGroups({ tunnelId, isOpen, tunnelUsernames, readOnly, 
     );
 }
 
-/** 分享列上的種類：個人 · 你的 / 個人 · 某人 / 組織。/ The kind on a share row. */
-function KindChip({ share }: { share: GroupShare }) {
-    const { t } = useI18n();
-    const k = shareKindLabel(share);
-    if (k.kind === "org") return <Chip><Building2 aria-hidden />{t("share.group.kindOrg")}</Chip>;
-    return (
-        <Chip>
-            <User aria-hidden />
-            {k.kind === "mine" ? t("share.group.kindMine") : t("share.group.kindPersonal", { owner: k.owner ?? "?" })}
-        </Chip>
-    );
-}
-
 const RULES: TranslationKey[] = [
     "share.group.flow.rule1",
     "share.group.flow.rule2",
@@ -355,13 +327,13 @@ const RULES: TranslationKey[] = [
     "share.group.flow.rule6",
 ];
 
-/** 群組分享怎麼運作：組織群組（身分提供者 / 管理員管）或個人群組（你管）─ 這條通道 ─ 每位成員。
- *  How group sharing works: an organization group (identity provider / admins) or a personal group (you) ─ this
- *  tunnel ─ each member. */
+/** 群組分享怎麼運作：成員由管理員（或公司帳號同步）維護的群組，或你維護的群組 ─ 這條通道 ─ 每位成員。
+ *  How group sharing works: a group admins keep (or synced from company accounts), or one you keep ─ this tunnel ─
+ *  each member. */
 export function GroupShareInfoDialog({ isOpen, onClose, share }: { isOpen: boolean; onClose: () => void; share: GroupShare | null }) {
     const { t } = useI18n();
     const [picked, setPicked] = useState<"org" | "personal" | null>(null);
-    const kind = picked ?? share?.kind ?? "org";
+    const kind = picked ?? share?.kind ?? "personal";
     // 選的種類跟這筆分享不同時，用範例畫。/ When the picked kind differs from the share, draw an example.
     const real = share && share.kind === kind ? share : null;
     const spots = groupShareSpots(real);
@@ -376,8 +348,8 @@ export function GroupShareInfoDialog({ isOpen, onClose, share }: { isOpen: boole
                     value={kind}
                     onChange={setPicked}
                     options={[
-                        { value: "org", label: t("orgGroups.title"), icon: <Building2 size={13} /> },
-                        { value: "personal", label: t("personalGroups.title"), icon: <User size={13} /> },
+                        { value: "personal", label: t("peopleGroups.keeper.you"), icon: <User size={13} /> },
+                        { value: "org", label: t("peopleGroups.keeper.admins"), icon: <Building2 size={13} /> },
                     ]}
                 />
                 <FlowPath>
@@ -389,7 +361,7 @@ export function GroupShareInfoDialog({ isOpen, onClose, share }: { isOpen: boole
                     <FlowLink compact label={kind === "org" ? t("share.group.flow.sync") : t("share.group.flow.picks")} state={kind === "org" ? "waiting" : spots.group} />
                     <FlowNode
                         icon={Users}
-                        title={real ? real.name : kind === "org" ? t("share.group.flow.group") : t("personalGroups.title")}
+                        title={real ? real.name : kind === "org" ? t("share.group.flow.group") : t("share.group.flow.yourGroup")}
                         sub={real ? t("share.group.flow.groupCount", { count: real.members }) : kind === "org" ? t("share.group.flow.groupSub") : t("share.group.flow.personalSub")}
                         state={spots.group}
                     />

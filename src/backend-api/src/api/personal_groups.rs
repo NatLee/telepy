@@ -110,6 +110,7 @@ async fn list_json(state: &AppState, me: &User) -> ApiResult<Value> {
 /// The groups I'm in, each with the tunnels shared with it that I can see (`through` = I hold it through this group).
 async fn member_of_json(state: &AppState, me: &User) -> ApiResult<Vec<Value>> {
     let groups = db::group_shares::member_of(&state.db, me.id).await?;
+    let synced = db::group_shares::synced_groups(&state.db).await?;
     let ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
     let mut tunnels: HashMap<i64, Vec<Value>> = HashMap::new();
     for (share_id, g, tunnel_id, tunnel_name, _owner, perm, _expires, _through) in db::group_shares::shares_of_groups(&state.db, &ids).await? {
@@ -136,6 +137,7 @@ async fn member_of_json(state: &AppState, me: &User) -> ApiResult<Vec<Value>> {
             "description": g.description,
             "kind": g.kind(),
             "owner": owner,
+            "synced": synced.contains(&g.id),
             "tunnels": tunnels.remove(&g.id).unwrap_or_default(),
         }));
     }
