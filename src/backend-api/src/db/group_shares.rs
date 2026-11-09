@@ -264,6 +264,18 @@ pub async fn share_choices(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, Stri
     .await
 }
 
+/// 成員由身分提供者同步的組織群組：SCIM 推送的，或單一登入規則會把人放進去的。給使用者看「誰維護成員」。
+/// Organization groups whose members an identity provider keeps: pushed by SCIM, or targeted by a single sign-on rule.
+/// Shown to people as who keeps the members.
+pub async fn synced_groups(db: &Db) -> sqlx::Result<std::collections::HashSet<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT group_id FROM telepy_scim_group UNION SELECT group_id FROM telepy_oidc_group_rule WHERE target = 'group' AND group_id IS NOT NULL",
+    )
+    .fetch_all(&db.read)
+    .await?;
+    Ok(ids.into_iter().collect())
+}
+
 /// 分享給這些群組的通道 → (群組分享 id, 群組 id, 通道 id, 通道名稱, 通道擁有者, 權限, 到期, 經由它的人數)。
 /// The tunnels shared with these groups → (share id, group id, tunnel id, tunnel name, owner, permission, end, holders).
 pub async fn shares_of_groups(db: &Db, group_ids: &[i64]) -> sqlx::Result<Vec<(i64, i64, i64, String, String, String, Option<String>, i64)>> {

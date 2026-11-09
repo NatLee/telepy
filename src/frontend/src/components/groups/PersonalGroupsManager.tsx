@@ -17,7 +17,9 @@ import { Pagination } from "@/components/ui/pagination";
 import { Section } from "@/components/ui/section";
 import { usePagination } from "@/hooks/usePagination";
 import { pageSlice } from "@/lib/pagination";
+import { FoldedItems } from "@/components/groups/FoldedItems";
 import { useImpactConfirm } from "@/components/groups/ImpactConfirm";
+import { FoldedNames } from "@/components/groups/MemberNames";
 import { PersonalGroupDialog, type PersonalGroupForm } from "@/components/groups/PersonalGroupDialog";
 import type { usePersonalGroups } from "@/hooks/usePersonalGroups";
 import { filterNamedGroups, memberDiff, type PersonalGroup } from "@/lib/peopleGroups";
@@ -80,7 +82,7 @@ export function usePersonalGroupEditor(personal: Personal) {
     return { openNew: () => setEditing("new"), openEdit: (g: PersonalGroup) => setEditing(g), askDelete, dialogs };
 }
 
-/** 你的個人群組：每個的人數與用在哪些通道，新增 / 編輯 / 刪除。/ Your personal groups: members, tunnels using them, new / edit / delete. */
+/** 「你建立的群組」：每個的人數與用在哪些通道，新增 / 編輯 / 刪除。/ "Groups you made": members, tunnels using them, new / edit / delete. */
 export function PersonalGroupsSection({
     groups,
     limit,
@@ -139,33 +141,33 @@ export function PersonalGroupsSection({
                         return (
                             <li key={g.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-3.5 py-2.5">
                                 <span className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
-                                    <span className="truncate text-sm text-foreground" title={g.description || undefined}>{g.name}</span>
+                                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                                        <span className="min-w-0 truncate text-sm text-foreground" title={g.description || undefined}>{g.name}</span>
+                                    </span>
                                     {detailed && g.description && <span className="text-xs leading-snug text-muted-foreground">{g.description}</span>}
                                     <span className="text-xs text-muted-foreground" title={detailed ? undefined : g.shares.map((s) => s.tunnel_name).join(", ") || undefined}>
                                         {t("access.memberCount", { count: g.members.length })} · {t("personalGroups.usedBy", { count: g.shares.length })}
                                         {paused > 0 && <span className="text-warning"> · {t("personalGroups.pausedCount", { count: paused })}</span>}
                                     </span>
-                                    {detailed && g.member_names.length > 0 && (
-                                        <span className="text-xs leading-snug text-muted-foreground">
-                                            {t("personalGroups.membersList", { names: g.member_names.join(", ") })}
-                                        </span>
-                                    )}
+                                    {detailed && <FoldedNames title={t("share.group.membersOf", { name: g.name })} names={g.member_names} />}
                                     {detailed && g.shares.length > 0 && (
-                                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-                                            <span className="text-muted-foreground">{t("personalGroups.sharedOn")}</span>
-                                            {g.shares.map((s) =>
-                                                s.active && !s.hidden ? (
-                                                    <Link key={s.id} href={`/tunnels/${s.tunnel_id}?tab=access`} prefetch={false} className="text-foreground underline-offset-2 hover:underline">
-                                                        {s.tunnel_name}
-                                                    </Link>
-                                                ) : (
-                                                    <span key={s.id} className="inline-flex items-center gap-1 text-warning" title={t("personalGroups.pausedHint")}>
-                                                        <CirclePause size={12} aria-hidden />
-                                                        {s.hidden ? t("personalGroups.hiddenTunnel") : s.tunnel_name}
-                                                    </span>
-                                                ),
-                                            )}
-                                        </span>
+                                        <FoldedItems
+                                            label={t("personalGroups.sharedOn")}
+                                            items={g.shares.map((s) => ({
+                                                key: s.id,
+                                                node:
+                                                    s.active && !s.hidden ? (
+                                                        <Link href={`/tunnels/${s.tunnel_id}?tab=access`} prefetch={false} className="text-foreground underline-offset-2 hover:underline">
+                                                            {s.tunnel_name}
+                                                        </Link>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-1 text-warning" title={t("personalGroups.pausedHint")}>
+                                                            <CirclePause size={12} aria-hidden />
+                                                            {s.hidden ? t("personalGroups.hiddenTunnel") : s.tunnel_name}
+                                                        </span>
+                                                    ),
+                                            }))}
+                                        />
                                     )}
                                 </span>
                                 <span className="flex gap-1">

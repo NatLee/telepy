@@ -1400,6 +1400,8 @@ pub struct GroupShare {
     pub owner: Option<String>,
     /// 看的人自己的個人群組。/ The viewer's own personal group.
     pub mine: bool,
+    /// 組織群組的成員由身分提供者同步（SCIM 或單一登入規則）。/ An organization group whose members an identity provider keeps.
+    pub synced: bool,
     /// false = 暫停：個人群組的主人已經管不到這條通道（或帳號停用），成員經由它拿不到東西。
     /// false = paused: a personal group whose owner no longer manages the tunnel (or is disabled); members get nothing through it.
     pub active: bool,
@@ -1428,6 +1430,8 @@ pub struct GroupChoice {
     pub members: i64,
     /// org | personal
     pub kind: String,
+    /// 成員由身分提供者同步。/ Members kept by an identity provider.
+    pub synced: bool,
     pub shared: bool,
 }
 
@@ -4530,6 +4534,8 @@ pub struct MemberOfGroup {
     pub kind: String,
     /// 個人群組的主人（可以退出）；組織群組 = null。/ A personal group's owner (you may leave it); null for organization groups.
     pub owner: Option<String>,
+    /// 組織群組的成員由身分提供者同步。/ An organization group whose members an identity provider keeps.
+    pub synced: bool,
     /// 分享給它、我看得到的通道。/ Tunnels shared with it that I can see.
     pub tunnels: Vec<MemberOfTunnel>,
 }

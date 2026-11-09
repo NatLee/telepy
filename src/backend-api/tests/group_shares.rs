@@ -255,8 +255,14 @@ async fn organization_groups_are_shared_only_when_open_to_sharing() {
     // 開放之後，bob 的「我所在的群組」列出它，以及他經由它拿到的通道。/ Opened: bob sees it, with the tunnel he holds through it.
     let r = lab.app.get("/api/user/groups", Some(&bob.token)).await;
     let m = &r.json["member_of"][0];
-    assert_eq!((m["id"].as_i64(), m["kind"].as_str(), m["owner"].is_null()), (Some(quiet), Some("org"), true), "{}", r.text);
+    assert_eq!((m["id"].as_i64(), m["kind"].as_str(), m["owner"].is_null(), m["synced"].as_bool()), (Some(quiet), Some("org"), true, Some(false)), "{}", r.text);
     assert_eq!((m["tunnels"][0]["id"].as_i64(), m["tunnels"][0]["through"].as_bool()), (Some(dev.tunnel_id), Some(true)), "{}", r.text);
+    // 單一登入規則會把人放進這個群組 = 成員由身分提供者同步，使用者看得到這一點。/ An SSO rule targets it: shown as synced.
+    sqlx::query("INSERT INTO telepy_oidc_group_rule (provider_id, idp_group, target, group_id) VALUES (1, 'ops', 'group', ?)").bind(quiet).execute(&lab.app.state.db.write).await.unwrap();
+    let r = lab.app.get("/api/user/groups", Some(&bob.token)).await;
+    assert_eq!(r.json["member_of"][0]["synced"], true, "{}", r.text);
+    let r = lab.app.get(&url, Some(&alice.token)).await;
+    assert_eq!((r.json["shares"][0]["synced"].as_bool(), r.json["groups"][0]["synced"].as_bool()), (Some(true), Some(true)), "{}", r.text);
 
     // 管理頁看得到分享給它的通道。/ The admin page lists the tunnels shared with it.
     let r = lab.app.get("/api/access", Some(&lab.admin_token)).await;

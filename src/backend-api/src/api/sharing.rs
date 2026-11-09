@@ -448,6 +448,7 @@ fn id_list(body: &Value) -> ApiResult<Option<Vec<i64>>> {
 async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bool) -> ApiResult<Value> {
     let rows = db::sharing::for_tunnel(&state.db, t.id).await?;
     let active = crate::group_shares::active_shares(state).await?;
+    let synced = db::group_shares::synced_groups(&state.db).await?;
     let mut shares = Vec::new();
     let mut shared = std::collections::HashSet::new();
     for g in db::group_shares::for_tunnel(&state.db, t.id).await? {
@@ -474,6 +475,7 @@ async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bo
             "owner": owner,
             "mine": group.owner_id == Some(me),
             "active": active.contains(&g.id),
+            "synced": synced.contains(&g.group_id),
             "members": members.len(),
             "member_names": if can_manage { json!(members.iter().map(|(_, n)| n).collect::<Vec<_>>()) } else { Value::Null },
             "through": through,
@@ -491,7 +493,7 @@ async fn group_shares_json(state: &AppState, t: &Tunnel, me: i64, can_manage: bo
         db::group_shares::share_choices(&state.db, me)
             .await?
             .into_iter()
-            .map(|(id, n, c, kind)| json!({ "id": id, "name": n, "members": c, "kind": kind, "shared": shared.contains(&id) }))
+            .map(|(id, n, c, kind)| json!({ "id": id, "name": n, "members": c, "kind": kind, "synced": synced.contains(&id), "shared": shared.contains(&id) }))
             .collect()
     } else {
         vec![]

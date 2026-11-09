@@ -37,6 +37,8 @@ export interface GroupShare {
     mine: boolean;
     /** false = 暫停：個人群組的主人已經不管這條通道，成員經由它拿不到東西。/ false = paused. */
     active: boolean;
+    /** 組織群組的成員由公司帳號（單一登入 / SCIM）同步。/ An organization group whose members are synced from company accounts. */
+    synced: boolean;
 }
 
 export interface GroupChoice {
@@ -45,6 +47,8 @@ export interface GroupChoice {
     members: number;
     shared: boolean;
     kind: GroupKind;
+    /** 成員由公司帳號同步（只有組織群組會是 true）。/ Members synced from company accounts (organization groups only). */
+    synced: boolean;
 }
 
 export interface GroupShareList {
@@ -93,6 +97,7 @@ export function parseGroupShares(v: unknown): GroupShareList {
                 owner: typeof r.owner === "string" ? r.owner : null,
                 mine: r.mine === true,
                 active: r.active !== false,
+                synced: r.synced === true,
             };
         }),
         groups: groups
@@ -104,6 +109,7 @@ export function parseGroupShares(v: unknown): GroupShareList {
                 members: num(g.members),
                 shared: g.shared === true,
                 kind: g.kind === "personal" ? ("personal" as const) : ("org" as const),
+                synced: g.synced === true,
             })),
     };
 }
@@ -113,20 +119,14 @@ export function pickableGroups(list: GroupShareList): GroupChoice[] {
     return list.groups.filter((g) => !g.shared);
 }
 
-/** 新增表單的選項分兩組：自己的個人群組、可以分享的組織群組（各自照名稱）。/ The add form's choices by kind, each by name. */
-export function choicesByKind(list: GroupShareList): { personal: GroupChoice[]; org: GroupChoice[] } {
-    const byName = (a: GroupChoice, b: GroupChoice) => a.name.localeCompare(b.name);
-    const open = pickableGroups(list);
-    return { personal: open.filter((g) => g.kind === "personal").sort(byName), org: open.filter((g) => g.kind === "org").sort(byName) };
+/** 新增表單的選項：一張清單，自己做的群組在前，其他照名稱。選項裡的個人群組一定是看的人自己的。
+ *  The add form's choices as one list: the groups you made first, then the rest, each by name. Personal choices
+ *  are always the viewer's own. */
+export function sortedChoices(list: GroupShareList): GroupChoice[] {
+    const rank = (g: GroupChoice) => (g.kind === "personal" ? 0 : 1);
+    return pickableGroups(list).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 
-/** 分享列上的種類標籤：自己的個人群組 / 別人的個人群組 / 組織群組。/ The kind label on a share row. */
-export function shareKindLabel(share: Pick<GroupShare, "kind" | "mine" | "owner">): { kind: "mine" | "personal" | "org"; owner: string | null } {
-    if (share.kind === "org") return { kind: "org", owner: null };
-    return share.mine ? { kind: "mine", owner: null } : { kind: "personal", owner: share.owner };
-}
-
-/** 成員裡沒算進「經由群組」或「自己的分享」的人：通道主人自己在群組裡。/ Members counted in neither: the owner in the group. */
 /** 群組人數那一行的各段（只列有人的）。/ The parts of the member-count line (only non-empty ones). */
 export function memberParts(share: GroupShare): ("direct" | "elsewhere" | "owner")[] {
     const out: ("direct" | "elsewhere" | "owner")[] = [];

@@ -108,6 +108,8 @@ export interface MemberOfGroup {
     kind: "org" | "personal";
     /** 個人群組的主人；組織群組 = null。/ A personal group's owner; null for organization groups. */
     owner: string | null;
+    /** 組織群組的成員由公司帳號同步。/ An organization group whose members are synced from company accounts. */
+    synced: boolean;
     tunnels: MemberOfTunnel[];
 }
 
@@ -177,6 +179,7 @@ export function parsePersonalGroups(v: unknown): PersonalGroupList & { created_i
                 description: str(g.description),
                 kind: g.kind === "personal" ? ("personal" as const) : ("org" as const),
                 owner: typeof g.owner === "string" ? g.owner : null,
+                synced: g.synced === true,
                 tunnels: (Array.isArray(g.tunnels) ? g.tunnels : [])
                     .map(obj)
                     .filter((x) => typeof x.id === "number")
@@ -201,6 +204,43 @@ export function filterNamedGroups<T extends { name: string; description: string;
         const hay = [g.name, g.description, ...(g.member_names ?? [])].join("\n").toLowerCase();
         return words.every((w) => hay.includes(w));
     });
+}
+
+/** 我所在的群組的搜尋：名稱、說明、主人、通道名稱（空白分開的字都要有）。/ Search the groups I'm in: name, description, owner, tunnel names. */
+export function filterMemberOf(groups: MemberOfGroup[], query: string): MemberOfGroup[] {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return groups;
+    return groups.filter((g) => {
+        const hay = [g.name, g.description, g.owner ?? "", ...g.tunnels.map((x) => x.name)].join("\n").toLowerCase();
+        return words.every((w) => hay.includes(w));
+    });
+}
+
+/** 名稱清單的搜尋（成員浮層用）。/ Search a list of names (the members popover). */
+export function filterNames(names: string[], query: string): string[] {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return names;
+    return names.filter((n) => words.every((w) => n.toLowerCase().includes(w)));
+}
+
+/** 太長的清單只列前 `max` 個，其餘折成「+N」。/ A long list shows the first `max`; the rest fold into "+N". */
+export function foldList<T>(items: T[], max: number): { shown: T[]; more: number } {
+    return { shown: items.slice(0, max), more: Math.max(0, items.length - max) };
+}
+
+/* ── 誰維護成員 / Who keeps the members ───────────────────────── */
+
+/**
+ * 一般使用者只需要知道「群組的成員是誰在維護」：你、做這個群組的人、管理員，或從公司帳號同步。
+ * 「組織群組 / 個人群組」這兩個詞只留在管理區。
+ * All an ordinary user needs to know about a group is who keeps its members: you, the person who made it, admins,
+ * or synced from company accounts. "Organization group" / "personal group" stay in the admin area.
+ */
+export type GroupKeeperKind = "you" | "owner" | "admins" | "synced";
+
+export function groupKeeper(g: { kind: "org" | "personal"; mine?: boolean; synced?: boolean }): GroupKeeperKind {
+    if (g.kind === "org") return g.synced ? "synced" : "admins";
+    return g.mine ? "you" : "owner";
 }
 
 /** 群組名稱的檢查，跟後端一樣（1–64 字）。/ The name rule, as the backend (1–64 characters). */
