@@ -87,6 +87,21 @@ export interface RecipeDef {
     defaults: RecipeParams;
     /** 是否為長駐轉發（可加 -f / keep-alive 等選項）。/ Long-running forward that accepts -f / keep-alive options. */
     forwarding: boolean;
+    /** 只有 telepy CLI 做得到（單純的 ssh 沒有對應的寫法）。/ Only the telepy CLI can do it (plain ssh has no equivalent). */
+    telepyOnly?: boolean;
+}
+
+/** 做一件事的兩種工具：Telepy 的 CLI，或系統的 ssh（~/.ssh/config 別名與單行指令都算）。/ The two tools: Telepy's CLI, or the system's ssh (alias or one-liner). */
+export type Way = "telepy" | "ssh";
+
+/** 這個任務哪些工具做得到。/ Which tools can do this task. */
+export function recipeWays(def: RecipeDef): Way[] {
+    return def.telepyOnly ? ["telepy"] : ["telepy", "ssh"];
+}
+
+/** 跑法屬於哪個工具。/ The tool a way of running belongs to. */
+export function wayOf(mode: ConnectMode): Way {
+    return mode === "telepy" ? "telepy" : "ssh";
 }
 
 export const RECIPES: RecipeDef[] = [
@@ -164,6 +179,7 @@ export const RECIPES: RecipeDef[] = [
         fields: [{ key: "network", label: "sheet.field.network", kind: "text" }],
         defaults: { network: "192.168.1.0/24" },
         forwarding: false,
+        telepyOnly: true,
     },
     {
         id: "copy",
