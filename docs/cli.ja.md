@@ -194,7 +194,7 @@ CI では何も保存する必要がありません。[CI で](#ci-で)を見て
 telepy ls                                  # NAME  HEALTH  LATENCY  ACCOUNTS  LABELS  GROUP  SEEN
 telepy ls --label env=prod --online --json
 telepy ls --group "Lab"
-telepy status box                          # ヘルス、稼働時間、デバイス情報と警告
+telepy status box                          # ヘルス、グローバル IP と LAN のアドレス、稼働時間、デバイス情報と警告
 ```
 
 ### SSH、scp、sftp
@@ -475,7 +475,7 @@ telepy browse close "$ID"
 | `telepy logout` | サインイン情報を忘れる。ブラウザーでのサインインはサーバー側でも失効 | — |
 | `telepy whoami` | 誰として、どのトークンまたはアプリで、スコープ、トンネル、有効期限 | — |
 | `telepy ls` | トンネルとヘルス、遅延、アカウント、ラベル、グループ。`--label`、`--group`、`--online`、`--json` | `tunnels:read` |
-| `telepy status <tunnel>` | 1 つのトンネル：ヘルス、稼働時間、デバイス情報と警告 | `tunnels:read` |
+| `telepy status <tunnel>` | 1 つのトンネル：ヘルス、グローバル IP と LAN のアドレス、稼働時間、デバイス情報と警告 | `tunnels:read` |
 | `telepy ssh <target>` | デバイスに SSH。`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`、`--` のあとにコマンド | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy scp [-r] <from>… <to>` | scp でコピー。リモート側は `<tunnel>[@account]:<path>` | `tunnels:read` + 自分の SSH 鍵 |
 | `telepy sftp <target>` | デバイスへの sftp を開く | `tunnels:read` + 自分の SSH 鍵 |

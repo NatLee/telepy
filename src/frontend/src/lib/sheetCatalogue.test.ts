@@ -87,3 +87,9 @@ test("example lines get the person's tunnel", () => {
     assert.deepEqual(fillTunnel(["telepy status <tunnel>", "telepy ssh <tunnel>@<account>"], "office-pi"), ["telepy status office-pi", "telepy ssh office-pi@<account>"]);
     assert.deepEqual(fillTunnel(["telepy status <tunnel>"], "my box"), ["telepy status 'my box'"]);
 });
+
+test("a device's IP or status is found by those words, in every language", () => {
+    for (const [q, locale] of [["ip address", "en"], ["device ip", "en"], ["status", "en"], ["IP 位址", "zh-TW"], ["狀態", "zh-TW"], ["IP アドレス", "ja"]] as const) {
+        assert.equal(top(q, locale), "ex:status", `${q} (${locale})`);
+    }
+});
