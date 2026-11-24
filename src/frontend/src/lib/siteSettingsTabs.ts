@@ -9,14 +9,14 @@
  */
 import type { TranslationKey } from "../locales/en.ts";
 
-export type SiteTabId = "general" | "signin" | "commands" | "desktop" | "browser" | "devices" | "ai" | "notify" | "app" | "server";
+export type SiteTabId = "general" | "signin" | "commands" | "desktop" | "browser" | "proxy" | "devices" | "ai" | "notify" | "app" | "server";
 export type SiteTabGroupId = "accounts" | "features" | "server";
 
 /** 左側欄的分組（手機上是下拉選單的 optgroup）。/ The rail's groups (optgroups of the phone select). */
 export const SITE_TAB_GROUPS: readonly { id: SiteTabGroupId; key: TranslationKey; tabs: readonly SiteTabId[] }[] = [
     { id: "accounts", key: "settings.railAccounts", tabs: ["general", "signin"] },
     // App：裝成 app（PWA）時的名稱。/ App: what an installed app (PWA) is called.
-    { id: "features", key: "settings.railFeatures", tabs: ["commands", "desktop", "browser", "devices", "ai", "notify", "app"] },
+    { id: "features", key: "settings.railFeatures", tabs: ["commands", "desktop", "browser", "proxy", "devices", "ai", "notify", "app"] },
     // 伺服器：訪客位址與原本只能寫在 .env 的設定（.env > 這頁 > 預設，一張說明圖）。/ Server: visitor addresses and the former .env-only settings.
     { id: "server", key: "settings.railServer", tabs: ["server"] },
 ];
@@ -44,6 +44,7 @@ const PREFIX_HOMES: readonly [string, SiteTabId][] = [
     ["signin_", "signin"],
     ["mfa_", "signin"],
     ["remote_browser_", "browser"],
+    ["proxy_", "proxy"],
     ["desktop_", "desktop"],
     ["ai_", "ai"],
     ["notify_", "notify"],

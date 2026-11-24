@@ -27,6 +27,10 @@ pub struct SiteSettings {
     pub lan_scan_user_agent: String,
     /// 裝置載體（telepy-carrier）每天檢查新版、自動換掉舊的。/ Keep the cached device carriers current every day.
     pub carrier_auto_update: bool,
+    /// 裝置代理的總開關（預設關）。/ The device proxy's switch (off by default).
+    pub proxy_enabled: bool,
+    /// 一個憑證經一條通道同時最多幾條代理連線。/ Proxy connections one credential may hold at once through one tunnel.
+    pub proxy_max_connections: i64,
     /// GeoIP（DB-IP Lite）與網卡廠商表（IEEE OUI）每月自動更新。/ Keep the GeoIP and NIC vendor data current every month.
     pub datasets_auto_update: bool,
     /// 一般使用者能不能設自己的 webhook。/ Whether everyone may set up personal webhooks.
@@ -108,6 +112,8 @@ pub const FIELDS: &[&str] = &[
     "device_ip_lookup_url",
     "lan_scan_user_agent",
     "carrier_auto_update",
+    "proxy_enabled",
+    "proxy_max_connections",
     "datasets_auto_update",
     "notify_user_webhooks",
     "notify_private_targets",
@@ -152,7 +158,7 @@ pub const FIELDS: &[&str] = &[
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
     remote_browser_max_sessions, remote_browser_geometry, remote_browser_ssh_timeout, remote_browser_ssh_attempts, \
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
-    ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, lan_scan_user_agent, carrier_auto_update, datasets_auto_update, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
+    ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, lan_scan_user_agent, carrier_auto_update, proxy_enabled, proxy_max_connections, datasets_auto_update, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
     desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_file_transfer, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime, terminal_detach_max_secs, \
     signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style, signin_consent_style, \
     client_ip_hops, client_ip_header, client_ip_cloudflare, server_device_probe, server_keep_shared_service_key, \

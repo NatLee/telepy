@@ -43,6 +43,7 @@ pub mod oauth;
 pub mod oidc;
 pub mod permissions;
 pub mod presence;
+pub mod proxy;
 pub mod recording;
 pub mod release_key;
 pub mod remote_browser;

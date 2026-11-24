@@ -27,6 +27,7 @@ import { ApiOverview, API_BASE } from "@/components/api/ApiOverview";
 import { WaysInDialog } from "@/components/api/WaysInDialog";
 import { ApiCatalogue } from "@/components/api/ApiCatalogue";
 import { ApiCallsView } from "@/components/api/ApiCallsView";
+import { ProxyPanel } from "@/components/api/ProxyPanel";
 import { useApiCatalogue } from "@/hooks/useApiCatalogue";
 import { useApiTokens } from "@/hooks/useApiTokens";
 import { useOAuthGrants } from "@/hooks/useOAuthGrants";
@@ -36,7 +37,7 @@ import { useI18n } from "@/lib/i18n";
 import type { ApiToken } from "@/lib/apiTokens";
 import type { OAuthGrant } from "@/types/oauth";
 
-const TABS = ["tokens", "cli", "endpoints", "activity"] as const;
+const TABS = ["tokens", "cli", "endpoints", "proxy", "activity"] as const;
 type Tab = (typeof TABS)[number];
 
 function ApiPageInner() {
@@ -49,7 +50,8 @@ function ApiPageInner() {
     // 「你的 token」要 API token 這個功能；只開了瀏覽器登入（MCP app）的人從 CLI 登入開始。
     // "Your tokens" needs the API tokens feature; someone with only browser sign-in (MCP apps) starts on CLI sign-ins.
     const tokensOn = hasFeature(user, "api.tokens");
-    const tabs = TABS.filter((x) => x !== "tokens" || tokensOn);
+    // 「代理」要裝置代理這個功能。/ "Proxy" needs the device proxy feature.
+    const tabs = TABS.filter((x) => (x !== "tokens" || tokensOn) && (x !== "proxy" || hasFeature(user, "proxy")));
     const first: Tab = tokensOn ? "tokens" : "cli";
     const raw = params.get("tab");
     const tab: Tab = (tabs as readonly string[]).includes(raw ?? "") ? (raw as Tab) : first;
@@ -76,7 +78,7 @@ function ApiPageInner() {
     const showCalls = useCallback((tok: ApiToken) => go("activity", { token: String(tok.id) }), [go]);
     const showSignInCalls = useCallback((g: OAuthGrant) => go("activity", { grant: String(g.id) }), [go]);
 
-    const labels: Record<Tab, string> = { tokens: t("apiPage.tab.tokens"), cli: t("apiPage.tab.cli"), endpoints: t("apiPage.tab.endpoints"), activity: t("apiPage.tab.activity") };
+    const labels: Record<Tab, string> = { tokens: t("apiPage.tab.tokens"), cli: t("apiPage.tab.cli"), endpoints: t("apiPage.tab.endpoints"), proxy: t("apiPage.tab.proxy"), activity: t("apiPage.tab.activity") };
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -134,6 +136,12 @@ function ApiPageInner() {
                         {t("cliSignIns.whyBody")}
                     </Callout>
                     <CliSignIns hideHeading onShowCalls={showSignInCalls} />
+                </section>
+            )}
+            {tab === "proxy" && (
+                <section aria-label={labels.proxy} className="space-y-3">
+                    <p className="text-sm leading-relaxed text-muted-foreground">{t("proxy.description")}</p>
+                    <ProxyPanel baseUrl={baseUrl} />
                 </section>
             )}
             {tab === "endpoints" && (

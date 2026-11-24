@@ -23,6 +23,9 @@ export const NOTIFICATION_ACTIONS = {
     // AI（MCP）工具開/關 SSH session：送給 session 的使用者與隧道擁有者。/ AI session lifecycle (user + tunnel owner).
     AI_SESSION_OPENED: "AI-SESSION-OPENED",
     AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
+    // 裝置代理的 session 開 / 關（送給開的人與通道擁有者）。/ A device-proxy session opened or closed (its user + the tunnel owner).
+    PROXY_SESSION_OPENED: "PROXY-SESSION-OPENED",
+    PROXY_SESSION_CLOSED: "PROXY-SESSION-CLOSED",
     // 裝置出示了和釘選不同的 SSH host key（送給隧道擁有者與被分享者）。/ A device presented a different host key (tunnel audience).
     HOST_KEY_CHANGED: "HOST-KEY-CHANGED",
     // 別的帳號把隧道指到了你的機器、被拒絕（送給擁有者與 ADMIN 被分享者）。/ Another account's tunnel reached your machine and was refused.

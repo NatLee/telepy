@@ -19,7 +19,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { AppWindow, Settings, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, HeartPulse, Waypoints, Server } from "lucide-react";
+import { ArrowLeftRight, AppWindow, Settings, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, HeartPulse, Waypoints, Server } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,7 @@ import { movedSettingsTab } from "@/lib/adminAreas";
 import { SITE_TAB_GROUPS, parseSiteTab, siteTabOf, type SiteTabId } from "@/lib/siteSettingsTabs";
 
 /** 分頁裡排最前面的設定（開關整個功能的）。/ Settings listed first in their tab (the ones that turn a feature on). */
-const LEAD_KEYS = ["notify_user_webhooks", "lan_scan_enabled"];
+const LEAD_KEYS = ["notify_user_webhooks", "lan_scan_enabled", "proxy_enabled"];
 
 /** 每一頁的名字、圖示與上面那段說明。/ Each tab's name, icon and the note on top. */
 const SITE_TABS: Record<SiteTabId, { label: TranslationKey; icon: React.ReactNode; banner: TranslationKey }> = {
@@ -50,6 +50,7 @@ const SITE_TABS: Record<SiteTabId, { label: TranslationKey; icon: React.ReactNod
     commands: { label: "settings.groupCommands", icon: <SquareTerminal size={15} />, banner: "settings.commandsBanner" },
     desktop: { label: "settings.groupDesktop", icon: <ScreenShare size={15} />, banner: "settings.desktopBanner" },
     browser: { label: "settings.groupRemoteBrowser", icon: <Globe size={15} />, banner: "settings.browserBanner" },
+    proxy: { label: "settings.groupProxy", icon: <ArrowLeftRight size={15} />, banner: "settings.proxyBanner" },
     devices: { label: "settings.groupDevices", icon: <Waypoints size={15} />, banner: "settings.devicesBanner" },
     ai: { label: "settings.groupAi", icon: <Bot size={15} />, banner: "settings.aiBanner" },
     notify: { label: "settings.groupNotify", icon: <Bell size={15} />, banner: "settings.notifyBanner" },

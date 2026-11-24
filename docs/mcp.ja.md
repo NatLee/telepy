@@ -96,6 +96,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`、`lan_os`（自分が所有する、または ADMIN のトンネルのみ） |
 | `browser:use` | デバイスとして Web を閲覧 | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `proxy:use` | デバイスをネットワークプロキシとして使う | MCP のツールはなし：接続は `/ws/proxy/` を通ります。[デバイスプロキシ](./proxy.ja.md)を参照 |
 
 承認ページでは、`ssh:exec`、`ssh:files`、`browser:use` に「変更可能」、残りの 2 つに「読み取りのみ」のタグが付きます。
 

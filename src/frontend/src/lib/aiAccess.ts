@@ -18,6 +18,8 @@ export const SCOPES: { scope: string; label: TranslationKey; description: Transl
         description: "oauth.scope.browserUseDescription",
         tools: ["browser_ports", "browser_open", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type", "browser_close"],
     },
+    // 沒有 MCP 工具：連線走 /ws/proxy/ 或代理位址。/ No MCP tools: connections ride /ws/proxy/ or the proxy address.
+    { scope: "proxy:use", label: "oauth.scope.proxyUse", description: "oauth.scope.proxyUseDescription", tools: [] },
 ];
 
 export const TOOL_LABELS: Record<string, TranslationKey> = {

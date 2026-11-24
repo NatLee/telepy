@@ -164,7 +164,7 @@ export interface CliContext {
 export const PLACEHOLDER = { tunnel: "<tunnel>", account: "<account>", other: "<tunnel2>", label: "<label>", group: "<group>", snippet: "<snippet>" } as const;
 
 /** 範例需要什麼：一個 scope、你的 SSH 金鑰（ssh / scp / sftp 走系統的 OpenSSH）或 API token（`tunnels:manage`）。 */
-export type CliNeed = "tunnels:read" | "ssh:exec" | "ssh:files" | "network:scan" | "browser:use" | "tunnels:manage" | "ssh-key";
+export type CliNeed = "tunnels:read" | "ssh:exec" | "ssh:files" | "network:scan" | "browser:use" | "proxy:use" | "tunnels:manage" | "ssh-key";
 
 /** 瀏覽器登入預設要的 scope（`DEFAULT_SCOPE`）；其他的要 `--scope`，`tunnels:manage` 只有 token 有。 */
 export const LOGIN_SCOPES: readonly CliNeed[] = ["tunnels:read", "ssh:exec", "ssh:files"];
@@ -294,6 +294,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "rsync [--identity …] [rsync options…] <from>… <to>", key: "rsync", needs: ["tunnels:read", "ssh-key"] },
     { usage: "forward <tunnel>[@account] <host>[:port] [--local N] [--open]", key: "forward", needs: ["tunnels:read", "ssh-key"] },
     { usage: "vpn <tunnel>[@account] [<network>… | --all] [--check [--probe <host:port>]] [--dns-domain <domain>] [--dns-server <ip>] [--carrier]", key: "vpn", needs: ["tunnels:read", "ssh-key"] },
+    { usage: "proxy [<tunnel>[@account]] [--port N] [--browser [<url>]]", key: "proxy", needs: ["proxy:use"] },
     { usage: "config install [<tunnel>…|--all] [--print] | tidy [--check] [--yes] | fallback [ask|always|never]", key: "config", needs: ["tunnels:read"] },
     { usage: "exec <tunnel>… [--label …] [--group …] -- <cmd>", key: "exec", needs: ["ssh:exec"] },
     { usage: "cp <from> <to>", key: "cp", needs: ["ssh:files"] },

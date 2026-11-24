@@ -15,6 +15,7 @@
 | [一行指令加入裝置](./device-join.zh-TW.md) | 腳本做了什麼、支援哪些裝置、會留下什麼、失敗時怎麼辦 |
 | [遠端桌面](./remote-desktop.zh-TW.md) | 瀏覽器裡的 RDP、VNC 與 RustDesk：畫質、剪貼簿、聲音、螢幕與檔案 |
 | [遠端瀏覽器](./remote-browser.zh-TW.md) | 從裝置那頭上網的 Chromium、它的限制與疑難排解 |
+| [裝置代理](./proxy.zh-TW.md) | 把通道當成網路代理，給自己的瀏覽器、工具與串接的 app 用：怎麼開啟、`telepy proxy`、app 的 API、檢查與記錄了什麼 |
 | [命令列與 API token](./cli.zh-TW.md) | 安裝、登入、所有指令，以及 token 能做什麼 |
 | [MCP](./mcp.zh-TW.md) | 連接 MCP 用戶端、核准流程，以及 agent 能做與不能做的事 |
 | [Webhook](./webhooks.zh-TW.md) | 個人與全站 webhook：事件、格式、簽章與重試 |

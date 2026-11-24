@@ -134,6 +134,7 @@ const EXEC: &str = "ssh:exec";
 const FILES: &str = "ssh:files";
 const SCAN: &str = "network:scan";
 const BROWSER: &str = "browser:use";
+const PROXY: &str = "proxy:use";
 
 const fn rule(methods: &'static str, pattern: &'static str, scope: &'static str, tunnel: TunnelFrom) -> RouteRule {
     RouteRule { methods, pattern, scope: Some(scope), tunnel }
@@ -196,6 +197,11 @@ pub const ROUTES: &[RouteRule] = {
         // 瀏覽器：REST 版的 MCP browser_*（session 只屬於開它的那把，隧道在開的時候檢查）。/ Scripted browsers.
         rule("GET", "/api/reverse/server/{t}/remote-browser/ports", BROWSER, Path),
         rule("GET|POST", "/api/browser/sessions", BROWSER, Handler),
+        // 裝置代理：能代理的通道、開著的代理 session（連線本身走 /ws/proxy/ 或代理入口，不在 REST）。
+        // The device proxy: the tunnels it may use and its open sessions (connections themselves ride /ws/proxy/ or the proxy endpoint, not REST).
+        rule("GET", "/api/proxy/tunnels", PROXY, Handler),
+        rule("GET", "/api/proxy/sessions", PROXY, Handler),
+        rule("DELETE", "/api/proxy/sessions/*", PROXY, Handler),
         rule("DELETE", "/api/browser/sessions/*", BROWSER, Handler),
         rule("POST", "/api/browser/sessions/*/navigate|click|type", BROWSER, Handler),
         rule("GET", "/api/browser/sessions/*/text|screenshot", BROWSER, Handler),

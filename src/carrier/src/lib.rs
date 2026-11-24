@@ -262,6 +262,36 @@ pub fn ws_endpoint(url: &str) -> Result<(String, u16, bool)> {
     Ok((host, port, tls))
 }
 
+/// 伺服器在升級前就拒絕了（HTTP 狀態 + body）。/ The server refused before upgrading (HTTP status and body).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub status: u16,
+    pub body: String,
+}
+
+/// 帶 `Authorization: Bearer` 連一個 WebSocket（`/ws/proxy/`）。伺服器用一般的 HTTP 狀態拒絕時回 `Ok(Err(Refused))`
+/// ——那是答案，不是連線錯誤（401 沒有權限、404 沒有這條通道、502 裝置連不到目標…）。
+/// Opens a WebSocket with `Authorization: Bearer` (`/ws/proxy/`). A plain HTTP refusal comes back as
+/// `Ok(Err(Refused))`: it is an answer, not a connection error (401, 404 no such tunnel, 502 the device couldn't reach
+/// the target…).
+pub async fn connect_ws_bearer(url: &str, bearer: &str, proxy: Option<&Proxy>, timeout: Duration) -> Result<std::result::Result<Ws, Refused>> {
+    let (host, port, tls) = ws_endpoint(url)?;
+    let fut = async {
+        let (tcp, pending) = tcp_connect(&host, port, proxy, timeout).await?;
+        let stream = Prefixed::new(tcp, pending);
+        let mut req = url.into_client_request().context("websocket request")?;
+        req.headers_mut().insert("User-Agent", format!("telepy-carrier/{VERSION}").parse().unwrap());
+        req.headers_mut().insert("Authorization", format!("Bearer {bearer}").parse().context("the token has characters a header can't carry")?);
+        let connector = if tls { Some(Connector::Rustls(tls_config()?)) } else { None };
+        match tokio_tungstenite::client_async_tls_with_config(req, stream, None, connector).await {
+            Ok((ws, _)) => Ok(Ok(ws)),
+            Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => Ok(Err(Refused { status: resp.status().as_u16(), body: resp.body().as_ref().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default() })),
+            Err(e) => Err(anyhow::Error::new(e).context("the server did not accept the WebSocket")),
+        }
+    };
+    tokio::time::timeout(timeout, fut).await.map_err(|_| anyhow!("the web port {host}:{port} did not answer in time"))?
+}
+
 /// 連上 `/ws/gateway/`（直連或經代理）。/ Open the gateway WebSocket, directly or through the proxy.
 pub async fn connect_ws(url: &str, proxy: Option<&Proxy>, timeout: Duration) -> Result<Ws> {
     let (host, port, tls) = ws_endpoint(url)?;

@@ -15,6 +15,7 @@ New here? The [project README](../README.md) covers what Telepy is and how to in
 | [Adding a device with one command](./device-join.md) | What the script does, which devices it supports, what it leaves behind, and what to do when it fails |
 | [Remote desktop](./remote-desktop.md) | RDP, VNC and RustDesk in the browser: quality, clipboard, sound, screens and files |
 | [Remote browser](./remote-browser.md) | A Chromium that goes online from the device, its limits, and troubleshooting |
+| [Device proxy](./proxy.md) | A tunnel as a network proxy for your own browser, tools and connected apps: turning it on, `telepy proxy`, the app API, what is checked and recorded |
 | [The command line and API tokens](./cli.md) | Installing, signing in, every command, and what a token may do |
 | [MCP](./mcp.md) | Connecting MCP clients, approving them, and what agents can and can't do |
 | [Webhooks](./webhooks.md) | Personal and site-wide webhooks: events, formats, signatures and retries |
