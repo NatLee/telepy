@@ -61,6 +61,8 @@ pub struct Inner {
     pub tunnel_keys: crate::ssh::tunnel_keys::TunnelKeys,
     /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
     pub ai: AiSessions,
+    /// 開著的裝置代理 session（`crate::proxy`）。/ The open device-proxy sessions.
+    pub proxy: Arc<crate::proxy::ProxyHub>,
     /// 網頁登入 session 的撤銷快取與「最後使用」節流。/ Web session revocation cache and last-use throttle.
     pub sessions: crate::auth::sessions::SessionGuard,
     /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
@@ -166,6 +168,7 @@ impl AppState {
             host_keys: HostKeyPins::default(),
             tunnel_keys: Default::default(),
             ai: AiSessions::default(),
+            proxy: Default::default(),
             sessions: Default::default(),
             mfa: MfaStores::new(&config.secret_key),
             oidc: crate::oidc::client::OidcClient::new(oidc_http),

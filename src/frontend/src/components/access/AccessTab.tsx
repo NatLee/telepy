@@ -13,6 +13,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import {
+    ArrowLeftRight,
     Ban,
     BookOpen,
     Check,
@@ -76,6 +77,7 @@ const FEATURE_ICON: Record<FeatureId, LucideIcon> = {
     remote_browser: MonitorPlay,
     remote_desktop: ScreenShare,
     network: Waypoints,
+    proxy: ArrowLeftRight,
     "keys.personal": KeyRound,
     "recordings.manage": Clapperboard,
     "command_rules.manage": ShieldCheck,

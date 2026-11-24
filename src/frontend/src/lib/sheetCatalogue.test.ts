@@ -43,7 +43,10 @@ test("a search finds a task in any of the three languages, whatever the interfac
     assert.equal(top("vpn", "ja"), "task:vpn");
     assert.equal(top("跳板"), "task:jump");
     assert.equal(top("踏み台", "zh-TW"), "task:jump");
-    assert.equal(top("proxy"), "task:socks");
+    // 「proxy」：telepy proxy 的範例在前，SOCKS 那個任務也在。/ "proxy": the telepy proxy examples first, the SOCKS task is there too.
+    assert.ok(top("proxy").startsWith("ex:proxy"), top("proxy"));
+    assert.ok(ids("proxy").includes("task:socks"));
+    assert.equal(top("socks proxy"), "task:socks");
     assert.equal(top("代理", "en"), "task:socks");
     assert.equal(top("rsync"), "task:copy");
     assert.equal(top("-D"), "task:socks");

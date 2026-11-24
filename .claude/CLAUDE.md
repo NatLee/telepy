@@ -37,7 +37,7 @@ src/
 docker/kasm-browser/  # KasmVNC + Chromium image and its session-manager
 ssh/                  # backend_ssh_key (service key + ssh config), ssh_host_keys (gateway host keys; generated, git-ignored)
 docs/                 # user docs in three languages: <name>.md (English) + <name>.zh-TW.md + <name>.ja.md, same headings in the same order — change all three
-                      # together (README.md = the index, visual-guide.md, device-join, remote-desktop, remote-browser, cli, mcp, webhooks, sso, device-connections,
+                      # together (README.md = the index, visual-guide.md, device-join, remote-desktop, remote-browser, proxy, cli, mcp, webhooks, sso, device-connections,
                       # latency-deep-dive, benchmarks); images/<lang>/ = the app's info-dialog diagrams + GIFs those docs embed (same file names per language);
                       # engineering/ = notes kept in Traditional Chinese only (rust-migration-plan.md, rustdesk-spike.md, rustdesk-id-server.md, articles/) — not user docs, one language;
                       # screenshots/<lang>/ (the README images, one set per language; retake all three when a shown screen changes — how in screenshots/README.md)
@@ -173,6 +173,7 @@ This file is loaded in full by every session, so it holds only what every task n
 | `mcp.md` | OAuth 2.1 (MCP connectors), MCP server + AI sessions, interactive shells + agent browsers over MCP |
 | `remote-desktop.md` | Remote desktop, RustDesk in the browser |
 | `remote-browser.md` | Remote browser panel, the device's own ports |
+| `proxy.md` | Device proxy (`proxy:use`): the core, `/ws/proxy/`, `telepy proxy`, the API page's Proxy tab |
 | `tunnels-ui.md` | Tunnels list data, dense rows, tunnel page + quick-access menu, list search |
 | `frontend.md` | How i18n works, user preferences, type scale, Site settings page layout, UI building blocks, design language, design tokens |
 | `brand.md` | Fonts, favicon, easter eggs + Tapi, disclaimer, sponsoring |

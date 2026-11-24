@@ -47,6 +47,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::sftp::router())
         .merge(api::remote_browser::router())
         .merge(api::browser::router())
+        .merge(api::proxy::router())
         .merge(api::desktop::router())
         .merge(api::rustdesk::router())
         .merge(api::credentials::router())

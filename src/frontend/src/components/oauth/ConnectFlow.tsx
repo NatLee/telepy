@@ -12,7 +12,7 @@
  * ─HTTPS─ Telepy ─SSH─ devices, and the last step goes back to the terminal.
  */
 import React from "react";
-import { Bot, CornerDownLeft, Eye, FolderTree, Globe, Radar, Server, Settings2, ShieldAlert, ShieldCheck, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Bot, CornerDownLeft, Eye, FolderTree, Globe, Radar, Server, Settings2, ShieldAlert, ShieldCheck, SquareTerminal, Waypoints, type LucideIcon } from "lucide-react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { DiagramLink, DiagramNode, FlowSteps } from "@/components/auth/AuthPanels";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,7 @@ export const SCOPE_META: Record<string, { Icon: LucideIcon; label: TranslationKe
     "ssh:files": { Icon: FolderTree, label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription", changes: true },
     "network:scan": { Icon: Radar, label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription", changes: false },
     "browser:use": { Icon: Globe, label: "oauth.scope.browserUse", description: "oauth.scope.browserUseDescription", changes: true },
+    "proxy:use": { Icon: Waypoints, label: "oauth.scope.proxyUse", description: "oauth.scope.proxyUseDescription", changes: true },
     // 只有個人 API token 有（REST 的寫入）。/ Personal API tokens only (REST writes).
     "tunnels:manage": { Icon: Settings2, label: "oauth.scope.tunnelsManage", description: "oauth.scope.tunnelsManageDescription", changes: true },
 };

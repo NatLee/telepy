@@ -10,6 +10,7 @@ pub mod auth;
 pub mod carriers;
 pub mod datasets;
 pub mod browser;
+pub mod proxy;
 pub mod command_rules;
 pub mod credentials;
 pub mod desktop;

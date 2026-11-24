@@ -48,8 +48,8 @@ test("scope summary: everything, read only, n of total", () => {
     assert.deepEqual(scopeSummary([...TOKEN_SCOPES], TOKEN_SCOPES), { kind: "all" });
     assert.deepEqual(scopeSummary(["tunnels:read"], TOKEN_SCOPES), { kind: "readOnly" });
     assert.deepEqual(scopeSummary(["tunnels:read", "network:scan"], TOKEN_SCOPES), { kind: "readOnly" });
-    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec"], TOKEN_SCOPES), { kind: "some", count: 2, total: 6 });
-    // CLI 登入沒有 tunnels:manage：五項都有就是全部。/ A CLI sign-in can't hold tunnels:manage: all five = everything.
-    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use"], OAUTH_SCOPES), { kind: "all" });
-    assert.deepEqual(scopeSummary(["mystery"], OAUTH_SCOPES), { kind: "some", count: 0, total: 5 });
+    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec"], TOKEN_SCOPES), { kind: "some", count: 2, total: 7 });
+    // CLI 登入沒有 tunnels:manage：六項都有就是全部。/ A CLI sign-in can't hold tunnels:manage: all six = everything.
+    assert.deepEqual(scopeSummary(["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use", "proxy:use"], OAUTH_SCOPES), { kind: "all" });
+    assert.deepEqual(scopeSummary(["mystery"], OAUTH_SCOPES), { kind: "some", count: 0, total: 6 });
 });

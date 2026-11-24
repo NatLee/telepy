@@ -94,6 +94,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`、`lan_os`（只限你擁有或身為 ADMIN 的通道） |
 | `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `proxy:use` | 把你的裝置當成網路代理 | MCP 沒有對應的工具：連線走 `/ws/proxy/`，見[裝置代理](./proxy.zh-TW.md) |
 
 `ssh:exec`、`ssh:files` 與 `browser:use` 在核准頁上會標「可以變更內容」，另外兩個標「唯讀」。
 

@@ -1366,6 +1366,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 區網掃描辨識網頁時帶的 User-Agent（空白 = 一般瀏覽器的）。/ The LAN scan's identify User-Agent (blank = an ordinary browser's).
     ("site_settings_sitesettings", "lan_scan_user_agent", "varchar(256) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "carrier_auto_update", "bool NOT NULL DEFAULT 1"),
+    // 裝置代理（OAuth app / API token 經裝置連出去）：預設關，升級不會多開一個入口。/ The device proxy (apps and tokens connecting out through a device): off by default, so an upgrade opens nothing new.
+    ("site_settings_sitesettings", "proxy_enabled", "bool NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "proxy_max_connections", "integer NOT NULL DEFAULT 64"),
     ("site_settings_sitesettings", "datasets_auto_update", "bool NOT NULL DEFAULT 1"),
     // 連線紀錄裡裝置自己回報的公網 IP（gateway 看到的是代理 / Docker 的內部位址時）。/ The public IP the device reported for that connection.
     ("telepy_tunnel_session", "public_ip", "varchar(64) NULL"),

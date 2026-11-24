@@ -6,6 +6,7 @@ pub mod desktop;
 pub mod filemanager;
 pub mod gateway;
 pub mod notifications;
+pub mod proxy;
 pub mod remote_browser;
 pub mod rustdesk;
 pub mod terminal;
@@ -47,6 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/ws/desktop/{session_id}/", get(desktop_upgrade))
         .route("/ws/rustdesk/{session_id}/", get(rustdesk_upgrade))
         .route("/ws/gateway/", get(gateway_upgrade))
+        .route("/ws/proxy/", get(proxy::upgrade))
 }
 
 /// SSH over WebSocket：沒有 auth 訊息（SSH 自己認證），來源 IP 取自轉送標頭；`X-Forwarded-Proto` 說裝置那頭是不是 wss。

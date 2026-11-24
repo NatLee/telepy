@@ -28,6 +28,7 @@ pub mod tapi;
 pub mod mascot;
 pub mod oauth;
 pub mod prefs;
+pub mod proxy;
 #[path = "../../backend-api/src/release_key.rs"]
 pub mod release_key;
 pub mod signed_in;
@@ -118,6 +119,8 @@ pub enum Cmd {
     Forward(ForwardArgs),
     /// Reach whole networks behind a device as if you were there (TCP, plus names under chosen domains); nothing runs on the device, only its sshd forwards; asks for sudo here
     Vpn(VpnArgs),
+    /// A proxy on this computer whose connections leave from a device (HTTP proxy and SOCKS5 on 127.0.0.1): your own browser, curl or any tool then reaches the device's network and sites see its address; no SSH key, no admin rights; without a tunnel it lists the ones you may use
+    Proxy(ProxyArgs),
     /// Install Telepy's ssh config blocks into ~/.ssh/config (like the web's SSH config dialog)
     Config(ConfigArgs),
     /// Run a command on one or many devices through Telepy (command rules apply)
@@ -187,6 +190,22 @@ pub struct VpnArgs {
     pub carrier: bool,
     #[command(flatten)]
     pub opts: SshOpts,
+}
+
+#[derive(Args, Debug)]
+pub struct ProxyArgs {
+    /// <tunnel>[@account] to leave through (account@tunnel works too); omit to list the tunnels you may use
+    #[arg(add = ArgValueCompleter::new(complete::target))]
+    pub target: Option<String>,
+    /// Port on this computer (0 = any free one)
+    #[arg(short = 'p', long, default_value_t = 8118)]
+    pub port: u16,
+    /// Also open a Chromium-family browser that uses the proxy, with its own profile; optionally the page to open
+    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "URL")]
+    pub browser: Option<String>,
+    /// Machine-readable output (the list)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -945,6 +964,7 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Cmd::Sftp(a) => sftp(&api, &a),
                 Cmd::Forward(a) => forward_cmd(&api, &a),
                 Cmd::Vpn(a) => vpn_cmd(&api, &a),
+                Cmd::Proxy(a) => proxy_cmd(api, a),
                 Cmd::Config(a) => config(&api, a).map(|_| 0),
                 Cmd::Exec(a) => exec(&api, &a),
                 Cmd::Cp(a) => cp(&api, &a).map(|_| 0),
@@ -1731,6 +1751,84 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
         return vpn_check(&file, &alias, &extra_opts(&a.opts), &plan, name, &a.target, &hosts, &a.probe);
     }
     vpn_run(&file, &alias, &extra_opts(&a.opts), &plan, name)
+}
+
+/// `telepy proxy [<tunnel>[@account]]`：沒給通道 = 列出能代理的通道；給了 = 在這台電腦開代理（見 `proxy.rs`）。
+/// `telepy proxy [<tunnel>[@account]]`: without a tunnel, the tunnels you may proxy through; with one, the proxy on this
+/// computer (see `proxy.rs`).
+fn proxy_cmd(api: Api, a: ProxyArgs) -> Result<i32> {
+    let info = match api.get("/api/proxy/tunnels") {
+        Ok(v) => v,
+        Err(e) => {
+            let code = e.downcast_ref::<api::HttpError>().and_then(|h| h.body["code"].as_str().map(str::to_string)).unwrap_or_default();
+            return match proxy::advice(&code, &api.server) {
+                Some(advice) => Err(anyhow!("{e:#}\n  {advice}")),
+                None => Err(e),
+            };
+        }
+    };
+    let tunnels = info["tunnels"].as_array().cloned().unwrap_or_default();
+    let blocked = |t: &Value| match t["blocked"].as_str() {
+        Some("step_up") => "asks for verification before every session: not through the proxy",
+        Some("no_account") => "no device account you may use",
+        Some("offline") => "offline",
+        _ => "",
+    };
+    let Some(target) = a.target.as_deref() else {
+        if a.json {
+            println!("{}", serde_json::to_string_pretty(&info)?);
+            return Ok(0);
+        }
+        if info["enabled"] == false {
+            eprintln!("The device proxy is turned off on this server. An administrator turns it on in Site settings → Features → Device proxy.");
+        }
+        if tunnels.is_empty() {
+            eprintln!("No tunnels to proxy through.");
+            return Ok(0);
+        }
+        let rows: Vec<Vec<String>> = tunnels
+            .iter()
+            .map(|t| {
+                let accounts: Vec<&str> = t["accounts"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                vec![s(t, "name").to_string(), accounts.join(","), blocked(t).to_string()]
+            })
+            .collect();
+        print_table(&["TUNNEL", "ACCOUNTS", "NOTE"], &rows, plain);
+        eprintln!("Start one: telepy proxy <tunnel>   (apps connect to {} with a token that has proxy:use)", s(&info["endpoints"], "websocket"));
+        return Ok(0);
+    };
+    let found = target::candidates(target).into_iter().find_map(|c| tunnels.iter().find(|t| s(t, "name") == c.tunnel || t["id"].to_string() == c.tunnel).map(|t| (t.clone(), c.account)));
+    let Some((t, account)) = found else {
+        let names: Vec<&str> = tunnels.iter().map(|t| s(t, "name")).collect();
+        bail!("No tunnel called '{target}' that you may proxy through. You can use: {}", if names.is_empty() { "(none)".to_string() } else { names.join(", ") });
+    };
+    let name = s(&t, "name").to_string();
+    if !blocked(&t).is_empty() {
+        bail!("{name}: {}.", blocked(&t));
+    }
+    let account = account.or_else(|| t["default_account"].as_str().map(str::to_string));
+    if account.is_none() {
+        let accounts: Vec<&str> = t["accounts"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        bail!("{name} has several accounts and no default. Pick one: telepy proxy {name}@{}", accounts.first().copied().unwrap_or("<account>"));
+    }
+    let browser = a.browser.clone();
+    let (shown_name, shown_account) = (name.clone(), account.clone());
+    proxy::run(api, t["id"].to_string(), account, a.port, move |port| {
+        for line in proxy::banner(&shown_name, shown_account.as_deref(), port) {
+            eprintln!("{line}");
+        }
+        if let Some(url) = browser {
+            let profile = creds::config_dir().join(format!("proxy-browser-{port}"));
+            let args = proxy::browser_args(port, &profile, Some(url.as_str()).filter(|u| !u.is_empty()));
+            match proxy::browser_candidates().into_iter().find(|p| p.exists()) {
+                Some(exe) => match Command::new(&exe).args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+                    Ok(_) => eprintln!("Opened {} with the proxy (its own profile: your everyday browser is untouched).", exe.file_name().and_then(|n| n.to_str()).unwrap_or("a browser")),
+                    Err(e) => eprintln!("Could not start the browser ({e}). Set your browser's proxy to http://127.0.0.1:{port} yourself."),
+                },
+                None => eprintln!("No Chrome, Chromium, Edge or Brave found. Set your browser's proxy to http://127.0.0.1:{port} yourself."),
+            }
+        }
+    })
 }
 
 /// 這台電腦原本的預設路由（不用 root 就讀得到）。/ This computer's own default route (readable without root).

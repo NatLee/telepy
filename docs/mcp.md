@@ -94,6 +94,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write`, `lan_files` |
 | `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check`, `lan_os` (only on tunnels you own or are ADMIN on) |
 | `browser:use` | Browse the web as your devices | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `proxy:use` | Use your devices as a network proxy | none over MCP: connections go through `/ws/proxy/`, see [Device proxy](./proxy.md) |
 
 `ssh:exec`, `ssh:files` and `browser:use` carry a **Can make changes** tag on the approval page. The other two are marked **Read only**.
 

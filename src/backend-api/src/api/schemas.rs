@@ -22,6 +22,78 @@ pub struct Status {
     pub status: String,
 }
 
+// ---------------------------------------------------------------- device proxy
+
+#[derive(ToSchema)]
+pub struct ProxyEndpoints {
+    /// `wss://<host>/ws/proxy/` — one WebSocket per TCP connection: `?tunnel=<id or name>&host=<host>&port=<port>[&account=<device account>]` with `Authorization: Bearer <token>`
+    pub websocket: String,
+    /// A standard HTTP proxy URL (`CONNECT` + `Proxy-Authorization`), when this server has one configured
+    pub http_proxy: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ProxyTunnel {
+    pub id: i64,
+    pub name: String,
+    pub online: Option<bool>,
+    /// Device accounts this person may connect as
+    pub accounts: Vec<String>,
+    pub default_account: Option<String>,
+    /// Why it can't be used right now: `step_up` | `no_account` | `offline`; null = usable
+    pub blocked: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ProxyTunnels {
+    /// The site switch (Site settings → Features → Device proxy)
+    pub enabled: bool,
+    /// Whether the "Device proxy" feature is on for this person
+    pub allowed: bool,
+    pub scope: String,
+    pub max_connections: i64,
+    /// A session with no connections closes after this many seconds
+    pub idle_seconds: u64,
+    pub endpoints: ProxyEndpoints,
+    pub tunnels: Vec<ProxyTunnel>,
+}
+
+#[derive(ToSchema)]
+pub struct ProxyUser {
+    pub id: i64,
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct ProxyTunnelRef {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct ProxySession {
+    pub id: String,
+    pub user: ProxyUser,
+    pub client_name: String,
+    /// `app` (OAuth) | `token` | `web`
+    pub kind: String,
+    pub grant_id: Option<i64>,
+    pub token_id: Option<i64>,
+    pub tunnel: ProxyTunnelRef,
+    /// The device account connections leave as
+    pub username: String,
+    pub ip: Option<String>,
+    pub opened_at: String,
+    /// Connections open right now
+    pub connections: u64,
+    pub connections_total: u64,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+    /// Distinct `host:port` destinations (the first 20)
+    pub targets: Vec<String>,
+    pub targets_more: u64,
+}
+
 // ---------------------------------------------------------------- auth
 
 #[derive(ToSchema)]

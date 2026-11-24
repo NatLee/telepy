@@ -37,6 +37,7 @@ pub enum Feature {
     RemoteBrowser,
     RemoteDesktop,
     Network,
+    Proxy,
     KeysPersonal,
     RecordingsManage,
     CommandRulesManage,
@@ -47,7 +48,7 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Feature; 15] = [
+    pub const ALL: [Feature; 16] = [
         Feature::TunnelsCreate,
         Feature::TunnelsShare,
         Feature::Terminal,
@@ -56,6 +57,7 @@ impl Feature {
         Feature::RemoteBrowser,
         Feature::RemoteDesktop,
         Feature::Network,
+        Feature::Proxy,
         Feature::KeysPersonal,
         Feature::RecordingsManage,
         Feature::CommandRulesManage,
@@ -75,6 +77,7 @@ impl Feature {
             Feature::RemoteBrowser => "remote_browser",
             Feature::RemoteDesktop => "remote_desktop",
             Feature::Network => "network",
+            Feature::Proxy => "proxy",
             Feature::KeysPersonal => "keys.personal",
             Feature::RecordingsManage => "recordings.manage",
             Feature::CommandRulesManage => "command_rules.manage",
@@ -101,6 +104,7 @@ impl Feature {
             Feature::RemoteBrowser => "Remote browser",
             Feature::RemoteDesktop => "Remote desktop",
             Feature::Network => "LAN discovery",
+            Feature::Proxy => "Device proxy",
             Feature::KeysPersonal => "Personal SSH keys",
             Feature::RecordingsManage => "Recordings",
             Feature::CommandRulesManage => "Command rules",
@@ -123,6 +127,7 @@ impl Feature {
             "ssh:files" => Some(Feature::Files),
             "network:scan" => Some(Feature::Network),
             "browser:use" => Some(Feature::RemoteBrowser),
+            "proxy:use" => Some(Feature::Proxy),
             _ => None,
         }
     }

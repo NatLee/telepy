@@ -469,11 +469,12 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 56);
+    assert_eq!(keys.len(), 58);
     assert_eq!((r.json["values"]["notify_push_max_delay"].as_i64(), r.json["values"]["notify_push_per_hour"].as_i64()), (Some(3600), Some(20)), "status pushes: an hour at most, 20 an hour");
     assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");
     assert_eq!(r.json["values"]["carrier_auto_update"], true, "device carriers follow new releases by default");
+    assert_eq!((r.json["values"]["proxy_enabled"].as_bool(), r.json["values"]["proxy_max_connections"].as_i64()), (Some(false), Some(64)), "the device proxy is off until an admin turns it on");
     assert_eq!(r.json["values"]["datasets_auto_update"], true, "installed GeoIP / vendor data is kept current by default");
     assert_eq!(r.json["values"]["signin_page_style"], "standard", "the sign-in page shows the product by default");
     assert_eq!(r.json["values"]["signin_oauth_style"], "standard");

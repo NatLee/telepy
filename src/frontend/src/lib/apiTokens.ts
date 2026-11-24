@@ -9,7 +9,7 @@ import { addDays } from "./keyExpiry.ts";
 import type { SpotState } from "./flow.ts";
 
 /** 順序 = 後端 `auth::api_tokens::all_scopes`。/ Same order as the backend. */
-export const TOKEN_SCOPES = ["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use", "tunnels:manage"] as const;
+export const TOKEN_SCOPES = ["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use", "proxy:use", "tunnels:manage"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
 /** 新 token 預設勾的：只讀。/ Ticked by default for a new token: read-only. */
@@ -70,7 +70,7 @@ export function sortTokens(list: ApiToken[], now: number = Date.now()): ApiToken
 }
 
 /** 會改東西的 scope（其餘只讀）；跟 `SCOPE_META.changes` 一樣。/ Scopes that change things (the rest only read); as `SCOPE_META.changes`. */
-export const CHANGING_SCOPES: readonly string[] = ["ssh:exec", "ssh:files", "browser:use", "tunnels:manage"];
+export const CHANGING_SCOPES: readonly string[] = ["ssh:exec", "ssh:files", "browser:use", "proxy:use", "tunnels:manage"];
 
 /** CLI 登入（OAuth）能拿到的 scope：沒有 tunnels:manage。/ What a CLI sign-in (OAuth) can hold: no tunnels:manage. */
 export const OAUTH_SCOPES: readonly string[] = TOKEN_SCOPES.filter((s) => s !== "tunnels:manage");

@@ -128,6 +128,12 @@ impl Api {
         }
     }
 
+    /// 現在能用的 token（OAuth 的快到期就先換新）：給不經 REST 的連線用（`/ws/proxy/`）。
+    /// A token usable right now (an OAuth one is renewed when about to expire), for connections outside REST (`/ws/proxy/`).
+    pub fn bearer_now(&self) -> Result<String> {
+        self.bearer(false)
+    }
+
     pub fn request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
         Ok(self.http.request(method, self.url(path)).bearer_auth(self.bearer(false)?).timeout(Duration::from_secs(120)))
     }

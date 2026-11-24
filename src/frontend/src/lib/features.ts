@@ -18,6 +18,7 @@ export type FeatureId =
     | "remote_browser"
     | "remote_desktop"
     | "network"
+    | "proxy"
     | "keys.personal"
     | "recordings.manage"
     | "command_rules.manage"
@@ -37,6 +38,7 @@ export const FEATURES: readonly { id: FeatureId; key: string }[] = [
     { id: "remote_browser", key: "remoteBrowser" },
     { id: "remote_desktop", key: "remoteDesktop" },
     { id: "network", key: "network" },
+    { id: "proxy", key: "proxy" },
     { id: "keys.personal", key: "keysPersonal" },
     { id: "recordings.manage", key: "recordings" },
     { id: "command_rules.manage", key: "commandRules" },

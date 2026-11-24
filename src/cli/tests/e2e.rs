@@ -525,6 +525,129 @@ async fn reqwest_get(url: &str) -> String {
     out
 }
 
+/// `telepy proxy`：這台電腦上的代理，連線經 `/ws/proxy/` 由裝置的 sshd 連出去——不用 SSH 金鑰（裝置上只有 Telepy 的
+/// service key），一般 HTTP、CONNECT 與 SOCKS5 三種客戶端都通。
+/// `telepy proxy`: a proxy on this computer whose connections ride `/ws/proxy/` and leave from the device's sshd — no SSH
+/// key of the person's (the device only holds Telepy's service key); plain HTTP, CONNECT and SOCKS5 clients all work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proxy_reaches_the_devices_network_from_this_computer() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let m = lab.machine_with("box", &[("pi", &[&lab.service])], MachineOpts { allow_jump: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &m).await;
+    lab.username(&alice, &dev, "pi").await;
+    // 「裝置網路上的服務」：回它收到的請求第一行。/ A "service on the device's network": answers with the request line it got.
+    let web = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let web_port = web.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = web.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let first = text.lines().next().unwrap_or_default().to_string();
+                let close = text.to_ascii_lowercase().contains("connection: close");
+                let body = format!("got [{first}] close={close}");
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            });
+        }
+    });
+    let expires = chrono_like((std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "px", "scopes": ["proxy:use"], "expires_at": expires})).await;
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await.replace("ws://", "http://");
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
+
+    // 預設關閉：說怎麼開。/ Off by default: it says how to turn it on.
+    let o = telepy(h, &["proxy", "box"]).await;
+    assert!(o.code != 0 && o.stderr.contains("Site settings") && o.stderr.contains("Device proxy"), "{}", o.stderr);
+    let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"proxy_enabled": true})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+
+    // 沒給通道：列出能代理的。/ Without a tunnel: the ones it may use.
+    let o = telepy(h, &["proxy"]).await;
+    assert!(o.code == 0 && o.stdout.contains("box") && o.stdout.contains("pi") && o.stderr.contains("/ws/proxy/"), "{} / {}", o.stdout, o.stderr);
+    let o = telepy(h, &["proxy", "nope"]).await;
+    assert!(o.code != 0 && o.stderr.contains("You can use: box"), "{}", o.stderr);
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_telepy"))
+        .args(["proxy", "box", "--port", "0"])
+        .env("HOME", h)
+        .env("TELEPY_CONFIG_DIR", h.join("config"))
+        .env("TELEPY_NO_KEYRING", "1")
+        .env_remove("TELEPY_URL")
+        .env_remove("TELEPY_TOKEN")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line()).await.expect("the proxy says where it listens").unwrap().unwrap();
+    assert!(first.contains("Proxy through box as pi is on http://127.0.0.1:"), "{first}");
+    let port: u16 = first.split("127.0.0.1:").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
+    let talk = |request: Vec<u8>| async move {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(&request).await.unwrap();
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(15), s.read_to_end(&mut out)).await;
+        String::from_utf8_lossy(&out).into_owned()
+    };
+
+    // 1) 一般 HTTP：改成 origin-form、一條連線一個請求。/ Plain HTTP: origin-form, one request per connection.
+    let answer = talk(format!("GET http://127.0.0.1:{web_port}/status?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{web_port}\r\nProxy-Connection: keep-alive\r\n\r\n").into_bytes()).await;
+    assert!(answer.starts_with("HTTP/1.1 200 OK") && answer.ends_with("got [GET /status?x=1 HTTP/1.1] close=true"), "{answer}");
+
+    // 2) CONNECT：先回 200，之後原樣轉接。/ CONNECT: a 200 first, then bytes as they are.
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s.write_all(format!("CONNECT 127.0.0.1:{web_port} HTTP/1.1\r\nHost: 127.0.0.1:{web_port}\r\n\r\n").as_bytes()).await.unwrap();
+    let mut head = [0u8; 39];
+    tokio::time::timeout(std::time::Duration::from_secs(15), s.read_exact(&mut head)).await.expect("the CONNECT answer").unwrap();
+    assert_eq!(&head[..], b"HTTP/1.1 200 Connection established\r\n\r\n");
+    s.write_all(b"GET /through-connect HTTP/1.1\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), s.read_to_end(&mut out)).await;
+    assert!(String::from_utf8_lossy(&out).ends_with("got [GET /through-connect HTTP/1.1] close=true"), "{}", String::from_utf8_lossy(&out));
+
+    // 3) SOCKS5（同一個 port）。/ SOCKS5 on the same port.
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s.write_all(&[5, 1, 0]).await.unwrap();
+    let mut method = [0u8; 2];
+    s.read_exact(&mut method).await.unwrap();
+    assert_eq!(method, [5, 0]);
+    let mut req = vec![5, 1, 0, 1, 127, 0, 0, 1];
+    req.extend_from_slice(&web_port.to_be_bytes());
+    s.write_all(&req).await.unwrap();
+    let mut reply = [0u8; 10];
+    tokio::time::timeout(std::time::Duration::from_secs(15), s.read_exact(&mut reply)).await.expect("the SOCKS reply").unwrap();
+    assert_eq!(reply[..2], [5, 0]);
+    s.write_all(b"GET /through-socks HTTP/1.1\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), s.read_to_end(&mut out)).await;
+    assert!(String::from_utf8_lossy(&out).ends_with("got [GET /through-socks HTTP/1.1] close=true"), "{}", String::from_utf8_lossy(&out));
+
+    // 4) 關著的 port：HTTP 客戶端拿到 502 與原因；不是代理請求 = 400。/ A closed port: a 502 with the reason; not a proxy request = 400.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let answer = talk(format!("GET http://127.0.0.1:{dead}/ HTTP/1.1\r\n\r\n").into_bytes()).await;
+    assert!(answer.starts_with("HTTP/1.1 502 Bad Gateway") && answer.contains("could not connect"), "{answer}");
+    let answer = talk(b"GET /not-a-proxy-request HTTP/1.1\r\n\r\n".to_vec()).await;
+    assert!(answer.starts_with("HTTP/1.1 400"), "{answer}");
+
+    // 裝置上只有 Telepy 的登入；Telepy 記下了這段代理。/ Only Telepy logged in to the device; Telepy recorded the proxy.
+    assert!(m.logged_in("pi", &lab.service));
+    let r = lab.app.get("/api/proxy/sessions", Some(&alice.token)).await;
+    assert_eq!(r.json[0]["client_name"], "API token \"px\"", "{}", r.text);
+    assert!(r.json[0]["connections_total"].as_u64().unwrap() >= 3, "{}", r.text);
+    child.kill().await.unwrap();
+}
+
 /// `telepy forward`：區網主機（lab 裡用本機的一個 TCP 服務代替，用標籤找）的 port 經裝置的 sshd 轉到這台電腦；
 /// 沒給 port、又不知道它的網頁 port 就說要寫；不是網頁 port 時印 `localhost:<port>`，`--https` 印 https 網址。
 /// `telepy forward`: a LAN host's port (a local TCP service here, found by its label) reaches this computer through
