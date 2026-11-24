@@ -1,21 +1,21 @@
 "use client";
 
 /**
- * 指令速查頁：一次只看一步——① 裝置與跑法（選裝置 / 帳號；用 telepy、~/.ssh/config 或單行 ssh 跑；就緒圖把四項設定
- * 擺在它們所在的地方，下面是清單）② 要做什麼（埠轉發與連進去 / 搬檔案兩組插圖卡片，「往哪個方向？」打開 `ForwardKinds`；
- * 點了就到下一步）③ 填入並複製（一句話裡填空，下面的指令跟著變；接著做什麼、插圖、每一段的意思、選項）。
- * telepy 的指令就是 CLI 自己的範例（`src/cli/src/examples.rs`，`forwardRecipes.test.ts` 比對），不是另一份。
- * 打開時：深連結（?recipe=）到 ③，設定沒做完到 ①，否則到 ②（`lib/sheetSteps.ts`）。隧道在 ?tunnel=<id>，跑法可以用 ?way=。
- * The command sheet, one step at a time: ① device and how to run it (device / account; telepy, ~/.ssh/config or a
- * one-line ssh; a readiness diagram places the four setup items where they live, the checklist below) ② pick a task
- * (two groups of illustrated cards, port forwarding and getting in / moving files; "Which way?" opens
- * `ForwardKinds`; a click moves on) ③ fill in and copy (blanks in one sentence with the command right below,
- * following them; what next, the picture, what each part means, options). The telepy commands are the CLI's own
- * examples (`src/cli/src/examples.rs`, compared by `forwardRecipes.test.ts`), not another copy. Opens on ③ for deep
- * links (?recipe=), on ① while setup is unfinished, else on ② (`lib/sheetSteps.ts`). Tunnel in ?tunnel=<id>, the
- * way in ?way=.
+ * 指令速查頁：一頁看完，不分步驟。最上面一列選裝置 / 帳號與用什麼跑（telepy、~/.ssh/config 或單行 ssh），下面一行
+ * 說設定好了沒（沒好才需要點開：就緒圖 + 清單在對話框裡）。左邊是任務清單（埠轉發、連進去與搬檔案、telepy CLI
+ * 還能做的事），右邊立刻是那件事的填空句與指令（跟著每次修改變）、另一種工具的寫法、接著做什麼；示意圖、
+ * 每一段的意思與選項收合在下面。telepy 的指令就是 CLI 自己的範例（`src/cli/src/examples.rs`，
+ * `forwardRecipes.test.ts` 比對），不是另一份。隧道在 ?tunnel=<id>，跑法 ?way=，任務與數值 ?recipe=。
+ * The command sheet on one page, no steps. A top row picks the device / account and what runs it (telepy,
+ * ~/.ssh/config or a one-line ssh); one line below says whether setup is done (the readiness diagram and the
+ * checklist open in a dialog only when needed). Tasks are listed on the left (port forwarding, getting in / moving
+ * files, more with the telepy CLI); the right side is at once that task's fill-in sentence and its command
+ * (following every edit), the other tool's form and what to do next; the picture, what each part means and the
+ * options are folded below. The telepy commands are the CLI's own examples (`src/cli/src/examples.rs`, compared
+ * by `forwardRecipes.test.ts`), not another copy. Tunnel in ?tunnel=<id>, the way in ?way=, task and values in
+ * ?recipe=.
  */
-import React, { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { Suspense, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -23,13 +23,13 @@ import {
     ChevronDown,
     Cpu,
     Info,
-    LayoutGrid,
     Lightbulb,
     ListTree,
     Plus,
     Repeat,
-    RotateCcw,
+    Route,
     Scale,
+    Settings2,
     SlidersHorizontal,
     SquareTerminal,
     type LucideIcon,
@@ -39,13 +39,12 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field } from "@/components/ui/field";
 import { Modal } from "@/components/ui/Modal";
-import { StepPanel, StepPath, type PathStep } from "@/components/ui/step-path";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
-import { MiniScene, TunnelScene } from "@/components/cheatsheet/TunnelScene";
-import { MINI_SCENES, sceneFor } from "@/components/cheatsheet/sceneSpec";
+import { TunnelScene } from "@/components/cheatsheet/TunnelScene";
+import { sceneFor } from "@/components/cheatsheet/sceneSpec";
 import { AnnotatedCommand, CommandBar, InlineCommand, MiniCommand } from "@/components/cheatsheet/CommandView";
 import { SetupGuide } from "@/components/cheatsheet/SetupGuide";
 import { ReadinessPath } from "@/components/cheatsheet/ReadinessPath";
@@ -56,7 +55,6 @@ import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
 import type { TranslationKey } from "@/locales/en";
 import { useCheatsheetPage } from "@/hooks/useCheatsheetPage";
 import { useSetupChecklist, type SetupStepId } from "@/hooks/useSetupChecklist";
-import { fillSummary, sheetOpenStep, sheetStates, type SheetStep } from "@/lib/sheetSteps";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -88,7 +86,7 @@ const TIPS = ["sheet.tip.deviceKey", "sheet.tip.lowPorts", "sheet.tip.inUse", "s
 
 function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
     value: T;
-    options: { value: T; label: string }[];
+    options: { value: T; label: string; title?: string }[];
     onChange: (v: T) => void;
     ariaLabel: string;
 }) {
@@ -100,6 +98,7 @@ function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
                     key={o.value}
                     type="button"
                     aria-pressed={value === o.value}
+                    title={o.title}
                     onClick={() => onChange(o.value)}
                     className={cn(
                         "h-8 rounded-md px-3 text-xs font-medium transition-colors whitespace-nowrap",
@@ -183,26 +182,11 @@ function CheatsheetInner() {
         cliSignIns,
     });
 
-    // 步驟：深連結直接到填空；否則等設定清單讀完再決定（沒做完 → ①，做完 → ②），之後照使用者點的。
-    // Steps: a deep link opens on fill-in; otherwise wait for the setup checklist (unfinished → ①, done → ②).
     const setupLoading = checklist.steps.some((s) => s.state === "loading");
-    const setupComplete = checklist.current === null;
-    const [step, setStep] = useState<SheetStep | null>(deepLinked ? "command" : null);
-    useEffect(() => {
-        if (step === null && !setupLoading && target) setStep(sheetOpenStep({ deepLinked: false, setupComplete }));
-    }, [step, setupLoading, target, setupComplete]);
-    // 金鑰清單一直讀不到（請求失敗）也別一直轉圈：1.5 秒後先到 ①。/ Never spin forever: open ① after 1.5 s.
-    useEffect(() => {
-        if (step !== null || !target) return;
-        const id = setTimeout(() => setStep((s) => s ?? "device"), 1500);
-        return () => clearTimeout(id);
-    }, [step, target]);
-    const [picked, setPicked] = useState(deepLinked);
-    const [copiedText, setCopiedText] = useState<string | null>(null);
     const [openRequest, setOpenRequest] = useState<{ id: SetupStepId; n: number } | null>(null);
-    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | "ways" | null>(null);
-    // 搜尋：有字（或選了某個 CLI 主題）時，結果清單取代下面的步驟。`?q=` 可以帶著搜尋進來。
-    // Search: while there is a query (or a CLI topic is being browsed) the result list replaces the steps. `?q=` opens with one.
+    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | "ways" | "setup" | null>(null);
+    // 搜尋：有字（或選了某個 CLI 主題）時，結果清單取代下面的任務與指令。`?q=` 可以帶著搜尋進來。
+    // Search: while there is a query (or a CLI topic is being browsed) the result list replaces the tasks and the command. `?q=` opens with one.
     const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
     const [browseTopic, setBrowseTopic] = useState<CliTopicId | null>(null);
     const [wayFilter, setWayFilter] = useState<WayFilter>("all");
@@ -212,8 +196,7 @@ function CheatsheetInner() {
         setBrowseTopic(null);
         setWayFilter("all");
     };
-    const barRef = useRef<HTMLDivElement>(null);
-    const panelId = useId();
+    const headId = useId();
 
     const def = RECIPE_BY_ID[recipe];
     const params = paramsById[recipe];
@@ -363,7 +346,6 @@ function CheatsheetInner() {
         const v = (params[f.key] ?? "").trim();
         return v !== "" && ((f.kind === "port" && !isValidPort(v)) || (f.key === "lanHost" && !isValidHost(v)));
     });
-    const commandText = segmentsToString(segments);
 
     const refRows = [
         { label: t("sheet.ref.shell"), segments: shellSegments(target) },
@@ -371,49 +353,14 @@ function CheatsheetInner() {
         ...RECIPES.map((r) => ({ label: t(r.title), segments: buildSegments(r.id, paramsById[r.id], target, options) })),
     ];
 
-    // ---------------------------------------------------------------- steps
-    const states = sheetStates({
-        setupDone: checklist.done,
-        setupTotal: checklist.total,
-        setupLoading,
-        picked,
-        invalid: anyInvalid,
-        copied: copiedText === commandText,
-    });
+    // ---------------------------------------------------------------- page
     const wayLabel = (m: ConnectMode) => t(m === "telepy" ? "sheet.modeTelepy" : m === "alias" ? "sheet.modeAlias" : "sheet.modeDirect");
+    const wayHint = (m: ConnectMode) => t(m === "telepy" ? "sheet.way.telepyHint" : m === "alias" ? "sheet.way.aliasHint" : "sheet.way.directHint");
     const account = hasTargetUser ? target.username : null;
-    const steps: PathStep<SheetStep>[] = [
-        {
-            value: "device",
-            title: t("sheet.step.device"),
-            icon: Cpu,
-            state: states.device,
-            sub: needsSetup && !setupLoading ? `${alias} · ${t("sheet.step.setupLeft", { done: checklist.done, total: checklist.total })}` : [alias, wayLabel(mode)].join(" · "),
-        },
-        { value: "task", title: t("sheet.step.task"), icon: LayoutGrid, state: states.task, sub: t(def.title) },
-        {
-            value: "command",
-            title: t("sheet.step.command"),
-            icon: SquareTerminal,
-            state: states.command,
-            sub: anyInvalid ? t("sheet.field.invalidPort") : states.command === "done" ? t("sheet.step.copied") : <span className="font-mono">{fillSummary(recipe, resolved)}</span>,
-        },
-    ];
-    const current: SheetStep = step ?? "device";
-    // 換步驟時，步驟列若已捲出畫面就捲回來（內容從頂端開始看）。/ Switching steps brings the bar back into view.
-    const go = (s: SheetStep) => {
-        setStep(s);
-        requestAnimationFrame(() => {
-            const bar = barRef.current;
-            if (bar && bar.getBoundingClientRect().top < 0) bar.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-    };
     const pickTask = (id: RecipeId) => {
         leaveSearch();
         setDialog(null);
         setRecipe(id);
-        setPicked(true);
-        go("command");
     };
     const browse = (id: CliTopicId) => {
         setDialog(null);
@@ -431,273 +378,278 @@ function CheatsheetInner() {
         remote: { remote: fwd("remote").devicePort, local: fwd("remote").localPort },
         socks: { local: fwd("socks").localPort },
     };
-    // 怎麼跑：三張小卡（第 ① 步）或一列分段（第 ③ 步）。/ How it runs: three cards (step ①) or a segmented row (step ③).
-    const wayCards = (
-        <fieldset className="min-w-0 space-y-2">
-            <legend className="mb-2 text-sm text-foreground">{t("sheet.way.title")}</legend>
-            <div className="grid gap-2 sm:grid-cols-3">
-                {CONNECT_MODES.map((m) => (
-                    <button
-                        key={m}
-                        type="button"
-                        aria-pressed={mode === m}
-                        onClick={() => actions.setMode(m)}
-                        className={cn(
-                            "flex min-w-0 flex-col items-start gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            mode === m ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card hover:border-foreground/30"
-                        )}
-                    >
-                        <span className="text-sm text-foreground">{wayLabel(m)}</span>
-                        <span className="text-xs leading-relaxed text-muted-foreground">{t(m === "telepy" ? "sheet.way.telepyHint" : m === "alias" ? "sheet.way.aliasHint" : "sheet.way.directHint")}</span>
-                    </button>
-                ))}
+    const groups = [
+        { id: "forward", title: t("sheet.group.forward") },
+        { id: "reach", title: t("sheet.group.reach") },
+    ] as const;
+    const groupHead = "px-2.5 pb-1 pt-3 text-xs text-muted-foreground";
+    const rowBase = "flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+    // 最上面一列：裝置、帳號、用什麼跑；下面一行說設定好了沒。/ The top row: device, account, what runs it; one line on setup below.
+    const topBar = (
+        <section className={cn(CARD, "px-4 py-3.5")} aria-label={t("sheet.device")}>
+            <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+                <Field label={t("sheet.device")} className="w-full sm:w-72">
+                    <Select value={selected ? String(selected.id) : ""} onValueChange={(v) => actions.setTunnel(Number(v))}>
+                        <SelectTrigger className="h-10 w-full text-sm" aria-label={t("sheet.device")}>
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {tunnels.map((tn) => (
+                                <SelectItem key={tn.id} value={String(tn.id)}>
+                                    <span className="flex items-center gap-2">
+                                        <StatusDot online={portsMap[String(tn.reverse_port)] === true} />
+                                        <span className="truncate">{tn.host_friendly_name}</span>
+                                        <span className="font-mono text-xs text-muted-foreground">:{tn.reverse_port}</span>
+                                    </span>
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </Field>
+                {config && config.usernames.length > 1 && (
+                    <Field label={t("sheet.targetUser")} className="w-full sm:w-48">
+                        <Select value={usernameId !== null ? String(usernameId) : ""} onValueChange={(v) => actions.setUsernameId(Number(v))}>
+                            <SelectTrigger className="h-10 w-full font-mono text-sm" aria-label={t("sheet.targetUser")}>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {config.usernames.map((u) => (
+                                    <SelectItem key={u.id} value={String(u.id)} className="font-mono">{u.username}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </Field>
+                )}
+                <Field label={t("sheet.way.runWith")} className="max-w-full min-w-0">
+                    <div className="flex min-h-10 max-w-full items-center">
+                        <Segmented<ConnectMode> value={mode} onChange={actions.setMode} ariaLabel={t("sheet.way.title")} options={CONNECT_MODES.map((m) => ({ value: m, label: wayLabel(m), title: wayHint(m) }))} />
+                    </div>
+                </Field>
             </div>
-        </fieldset>
+            <p className="mt-2 text-xs text-muted-foreground">{wayHint(mode)}</p>
+            {config && !hasTargetUser && <Callout tone="warning" className="mt-3">{t("sheet.noTargetUser")}</Callout>}
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border pt-3 text-sm" role="status">
+                {setupLoading ? (
+                    <>
+                        <span className="size-3.5 animate-spin rounded-full border-b-2 border-muted-foreground" aria-hidden />
+                        <span className="text-muted-foreground">{t("sheet.ready.checking")}</span>
+                    </>
+                ) : (
+                    <>
+                        <span className={cn("size-2 shrink-0 rounded-full", needsSetup ? "bg-warning" : "bg-success")} aria-hidden />
+                        <span className="min-w-0 flex-1 basis-56 text-foreground">
+                            {needsSetup ? t("sheet.ready.left", { left: checklist.total - checklist.done, total: checklist.total }) : t("sheet.ready.allSet")}
+                        </span>
+                        <Button variant={needsSetup ? "outline" : "ghost"} size="sm" onClick={() => setDialog("setup")}>
+                            <Settings2 size={15} /> {t(needsSetup ? "sheet.ready.open" : "sheet.ready.review")}
+                        </Button>
+                    </>
+                )}
+            </div>
+        </section>
     );
 
-    const panel = (() => {
-        switch (current) {
-            case "device":
-                return (
-                    <StepPanel id={panelId} steps={steps} value={current} onChange={go} title={t("sheet.step.deviceTitle")} description={t("sheet.setup.subtitle")}>
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,20rem)_minmax(0,14rem)]">
-                            <Field label={t("sheet.device")}>
-                                <Select value={selected ? String(selected.id) : ""} onValueChange={(v) => actions.setTunnel(Number(v))}>
-                                    <SelectTrigger className="h-10 w-full text-sm" aria-label={t("sheet.device")}>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {tunnels.map((tn) => (
-                                            <SelectItem key={tn.id} value={String(tn.id)}>
-                                                <span className="flex items-center gap-2">
-                                                    <StatusDot online={portsMap[String(tn.reverse_port)] === true} />
-                                                    <span className="truncate">{tn.host_friendly_name}</span>
-                                                    <span className="font-mono text-xs text-muted-foreground">:{tn.reverse_port}</span>
-                                                </span>
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </Field>
-                            {config && config.usernames.length > 1 && (
-                                <Field label={t("sheet.targetUser")}>
-                                    <Select value={usernameId !== null ? String(usernameId) : ""} onValueChange={(v) => actions.setUsernameId(Number(v))}>
-                                        <SelectTrigger className="h-10 w-full font-mono text-sm" aria-label={t("sheet.targetUser")}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {config.usernames.map((u) => (
-                                                <SelectItem key={u.id} value={String(u.id)} className="font-mono">{u.username}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </Field>
-                            )}
-                        </div>
-                        {config && !hasTargetUser && <Callout tone="warning">{t("sheet.noTargetUser")}</Callout>}
-                        {wayCards}
-                        <ReadinessPath
-                            checklist={checklist}
-                            alias={alias}
-                            username={account}
-                            online={online}
-                            mode={mode}
-                            onOpen={(id) => setOpenRequest((r) => ({ id, n: (r?.n ?? 0) + 1 }))}
-                        />
-                        <SetupGuide
-                            openRequest={openRequest}
-                            tunnelId={selected?.id ?? 0}
-                            alias={alias}
-                            username={account}
-                            online={online}
-                            mode={mode}
-                            setMode={actions.setMode}
-                            configText={config?.config ?? null}
-                            knownHosts={config?.known_hosts ?? null}
-                            legacyAlias={config?.server.legacy_alias ?? null}
-                            checklist={checklist}
-                        />
-                    </StepPanel>
-                );
-            case "task": {
-                const card = (r: (typeof RECIPES)[number]) => {
-                    const active = r.id === recipe;
-                    return (
-                        <button
-                            key={r.id}
-                            type="button"
-                            aria-pressed={active}
-                            onClick={() => pickTask(r.id)}
-                            className={cn(
-                                // pt-8：插圖排在右上角的旗標底下，不跟它重疊。/ pt-8 keeps the illustration below the corner flag.
-                                "@container relative flex flex-col items-center gap-3 rounded-xl border px-3 pb-3.5 pt-8 text-center transition-colors duration-150",
-                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                active ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card hover:border-foreground/30"
-                            )}
-                        >
-                            <code className="absolute right-2 top-2 rounded bg-muted px-1 font-mono text-[0.6875rem] text-muted-foreground">{r.flag}</code>
-                            <MiniScene items={MINI_SCENES[r.id]} active={active} />
-                            <span className="text-sm leading-tight text-foreground">{t(r.title)}</span>
-                            <WayMarks ways={recipeWays(r)} className="mt-auto" />
+    // 左邊的任務清單（內容區夠寬時，看容器不看視窗：顯示大小調大也對）；窄的時候是一個下拉。
+    // The task list on the left when the content area is wide enough (a container query, so a larger display size works too); a select otherwise.
+    const taskList = (
+        <nav className={cn(CARD, "hidden p-1.5 @[52rem]:sticky @[52rem]:top-20 @[52rem]:block")} aria-label={t("sheet.tasks.label")}>
+            {groups.map((g) => (
+                <div key={g.id}>
+                    <h2 className={groupHead}>{g.title}</h2>
+                    <ul>
+                        {RECIPES.filter((r) => r.group === g.id).map((r) => {
+                            const active = r.id === recipe;
+                            return (
+                                <li key={r.id}>
+                                    <button
+                                        type="button"
+                                        aria-current={active ? "true" : undefined}
+                                        onClick={() => pickTask(r.id)}
+                                        className={cn(rowBase, active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted/70")}
+                                    >
+                                        <span className="min-w-0 flex-1 leading-snug">{t(r.title)}</span>
+                                        <code className={cn("shrink-0 font-mono text-[0.6875rem]", active ? "text-primary/80" : "text-muted-foreground")}>{r.flag}</code>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
+            ))}
+            {/* telepy CLI 才有的事：照主題列，點了看那個主題的範例。/ What only the telepy CLI does, by topic; a click lists that topic's examples. */}
+            <h2 className={groupHead} title={t("sheet.ways.moreHint")}>{t("sheet.ways.more")}</h2>
+            <ul>
+                {moreTopics.map((tp) => (
+                    <li key={tp.id}>
+                        <button type="button" onClick={() => browse(tp.id)} className={cn(rowBase, "text-foreground hover:bg-muted/70")}>
+                            <span className="min-w-0 flex-1 leading-snug">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{tp.list.length}</span>
                         </button>
-                    );
-                };
-                return (
-                    <StepPanel id={panelId} steps={steps} value={current} onChange={go} title={t("sheet.step1")} description={t("sheet.step.taskHint")}>
-                        <section className="space-y-2.5" aria-labelledby={`${panelId}-forward`}>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <h3 id={`${panelId}-forward`} className="text-sm text-foreground">{t("sheet.group.forward")}</h3>
-                                <Button variant="ghost" size="sm" onClick={() => setDialog("directions")}>
-                                    <Info size={15} /> {t("sheet.group.which")}
-                                </Button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">{RECIPES.filter((r) => r.group === "forward").map(card)}</div>
-                        </section>
-                        <section className="space-y-2.5" aria-labelledby={`${panelId}-reach`}>
-                            <h3 id={`${panelId}-reach`} className="text-sm text-foreground">{t("sheet.group.reach")}</h3>
-                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">{RECIPES.filter((r) => r.group === "reach").map(card)}</div>
-                        </section>
-                        {/* telepy CLI 才有的事：照主題列，點了看那個主題的範例。/ What only the telepy CLI does, by topic; a click lists that topic's examples. */}
-                        <section className="space-y-2.5" aria-labelledby={`${panelId}-more`}>
-                            <div>
-                                <h3 id={`${panelId}-more`} className="text-sm text-foreground">{t("sheet.ways.more")}</h3>
-                                <p className="mt-0.5 text-xs text-muted-foreground">{t("sheet.ways.moreHint")}</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
-                                {moreTopics.map((tp) => {
-                                    const ssh = tp.list.filter((e) => e.ways.includes("ssh")).length;
-                                    return (
-                                        <button
-                                            key={tp.id}
-                                            type="button"
-                                            onClick={() => browse(tp.id)}
-                                            className="flex min-w-0 flex-col items-start gap-1 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                        >
-                                            <span className="text-sm text-foreground">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
-                                            <span className="text-xs text-muted-foreground">{t(ssh > 0 ? "sheet.ways.topicSome" : "sheet.ways.topicNone", { total: tp.list.length, ssh })}</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </section>
-                    </StepPanel>
-                );
-            }
-            case "command":
-                return (
-                    <StepPanel
-                        id={panelId}
-                        steps={steps}
-                        value={current}
-                        onChange={go}
-                        title={t("sheet.step.commandTitle")}
-                        description={tn("sheet.step.commandHint", { task: <strong className="text-foreground">{t(def.title)}</strong> })}
-                        actions={
-                            recipe === "copy" ? (
-                                <Segmented
-                                    value={upload ? "upload" : "download"}
-                                    onChange={(v) => setParam("direction", v)}
-                                    ariaLabel={t("sheet.field.direction")}
-                                    options={[
-                                        { value: "upload", label: t("sheet.field.upload") },
-                                        { value: "download", label: t("sheet.field.download") },
-                                    ]}
-                                />
-                            ) : recipe === "vpn" ? (
-                                <Segmented
-                                    value={resolved.scope === "all" ? "all" : "network"}
-                                    onChange={(v) => setParam("scope", v)}
-                                    ariaLabel={t("sheet.field.vpnScope")}
-                                    options={[
-                                        { value: "network", label: t("sheet.field.vpnScopeNetwork") },
-                                        { value: "all", label: t("sheet.field.vpnScopeAll") },
-                                    ]}
-                                />
-                            ) : undefined
-                        }
-                        final={
-                            <Button variant="outline" onClick={() => go("task")}>
-                                <RotateCcw size={16} />
-                                {t("sheet.step.another")}
-                            </Button>
-                        }
-                    >
-                        {/* 填空與指令放在一起：改一個數字，下面的指令馬上跟著變。/ The blanks and the command together: edit a number, the command follows. */}
-                        <div className="rounded-xl border border-border bg-muted/30 px-4 py-2.5">
-                            <p className="text-[1rem] leading-9 text-foreground">{sentence}</p>
-                            {anyInvalid && <p className="pb-1 text-xs text-destructive">{t("sheet.field.invalidPort")}</p>}
-                            {recipe === "local" && (
-                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5 pb-0.5">
-                                    <span className="mr-0.5 text-[0.75rem] text-muted-foreground">{t("sheet.presets")}</span>
-                                    {LOCAL_PRESETS.map((p) => {
-                                        const active = resolved.remotePort === p.remotePort && resolved.localPort === p.localPort;
-                                        return (
-                                            <button
-                                                key={p.label}
-                                                type="button"
-                                                aria-pressed={active}
-                                                onClick={() => setParamsById((prev) => ({ ...prev, local: { remotePort: p.remotePort, localPort: p.localPort } }))}
-                                                className={cn(
-                                                    "rounded-full border px-2 py-0.5 text-[0.75rem] transition-colors",
-                                                    active ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                                                )}
-                                            >
-                                                {p.label}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                    </li>
+                ))}
+            </ul>
+        </nav>
+    );
+    const taskSelect = (
+        <div className="@[52rem]:hidden">
+            <Field label={t("sheet.tasks.label")}>
+                <Select value={recipe} onValueChange={(v) => pickTask(v as RecipeId)}>
+                    <SelectTrigger className="h-10 w-full text-sm" aria-label={t("sheet.tasks.label")}>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {RECIPES.map((r) => (
+                            <SelectItem key={r.id} value={r.id}>{t(r.title)}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </Field>
+        </div>
+    );
+
+    // 右邊：這件事的填空句、指令、接著做什麼。/ The right side: this task's sentence, its command and what to do next.
+    const commandCard = (
+        <section className={cn(CARD, "min-w-0 space-y-4 p-4 sm:p-5")} aria-labelledby={headId}>
+            <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <h2 id={headId} className="text-lg font-semibold tracking-tight text-foreground">{t(def.title)}</h2>
+                        <WayMarks ways={recipeWays(def)} />
+                    </div>
+                    <p className="text-sm text-muted-foreground">{t("sheet.fillHint")}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    {recipe === "copy" && (
+                        <Segmented
+                            value={upload ? "upload" : "download"}
+                            onChange={(v) => setParam("direction", v)}
+                            ariaLabel={t("sheet.field.direction")}
+                            options={[
+                                { value: "upload", label: t("sheet.field.upload") },
+                                { value: "download", label: t("sheet.field.download") },
+                            ]}
+                        />
+                    )}
+                    {recipe === "vpn" && (
+                        <Segmented
+                            value={resolved.scope === "all" ? "all" : "network"}
+                            onChange={(v) => setParam("scope", v)}
+                            ariaLabel={t("sheet.field.vpnScope")}
+                            options={[
+                                { value: "network", label: t("sheet.field.vpnScopeNetwork") },
+                                { value: "all", label: t("sheet.field.vpnScopeAll") },
+                            ]}
+                        />
+                    )}
+                    {def.group === "forward" && (
+                        <Button variant="ghost" size="sm" onClick={() => setDialog("directions")}>
+                            <Info size={15} /> {t("sheet.group.which")}
+                        </Button>
+                    )}
+                </div>
+            </header>
+            {/* 填空與指令放在一起：改一個數字，下面的指令馬上跟著變。/ The blanks and the command together: edit a number, the command follows. */}
+            <div className="rounded-xl border border-border bg-muted/30 px-4 py-2.5">
+                <p className="text-[1rem] leading-9 text-foreground">{sentence}</p>
+                {anyInvalid && <p className="pb-1 text-xs text-destructive">{t("sheet.field.invalidPort")}</p>}
+                {recipe === "local" && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5 pb-0.5">
+                        <span className="mr-0.5 text-[0.75rem] text-muted-foreground">{t("sheet.presets")}</span>
+                        {LOCAL_PRESETS.map((p) => {
+                            const active = resolved.remotePort === p.remotePort && resolved.localPort === p.localPort;
+                            return (
+                                <button
+                                    key={p.label}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() => setParamsById((prev) => ({ ...prev, local: { remotePort: p.remotePort, localPort: p.localPort } }))}
+                                    className={cn(
+                                        "rounded-full border px-2 py-0.5 text-[0.75rem] transition-colors",
+                                        active ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                                    )}
+                                >
+                                    {p.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+            <div className="space-y-2">
+                <CommandBar segments={segments} />
+                {otherSegments ? (
+                    <div className="grid gap-1.5 pt-1">
+                        <span className="text-xs text-muted-foreground">{t(telepyWay ? "sheet.compare.ssh" : "sheet.compare.telepy")}</span>
+                        <InlineCommand segments={otherSegments} />
+                    </div>
+                ) : (
+                    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs text-muted-foreground">
+                        <span>{t("sheet.compare.telepyOnly")}</span>
+                        {!telepyWay && <button type="button" onClick={() => actions.setMode("telepy")} className="text-primary underline underline-offset-2">{t("sheet.compare.useTelepy")}</button>}
+                    </p>
+                )}
+                <div className="space-y-2 pt-1 text-sm text-muted-foreground">
+                    {next && (
+                        <div className="flex gap-2">
+                            <ArrowRight size={16} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+                            <div className="min-w-0 flex-1 space-y-2">{next}</div>
                         </div>
-                        <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                                <span className="text-sm text-foreground">{t("sheet.way.runWith")}</span>
-                                <Segmented<ConnectMode> value={mode} onChange={actions.setMode} ariaLabel={t("sheet.way.title")} options={CONNECT_MODES.map((m) => ({ value: m, label: wayLabel(m) }))} />
+                    )}
+                    {def.forwarding && (
+                        !telepyWay && options.background && spec ? (
+                            <div className="space-y-1.5 pl-6">
+                                <p className="text-xs">{t("sheet.next.background")}</p>
+                                <MiniCommand command={`pkill -f 'ssh.*${spec}'`} />
                             </div>
-                            <CommandBar segments={segments} onCopy={() => setCopiedText(commandText)} />
-                            {otherSegments ? (
-                                <div className="grid gap-1.5 pt-1">
-                                    <span className="text-xs text-muted-foreground">{t(telepyWay ? "sheet.compare.ssh" : "sheet.compare.telepy")}</span>
-                                    <InlineCommand segments={otherSegments} />
-                                </div>
-                            ) : (
-                                <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs text-muted-foreground">
-                                    <WayMarks ways={recipeWays(def)} />
-                                    <span>{t("sheet.compare.telepyOnly")}</span>
-                                    {!telepyWay && <button type="button" onClick={() => actions.setMode("telepy")} className="text-primary underline underline-offset-2">{t("sheet.compare.useTelepy")}</button>}
-                                </p>
-                            )}
-                            <div className="space-y-2 pt-1 text-sm text-muted-foreground">
-                                {next && (
-                                    <div className="flex gap-2">
-                                        <ArrowRight size={16} className="mt-0.5 shrink-0 text-primary" aria-hidden />
-                                        <div className="min-w-0 flex-1 space-y-2">{next}</div>
-                                    </div>
-                                )}
-                                {def.forwarding && (
-                                    !telepyWay && options.background && spec ? (
-                                        <div className="space-y-1.5 pl-6">
-                                            <p className="text-xs">{t("sheet.next.background")}</p>
-                                            <MiniCommand command={`pkill -f 'ssh.*${spec}'`} />
-                                        </div>
-                                    ) : (
-                                        <p className="pl-6 text-xs">{t("sheet.next.keepOpen")}</p>
-                                    )
-                                )}
-                            </div>
-                        </div>
-                        {needsSetup && !setupLoading && (
-                            <Callout tone="warning">
-                                <span className="block">{t("sheet.step.setupFirst", { done: checklist.done, total: checklist.total })}</span>
-                                <Button variant="outline" size="sm" className="mt-2" onClick={() => go("device")}>{t("sheet.step.openSetup")}</Button>
-                            </Callout>
+                        ) : (
+                            <p className="pl-6 text-xs">{t("sheet.next.keepOpen")}</p>
+                        )
+                    )}
+                </div>
+            </div>
+        </section>
+    );
+
+    return (
+        <div className="space-y-4 animate-fade-in-up">
+            <PageHeader
+                icon={<SquareTerminal />}
+                title={t("sheet.title")}
+                description={t("sheet.subtitle")}
+                actions={
+                    <>
+                        <Button variant="outline" onClick={() => setDialog("ways")}>
+                            <Scale size={16} /> {t("sheet.ways.button")}
+                        </Button>
+                    </>
+                }
+            />
+
+            <SheetSearchBox value={query} onChange={setQuery} />
+
+            {topBar}
+
+            {searching ? (
+                <SheetResults query={query} topic={browseTopic} way={wayFilter} onWay={setWayFilter} tunnel={target.tunnel} onTask={pickTask} taskCommand={(id) => segmentsToString(buildSegments(id, paramsById[id], target, options))} onBack={leaveSearch} />
+            ) : (
+                <div className="@container">
+                <div className="grid items-start gap-4 @[52rem]:grid-cols-[15rem_minmax(0,1fr)]">
+                    {taskList}
+                    <div className="min-w-0 space-y-3">
+                        {taskSelect}
+                        {commandCard}
+                        {scene && (
+                            <Disclosure icon={Route} title={t("sheet.more.scene")}>
+                                <TunnelScene nodes={scene.nodes} links={scene.links} file={scene.file} caption={caption} />
+                            </Disclosure>
                         )}
-                        {scene && <TunnelScene nodes={scene.nodes} links={scene.links} file={scene.file} caption={caption} />}
-                        <section className="space-y-2">
-                            <h3 className="text-sm text-foreground">{t("sheet.more.explain")}</h3>
-                            <AnnotatedCommand segments={segments} />
-                            <p className="text-xs text-muted-foreground">{t("sheet.more.explainHint")}</p>
-                        </section>
+                        <Disclosure icon={Info} title={t("sheet.more.explain")}>
+                            <div className="space-y-2">
+                                <AnnotatedCommand segments={segments} />
+                                <p className="text-xs text-muted-foreground">{t("sheet.more.explainHint")}</p>
+                            </div>
+                        </Disclosure>
                         {/* telepy 自己處理這些（等到接通、保持連線）；ssh 的跑法才有。/ telepy handles these itself; only the ssh ways have them. */}
                         {def.forwarding && !telepyWay && (
                             <Disclosure icon={SlidersHorizontal} title={t("sheet.more.options")}>
@@ -708,50 +660,44 @@ function CheatsheetInner() {
                                 </div>
                             </Disclosure>
                         )}
-                    </StepPanel>
-                );
-        }
-    })();
-
-    return (
-        <div className="space-y-6 animate-fade-in-up">
-            <PageHeader
-                icon={<SquareTerminal />}
-                title={t("sheet.title")}
-                description={t("sheet.subtitle")}
-                actions={
-                    <>
-                        <Button variant="outline" onClick={() => setDialog("ways")}>
-                            <Scale size={16} /> {t("sheet.ways.button")}
-                        </Button>
-                        <Button variant="outline" onClick={() => setDialog("all")}>
-                            <ListTree size={16} /> {t("sheet.allCommands")}
-                        </Button>
-                        <Button variant="outline" onClick={() => setDialog("tips")}>
-                            <Lightbulb size={16} /> {t("sheet.more.tips")}
-                        </Button>
-                    </>
-                }
-            />
-
-            <SheetSearchBox value={query} onChange={setQuery} />
-
-            {!searching && (
-                <div ref={barRef} className="scroll-mt-20">
-                    <StepPath steps={steps} value={current} onChange={go} panelId={panelId} aria-label={t("ui.steps.aria")} />
+                        <div className="flex flex-wrap gap-x-1 gap-y-1">
+                            <Button variant="ghost" size="sm" onClick={() => setDialog("all")}>
+                                <ListTree size={15} /> {t("sheet.allCommands")}
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setDialog("tips")}>
+                                <Lightbulb size={15} /> {t("sheet.more.tips")}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
                 </div>
             )}
 
-            {searching ? (
-                <SheetResults query={query} topic={browseTopic} way={wayFilter} onWay={setWayFilter} tunnel={target.tunnel} onTask={pickTask} taskCommand={(id) => segmentsToString(buildSegments(id, paramsById[id], target, options))} onBack={leaveSearch} />
-            ) : step === null ? (
-                <div className="flex justify-center rounded-xl border border-border bg-card p-16 shadow-card">
-                    <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" aria-label={t("common.loading")} />
+            <Modal isOpen={dialog === "setup"} onClose={() => setDialog(null)} size="4xl" icon={<Settings2 />} title={t("sheet.ready.title")} description={t("sheet.setup.subtitle")}>
+                <div className="space-y-4">
+                    <ReadinessPath
+                        checklist={checklist}
+                        alias={alias}
+                        username={account}
+                        online={online}
+                        mode={mode}
+                        onOpen={(id) => setOpenRequest((r) => ({ id, n: (r?.n ?? 0) + 1 }))}
+                    />
+                    <SetupGuide
+                        openRequest={openRequest}
+                        tunnelId={selected?.id ?? 0}
+                        alias={alias}
+                        username={account}
+                        online={online}
+                        mode={mode}
+                        setMode={actions.setMode}
+                        configText={config?.config ?? null}
+                        knownHosts={config?.known_hosts ?? null}
+                        legacyAlias={config?.server.legacy_alias ?? null}
+                        checklist={checklist}
+                    />
                 </div>
-            ) : (
-                panel
-            )}
-
+            </Modal>
             <Modal isOpen={dialog === "all"} onClose={() => setDialog(null)} size="3xl" icon={<ListTree />} title={t("sheet.more.all", { name: alias })} description={t("sheet.allHint")}>
                 <div className="space-y-3">
                     {refRows.map((row) => (
