@@ -252,15 +252,18 @@ export function SettingRow({ settingKey: key, value, meta: m, env, onToggle, onU
     );
 
     return (
-        <li className="p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
-            <div className={cn("flex gap-4", fullWidth ? "flex-col" : beside ? "items-start justify-between" : "flex-col sm:flex-row sm:items-start sm:justify-between")}>
+        // 版面照這一列自己的寬度決定（container query）：旁邊有分頁欄時內容區比視窗窄很多，照視窗寬度並排會把輸入框擠出去。
+        // The layout follows the row's own width (a container query): beside the tab rail the content is much narrower
+        // than the viewport, and going side by side by viewport width pushed the input out of the card.
+        <li className="@container p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
+            <div className={cn("flex gap-4", fullWidth ? "flex-col" : beside ? "items-start justify-between" : "flex-col @2xl:flex-row @2xl:items-start @2xl:justify-between")}>
                 <div className="min-w-0 flex-1">
                     <h4 className="text-[1rem] text-foreground">{label}</h4>
                     {description && <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>}
-                    <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80">{key}</p>
+                    <p className="mt-2 inline-block max-w-full rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80 [overflow-wrap:anywhere]">{key}</p>
                     {env && <EnvLine env={env} onExplain={onExplain ? () => onExplain(key) : undefined} />}
                 </div>
-                <div className={cn("min-w-0", fullWidth ? "" : beside ? "shrink-0 pt-0.5" : "sm:shrink-0 sm:pt-0.5")}>{editor}</div>
+                <div className={cn("min-w-0", fullWidth ? "" : beside ? "shrink-0 pt-0.5" : "@2xl:shrink-0 @2xl:pt-0.5")}>{editor}</div>
             </div>
         </li>
     );

@@ -69,6 +69,11 @@ services:
       # [Server] 對外 base URL（MCP 連接器的 OAuth issuer）；留空依網站設定，再沒有就依 X-Forwarded-* 推導。
       # [Server] Public base URL (the OAuth issuer); empty = the site setting, else from the request.
       - PUBLIC_URL=${PUBLIC_URL:-}
+      # 裝置代理的標準代理入口：PROXY_PORT 有設才聽（容器內 8444）。/ The device proxy's standard endpoint: listens (8444 in the container) only when PROXY_PORT is set.
+      - PROXY_BIND=${PROXY_BIND:-${PROXY_PORT:+0.0.0.0:8444}}
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_TLS_CERT=${PROXY_TLS_CERT:-}
+      - PROXY_TLS_KEY=${PROXY_TLS_KEY:-}
       # 使用者來源 IP（登入紀錄 / 誰在用通道）：auto = X-Forwarded-For 右邊的內部位址都算代理（Traefik、前面的
       # Nginx Proxy Manager），不必數層數；數字 = 固定跳過幾層（含 Traefik）。
       # Client IP: auto = every internal address at the right of X-Forwarded-For is a proxy (Traefik, an upstream
@@ -119,6 +124,9 @@ services:
       # 裝置的反向 SSH 連線：REVERSE_SERVER_SSH_PORT → 內建 gateway。
       # Devices' reverse SSH connections land on the in-process gateway.
       - ${REVERSE_SERVER_SSH_PORT}:2222
+      # 裝置代理的標準代理入口（可選）：沒設 PROXY_PORT 時只占一個本機的隨機埠，裡面沒有東西在聽。
+      # The device proxy's standard endpoint (optional): without PROXY_PORT this only takes a random loopback port with nothing listening behind it.
+      - ${PROXY_PORT:-127.0.0.1:0}:8444
     # 健康檢查：打公開的輕量端點（只數一次 User）。schema 補齊在 listen 之前完成，通常 <1s。
     # Health via a cheap public endpoint; schema reconciliation runs before listening.
     healthcheck:

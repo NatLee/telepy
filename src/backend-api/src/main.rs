@@ -187,6 +187,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(telepy_server::db::audit_chain::run(state.db.clone()));
     tokio::spawn(telepy_server::ai::run_reaper(state.clone(), telepy_server::ai::REAP_INTERVAL));
     tokio::spawn(telepy_server::proxy::run(state.clone()));
+    tokio::spawn(telepy_server::proxy::listener::run(state.clone()));
     tokio::spawn(state.pool.clone().run_reaper());
     tokio::spawn(state.desktop.clone().run_reaper(state.db.clone()));
     tokio::spawn(state.rustdesk.clone().run_reaper(state.db.clone()));

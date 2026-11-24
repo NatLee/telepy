@@ -88,6 +88,28 @@ Telepy checks everything and has the device connect **before** it upgrades. So a
 
 The API page's **Proxy** tab shows these endpoints for your server with examples filled in.
 
+## A standard proxy address
+
+Some programs only take a proxy URL. For them an administrator can open a second way in: an ordinary HTTPS proxy.
+
+```sh
+curl -x "https://box:$TELEPY_TOKEN@proxy.example.com:8444" https://ifconfig.me
+```
+
+The **user name is the tunnel** (its name or id; add `@account` to pick a device account) and the **password is the token**. Programs that set headers themselves can send `Proxy-Authorization: Bearer <token>` with a `Telepy-Tunnel: <tunnel>` header instead. Without credentials the answer is `407`, so a browser asks for them. Everything after that is the same as the WebSocket way: the same checks, the same sessions, the same log lines.
+
+To open it, set these in `.env` and restart:
+
+| Variable | What it does |
+| --- | --- |
+| `PROXY_PORT` | The host port the proxy endpoint is published on, e.g. `8444`. Empty = no endpoint |
+| `PROXY_URL` | The address people put in their proxy setting, e.g. `https://proxy.example.com:8444`. Can also be set in **Site settings → Server → Addresses** |
+| `PROXY_TLS_CERT`, `PROXY_TLS_KEY` | A certificate chain and its key (PEM, paths inside the container, e.g. under `/data`). With both, the endpoint is an HTTPS proxy. Without them it is plain HTTP, and something in front must do TLS, because the token travels in the request |
+
+The proxy address needs a name that reaches the server **directly**. A CDN, and most web proxies, pass web requests but not `CONNECT`, which is the same reason SSH often gets its own name. **Site settings → Server → Addresses** shows the web address, the SSH host and the proxy address side by side.
+
+If no proxy address is set, nothing is lost: the device proxy rides WebSockets on the web address, and `telepy proxy` gives programs an ordinary proxy on the person's own computer.
+
 ## What Telepy checks and records
 
 All connections of one token (or app) through one tunnel as one device account form a **proxy session**.

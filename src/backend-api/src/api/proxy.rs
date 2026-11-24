@@ -41,7 +41,7 @@ pub fn endpoints(state: &AppState, headers: &HeaderMap) -> Value {
         Some(rest) => format!("wss://{rest}/ws/proxy/"),
         None => format!("ws://{}/ws/proxy/", base.trim_start_matches("http://")),
     };
-    json!({ "websocket": ws, "http_proxy": Value::Null })
+    json!({ "websocket": ws, "http_proxy": state.config.proxy_url() })
 }
 
 #[utoipa::path(get, path = "/api/proxy/tunnels", tag = "Device Proxy", security(("bearer" = [])), responses((status = 200, description = "The tunnels this caller may proxy through (an app or token only sees the ones chosen at authorization), whether each is usable right now, and the proxy endpoints", body = super::schemas::ProxyTunnels), (status = 403, description = "code = proxy_disabled | token_scope | feature_disabled (tokens and apps only; a web sign-in gets `enabled: false` instead)", body = super::schemas::ErrorBody)))]

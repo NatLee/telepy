@@ -84,14 +84,15 @@ test("server keys are grouped in display order", () => {
     assert.equal(isServerKey("signin_lifetime"), false);
     const groups = groupServerKeys(["server_public_url", "client_ip_cloudflare", "client_ip_hops", "server_new_thing", "allow_registration"]);
     assert.deepEqual(groups, [
+        { id: "addresses", keys: ["server_public_url"] },
         { id: "visitor", keys: ["client_ip_hops", "client_ip_cloudflare"] },
-        { id: "signin", keys: ["server_public_url", "server_new_thing"] },
+        { id: "signin", keys: ["server_new_thing"] },
     ]);
 });
 
 test("the dialog lists keys in tab order and opens on the right one", () => {
     const env = parseEnvMap(raw);
-    assert.deepEqual(envBackedKeys(env), ["client_ip_hops", "server_device_probe", "server_public_url"]);
+    assert.deepEqual(envBackedKeys(env), ["server_public_url", "client_ip_hops", "server_device_probe"]);
     assert.equal(initialKey(env, "server_public_url"), "server_public_url");
     assert.equal(initialKey(env, "nope"), "client_ip_hops", "first locked");
     assert.equal(initialKey(parseEnvMap({ server_public_url: { var: "PUBLIC_URL", set: false } })), "server_public_url");

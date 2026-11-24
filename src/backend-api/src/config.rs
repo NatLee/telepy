@@ -30,6 +30,16 @@ pub struct Config {
     pub public_url: Option<String>,
     /// SSH_SERVER_DOMAIN：裝置與筆電的 SSH 連到這個名稱（空 = 跟網頁同一個）。/ The host devices' and laptops' SSH dial (blank = the web host).
     pub ssh_server_domain: Option<String>,
+    /// `PROXY_URL`：裝置代理對外的標準代理位址（可在網站設定改）。/ The device proxy's public proxy address (also a site setting).
+    pub proxy_url: Option<String>,
+    /// `PROXY_BIND`：標準 HTTP 代理入口聽在哪裡（例 `0.0.0.0:8444`）；沒設 = 不開，代理只走 `/ws/proxy/`。只能在環境變數設。
+    /// Where the standard HTTP proxy endpoint listens (e.g. `0.0.0.0:8444`); unset = none, the proxy only rides
+    /// `/ws/proxy/`. Environment only.
+    pub proxy_bind: Option<String>,
+    /// `PROXY_TLS_CERT` / `PROXY_TLS_KEY`：PEM 檔；兩個都給 = 代理入口自己做 TLS，否則是明文（前面要有東西做 TLS）。
+    /// PEM files; with both the endpoint terminates TLS itself, otherwise it is plain (something in front must do TLS).
+    pub proxy_tls_cert: Option<String>,
+    pub proxy_tls_key: Option<String>,
     /// `SOCIAL_GOOGLE_CLIENT_ID`；用的地方讀 [`Config::google_client`]。/ The variable; consumers read `google_client`.
     pub google_client_id: Option<String>,
     pub internal_api_token: String,
@@ -181,6 +191,10 @@ impl Config {
             public_url: env("PUBLIC_URL").map(|u| u.trim().trim_end_matches('/').to_string()),
             google_client_id: env("SOCIAL_GOOGLE_CLIENT_ID"),
             ssh_server_domain: env("SSH_SERVER_DOMAIN"),
+            proxy_url: env("PROXY_URL").map(|u| u.trim().trim_end_matches('/').to_string()),
+            proxy_bind: env("PROXY_BIND").map(|b| b.trim().to_string()).filter(|b| !b.is_empty()),
+            proxy_tls_cert: env("PROXY_TLS_CERT").filter(|v| !v.trim().is_empty()),
+            proxy_tls_key: env("PROXY_TLS_KEY").filter(|v| !v.trim().is_empty()),
             internal_api_token: env("INTERNAL_API_TOKEN").unwrap_or_default(),
             db_path: env("DB_PATH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("db.sqlite3")),
             data_dir,

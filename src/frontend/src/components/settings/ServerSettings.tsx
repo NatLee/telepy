@@ -9,7 +9,7 @@
  * saved here, else the built-in default. The tab's info button and every locked chip open SettingSourceDialog.
  */
 import React, { useState } from "react";
-import { FileCog, Info, Network, ScrollText, Server, LogIn, type LucideIcon } from "lucide-react";
+import { FileCog, Info, Network, ScrollText, Server, LogIn, Signpost, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
@@ -24,8 +24,10 @@ import { ClientIpHeaderControl, ProxySourcesControl } from "./AddressOptions";
 import { SettingRow } from "./SettingRow";
 import { SettingSourceDialog } from "./SettingSourceDialog";
 import { SshHostControl } from "./SshHost";
+import { ServerAddresses } from "./ServerAddresses";
 
 const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKey; hint: TranslationKey; anchor: string }> = {
+    addresses: { icon: Signpost, title: "settingsEnv.group.addresses", hint: "settingsEnv.group.addressesHint", anchor: "addresses" },
     visitor: { icon: Network, title: "settingsEnv.group.visitor", hint: "settingsEnv.group.visitorHint", anchor: "visitor-addresses" },
     devices: { icon: Server, title: "settingsEnv.group.devices", hint: "settingsEnv.group.devicesHint", anchor: "devices-gateway" },
     logs: { icon: ScrollText, title: "settingsEnv.group.logs", hint: "settingsEnv.group.logsHint", anchor: "logs-api-docs" },
@@ -33,7 +35,7 @@ const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKe
 };
 
 /** 自訂編輯器的 key（整列寬）。/ Keys with a custom, full-width editor. */
-const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from", "server_ssh_host"];
+const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from", "server_ssh_host", "server_public_url", "server_proxy_url"];
 
 /** 代理層數：自動，或固定 0–10 層。/ Trusted proxies: automatic, or a fixed 0–10. */
 function HopsControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
@@ -157,7 +159,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
 
     return (
         <div className="space-y-6">
-            <section className="rounded-xl border border-border/80 bg-card p-4 text-card-foreground shadow-card sm:px-6 sm:py-5">
+            <section className="@container rounded-xl border border-border/80 bg-card p-4 text-card-foreground shadow-card sm:px-6 sm:py-5">
                 <SectionHeading
                     icon={<FileCog />}
                     wrapTitle
@@ -165,7 +167,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
                     description={t("settings.serverBanner")}
                     action={
                         <Button type="button" size="sm" variant="outline" onClick={() => setExplain(null)} aria-label={t("settingsEnv.howButton")}>
-                            <Info size={15} /> <span className="hidden sm:inline">{t("settingsEnv.howButton")}</span>
+                            <Info size={15} /> <span className="hidden @xl:inline">{t("settingsEnv.howButton")}</span>
                         </Button>
                     }
                 />
@@ -182,6 +184,17 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
                         </li>
                     )}
                 </ol>
+                {/* 這一頁的幾組：點了跳過去。/ The sections of this page: a click jumps there. */}
+                {!loading && groups.length > 1 && (
+                    <nav aria-label={t("settingsEnv.onThisPage")} className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/70 pt-3 text-sm">
+                        <span className="text-xs text-muted-foreground">{t("settingsEnv.onThisPage")}</span>
+                        {groups.map((g) => (
+                            <a key={g.id} href={`#${GROUP_META[g.id].anchor}`} className="text-foreground underline-offset-4 hover:underline">
+                                {t(GROUP_META[g.id].title)}
+                            </a>
+                        ))}
+                    </nav>
+                )}
             </section>
 
             {loading ? (
@@ -195,6 +208,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
                     return (
                         <section key={g.id} id={gm.anchor} className="scroll-mt-20 space-y-3">
                             <SectionHeading icon={<Icon />} wrapTitle title={t(gm.title)} description={t(gm.hint)} as="h2" />
+                            {g.id === "addresses" && <ServerAddresses values={settingsObj} env={env} />}
                             <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
                                 <ul className="divide-y divide-border/70">
                                     {g.keys.map((key) => (
