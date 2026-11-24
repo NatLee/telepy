@@ -195,6 +195,22 @@ pub const EXAMPLES: &[Example] = &[
         needs: &["tunnels:read", "ssh-key"],
     },
     Example {
+        id: "vpnAll",
+        topic: "forward",
+        title: "Everything through the device",
+        note: "Sites see the device's address, and every network the device can reach is reachable. The Telepy server stays on your own network, your local network stays local, and IPv6 is refused while it runs.",
+        lines: &["telepy vpn <tunnel>@<account> --all"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
+        id: "vpnCheck",
+        topic: "forward",
+        title: "Try it before starting",
+        note: "Shows what would be routed and reaches a host through the device, without admin rights. --probe names a host and port to try.",
+        lines: &["telepy vpn <tunnel>@<account> --all --check --probe 192.168.1.20:22"],
+        needs: &["tunnels:read", "ssh-key"],
+    },
+    Example {
         id: "vpnDns",
         topic: "forward",
         title: "With the network's own names",

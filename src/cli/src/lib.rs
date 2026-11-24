@@ -167,6 +167,15 @@ pub struct VpnArgs {
     pub target: String,
     /// Networks to reach through the device, e.g. 192.168.1.0/24 (default: the device's own networks Telepy knows)
     pub nets: Vec<String>,
+    /// Send everything through the device, so sites see the device's address (the Telepy server itself stays on your own network; IPv6 is refused while it runs)
+    #[arg(long, conflicts_with = "nets")]
+    pub all: bool,
+    /// Don't start the VPN: show what it would route and try the device's network through it (no admin rights needed)
+    #[arg(long)]
+    pub check: bool,
+    /// With --check, also try this host:port through the device (repeatable)
+    #[arg(long, value_name = "HOST:PORT", requires = "check")]
+    pub probe: Vec<String>,
     /// Names under this domain are found by the device, e.g. corp.lan (repeatable)
     #[arg(long = "dns-domain")]
     pub dns_domain: Vec<String>,
@@ -199,6 +208,12 @@ pub struct VpnHelperArgs {
     /// Never hand names to the device's sshd (a Mac's drops the connection)
     #[arg(long = "no-sshd-names")]
     pub no_sshd_names: bool,
+    /// Hosts that keep their own path outside the VPN (the Telepy server)
+    #[arg(long)]
+    pub bypass: Vec<String>,
+    /// Take IPv6 in and refuse it
+    #[arg(long = "block-v6")]
+    pub block_v6: bool,
     /// The telepy that started it: stop once it is gone
     #[arg(long)]
     pub owner: Option<u32>,
@@ -1601,38 +1616,71 @@ fn rsync(api: &Api, a: &RsyncArgs) -> Result<i32> {
 fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     let d = dashboard(api)?;
     let (t, _) = resolve(&d.tunnels, &a.target)?;
+    let name = name_of(&t);
+    let device_nets = vpn::default_nets(&t["endpoint"]["lan"]);
     let mut nets: Vec<vpn::Net> = a.nets.iter().map(|n| vpn::parse_net(n)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
-    if nets.is_empty() {
-        nets = vpn::default_nets(&t["endpoint"]["lan"]);
+    let named = !nets.is_empty();
+    if a.all {
+        nets = vec![vpn::EVERYTHING];
+    } else if !named {
+        nets = device_nets.clone();
         if nets.is_empty() {
-            bail!("Telepy doesn't know {}'s networks yet. Name them: telepy vpn {} 192.168.1.0/24", name_of(&t), a.target);
+            bail!("Telepy doesn't know {name}'s networks yet. Name them: telepy vpn {} 192.168.1.0/24 (or send everything through it: --all)", a.target);
         }
-        eprintln!("Networks behind {}: {} (give them yourself to choose)", name_of(&t), nets.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
+        eprintln!("Networks behind {name}: {} — the ones its own interfaces are on. Other networks it can reach (another subnet, the internet) aren't included: name them, or use --all.", nets.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
     }
-    // 這台電腦自己的網段：預設的略過，自己指定的提醒。/ This computer's own networks: skipped from the defaults, warned about otherwise.
-    let own = local_nets();
-    let (keep, mine) = vpn::split_own(&nets, &own);
-    if !mine.is_empty() {
-        let list = mine.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
-        if a.nets.is_empty() {
-            eprintln!("Left out {list}: this computer is on it too, so routing it away would cut your own network. Name it to route it anyway.");
-            nets = keep;
-            if nets.is_empty() {
-                bail!("Every network behind {} is one this computer is on too. Name the one you want, e.g. telepy vpn {} 10.0.0.0/24", name_of(&t), a.target);
-            }
-        } else {
+    // 這台電腦自己的網段。自己指定的只提醒；預設的（與 --all 時裝置的內網）整段導過去會切斷自己的網路，改成把 Telepy
+    // 知道的那幾台主機一台一台導過去。
+    // This computer's own networks. Named ones only get a note; a default one (and, with --all, the device's own LAN)
+    // would cut this computer's network if routed whole, so the hosts Telepy knows there are routed one by one instead.
+    let own = local_addrs();
+    let own_nets: Vec<vpn::Net> = own.iter().map(|(ip, prefix)| vpn::Net::new(*ip, *prefix)).collect();
+    let candidates = if named { nets.clone() } else { device_nets.clone() };
+    let (keep, mine) = vpn::split_own(&candidates, &own_nets);
+    let mut lan_hosts: Option<Vec<Value>> = None;
+    let mut hosts_of = |api: &Api| -> Vec<Value> {
+        lan_hosts.get_or_insert_with(|| api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"])).ok().and_then(|v| v["hosts"].as_array().cloned()).unwrap_or_default()).clone()
+    };
+    if named {
+        if !mine.is_empty() {
+            let list = mine.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
             eprintln!("Note: this computer is on {list} too; while the VPN runs, those addresses go to the device instead.");
         }
-    }
-    // 連 Telepy 的那條不能自己導進自己。/ The connection to Telepy must not be routed into itself.
-    let server_ips: Vec<std::net::Ipv4Addr> = url::Url::parse(&api.server)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
-        .and_then(|h| std::net::ToSocketAddrs::to_socket_addrs(&(h.as_str(), 443)).ok())
-        .map(|it| it.filter_map(|a| match a.ip() { std::net::IpAddr::V4(ip) => Some(ip), _ => None }).collect())
-        .unwrap_or_default();
-    if let Some((n, ip)) = vpn::swallows(&nets, &server_ips) {
-        bail!("{n} includes {ip}, the Telepy server itself: the VPN would route its own connection into itself. Pick narrower networks.");
+    } else if !mine.is_empty() || a.all {
+        // 被這台電腦自己的網段蓋住的位址：預設模式是裝置那幾段裡重疊的；--all 是任何落在自己網段裡的已知主機。
+        // Addresses shadowed by this computer's own networks: the device's overlapping ones by default; with --all any
+        // known host that falls inside a network this computer is on.
+        let shadow: Vec<vpn::Net> = if a.all { own_nets.clone() } else { mine.clone() };
+        // 那邊已知的主機：掃描看過 / 手動加的，加上裝置自己的位址。/ The hosts known there: scanned or added by hand, plus the device's own addresses.
+        let mut known: Vec<std::net::Ipv4Addr> = t["endpoint"]["lan"].as_array().into_iter().flatten().filter_map(|n| n["ip"].as_str()?.parse().ok()).collect();
+        known.extend(hosts_of(api).iter().filter_map(|h| h["address"].as_str()?.parse::<std::net::Ipv4Addr>().ok()));
+        // 這邊另有其人的位址：自己的、閘道、DNS。/ Addresses that are someone else here: this computer's, its gateway, its DNS.
+        let mut avoid: Vec<std::net::Ipv4Addr> = own.iter().map(|(ip, _)| *ip).collect();
+        avoid.extend(own_default_route().and_then(|r| r.gateway));
+        avoid.extend(vpn::resolv_nameservers(&std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default()));
+        let (routes, skipped) = vpn::host_routes(&known, &shadow, &avoid);
+        if !mine.is_empty() {
+            let list = mine.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+            eprintln!("Left out {list}: this computer is on it too, so routing all of it away would cut your own network.");
+        } else if !routes.is_empty() || !skipped.is_empty() {
+            eprintln!("Some hosts behind {name} have addresses on a network this computer is on too; that network stays local.");
+        }
+        if !routes.is_empty() {
+            eprintln!("  Routing the {} host(s) Telepy knows there one by one instead: {}", routes.len(), routes.iter().map(|n| n.addr.to_string()).collect::<Vec<_>>().join(", "));
+        }
+        if !skipped.is_empty() {
+            eprintln!("  Not routed: {} (here that is this computer, its gateway or its DNS server).", skipped.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", "));
+        }
+        if !mine.is_empty() {
+            eprintln!("  A host that isn't listed? Name it: telepy vpn {} 192.168.1.50   (telepy lan scan {} finds them)", a.target, a.target);
+        }
+        if !a.all {
+            nets = keep;
+        }
+        nets.extend(routes);
+        if nets.is_empty() {
+            bail!("Every network behind {name} is one this computer is on too, and Telepy knows no host there yet. Name the hosts you want, e.g. telepy vpn {} 192.168.1.50", a.target);
+        }
     }
     let domains: Vec<String> = a.dns_domain.iter().map(|d| vpn::check_domain(d)).collect::<std::result::Result<_, _>>().map_err(|e| anyhow!(e))?;
     // Apple 的 sshd 收到「用名稱轉送」會整條斷線（見 docs/device-connections.md），Mac 上名稱不轉。
@@ -1646,14 +1694,51 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     let mac = vpn::device_is_mac(&t["endpoint"]["facts"]);
     if !domains.is_empty() && a.dns_server.is_none() && !a.carrier && mac {
         bail!(
-            "{} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so it can't find names for you. Use the device's carrier (--carrier), name the network's DNS server (--dns-server 192.168.1.1), use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
-            name_of(&t),
+            "{name} is a Mac: Apple's sshd ends the whole connection when asked to reach a name, so it can't find names for you. Use the device's carrier (--carrier), name the network's DNS server (--dns-server 192.168.1.1), use addresses (telepy lan ls {} lists the hosts), or put the names in this computer's /etc/hosts.",
             a.target
         );
     }
     let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
-    let plan = VpnPlan { nets, domains, dns_server: a.dns_server, carrier: a.carrier, sshd_names: !mac };
-    vpn_run(&file, &alias, &extra_opts(&a.opts), &plan, name_of(&t))
+    // 連 Telepy 的那條不能自己導進自己：路由範圍蓋到伺服器時，讓伺服器的位址照原本的路走（/32 例外）。
+    // The connection to Telepy must not be routed into itself: when the routed networks cover the server, its addresses
+    // keep their original path (a /32 exception each).
+    let mut servers: Vec<String> = url::Url::parse(&api.server).ok().and_then(|u| u.host_str().map(str::to_string)).into_iter().collect();
+    for h in vpn::config_hostnames(&std::fs::read_to_string(&file).unwrap_or_default()) {
+        if !servers.contains(&h) {
+            servers.push(h);
+        }
+    }
+    let server_ips: Vec<std::net::Ipv4Addr> = servers
+        .iter()
+        .filter_map(|h| std::net::ToSocketAddrs::to_socket_addrs(&(h.as_str(), 443)).ok())
+        .flatten()
+        .filter_map(|a| match a.ip() {
+            std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
+            _ => None,
+        })
+        .collect();
+    let bypass = if vpn::swallows(&nets, &server_ips).is_some() { servers.clone() } else { Vec::new() };
+    if !bypass.is_empty() && own_default_route().is_none() {
+        bail!("These networks include the Telepy server itself, and this computer has no default route to keep it on. Pick narrower networks.");
+    }
+    let plan = VpnPlan { nets, domains, dns_server: a.dns_server, carrier: a.carrier, sshd_names: !mac, bypass, block_v6: a.all };
+    if a.check {
+        let addrs: Vec<String> = t["endpoint"]["lan"].as_array().into_iter().flatten().filter_map(|n| n["ip"].as_str().map(str::to_string)).collect();
+        if !addrs.is_empty() {
+            println!("{name} itself is {} on its network.", addrs.join(", "));
+        }
+        let hosts = hosts_of(api);
+        return vpn_check(&file, &alias, &extra_opts(&a.opts), &plan, name, &a.target, &hosts, &a.probe);
+    }
+    vpn_run(&file, &alias, &extra_opts(&a.opts), &plan, name)
+}
+
+/// 這台電腦原本的預設路由（不用 root 就讀得到）。/ This computer's own default route (readable without root).
+fn own_default_route() -> Option<vpn::DefaultRoute> {
+    let os = if cfg!(target_os = "macos") { vpn::Os::Macos } else { vpn::Os::Linux };
+    let cmd = vpn::default_route_command(os);
+    let out = Command::new(&cmd[0]).args(&cmd[1..]).stderr(std::process::Stdio::null()).output().ok()?;
+    vpn::parse_default_route(os, &String::from_utf8_lossy(&out.stdout))
 }
 
 /// 這次 VPN 要做的事。/ What this VPN does.
@@ -1665,16 +1750,20 @@ struct VpnPlan {
     carrier: bool,
     /// 名稱能不能交給裝置的 sshd（Mac 不行）。/ Whether names may go to the device's sshd (not on a Mac).
     sshd_names: bool,
+    /// 要留在原本路上的主機（路由範圍蓋到 Telepy 伺服器時）。/ Hosts kept on their own path (when the routes cover the Telepy server).
+    bypass: Vec<String>,
+    /// IPv6 收進來拒絕掉（--all）。/ Take IPv6 in and refuse it (--all).
+    block_v6: bool,
 }
 
-/// 這台電腦自己的 IPv4 網段（不含回送）。/ This computer's own IPv4 networks (no loopback).
-fn local_nets() -> Vec<vpn::Net> {
+/// 這台電腦自己的 IPv4 位址與 prefix（不含回送）。/ This computer's own IPv4 addresses with their prefix (no loopback).
+fn local_addrs() -> Vec<(std::net::Ipv4Addr, u8)> {
     #[cfg(unix)]
     {
         getifaddrs::getifaddrs()
             .map(|it| {
                 it.filter_map(|i| match (i.address.ip_addr(), i.address.netmask()) {
-                    (Some(std::net::IpAddr::V4(ip)), Some(std::net::IpAddr::V4(mask))) if !ip.is_loopback() => Some(vpn::Net::new(ip, u32::from(mask).count_ones() as u8)),
+                    (Some(std::net::IpAddr::V4(ip)), Some(std::net::IpAddr::V4(mask))) if !ip.is_loopback() => Some((ip, u32::from(mask).count_ones() as u8)),
                     _ => None,
                 })
                 .collect()
@@ -1689,6 +1778,12 @@ fn local_nets() -> Vec<vpn::Net> {
 
 #[cfg(not(unix))]
 fn vpn_run(_: &std::path::Path, _: &str, _: &[String], _: &VpnPlan, _: &str) -> Result<i32> {
+    bail!("telepy vpn runs on macOS and Linux.")
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
+fn vpn_check(_: &std::path::Path, _: &str, _: &[String], _: &VpnPlan, _: &str, _: &str, _: &[Value], _: &[String]) -> Result<i32> {
     bail!("telepy vpn runs on macOS and Linux.")
 }
 
@@ -1920,6 +2015,111 @@ fn wait_engine(helper: &mut std::process::Child) -> Result<i32> {
     }
 }
 
+/// `telepy vpn --check`：不開 VPN，先說它會做什麼（導哪些網段、哪些留在原本的路上），再真的開 `ssh -D`，經裝置去連
+/// 幾台已知的主機（掃描看過有開 port 的，加上 `--probe`）。除了虛擬網卡以外整條路都走過一遍，而且不需要 root。
+/// `telepy vpn --check`: without starting the VPN, say what it would do (what is routed, what keeps its own path), then
+/// really open `ssh -D` and reach a few known hosts through the device (ones a scan saw with an open port, plus
+/// `--probe`). That walks the whole path except the TUN device, and needs no root.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn vpn_check(file: &std::path::Path, alias: &str, extra: &[String], plan: &VpnPlan, tunnel: &str, target: &str, hosts: &[Value], probes: &[String]) -> Result<i32> {
+    let everything = plan.nets.iter().any(|n| n.prefix == 0);
+    let list = |nets: &[vpn::Net]| nets.iter().map(|n| if n.prefix == 32 { n.addr.to_string() } else { n.to_string() }).collect::<Vec<_>>().join(", ");
+    println!("Would route through {tunnel}: {}", if everything { "everything (sites see the device's address)".to_string() } else { list(&plan.nets) });
+    if everything {
+        let extra_hosts: Vec<vpn::Net> = plan.nets.iter().copied().filter(|n| n.prefix != 0).collect();
+        if !extra_hosts.is_empty() {
+            println!("  and, host by host on a network this computer shares: {}", list(&extra_hosts));
+        }
+        println!("  This computer's own networks stay local. IPv6 is refused while it runs.");
+    }
+    if !plan.bypass.is_empty() {
+        println!("  Kept on your own network: {} (the Telepy server; the VPN's own connection)", plan.bypass.join(", "));
+    }
+    println!("  Carried: TCP, and DNS as TCP.{}", if plan.carrier { " With --carrier also ping and UDP, when the device has a carrier." } else { " Not ping or other UDP: a ping that gets no answer is expected (add --carrier)." });
+    if !plan.domains.is_empty() {
+        println!("  Names under {}: {}", plan.domains.join(", "), match plan.dns_server {
+            Some(s) => format!("asked of {s} through the device"),
+            None => "found by the device".to_string(),
+        });
+    }
+    // 要試的目標：--probe 的，再來是掃描看過、在路由範圍裡、有開 port 的主機（最多 5 個）。
+    // What to try: the --probe ones, then scanned hosts inside the routed networks with an open port (5 at most).
+    let mut tries: Vec<(std::net::Ipv4Addr, u16, String)> = Vec::new();
+    for p in probes {
+        let (h, port) = p.rsplit_once(':').ok_or_else(|| anyhow!("--probe takes host:port, e.g. 192.168.1.20:22"))?;
+        let ip: std::net::Ipv4Addr = h.parse().map_err(|_| anyhow!("--probe takes an IPv4 address and a port, e.g. 192.168.1.20:22"))?;
+        tries.push((ip, port.parse().map_err(|_| anyhow!("'{port}' is not a port"))?, String::new()));
+    }
+    for h in hosts {
+        if tries.len() >= probes.len() + 5 {
+            break;
+        }
+        let Some(ip) = h["address"].as_str().and_then(|a| a.parse::<std::net::Ipv4Addr>().ok()) else { continue };
+        let Some(port) = h["open_ports"].as_array().and_then(|p| p.first()).and_then(Value::as_u64).and_then(|p| u16::try_from(p).ok()) else { continue };
+        if plan.nets.iter().any(|n| n.contains(ip)) && !tries.iter().any(|(i, _, _)| *i == ip) {
+            let label = h["label"].as_str().or(h["hostname"].as_str()).unwrap_or("").to_string();
+            tries.push((ip, port, label));
+        }
+    }
+    if tries.is_empty() {
+        println!("Nothing to try: Telepy knows no host with an open port in these networks. Scan first (telepy lan scan {target}) or name one: --probe 192.168.1.20:22");
+        return Ok(0);
+    }
+    println!("Trying the device's network through its sshd (the same path the VPN uses)…");
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
+    let mut c = Command::new("ssh");
+    c.arg("-F").arg(file).args(["-N", "-o", "ExitOnForwardFailure=yes", "-D"]).arg(format!("127.0.0.1:{port}")).args(extra).arg(alias);
+    dies_with_us(&mut c);
+    let mut ssh = start_socks(c, port).map_err(|e| anyhow!("The SSH connection to {tunnel} didn't come up: {e}. Run with --ssh-opt -v to see why."))?;
+    let mut failed = 0;
+    for (ip, p, label) in &tries {
+        let started = std::time::Instant::now();
+        let what = if label.is_empty() { format!("{ip}:{p}") } else { format!("{ip}:{p} ({label})") };
+        match socks_probe(port, *ip, *p) {
+            Ok(()) => println!("  {} {what}: reached in {} ms", color::out(color::GOOD, "ok"), started.elapsed().as_millis()),
+            Err(e) => {
+                failed += 1;
+                println!("  {} {what}: {e}", color::out(color::BAD, "failed"));
+            }
+        }
+    }
+    let _ = ssh.kill();
+    let _ = ssh.wait();
+    if failed == 0 {
+        println!("The path works. Start it: telepy vpn {target}{}", if everything { " --all" } else { "" });
+    } else if failed == tries.len() {
+        println!("Nothing was reached. If the device's sshd forbids forwarding (AllowTcpForwarding) nothing can go through it; otherwise those hosts may be off or on another network.");
+    }
+    Ok(i32::from(failed > 0))
+}
+
+/// 經本機的 SOCKS（`ssh -D`）連一個位址：連上就算。/ Connects to an address through the local SOCKS (`ssh -D`); connected = fine.
+#[cfg(unix)]
+fn socks_probe(socks_port: u16, ip: std::net::Ipv4Addr, port: u16) -> std::result::Result<(), String> {
+    use std::io::{Read, Write};
+    let limit = std::time::Duration::from_secs(8);
+    let mut s = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], socks_port)), limit).map_err(|e| format!("the SSH connection went away ({e})"))?;
+    let _ = s.set_read_timeout(Some(limit));
+    let _ = s.set_write_timeout(Some(limit));
+    // ssh 對連不上的目標常常不回 SOCKS 錯誤、直接關掉這條連線。/ For a target it can't reach, ssh often closes the connection instead of answering with a SOCKS error.
+    let io = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => "no answer in 8 s".to_string(),
+        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset => "the device could not connect to it (refused, or no such host)".to_string(),
+        _ => format!("the SSH connection went away ({e})"),
+    };
+    s.write_all(&[5, 1, 0]).map_err(io)?;
+    let mut hello = [0u8; 2];
+    s.read_exact(&mut hello).map_err(io)?;
+    s.write_all(&vpn::socks5_connect(ip, port)).map_err(io)?;
+    let mut head = [0u8; 4];
+    s.read_exact(&mut head).map_err(io)?;
+    let rest = vpn::socks5_reply_rest(head)?;
+    let mut tail = vec![0u8; rest];
+    s.read_exact(&mut tail).map_err(io)?;
+    Ok(())
+}
+
 /// `ssh -D` 開 SOCKS（裝置的 sshd 開 direct-tcpip，斷了自己重連），再用 root 開虛擬網卡把網段導過去。
 /// `ssh -D` for SOCKS (the device's sshd opens direct-tcpip; reconnected when it drops), then root brings up the TUN device.
 #[cfg(unix)]
@@ -1969,6 +2169,8 @@ fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], plan: &VpnPlan
             owner: None,
             agent,
             sshd_names: plan.sshd_names,
+            bypass: plan.bypass.clone(),
+            block_v6: plan.block_v6,
         })
         .map(|_| 0)
     } else {
@@ -1981,6 +2183,8 @@ fn vpn_run(file: &std::path::Path, alias: &str, extra: &[String], plan: &VpnPlan
             dns_server: plan.dns_server,
             agent: bridge.as_ref().map(|(p, path, _)| (*p, path.display().to_string())),
             sshd_names: plan.sshd_names,
+            bypass: plan.bypass.clone(),
+            block_v6: plan.block_v6,
             owner: std::process::id(),
         };
         let mut helper = Command::new("sudo").arg("--").arg(exe).args(vpn::helper_argv(&helper)).spawn().context("cannot run sudo")?;
@@ -2004,7 +2208,7 @@ fn vpn_helper(a: &VpnHelperArgs) -> Result<i32> {
             (Some(addr), Some(path)) => Some((addr, std::fs::read(path).context("reading the carrier bridge's token")?)),
             _ => None,
         };
-        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, dns_server: a.dns_server, owner: a.owner, agent, sshd_names: !a.no_sshd_names })?;
+        vpn_engine::run(vpn_engine::Options { socks: a.socks, nets, dns_domains: domains, dns_server: a.dns_server, owner: a.owner, agent, sshd_names: !a.no_sshd_names, bypass: a.bypass.clone(), block_v6: a.block_v6 })?;
         Ok(0)
     }
     #[cfg(not(unix))]

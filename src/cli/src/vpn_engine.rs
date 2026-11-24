@@ -50,6 +50,63 @@ pub struct Options {
     pub agent: Option<(SocketAddr, Vec<u8>)>,
     /// 名稱能不能交給裝置的 sshd（Mac 的 sshd 一收到名稱就整條斷）。/ Whether names may go to the device's sshd (a Mac's drops the connection).
     pub sshd_names: bool,
+    /// 要照原本的路出去的主機名稱（Telepy 伺服器）：路由範圍會蓋到它們時才給。
+    /// Host names that keep their original path (the Telepy server): given when the routed networks would cover them.
+    pub bypass: Vec<String>,
+    /// IPv6 也收進來拒絕掉（`--all`：不然雙協定的網站會直接從這台電腦出去）。
+    /// Take IPv6 in and refuse it (`--all`: dual-stack sites would otherwise leave straight from this computer).
+    pub block_v6: bool,
+}
+
+/// 多久重查一次要繞開的主機（CDN 後面的伺服器會換位址）。/ How often the bypassed hosts are looked up again (a server behind a CDN changes addresses).
+const BYPASS_EVERY: Duration = Duration::from_secs(30);
+
+/// 到 Telepy 伺服器的例外路由：每個位址一條 /32，走這台電腦原本的預設路由；收工時拿掉。
+/// The exceptions for the Telepy server: one /32 per address through this computer's own default route; removed at the end.
+struct Bypass {
+    via: vpn::DefaultRoute,
+    hosts: Vec<String>,
+    added: Vec<Ipv4Addr>,
+}
+
+impl Bypass {
+    fn set_up(hosts: &[String]) -> Result<Bypass> {
+        let cmd = vpn::default_route_command(os());
+        let out = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output().with_context(|| format!("cannot run {}", cmd[0]))?;
+        let via = vpn::parse_default_route(os(), &String::from_utf8_lossy(&out.stdout))
+            .context("this computer has no default route, so there is no path to keep the Telepy server on")?;
+        let mut b = Bypass { via, hosts: hosts.to_vec(), added: Vec::new() };
+        b.refresh();
+        if b.added.is_empty() {
+            bail!("could not look up {} to keep it outside the VPN", hosts.join(", "));
+        }
+        Ok(b)
+    }
+
+    /// 查一次名稱，新出現的位址補上例外路由。/ Look the names up and add an exception for every new address.
+    fn refresh(&mut self) {
+        for host in &self.hosts {
+            let Ok(addrs) = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), 443)) else { continue };
+            for ip in addrs.filter_map(|a| match a.ip() {
+                std::net::IpAddr::V4(ip) => Some(ip),
+                _ => None,
+            }) {
+                if self.added.contains(&ip) || ip.is_loopback() {
+                    continue;
+                }
+                match run_cmd(&vpn::bypass_add(os(), &self.via, ip)) {
+                    Ok(()) => self.added.push(ip),
+                    Err(e) => eprintln!("  could not keep {ip} ({host}) outside the VPN: {e:#}"),
+                }
+            }
+        }
+    }
+
+    fn undo(&self) {
+        for ip in &self.added {
+            let _ = run_cmd(&vpn::bypass_del(os(), *ip));
+        }
+    }
 }
 
 /// 安靜多久的 TCP 連線才放掉：跟一般網路一樣幾乎不放（堆疊預設 60 秒，閒置的 SSH 一分鐘就被切）。
@@ -74,20 +131,50 @@ fn os() -> Os {
 pub fn run(o: Options) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
     rt.block_on(async move {
-        let dev = tun_rs::DeviceBuilder::new()
-            .ipv4(TUN_ADDR, 30u8, Some(DNS_ADDR))
-            .mtu(MTU)
-            .build_async()
-            .context("cannot create the network device (run as root / with sudo)")?;
+        let mut builder = tun_rs::DeviceBuilder::new().ipv4(TUN_ADDR, 30u8, Some(DNS_ADDR)).mtu(MTU);
+        if o.block_v6 {
+            builder = builder.ipv6(vpn::TUN_V6, 64u8);
+        }
+        let dev = builder.build_async().context("cannot create the network device (run as root / with sudo)")?;
         let name = dev.name().context("the network device has no name")?;
-        let mut routed = o.nets.clone();
+        // 先讓 Telepy 伺服器留在原本的路上，再把網段導進來（順序反了會有一瞬間自己咬自己）。
+        // The Telepy server's exceptions go in first, the networks after (the other order swallows the connection for a moment).
+        let bypass = if o.bypass.is_empty() { None } else { Some(Arc::new(Mutex::new(Bypass::set_up(&o.bypass)?))) };
+        let undo_bypass = |b: &Option<Arc<Mutex<Bypass>>>| {
+            if let Some(b) = b {
+                if let Ok(b) = b.lock() {
+                    b.undo();
+                }
+            }
+        };
+        let mut routed = vpn::routed_nets(&o.nets);
         if !o.dns_domains.is_empty() {
             routed.push(FAKE_NET);
         }
         for cmd in vpn::route_commands(os(), &name, &routed) {
-            run_cmd(&cmd).with_context(|| format!("adding the route ({})", cmd.join(" ")))?;
+            if let Err(e) = run_cmd(&cmd).with_context(|| format!("adding the route ({})", cmd.join(" "))) {
+                undo_bypass(&bypass);
+                return Err(e);
+            }
         }
-        let dns = Dns::set_up(&name, &o.dns_domains)?;
+        if o.block_v6 {
+            let mut said = false;
+            for cmd in vpn::v6_routes(os(), &name) {
+                if let Err(e) = run_cmd(&cmd) {
+                    if !said {
+                        eprintln!("  IPv6 could not be taken into the VPN ({e:#}). If this computer has IPv6, sites that support it may still see its own address.");
+                        said = true;
+                    }
+                }
+            }
+        }
+        let dns = match Dns::set_up(&name, &o.dns_domains) {
+            Ok(d) => d,
+            Err(e) => {
+                undo_bypass(&bypass);
+                return Err(e);
+            }
+        };
         let nets = o.nets.iter().map(Net::to_string).collect::<Vec<_>>().join(", ");
         let dns_note = match (dns.domains.is_empty(), o.dns_server) {
             (true, _) => String::new(),
@@ -95,7 +182,14 @@ pub fn run(o: Options) -> Result<()> {
             (false, None) => format!("; names under {} are found by the device", dns.domains.join(", ")),
         };
         let carries = if o.agent.is_some() { "TCP and DNS go through; asking the device's carrier for ping and UDP" } else { "TCP and DNS go through; ping and other UDP don't" };
-        eprintln!("VPN up on {name}: {nets}{dns_note}. {carries}. Press Ctrl-C to stop.");
+        let kept = match &bypass {
+            Some(b) => b.lock().map(|b| format!(" The Telepy server ({}) stays on your own network.", b.added.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(", "))).unwrap_or_default(),
+            None => String::new(),
+        };
+        let v6 = if o.block_v6 { " IPv6 is refused while it runs, so nothing leaves around the VPN." } else { "" };
+        let nets = if o.nets.iter().any(|n| n.prefix == 0) { "everything".to_string() } else { nets };
+        eprintln!("VPN up on {name}: {nets}{dns_note}. {carries}.{kept}{v6} Press Ctrl-C to stop.");
+        let block_v6 = o.block_v6;
 
         let dev = Arc::new(dev);
         let (to_stack, from_dev) = mpsc::channel::<Vec<u8>>(1024);
@@ -120,6 +214,12 @@ pub fn run(o: Options) -> Result<()> {
                 let mut buf = vec![0u8; MTU as usize + 64];
                 while let Ok(n) = dev.recv(&mut buf).await {
                     let p = buf[..n].to_vec();
+                    if block_v6 && p.first().is_some_and(|b| b >> 4 == 6) {
+                        if let Some(reply) = vpn::reject_v6(&p) {
+                            let _ = ctx.to_dev.send(reply);
+                        }
+                        continue;
+                    }
                     match vpn::classify(&p) {
                         Inbound::Pass => {
                             if to_stack.send(p).await.is_err() {
@@ -175,6 +275,26 @@ pub fn run(o: Options) -> Result<()> {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
         let mut watch = tokio::time::interval(Duration::from_secs(2));
+        // 定期重查要繞開的主機（另一條執行緒：查名稱會卡住）。/ Look the bypassed hosts up again now and then (its own thread: lookups block).
+        let stop_refresh = Arc::new(AtomicBool::new(false));
+        if let Some(b) = bypass.clone() {
+            let stop = stop_refresh.clone();
+            std::thread::spawn(move || {
+                let mut waited = Duration::ZERO;
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(500));
+                    waited += Duration::from_millis(500);
+                    if waited >= BYPASS_EVERY {
+                        waited = Duration::ZERO;
+                        if let Ok(mut b) = b.lock() {
+                            if !stop.load(Ordering::Relaxed) {
+                                b.refresh();
+                            }
+                        }
+                    }
+                }
+            });
+        }
         let result: Result<()> = loop {
             tokio::select! {
                 s = stack.accept() => match s {
@@ -207,6 +327,8 @@ pub fn run(o: Options) -> Result<()> {
         reader.abort();
         writer.abort();
         dns.undo();
+        stop_refresh.store(true, Ordering::Relaxed);
+        undo_bypass(&bypass);
         eprintln!("VPN down.");
         result
     })

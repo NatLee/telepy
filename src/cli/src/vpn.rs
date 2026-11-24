@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4};
 
 use serde_json::Value;
 
@@ -510,6 +510,10 @@ pub struct Helper {
     pub agent: Option<(u16, String)>,
     /// 名稱能不能交給裝置的 sshd（Mac 不行）。/ Whether names may be handed to the device's sshd (not on a Mac).
     pub sshd_names: bool,
+    /// 要照原本的路出去的主機（Telepy 伺服器）。/ Hosts that stay on their original path (the Telepy server).
+    pub bypass: Vec<String>,
+    /// IPv6 也收進來拒絕掉（`--all`）。/ Take IPv6 in and refuse it (`--all`).
+    pub block_v6: bool,
     pub owner: u32,
 }
 
@@ -524,6 +528,13 @@ pub fn helper_argv(h: &Helper) -> Vec<String> {
     }
     if !h.sshd_names {
         out.push("--no-sshd-names".into());
+    }
+    if h.block_v6 {
+        out.push("--block-v6".into());
+    }
+    for host in &h.bypass {
+        out.push("--bypass".into());
+        out.push(host.clone());
     }
     for n in &h.nets {
         out.push("--net".into());
@@ -563,6 +574,237 @@ pub fn linux_resolved_commands(dev: &str, domains: &[String]) -> Vec<Vec<String>
     let mut domain = vec!["resolvectl".to_string(), "domain".into(), dev.into()];
     domain.extend(domains.iter().map(|d| format!("~{d}")));
     vec![vec!["resolvectl".into(), "dns".into(), dev.into(), DNS_ADDR.to_string()], domain]
+}
+
+// ---------------------------------------------------------------- everything through the device (--all)
+
+/// 全部的 IPv4（`--all`）。/ All of IPv4 (`--all`).
+pub const EVERYTHING: Net = Net { addr: Ipv4Addr::UNSPECIFIED, prefix: 0 };
+/// 虛擬網卡的 IPv6 位址（只用來把 IPv6 收進來拒絕掉，見 [`reject_v6`]）。/ The TUN device's IPv6 address (only there to take IPv6 in and refuse it, see [`reject_v6`]).
+pub const TUN_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x7e1e, 0, 0, 0, 0, 0, 1);
+/// 回 IPv6 拒絕訊息時用的來源位址。/ The source of the IPv6 refusals.
+pub const TUN_V6_PEER: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x7e1e, 0, 0, 0, 0, 0, 2);
+
+/// 真的寫進路由表的網段：`0.0.0.0/0` 拆成兩個 /1。它們比預設路由精確所以贏過它，預設路由本身不用動；虛擬網卡一消失
+/// 它們就跟著消失，當機也不會留下一台沒有預設路由的電腦。這台電腦自己接著的網段更精確，照舊走原本的網卡。
+/// The networks really put in the routing table: `0.0.0.0/0` becomes two /1 routes. They are more specific than the
+/// default route, so they win without touching it, and they vanish with the TUN device — a crash never leaves a
+/// computer without a default route. This computer's own connected networks are more specific still and stay local.
+pub fn routed_nets(nets: &[Net]) -> Vec<Net> {
+    let mut out = Vec::with_capacity(nets.len() + 1);
+    for n in nets {
+        if n.prefix == 0 {
+            out.push(Net::new(Ipv4Addr::UNSPECIFIED, 1));
+            out.push(Net::new(Ipv4Addr::new(128, 0, 0, 0), 1));
+        } else {
+            out.push(*n);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 這台電腦原本的預設路由：閘道（點對點連線沒有）與網卡。/ This computer's own default route: the gateway (none on a point-to-point link) and the interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultRoute {
+    pub gateway: Option<Ipv4Addr>,
+    pub dev: String,
+}
+
+/// 讀預設路由的指令。/ The command that reads the default route.
+pub fn default_route_command(os: Os) -> Vec<String> {
+    match os {
+        Os::Macos => ["route", "-n", "get", "default"].map(String::from).to_vec(),
+        Os::Linux => ["ip", "-4", "route", "show", "default"].map(String::from).to_vec(),
+    }
+}
+
+/// 讀 `route -n get default`（macOS：`gateway: X`、`interface: en0`）或 `ip -4 route show default`
+/// （Linux：`default via X dev eth0 …`，點對點是 `default dev ppp0`；有好幾條取第一條 = metric 最小）。
+/// Reads `route -n get default` (macOS) or `ip -4 route show default` (Linux; the first line = the lowest metric).
+pub fn parse_default_route(os: Os, text: &str) -> Option<DefaultRoute> {
+    match os {
+        Os::Macos => {
+            let field = |name: &str| text.lines().find_map(|l| l.trim().strip_prefix(name).map(|v| v.trim().to_string()));
+            let dev = field("interface:").filter(|d| !d.is_empty())?;
+            Some(DefaultRoute { gateway: field("gateway:").and_then(|g| g.parse().ok()), dev })
+        }
+        Os::Linux => {
+            let line = text.lines().find(|l| l.trim_start().starts_with("default"))?;
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let after = |key: &str| words.iter().position(|w| *w == key).and_then(|i| words.get(i + 1)).copied();
+            Some(DefaultRoute { gateway: after("via").and_then(|g| g.parse().ok()), dev: after("dev")?.to_string() })
+        }
+    }
+}
+
+/// 讓一個位址照原本的路出去（不進 VPN）：到 Telepy 伺服器的那條連線不能被自己吞掉。/32 比任何網段都精確。
+/// Keeps one address on its original path (outside the VPN): the connection to the Telepy server must not be swallowed
+/// by the VPN it carries. A /32 beats every network route.
+pub fn bypass_add(os: Os, via: &DefaultRoute, ip: Ipv4Addr) -> Vec<String> {
+    let mut out: Vec<String> = match os {
+        Os::Macos => vec!["route".into(), "-q".into(), "-n".into(), "add".into(), "-host".into(), ip.to_string()],
+        Os::Linux => vec!["ip".into(), "route".into(), "replace".into(), format!("{ip}/32")],
+    };
+    match (os, via.gateway) {
+        (Os::Macos, Some(gw)) => out.push(gw.to_string()),
+        (Os::Macos, None) => out.extend(["-interface".to_string(), via.dev.clone()]),
+        (Os::Linux, Some(gw)) => out.extend(["via".to_string(), gw.to_string(), "dev".to_string(), via.dev.clone()]),
+        (Os::Linux, None) => out.extend(["dev".to_string(), via.dev.clone()]),
+    }
+    out
+}
+
+/// 收工時把那條例外路由拿掉。/ Removes that exception when the VPN stops.
+pub fn bypass_del(os: Os, ip: Ipv4Addr) -> Vec<String> {
+    match os {
+        Os::Macos => vec!["route".into(), "-q".into(), "-n".into(), "delete".into(), "-host".into(), ip.to_string()],
+        Os::Linux => vec!["ip".into(), "route".into(), "del".into(), format!("{ip}/32")],
+    }
+}
+
+/// 把所有 IPv6 也導進虛擬網卡（同樣拆成兩個 /1），好在那裡拒絕掉。不這樣做的話，有 IPv6 的電腦連雙協定的網站時
+/// 會直接從自己的網路出去，「從裝置出去」就不成立了。
+/// Routes all IPv6 into the TUN device too (two /1 routes again) so it can be refused there. Otherwise a computer with
+/// IPv6 reaches dual-stack sites straight from its own network, and "leaves through the device" would not be true.
+pub fn v6_routes(os: Os, dev: &str) -> Vec<Vec<String>> {
+    ["::/1", "8000::/1"]
+        .iter()
+        .map(|n| match os {
+            Os::Macos => vec!["route".into(), "-q".into(), "-n".into(), "add".into(), "-inet6".into(), "-net".into(), (*n).to_string(), "-interface".into(), dev.into()],
+            Os::Linux => vec!["ip".into(), "-6".into(), "route".into(), "replace".into(), (*n).to_string(), "dev".into(), dev.into()],
+        })
+        .collect()
+}
+
+const PROTO_ICMPV6: u8 = 58;
+
+/// 對一個進到虛擬網卡的 IPv6 封包的回答：TCP 回 RST、其他回 ICMPv6「管理上禁止」（type 1 code 1），讓程式馬上改用
+/// IPv4（而不是等逾時）；ICMPv6 本身與 RST 不回。
+/// The answer to an IPv6 packet that reached the TUN device: a RST for TCP, ICMPv6 "administratively prohibited"
+/// (type 1 code 1) for the rest, so programs fall back to IPv4 at once instead of waiting; ICMPv6 itself and RSTs get none.
+pub fn reject_v6(p: &[u8]) -> Option<Vec<u8>> {
+    if p.len() < 40 || p[0] >> 4 != 6 {
+        return None;
+    }
+    let (src, dst, next) = (&p[8..24], &p[24..40], p[6]);
+    // 多點傳送（鄰居探索、mDNS）不回。/ Never answer multicast (neighbour discovery, mDNS).
+    if dst[0] == 0xff || next == PROTO_ICMPV6 {
+        return None;
+    }
+    let header = |from: &[u8], to: &[u8], next: u8, len: usize| {
+        let mut h = [0u8; 40];
+        h[0] = 0x60;
+        h[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+        h[6] = next;
+        h[7] = 64;
+        h[8..24].copy_from_slice(from);
+        h[24..40].copy_from_slice(to);
+        h
+    };
+    let pseudo = |from: &[u8], to: &[u8], next: u8, len: usize| [from, to, &(len as u32).to_be_bytes()[..], &[0, 0, 0, next][..]].concat();
+    if next == PROTO_TCP {
+        let t = p.get(40..60)?;
+        let flags = t[13];
+        if flags & 0x04 != 0 {
+            return None;
+        }
+        let mut r = [0u8; 20];
+        r[0..2].copy_from_slice(&t[2..4]);
+        r[2..4].copy_from_slice(&t[0..2]);
+        r[12] = 5 << 4;
+        if flags & 0x10 != 0 {
+            r[4..8].copy_from_slice(&t[8..12]);
+            r[13] = 0x04;
+        } else {
+            let data = p.len().saturating_sub(40 + usize::from(t[12] >> 4) * 4) as u32;
+            let seq = u32::from_be_bytes([t[4], t[5], t[6], t[7]]);
+            let ack = seq.wrapping_add(data).wrapping_add(u32::from(flags & 0x02 != 0)).wrapping_add(u32::from(flags & 0x01 != 0));
+            r[8..12].copy_from_slice(&ack.to_be_bytes());
+            r[13] = 0x04 | 0x10;
+        }
+        let c = checksum(&[&pseudo(dst, src, PROTO_TCP, 20), &r]);
+        r[16..18].copy_from_slice(&c.to_be_bytes());
+        return Some([&header(dst, src, PROTO_TCP, 20)[..], &r[..]].concat());
+    }
+    // ICMPv6 錯誤最多帶到整個封包 1280 位元組。/ An ICMPv6 error carries as much of the packet as fits in 1280 bytes.
+    let quoted = &p[..p.len().min(1280 - 40 - 8)];
+    let mut body = vec![1u8, 1, 0, 0, 0, 0, 0, 0];
+    body.extend_from_slice(quoted);
+    let from = TUN_V6_PEER.octets();
+    let c = checksum(&[&pseudo(&from, src, PROTO_ICMPV6, body.len()), &body]);
+    body[2..4].copy_from_slice(&c.to_be_bytes());
+    Some([&header(&from, src, PROTO_ICMPV6, body.len())[..], &body[..]].concat())
+}
+
+/// 產生的 ssh 設定裡「直接連出去」的 `HostName`：連 Telepy 時真的會撥的主機，路由範圍蓋到它們時要讓它們走原本的路。
+/// 經別的 Host 跳過去的段落（有 `ProxyJump`，或 `ProxyCommand` 是 `ssh … -W`）不算：那個 HostName 是通道的別名，
+/// 不是 DNS 名稱。
+/// The `HostName`s the generated ssh config dials directly: the hosts a connection to Telepy really reaches, which keep
+/// their original path when the routed networks cover them. Stanzas that hop through another Host (`ProxyJump`, or a
+/// `ProxyCommand` that is `ssh … -W`) don't count: their HostName is the tunnel's alias, not a DNS name.
+pub fn config_hostnames(config: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut block: (Option<String>, bool) = (None, false);
+    let mut flush = |block: &mut (Option<String>, bool)| {
+        if let (Some(host), false) = (block.0.take(), block.1) {
+            if host != "localhost" && !host.starts_with("127.") && host != "::1" && !out.iter().any(|h| *h == host) {
+                out.push(host);
+            }
+        }
+        *block = (None, false);
+    };
+    for line in config.lines() {
+        let mut words = line.split_whitespace();
+        let Some(key) = words.next() else { continue };
+        match key.to_ascii_lowercase().as_str() {
+            "host" | "match" => flush(&mut block),
+            "hostname" => block.0 = words.next().map(str::to_string),
+            "proxyjump" => block.1 = true,
+            "proxycommand" => block.1 |= line.split_whitespace().any(|w| w == "-W"),
+            _ => {}
+        }
+    }
+    flush(&mut block);
+    out
+}
+
+/// `/etc/resolv.conf` 裡的 IPv4 名稱伺服器。/ The IPv4 name servers in `/etc/resolv.conf`.
+pub fn resolv_nameservers(text: &str) -> Vec<Ipv4Addr> {
+    text.lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            (w.next() == Some("nameserver")).then(|| w.next()).flatten()?.parse().ok()
+        })
+        .collect()
+}
+
+/// 一次最多逐台路由幾台主機。/ How many hosts are routed one by one at most.
+pub const MAX_HOST_ROUTES: usize = 64;
+
+/// 裝置的網段跟這台電腦的一樣（兩邊都是 192.168.1.0/24）時，整段導過去會切斷自己的網路——改成把 Telepy 知道的那幾台
+/// 主機一台一台導過去（/32 比接著的網段精確）。這台電腦自己的位址、它的閘道與 DNS（`avoid`）不導：那些位址在這邊
+/// 另有其人。回傳（要導的主機、因為 `avoid` 跳過的）。
+/// When the device's network is the same as this computer's (192.168.1.0/24 on both sides), routing all of it away would
+/// cut this computer's own network — so the hosts Telepy knows there are routed one by one instead (a /32 beats the
+/// connected network). This computer's own addresses, its gateway and its DNS servers (`avoid`) are left alone: here
+/// those addresses belong to something else. Returns (the hosts to route, the ones skipped because of `avoid`).
+pub fn host_routes(hosts: &[Ipv4Addr], left_out: &[Net], avoid: &[Ipv4Addr]) -> (Vec<Net>, Vec<Ipv4Addr>) {
+    let mut seen: Vec<Ipv4Addr> = Vec::new();
+    let (mut keep, mut skipped) = (Vec::new(), Vec::new());
+    for ip in hosts {
+        if seen.contains(ip) || !left_out.iter().any(|n| n.contains(*ip)) {
+            continue;
+        }
+        seen.push(*ip);
+        if avoid.contains(ip) {
+            skipped.push(*ip);
+        } else if keep.len() < MAX_HOST_ROUTES {
+            keep.push(Net::new(*ip, 32));
+        }
+    }
+    (keep, skipped)
 }
 
 /// 斷線後隔多久重連：1、2、4…最多 30 秒。/ How long to wait before reconnecting: 1, 2, 4… at most 30 s.
@@ -662,7 +904,7 @@ mod tests {
     #[test]
     fn the_helper_and_the_commands() {
         let nets = [parse_net("10.77.0.0/24").unwrap()];
-        let h = Helper { socks_port: 41234, nets: nets.to_vec(), dns_domains: vec!["corp.lan".into()], dns_server: Some(Ipv4Addr::new(10, 77, 0, 1)), agent: None, sshd_names: true, owner: 77 };
+        let h = Helper { socks_port: 41234, nets: nets.to_vec(), dns_domains: vec!["corp.lan".into()], dns_server: Some(Ipv4Addr::new(10, 77, 0, 1)), agent: None, sshd_names: true, owner: 77, ..Default::default() };
         assert_eq!(helper_argv(&h), ["_vpn", "--socks", "127.0.0.1:41234", "--owner", "77", "--dns-server", "10.77.0.1", "--net", "10.77.0.0/24", "--dns-domain", "corp.lan"]);
         let h = Helper { agent: Some((41300, "/tmp/t".into())), sshd_names: false, dns_server: None, ..h };
         assert_eq!(helper_argv(&h)[5..9], ["--agent", "127.0.0.1:41300", "--agent-token", "/tmp/t"]);
@@ -675,6 +917,108 @@ mod tests {
     }
 
     /// 從筆電 10.0.0.2:40000 到 10.77.0.10:9999 的 SYN。/ A SYN from 10.0.0.2:40000 to 10.77.0.10:9999.
+    #[test]
+    fn everything_becomes_two_halves_and_the_server_keeps_its_own_path() {
+        let nets = [EVERYTHING, parse_net("10.77.0.0/24").unwrap()];
+        assert_eq!(routed_nets(&nets).iter().map(Net::to_string).collect::<Vec<_>>(), ["0.0.0.0/1", "10.77.0.0/24", "128.0.0.0/1"]);
+        assert_eq!(routed_nets(&[parse_net("10.77.0.0/24").unwrap()]).len(), 1);
+        // macOS：route -n get default
+        let mac = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n";
+        let via = parse_default_route(Os::Macos, mac).unwrap();
+        assert_eq!(via, DefaultRoute { gateway: Some(Ipv4Addr::new(192, 168, 1, 1)), dev: "en0".into() });
+        let ip = Ipv4Addr::new(203, 0, 113, 9);
+        assert_eq!(bypass_add(Os::Macos, &via, ip), ["route", "-q", "-n", "add", "-host", "203.0.113.9", "192.168.1.1"]);
+        assert_eq!(bypass_del(Os::Macos, ip), ["route", "-q", "-n", "delete", "-host", "203.0.113.9"]);
+        // 另一個 VPN 當預設路由：沒有閘道位址，只有網卡。/ Another VPN as the default route: an interface, no gateway address.
+        let p2p = parse_default_route(Os::Macos, "    gateway: link#24\n  interface: utun4\n").unwrap();
+        assert_eq!(bypass_add(Os::Macos, &p2p, ip), ["route", "-q", "-n", "add", "-host", "203.0.113.9", "-interface", "utun4"]);
+        assert_eq!(parse_default_route(Os::Macos, "route: writing to routing socket: not in table\n"), None);
+        // Linux：第一條（metric 最小）。/ Linux: the first line (lowest metric).
+        let linux = "default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100\ndefault via 10.9.0.1 dev wlan0 metric 600\n";
+        let via = parse_default_route(Os::Linux, linux).unwrap();
+        assert_eq!(bypass_add(Os::Linux, &via, ip), ["ip", "route", "replace", "203.0.113.9/32", "via", "10.0.0.1", "dev", "eth0"]);
+        assert_eq!(bypass_add(Os::Linux, &parse_default_route(Os::Linux, "default dev ppp0 scope link\n").unwrap(), ip), ["ip", "route", "replace", "203.0.113.9/32", "dev", "ppp0"]);
+        assert_eq!(bypass_del(Os::Linux, ip), ["ip", "route", "del", "203.0.113.9/32"]);
+        assert_eq!(v6_routes(Os::Macos, "utun7")[0], ["route", "-q", "-n", "add", "-inet6", "-net", "::/1", "-interface", "utun7"]);
+        assert_eq!(v6_routes(Os::Linux, "tun0")[1], ["ip", "-6", "route", "replace", "8000::/1", "dev", "tun0"]);
+        let h = Helper { bypass: vec!["telepy.example.com".into()], block_v6: true, sshd_names: true, ..Default::default() };
+        let argv = helper_argv(&h);
+        assert!(argv.windows(2).any(|w| w == ["--bypass", "telepy.example.com"]) && argv.contains(&"--block-v6".to_string()), "{argv:?}");
+    }
+
+    #[test]
+    fn the_hosts_telepy_dials_and_this_computers_name_servers_are_read() {
+        let config = "Host telepy-example-2222\n    HostName ssh.example.com\n    Port 2222\n    ProxyCommand telepy _carrier --url wss://telepy.example.com/ws/gateway/\nHost box\n    hostname localhost\n    Port 1024\nHost other\n  HostName ssh.example.com\n";
+        assert_eq!(config_hostnames(config), ["ssh.example.com"]);
+        // 裝置那一段的 HostName 是通道別名（經伺服器跳過去），不是要查 DNS 的名稱。/ A device stanza's HostName is the tunnel's alias (reached through the server), not a DNS name.
+        let hop = "Host telepy-x\n    HostName ssh.example.com\nHost hd-dev\n    HostName hd-dev\n    ProxyCommand ssh -F /x/hd-dev.conf -W %h:%p telepy-x\nHost lan\n    HostName 10.0.0.9\n    ProxyJump hd-dev\n";
+        assert_eq!(config_hostnames(hop), ["ssh.example.com"]);
+        assert_eq!(resolv_nameservers("# made by the system\nnameserver 192.168.1.1\nnameserver fe80::1%en0\nsearch lan\nnameserver 1.1.1.1\n"), [Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(1, 1, 1, 1)]);
+    }
+
+    #[test]
+    fn a_network_this_computer_is_on_too_is_reached_host_by_host() {
+        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        let left_out = [parse_net("192.168.1.0/24").unwrap()];
+        let hosts = [ip("192.168.1.20"), ip("192.168.1.1"), ip("10.0.0.5"), ip("192.168.1.20"), ip("192.168.1.40"), ip("192.168.1.77")];
+        // 這邊的閘道是 .1、自己是 .40：那兩個位址在這邊另有其人。/ Here .1 is the gateway and .40 is this computer.
+        let (keep, skipped) = host_routes(&hosts, &left_out, &[ip("192.168.1.1"), ip("192.168.1.40")]);
+        assert_eq!(keep.iter().map(Net::to_string).collect::<Vec<_>>(), ["192.168.1.20/32", "192.168.1.77/32"], "hosts outside the left-out network aren't touched");
+        assert_eq!(skipped, [ip("192.168.1.1"), ip("192.168.1.40")]);
+        let many: Vec<Ipv4Addr> = (1..=200u8).map(|n| Ipv4Addr::new(192, 168, 1, n)).collect();
+        assert_eq!(host_routes(&many, &left_out, &[]).0.len(), MAX_HOST_ROUTES);
+    }
+
+    fn v6_packet(next: u8, payload: &[u8]) -> Vec<u8> {
+        let mut p = vec![0x60, 0, 0, 0, 0, 0, next, 64];
+        p[4..6].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+        p.extend_from_slice(&"2001:db8::10".parse::<Ipv6Addr>().unwrap().octets());
+        p.extend_from_slice(&"2606:4700::6810:1".parse::<Ipv6Addr>().unwrap().octets());
+        p.extend_from_slice(payload);
+        p
+    }
+
+    /// 校驗和連同虛擬標頭算回來要是 0。/ The checksum over the pseudo header and the segment must come out as zero.
+    fn v6_sum_ok(p: &[u8]) -> bool {
+        let len = p.len() - 40;
+        let pseudo = [&p[8..24], &p[24..40], &(len as u32).to_be_bytes()[..], &[0, 0, 0, p[6]][..]].concat();
+        checksum(&[&pseudo, &p[40..]]) == 0
+    }
+
+    #[test]
+    fn ipv6_is_refused_at_once_so_programs_fall_back_to_ipv4() {
+        // TCP SYN（seq 1000）→ RST+ACK，ack = 1001，位址與 port 對調。/ A TCP SYN gets RST+ACK with ack = seq + 1, addresses and ports swapped.
+        let mut syn = [0u8; 20];
+        syn[0..2].copy_from_slice(&50000u16.to_be_bytes());
+        syn[2..4].copy_from_slice(&443u16.to_be_bytes());
+        syn[4..8].copy_from_slice(&1000u32.to_be_bytes());
+        syn[12] = 5 << 4;
+        syn[13] = 0x02;
+        let q = v6_packet(PROTO_TCP, &syn);
+        let r = reject_v6(&q).unwrap();
+        assert_eq!((r.len(), r[6]), (60, PROTO_TCP));
+        assert_eq!((&r[8..24], &r[24..40]), (&q[24..40], &q[8..24]));
+        assert_eq!((u16::from_be_bytes([r[40], r[41]]), u16::from_be_bytes([r[42], r[43]])), (443, 50000));
+        assert_eq!((r[53], u32::from_be_bytes([r[48], r[49], r[50], r[51]])), (0x14, 1001));
+        assert!(v6_sum_ok(&r));
+        // RST 不回 RST。/ A RST is never answered.
+        syn[13] = 0x04;
+        assert_eq!(reject_v6(&v6_packet(PROTO_TCP, &syn)), None);
+        // UDP（QUIC）→ ICMPv6 type 1 code 1，帶著原封包。/ UDP (QUIC) gets ICMPv6 type 1 code 1 quoting the packet.
+        let q = v6_packet(PROTO_UDP, &[0xc3, 0x50, 0x01, 0xbb, 0, 12, 0, 0, 1, 2, 3, 4]);
+        let r = reject_v6(&q).unwrap();
+        assert_eq!((r[6], r[40], r[41]), (58, 1, 1));
+        assert_eq!(&r[24..40], &q[8..24], "back to the sender");
+        assert_eq!(&r[48..], &q[..]);
+        assert!(v6_sum_ok(&r));
+        // ICMPv6、多點傳送、IPv4 都不回。/ ICMPv6, multicast and IPv4 get no answer.
+        assert_eq!(reject_v6(&v6_packet(58, &[128, 0, 0, 0, 0, 0, 0, 0])), None);
+        let mut mdns = v6_packet(PROTO_UDP, &[0; 8]);
+        mdns[24] = 0xff;
+        assert_eq!(reject_v6(&mdns), None);
+        assert_eq!(reject_v6(&syn_packet(0x02)), None);
+    }
+
     fn syn_packet(flags: u8) -> Vec<u8> {
         let mut t = [0u8; 20];
         t[0..2].copy_from_slice(&40000u16.to_be_bytes());

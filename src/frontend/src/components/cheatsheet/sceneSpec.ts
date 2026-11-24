@@ -71,6 +71,14 @@ export function sceneFor(id: RecipeId, rawParams: RecipeParams, target: ConnectT
             };
         }
         case "vpn":
+            // 全部流量：目標是網際網路（和它的內網），網站看到的是裝置的位址。/ Everything: the target is the internet (and its network); sites see the device's address.
+            if (p.scope === "all") {
+                return {
+                    nodes: [you(t("sheet.scene.allTraffic"), true), device(), { icon: Globe, role: "target", name: t("sheet.scene.internet"), sub: t("sheet.scene.internetSub") }],
+                    links: [tunnel(), { kind: "plain", direction: "forward", label: t("sheet.scene.linkWeb") }],
+                    file: false,
+                };
+            }
             return {
                 nodes: [you(p.network, true), device(), { icon: Network, role: "target", name: p.network, sub: t("sheet.scene.wholeNetwork") }],
                 links: [tunnel(), { kind: "plain", direction: "forward", label: t("sheet.scene.linkLan") }],

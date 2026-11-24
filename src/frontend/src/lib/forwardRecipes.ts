@@ -176,8 +176,20 @@ export const RECIPES: RecipeDef[] = [
         group: "reach",
         flag: "VPN",
         title: "sheet.recipe.vpn.title",
-        fields: [{ key: "network", label: "sheet.field.network", kind: "text" }],
-        defaults: { network: "192.168.1.0/24" },
+        fields: [
+            {
+                // 一個網段，或全部流量（網站看到的是裝置的位址）。/ One network, or everything (sites see the device's address).
+                key: "scope",
+                label: "sheet.field.vpnScope",
+                kind: "choice",
+                choices: [
+                    { value: "network", label: "sheet.field.vpnScopeNetwork" },
+                    { value: "all", label: "sheet.field.vpnScopeAll" },
+                ],
+            },
+            { key: "network", label: "sheet.field.network", kind: "text" },
+        ],
+        defaults: { scope: "network", network: "192.168.1.0/24" },
         forwarding: false,
         telepyOnly: true,
     },
@@ -433,6 +445,9 @@ function telepySegments(id: RecipeId, params: RecipeParams, target: ConnectTarge
         }
         case "vpn": {
             const net = text(params, "network", def);
+            if (params.scope === "all") {
+                return [TELEPY, { tokens: [tok("vpn", "sub")], explain: { key: "sheet.explain.telepyVpn" } }, telepyTarget(target), { tokens: [tok("--all", "flag")], explain: { key: "sheet.explain.vpnAll" } }];
+            }
             return [TELEPY, { tokens: [tok("vpn", "sub")], explain: { key: "sheet.explain.telepyVpn" } }, telepyTarget(target), { tokens: [tok(shq(net), "value")], explain: { key: "sheet.explain.vpnNetwork", vars: { net } } }];
         }
         case "copy": {
@@ -596,6 +611,7 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.telepyHop": "sheet.part.telepyHop",
     "sheet.explain.telepyVpn": "sheet.part.telepyVpn",
     "sheet.explain.vpnNetwork": "sheet.part.vpnNetwork",
+    "sheet.explain.vpnAll": "sheet.part.vpnAll",
 };
 
 export function segmentsToString(segments: Segment[]): string {
