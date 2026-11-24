@@ -29,6 +29,7 @@ import {
     Plus,
     Repeat,
     RotateCcw,
+    Scale,
     SlidersHorizontal,
     SquareTerminal,
     type LucideIcon,
@@ -48,6 +49,11 @@ import { MINI_SCENES, sceneFor } from "@/components/cheatsheet/sceneSpec";
 import { AnnotatedCommand, CommandBar, InlineCommand, MiniCommand } from "@/components/cheatsheet/CommandView";
 import { SetupGuide } from "@/components/cheatsheet/SetupGuide";
 import { ReadinessPath } from "@/components/cheatsheet/ReadinessPath";
+import { SHEET_CATALOGUE, SheetResults, SheetSearchBox, type WayFilter } from "@/components/cheatsheet/SheetSearch";
+import { WayMarks } from "@/components/cheatsheet/WayMarks";
+import { WaysDialog } from "@/components/cheatsheet/WaysDialog";
+import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
+import type { TranslationKey } from "@/locales/en";
 import { useCheatsheetPage } from "@/hooks/useCheatsheetPage";
 import { useSetupChecklist, type SetupStepId } from "@/hooks/useSetupChecklist";
 import { fillSummary, sheetOpenStep, sheetStates, type SheetStep } from "@/lib/sheetSteps";
@@ -62,6 +68,7 @@ import {
     forwardSpec,
     isValidHost,
     isValidPort,
+    recipeWays,
     resolveParams,
     segmentsToString,
     shellSegments,
@@ -193,7 +200,18 @@ function CheatsheetInner() {
     const [picked, setPicked] = useState(deepLinked);
     const [copiedText, setCopiedText] = useState<string | null>(null);
     const [openRequest, setOpenRequest] = useState<{ id: SetupStepId; n: number } | null>(null);
-    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | null>(null);
+    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | "ways" | null>(null);
+    // 搜尋：有字（或選了某個 CLI 主題）時，結果清單取代下面的步驟。`?q=` 可以帶著搜尋進來。
+    // Search: while there is a query (or a CLI topic is being browsed) the result list replaces the steps. `?q=` opens with one.
+    const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+    const [browseTopic, setBrowseTopic] = useState<CliTopicId | null>(null);
+    const [wayFilter, setWayFilter] = useState<WayFilter>("all");
+    const searching = query.trim() !== "" || browseTopic !== null;
+    const leaveSearch = () => {
+        setQuery("");
+        setBrowseTopic(null);
+        setWayFilter("all");
+    };
     const barRef = useRef<HTMLDivElement>(null);
     const panelId = useId();
 
@@ -390,10 +408,21 @@ function CheatsheetInner() {
         });
     };
     const pickTask = (id: RecipeId) => {
+        leaveSearch();
+        setDialog(null);
         setRecipe(id);
         setPicked(true);
         go("command");
     };
+    const browse = (id: CliTopicId) => {
+        setDialog(null);
+        setQuery("");
+        setBrowseTopic(id);
+    };
+    // 另一種工具的同一件事（並排看）：telepy ↔ ~/.ssh/config 的 ssh。/ The same task with the other tool, side by side.
+    const otherMode: ConnectMode = telepyWay ? "alias" : "telepy";
+    const otherSegments = def.telepyOnly ? null : buildSegments(recipe, params, { ...target, mode: otherMode }, options);
+    const moreTopics = CLI_EXAMPLE_TOPICS.map((tp) => ({ id: tp.id, list: SHEET_CATALOGUE.filter((e) => e.kind === "example" && e.topic === tp.id) })).filter((tp) => tp.list.length > 0);
     // 方向圖用目前填的數字（埠轉發的三種各取對應任務的值）。/ The direction diagram with the numbers filled in.
     const fwd = (id: RecipeId) => resolveParams(id, paramsById[id]);
     const forwardValues: ForwardValues = {
@@ -508,6 +537,7 @@ function CheatsheetInner() {
                             <code className="absolute right-2 top-2 rounded bg-muted px-1 font-mono text-[0.6875rem] text-muted-foreground">{r.flag}</code>
                             <MiniScene items={MINI_SCENES[r.id]} active={active} />
                             <span className="text-sm leading-tight text-foreground">{t(r.title)}</span>
+                            <WayMarks ways={recipeWays(r)} className="mt-auto" />
                         </button>
                     );
                 };
@@ -525,6 +555,29 @@ function CheatsheetInner() {
                         <section className="space-y-2.5" aria-labelledby={`${panelId}-reach`}>
                             <h3 id={`${panelId}-reach`} className="text-sm text-foreground">{t("sheet.group.reach")}</h3>
                             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">{RECIPES.filter((r) => r.group === "reach").map(card)}</div>
+                        </section>
+                        {/* telepy CLI 才有的事：照主題列，點了看那個主題的範例。/ What only the telepy CLI does, by topic; a click lists that topic's examples. */}
+                        <section className="space-y-2.5" aria-labelledby={`${panelId}-more`}>
+                            <div>
+                                <h3 id={`${panelId}-more`} className="text-sm text-foreground">{t("sheet.ways.more")}</h3>
+                                <p className="mt-0.5 text-xs text-muted-foreground">{t("sheet.ways.moreHint")}</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+                                {moreTopics.map((tp) => {
+                                    const ssh = tp.list.filter((e) => e.ways.includes("ssh")).length;
+                                    return (
+                                        <button
+                                            key={tp.id}
+                                            type="button"
+                                            onClick={() => browse(tp.id)}
+                                            className="flex min-w-0 flex-col items-start gap-1 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                        >
+                                            <span className="text-sm text-foreground">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
+                                            <span className="text-xs text-muted-foreground">{t(ssh > 0 ? "sheet.ways.topicSome" : "sheet.ways.topicNone", { total: tp.list.length, ssh })}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </section>
                     </StepPanel>
                 );
@@ -591,6 +644,18 @@ function CheatsheetInner() {
                                 <Segmented<ConnectMode> value={mode} onChange={actions.setMode} ariaLabel={t("sheet.way.title")} options={CONNECT_MODES.map((m) => ({ value: m, label: wayLabel(m) }))} />
                             </div>
                             <CommandBar segments={segments} onCopy={() => setCopiedText(commandText)} />
+                            {otherSegments ? (
+                                <div className="grid gap-1.5 pt-1">
+                                    <span className="text-xs text-muted-foreground">{t(telepyWay ? "sheet.compare.ssh" : "sheet.compare.telepy")}</span>
+                                    <InlineCommand segments={otherSegments} />
+                                </div>
+                            ) : (
+                                <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs text-muted-foreground">
+                                    <WayMarks ways={recipeWays(def)} />
+                                    <span>{t("sheet.compare.telepyOnly")}</span>
+                                    {!telepyWay && <button type="button" onClick={() => actions.setMode("telepy")} className="text-primary underline underline-offset-2">{t("sheet.compare.useTelepy")}</button>}
+                                </p>
+                            )}
                             <div className="space-y-2 pt-1 text-sm text-muted-foreground">
                                 {next && (
                                     <div className="flex gap-2">
@@ -645,6 +710,9 @@ function CheatsheetInner() {
                 description={t("sheet.subtitle")}
                 actions={
                     <>
+                        <Button variant="outline" onClick={() => setDialog("ways")}>
+                            <Scale size={16} /> {t("sheet.ways.button")}
+                        </Button>
                         <Button variant="outline" onClick={() => setDialog("all")}>
                             <ListTree size={16} /> {t("sheet.allCommands")}
                         </Button>
@@ -655,11 +723,17 @@ function CheatsheetInner() {
                 }
             />
 
-            <div ref={barRef} className="scroll-mt-20">
-                <StepPath steps={steps} value={current} onChange={go} panelId={panelId} aria-label={t("ui.steps.aria")} />
-            </div>
+            <SheetSearchBox value={query} onChange={setQuery} />
 
-            {step === null ? (
+            {!searching && (
+                <div ref={barRef} className="scroll-mt-20">
+                    <StepPath steps={steps} value={current} onChange={go} panelId={panelId} aria-label={t("ui.steps.aria")} />
+                </div>
+            )}
+
+            {searching ? (
+                <SheetResults query={query} topic={browseTopic} way={wayFilter} onWay={setWayFilter} tunnel={target.tunnel} onTask={pickTask} taskCommand={(id) => segmentsToString(buildSegments(id, paramsById[id], target, options))} onBack={leaveSearch} />
+            ) : step === null ? (
                 <div className="flex justify-center rounded-xl border border-border bg-card p-16 shadow-card">
                     <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" aria-label={t("common.loading")} />
                 </div>
@@ -677,6 +751,7 @@ function CheatsheetInner() {
                     ))}
                 </div>
             </Modal>
+            <WaysDialog isOpen={dialog === "ways"} onClose={() => setDialog(null)} entries={SHEET_CATALOGUE} onTask={pickTask} onTopic={browse} />
             <Modal isOpen={dialog === "directions"} onClose={() => setDialog(null)} size="3xl" icon={<Info />} title={t("fwdKinds.title")} description={t("sheet.group.whichHint")}>
                 <ForwardKinds active={def.direction ?? null} values={forwardValues} titled={false} />
             </Modal>
