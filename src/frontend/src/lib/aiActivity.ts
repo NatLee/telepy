@@ -17,6 +17,7 @@ const CATEGORIES: Record<string, ToolCategory> = {
     shell_resize: "exec",
     shell_open: "session",
     shell_close: "session",
+    browser_ports: "browser",
     browser_open: "browser",
     browser_navigate: "browser",
     browser_read: "browser",

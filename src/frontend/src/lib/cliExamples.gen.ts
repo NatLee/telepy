@@ -63,6 +63,7 @@ export const CLI_EXAMPLES = [
     { id: "lanShell", topic: "network", lines: ["telepy ssh <tunnel>@<account> --ssh-opt -t -- ssh ubuntu@192.168.1.20"], needs: ["tunnels:read", "ssh-key"] },
     { id: "lanCp", topic: "network", lines: ["telepy cp <tunnel>/admin@192.168.1.20:/etc/hosts ./hosts", "TELEPY_LAN_PASSWORD=… telepy cp ./backup.tgz <tunnel>/nas:/srv/backup/"], needs: ["ssh:files"] },
     { id: "lanAdd", topic: "network", lines: ["telepy lan add <tunnel> 192.168.1.20 --label nas --user admin", "telepy lan edit <tunnel> nas --labels rack-2,prod --note \"top shelf, UPS on the left\""], needs: ["tunnels:manage"] },
+    { id: "browsePorts", topic: "network", lines: ["telepy browse ports <tunnel>"], needs: ["browser:use"] },
     { id: "browse", topic: "network", lines: ["ID=$(telepy browse <tunnel> http://192.168.1.1/)", "telepy browse text \"$ID\" --selector main", "telepy browse shot \"$ID\" -o router.png", "telepy browse close \"$ID\""], needs: ["browser:use"] },
     { id: "browseLogin", topic: "network", lines: ["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files browser:use\""], needs: ["browser:use"] },
     { id: "ciEnv", topic: "ci", lines: ["export TELEPY_URL=<url>", "export TELEPY_TOKEN=tpt_…", "telepy exec --label <label> -- uptime"], needs: ["ssh:exec"] },

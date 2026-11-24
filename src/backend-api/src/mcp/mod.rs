@@ -47,7 +47,8 @@ command again once they approve it. For interactive programs (TUIs, prompts, REP
 shell_open, type with shell_send (control characters such as \\u0003 for Ctrl+C are allowed; press_enter adds Enter) and \
 read with shell_read, which returns the new output and the current screen as text. With the browser:use permission, \
 browser_open starts a real Chromium that browses through the device (so it reaches the device's LAN and localhost); \
-drive it with browser_navigate / browser_read / browser_click / browser_type / browser_screenshot and close it with \
+browser_ports lists what the device itself serves (ports and their localhost URLs); \
+drive a browser with browser_navigate / browser_read / browser_click / browser_type / browser_screenshot and close it with \
 browser_close. Machines behind a device are in lan_hosts; lan_files lists, reads and writes their files (the device's \
 sshd opens the hop, no session needed).";
 
@@ -381,6 +382,14 @@ pub struct BrowserOpenArgs {
     pub idle_timeout_s: Option<u64>,
     /// Close after this many seconds in any case (can only be shorter than the site limit)
     pub max_lifetime_s: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserPortsArgs {
+    /// Tunnel id from list_tunnels
+    pub tunnel_id: i64,
+    /// Device account to ask as; omit for the tunnel's default
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1451,6 +1460,43 @@ impl TelepyMcp {
         }
         body["hint"] = json!("Read the page with browser_read, look at it with browser_screenshot, and close it with browser_close when you are done.");
         Ok(CallToolResult::structured(body))
+    }
+
+    #[tool(description = "The ports a tunnel's device listens on right now (asked of the device with ss / netstat / lsof; nothing is probed), web pages first. Each port says whether it is a web page (`web`: seen by the last scan / a usual web port / maybe / no) and the `url` to give browser_open or browser_navigate — always localhost, because the browser connects from the device. Use it instead of running a command to find what a device serves.", annotations(title = "Device ports", read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn browser_ports(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserPortsArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if let Some(r) = refused(&p, "browser:use") {
+            return Ok(r);
+        }
+        if p.feature_denied(crate::features::Feature::RemoteBrowser) {
+            return Ok(feature_off(crate::features::Feature::RemoteBrowser));
+        }
+        let db = &self.state.db;
+        let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
+        if !p.tunnel_allowed(args.tunnel_id) {
+            return Ok(not_found());
+        }
+        let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
+        if permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten().is_none() {
+            return Ok(not_found());
+        }
+        if tunnel.require_step_up {
+            return Ok(fail(STEP_UP_REFUSAL.to_string()));
+        }
+        let out = crate::api::remote_browser::device_ports(&self.state, &p.user, &tunnel, args.username.as_deref().filter(|u| !u.is_empty())).await;
+        let (detail, error) = match &out {
+            Ok(v) => (Some(format!("{} ports as {}", v["ports"].as_array().map(Vec::len).unwrap_or(0), v["username"].as_str().unwrap_or("?"))), None),
+            Err(e) => (None, e.body.get("error").and_then(Value::as_str).map(str::to_string)),
+        };
+        self.audit(&p, "browser_ports", started, Audit { tunnel_id: Some(tunnel.id), detail, error: error.clone(), ..Default::default() }).await;
+        match out {
+            Ok(mut v) => {
+                v["hint"] = json!("Open a port's url with browser_open (tunnel_id + url) or browser_navigate. `web: no` ports are not web pages.");
+                Ok(CallToolResult::structured(v))
+            }
+            Err(_) => Ok(fail(error.unwrap_or_else(|| "The device's ports could not be listed.".to_string()))),
+        }
     }
 
     #[tool(description = "Go to a URL (http or https) in the browser and wait for the page to load. Returns the final URL and the page title.", annotations(title = "Navigate", read_only_hint = false, destructive_hint = false, open_world_hint = true))]

@@ -28,6 +28,18 @@ Starting takes three steps, and the panel shows each one as it happens:
 
 If a step fails, the list stops on it with the reason, and **Try again** starts over. The first attempt at the proxy can be slow on a cold connection, so Telepy retries it once by default.
 
+### What the device itself serves
+
+You don't have to remember which port that dashboard was on, or open a shell to run `ss`. Under the start button the panel has **On this device**: the ports the device listens on right now.
+
+- Telepy asks the device once, as the account you picked, with whatever it has (`ss`, `netstat`, `lsof`, PowerShell on Windows). Nothing is probed and nothing is stored.
+- Web pages come first, one tile per port. A tile says how sure Telepy is: **Web page** (a network scan saw one there), **Usually a web page** (a port that normally serves one) or **May be a web page** (anything else that isn't obviously a database or SSH).
+- Click a tile and the browser starts on `http://localhost:<port>/`. Localhost, because the browser connects from the device. That also reaches services that listen on the device's loopback only.
+- Ports that aren't web pages (SSH, PostgreSQL, Redis…) fold into one line below. The browser can't open those.
+- While the browser runs, the same list is behind **Ports** in the panel's header. A click there opens a new tab.
+
+Names such as "Grafana" come from the last network scan of the device (the **Network** page). A device that was never scanned still lists its ports, just without names.
+
 ### A web page on the device's LAN
 
 On the **Network** page, open a host: its **Connect** tab starts with **Services on this machine**, one row per open port with its most direct use (a terminal for SSH, the remote desktop page for RDP / VNC / RustDesk, `telepy forward` for anything else). Web ports show their address and the page title the scan saw, and **Another page** takes a port, a port and path (`8080/admin`), a path or a full `http(s)://` address.

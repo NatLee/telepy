@@ -301,7 +301,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "recordings ls | play <id>", key: "recordings", needs: ["ssh:exec"] },
     { usage: "snippets ls [--tunnel <t>]", key: "snippets", needs: ["ssh:exec"] },
     { usage: "run <snippet> <tunnel> [--var k=v]", key: "run", needs: ["ssh:exec"] },
-    { usage: "browse <tunnel> [url] | ls | go | text | shot | click | type | close", key: "browse", needs: ["browser:use"] },
+    { usage: "browse <tunnel> [url] | ports | ls | go | text | shot | click | type | close", key: "browse", needs: ["browser:use"] },
     { usage: "lan ls | map | scan | check | schedule | watch | wake | os | show | add | edit | rm <tunnel> …", key: "lan", needs: ["tunnels:read"] },
     { usage: "api tokens | activity [--follow]", key: "api", needs: [] },
     { usage: "keys [ls] | add [<file>] [--device <tunnel>] | check <tunnel>[@account] [--yes]", key: "keys", needs: [] },

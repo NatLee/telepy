@@ -2171,6 +2171,31 @@ pub struct RemoteBrowserOpenRequest {
 }
 
 #[derive(ToSchema)]
+pub struct RemoteBrowserPort {
+    pub port: u16,
+    /// `seen` (the last scan saw a page) | `usual` (a port that usually serves one) | `maybe` (unknown) | `no` (not a web page)
+    pub web: String,
+    pub scheme: Option<String>,
+    /// What the remote browser opens: always `localhost`, as the device sees it
+    pub url: Option<String>,
+    /// Page title or Server header from the last scan
+    pub title: Option<String>,
+    pub proto: Option<String>,
+    pub loopback_only: bool,
+}
+
+#[derive(ToSchema)]
+pub struct RemoteBrowserPorts {
+    pub tunnel_id: i64,
+    pub username: String,
+    /// false = no tool on the device could list its ports
+    pub listed: bool,
+    /// Whether a LAN scan has looked at the device itself (titles come from it)
+    pub scanned: bool,
+    pub ports: Vec<RemoteBrowserPort>,
+}
+
+#[derive(ToSchema)]
 pub struct RemoteBrowserTab {
     pub url: String,
     /// DevTools target id of the new tab

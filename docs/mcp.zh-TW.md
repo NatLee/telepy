@@ -93,7 +93,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:exec` | 在你的裝置上執行指令 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
 | `ssh:files` | 讀寫你裝置上的檔案 | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | 探索裝置所在區網的機器 | `lan_scan`、`lan_check`、`lan_os`（只限你擁有或身為 ADMIN 的通道） |
-| `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `browser:use` | 以你的裝置的身分瀏覽網頁 | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 `ssh:exec`、`ssh:files` 與 `browser:use` 在核准頁上會標「可以變更內容」，另外兩個標「唯讀」。
 
@@ -169,6 +169,7 @@ shell 的行為細節請看 [互動 shell](#互動-shell)。
 
 | 工具 | 做什麼 |
 | --- | --- |
+| `browser_ports(tunnel_id, username?)` | 裝置現在正在聽的 port，網頁排前面，各附上要開的 `localhost` 網址。不做任何探測 |
 | `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | 經裝置開一個遠端瀏覽器（Chromium），回傳 `browser_id`。可以順便打開 `url` |
 | `browser_navigate(browser_id, url)` | 前往網址（只收 http / https，沒寫就補 `https://`），等頁面載入，回傳最後的網址與標題 |
 | `browser_read(browser_id, selector?)` | 頁面文字：標題、網址、看得到的文字（最多 10 萬字）、連結。給 `selector` 就只讀一部分 |

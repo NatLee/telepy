@@ -428,6 +428,7 @@ Nothing is installed for it: when the device has no carrier, or one from an earl
 ### A browser on the device's network
 
 ```sh
+telepy browse ports box                        # what the device itself serves: ports and their URLs
 ID=$(telepy browse box http://192.168.1.1/)   # a browser on the device's network (browser:use); prints its id
 telepy browse text "$ID" --selector main
 telepy browse shot "$ID" -o router.png

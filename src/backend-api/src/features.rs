@@ -185,6 +185,7 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
         (_, ["api", "sftp", op, ..]) if *op != "shell" => Files,
 
         ("POST", ["api", "reverse", "server", _, "remote-browser", "start"]) => RemoteBrowser,
+        ("GET", ["api", "reverse", "server", _, "remote-browser", "ports"]) => RemoteBrowser,
         // 腳本開的瀏覽器（MCP browser_* 的 REST 版）；列出與關閉不擋。/ Scripted browsers; listing and closing stay open.
         ("POST", ["api", "browser", "sessions", ..]) => RemoteBrowser,
         ("GET", ["api", "browser", "sessions", _, _]) => RemoteBrowser,
@@ -548,6 +549,7 @@ mod tests {
             ("POST", "/api/sftp/upload/4/root", Some(Files)),
             ("GET", "/api/sftp/shell/4/root", None),
             ("POST", "/api/reverse/server/4/remote-browser/start", Some(RemoteBrowser)),
+            ("GET", "/api/reverse/server/4/remote-browser/ports", Some(RemoteBrowser)),
             ("POST", "/api/browser/sessions", Some(RemoteBrowser)),
             ("POST", "/api/browser/sessions/aib_1/click", Some(RemoteBrowser)),
             ("GET", "/api/browser/sessions/aib_1/screenshot", Some(RemoteBrowser)),

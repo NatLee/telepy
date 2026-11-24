@@ -194,6 +194,7 @@ pub const ROUTES: &[RouteRule] = {
         rule("POST", "/api/reverse/server/{t}/lan/hosts/*/check", SCAN, Path),
         rule("POST", "/api/reverse/server/{t}/lan/hosts/*/os", SCAN, Path),
         // 瀏覽器：REST 版的 MCP browser_*（session 只屬於開它的那把，隧道在開的時候檢查）。/ Scripted browsers.
+        rule("GET", "/api/reverse/server/{t}/remote-browser/ports", BROWSER, Path),
         rule("GET|POST", "/api/browser/sessions", BROWSER, Handler),
         rule("DELETE", "/api/browser/sessions/*", BROWSER, Handler),
         rule("POST", "/api/browser/sessions/*/navigate|click|type", BROWSER, Handler),

@@ -172,6 +172,7 @@ This file is loaded in full by every session, so it holds only what every task n
 | `device-info.md` | GeoIP + IP-change alerts, device addresses, device facts, device public IP |
 | `mcp.md` | OAuth 2.1 (MCP connectors), MCP server + AI sessions, interactive shells + agent browsers over MCP |
 | `remote-desktop.md` | Remote desktop, RustDesk in the browser |
+| `remote-browser.md` | Remote browser panel, the device's own ports |
 | `tunnels-ui.md` | Tunnels list data, dense rows, tunnel page + quick-access menu, list search |
 | `frontend.md` | How i18n works, user preferences, type scale, Site settings page layout, UI building blocks, design language, design tokens |
 | `brand.md` | Fonts, favicon, easter eggs + Tapi, disclaimer, sponsoring |

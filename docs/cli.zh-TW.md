@@ -428,6 +428,7 @@ TCP 會轉送，DNS 也會：問裝置後面任何一台 DNS 伺服器的查詢�
 ### 裝置網路上的瀏覽器
 
 ```sh
+telepy browse ports box                        # 裝置自己開了什麼：port 和對應的網址
 ID=$(telepy browse box http://192.168.1.1/)   # 在裝置的網路上開一個瀏覽器（browser:use），印出它的 id
 telepy browse text "$ID" --selector main
 telepy browse shot "$ID" -o router.png

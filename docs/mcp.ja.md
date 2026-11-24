@@ -95,7 +95,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:exec` | デバイスでコマンドを実行 | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`、`lan_wake` |
 | `ssh:files` | デバイスのファイルの読み書き | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write`、`lan_files` |
 | `network:scan` | デバイスのネットワーク上の機器を探す | `lan_scan`、`lan_check`、`lan_os`（自分が所有する、または ADMIN のトンネルのみ） |
-| `browser:use` | デバイスとして Web を閲覧 | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `browser:use` | デバイスとして Web を閲覧 | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 承認ページでは、`ssh:exec`、`ssh:files`、`browser:use` に「変更可能」、残りの 2 つに「読み取りのみ」のタグが付きます。
 
@@ -171,6 +171,7 @@ MCP client ── POST /mcp ─────────────────�
 
 | ツール | 内容 |
 | --- | --- |
+| `browser_ports(tunnel_id, username?)` | デバイスがいま待ち受けているポートを、Web ページを先頭に、開くべき `localhost` の URL 付きで返す。プローブはしない |
 | `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | デバイス経由でリモートブラウザ（Chromium）を開き、`browser_id` を返す。同時に `url` を開ける |
 | `browser_navigate(browser_id, url)` | URL に移動する（http / https のみ。省略時は `https://` を補う）。ページの読み込みを待ち、最終的な URL とタイトルを返す |
 | `browser_read(browser_id, selector?)` | ページのテキスト：タイトル、URL、見えているテキスト（最大 10 万文字）、リンク。`selector` で一部だけ読める |

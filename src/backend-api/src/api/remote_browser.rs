@@ -1,6 +1,6 @@
 //! `/api/reverse/server/{id}/remote-browser/start`、`/remote-browser/{sid}/{stop,ping}`（browse_views.py）。
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
@@ -18,6 +18,7 @@ use crate::util::json_str;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(start))
+        .routes(routes!(ports))
         .routes(routes!(stop))
         .routes(routes!(open_tab))
         .routes(routes!(ping))
@@ -68,6 +69,72 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         Err(StartError::Coded { message, code }) => Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": message, "code": code }))),
         Err(StartError::Other(message)) => Err(ApiError::internal(message)),
     }
+}
+
+fn ports_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
+    ApiError::new(status, json!({ "error": msg.into(), "code": code }))
+}
+
+/// 裝置自己現在在聽哪些 port，給瀏覽器面板 / `telepy browse ports` / MCP `browser_ports` 看：用這個人的裝置帳號跑一次
+/// 掃描用的那個唯讀指令（`ss` / `netstat` / `lsof`，再來 PowerShell），不探測、不存檔；上次掃描存下來的標題拿來標名字。
+/// 呼叫的人已經看過 VIEW（與 step-up）。
+/// The ports the device itself listens on right now, for the browser panel / `telepy browse ports` / MCP
+/// `browser_ports`: one run of the scan's read-only command (`ss` / `netstat` / `lsof`, then PowerShell) as this
+/// person's device account; nothing is probed or stored, and the titles the last scan kept name the ports. The caller
+/// has checked VIEW (and step-up).
+pub async fn device_ports(state: &AppState, user: &crate::db::users::User, t: &crate::db::tunnels::Tunnel, username: Option<&str>) -> ApiResult<Value> {
+    use crate::lan::device_self;
+    let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
+    if allowed.is_empty() {
+        return Err(ports_error(StatusCode::FORBIDDEN, "no_account", "You have no account you may use on this device."));
+    }
+    let username = permissions::choose_username(&allowed, t.default_username_id, username, &t.host_friendly_name).map_err(|e| ports_error(StatusCode::BAD_REQUEST, "username", e))?;
+    if let Some(listen) = state.status.listen_ports() {
+        if !u16::try_from(t.reverse_port).map(|p| listen.contains(&p)).unwrap_or(false) {
+            return Err(ports_error(StatusCode::BAD_REQUEST, "device_offline", format!("The device '{}' is offline.", t.host_friendly_name)));
+        }
+    }
+    let run = |cmd: &'static str| {
+        let state = state.clone();
+        let username = username.clone();
+        async move {
+            match state.pool.session_channel(&state, t.reverse_port, &username).await {
+                Ok((_lease, ch)) => crate::ssh::exec::run_on(ch, cmd, std::time::Duration::from_secs(10), 256 * 1024).await.map(|r| r.stdout.text).map_err(|e| format!("{e:#}")),
+                Err(e) => Err(format!("cannot log in to the device as {username}: {e:#}")),
+            }
+        }
+    };
+    let mut listening = device_self::parse_listening(&run(device_self::LISTEN_POSIX).await.map_err(|e| ports_error(StatusCode::BAD_GATEWAY, "ports_failed", e))?);
+    if listening.is_empty() {
+        listening = device_self::parse_listening(&run(device_self::LISTEN_WINDOWS).await.unwrap_or_default());
+    }
+    // 上次掃描看到的裝置自己的服務（標題、協定）。/ What the last scan saw on the device itself (titles, protocols).
+    let own = db::lan::hosts_for_tunnel(&state.db, t.id).await?.into_iter().find(|h| h.source == "self");
+    let seen = own.as_ref().map(|h| h.service_list()).unwrap_or_default();
+    let ports = device_self::browse_ports(&listening, &seen);
+    Ok(json!({
+        "tunnel_id": t.id,
+        "username": username,
+        // 裝置上沒有任何一個列得出 port 的工具。/ No tool on the device could list its ports.
+        "listed": !listening.is_empty(),
+        "scanned": own.is_some(),
+        "ports": ports,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct PortsQuery {
+    username: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/reverse/server/{id}/remote-browser/ports", tag = "Remote Browser", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = Option<String>, Query, description = "Device account to ask as; omit for the tunnel's default")), responses((status = 200, description = "The ports the device listens on right now, web pages first; `url` is what the remote browser would open", body = super::schemas::RemoteBrowserPorts), (status = 400, description = "code = device_offline | username", body = super::schemas::ErrorBody), (status = 403, description = "code = no_account", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = ports_failed", body = super::schemas::ErrorBody)))]
+async fn ports(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, Query(q): Query<PortsQuery>) -> ApiResult<Json<Value>> {
+    let tunnel = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
+    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
+        return Err(ApiError::forbidden("Permission denied"));
+    }
+    super::step_up::check(&state, user.id, &tunnel, &headers)?;
+    Ok(Json(device_ports(&state, &user, &tunnel, q.username.as_deref().filter(|u| !u.is_empty())).await?))
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/remote-browser/{sid}/stop", tag = "Remote Browser", security(("bearer" = [])), params(("sid" = String, Path, description = "Session id")), responses((status = 200, body = super::schemas::Status), (status = 404, body = super::schemas::ErrorBody)))]
