@@ -469,7 +469,7 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 58);
+    assert_eq!(keys.len(), 59);
     assert_eq!((r.json["values"]["notify_push_max_delay"].as_i64(), r.json["values"]["notify_push_per_hour"].as_i64()), (Some(3600), Some(20)), "status pushes: an hour at most, 20 an hour");
     assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");

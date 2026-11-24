@@ -97,6 +97,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "server_google_client_id", kind: Kind::Opt(256), label: "Google client ID", description: "The OAuth client ID of Google sign-in: the sign-in button uses it and Google sign-ins are checked against it. Blank = no Google sign-in. Applies at once. SOCIAL_GOOGLE_CLIENT_ID in .env takes over." },
     FieldMeta { name: "server_public_url", kind: Kind::Url(512), label: "Public address", description: "The address people open Telepy at, like https://telepy.example.com (no path). Used for the OAuth issuer, links in scripts and webhooks, the passkey domain and devices' address lookups. Blank = taken from each request's X-Forwarded-* headers. Changing it makes passkeys registered under another domain stop working. Applies at once. PUBLIC_URL in .env takes over." },
     FieldMeta { name: "server_ssh_host", kind: Kind::Opt(253), label: "SSH host", description: "The name devices and laptops connect their SSH to (the gateway port). Blank = the same name as the web. Set it when the web name goes through a proxy that only carries web ports (Cloudflare, another CDN, an HTTP load balancer…): that name then cannot reach the SSH port, so give SSH a name that goes straight to this server. Only new scripts and SSH configs use it; installed devices keep the name they were set up with. SSH_SERVER_DOMAIN in .env takes over." },
+    FieldMeta { name: "server_proxy_url", kind: Kind::Url(512), label: "Proxy address", description: "The address programs put in their proxy setting to use the device proxy, like https://proxy.example.com:8443 (no path). It needs the proxy endpoint to be listening (PROXY_BIND in .env) and a name that reaches it without a CDN in between, because a CDN does not pass CONNECT. Blank = no proxy address: the device proxy then only rides WebSockets on the web address, and telepy proxy turns that into an ordinary proxy on the person's own computer." },
     FieldMeta { name: "app_name_mode", kind: Kind::Choice(&crate::app_manifest::MODES), label: "App name", description: "The name Telepy gets when someone installs it as an app (the home screen, the dock, the app's window) and the title of its notifications. telepy = Telepy; domain = this site's domain, so two Telepy servers on one computer or phone can be told apart; custom = the name below. Browsers pick a new name up the next time they check the app. Everyone can see it, signed in or not." },
     FieldMeta { name: "app_name", kind: Kind::Opt(64), label: "Custom app name", description: "Used when the app name is set to custom. Up to 30 characters; home screens often show only the first 12 or so." },
     FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
@@ -157,6 +158,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("server_google_client_id".into(), json!(s.server_google_client_id));
     m.insert("server_public_url".into(), json!(s.server_public_url));
     m.insert("server_ssh_host".into(), json!(s.server_ssh_host));
+    m.insert("server_proxy_url".into(), json!(s.server_proxy_url));
     m.insert("app_name_mode".into(), json!(s.app_name_mode));
     m.insert("app_name".into(), json!(s.app_name));
     m.insert("notify_push".into(), json!(s.notify_push));
@@ -442,6 +444,7 @@ fn normalize(name: &str, value: SettingValue) -> Result<SettingValue, ApiError> 
         "server_google_client_id" => ss::check_google_client_id(s),
         "server_public_url" => ss::check_public_url(s),
         "server_ssh_host" => ss::check_ssh_host(s),
+        "server_proxy_url" => ss::check_proxy_url(s),
         "app_name" => crate::app_manifest::check_name(s),
         // 原封不動放進 HTTP 請求：一行、看得見的 ASCII。/ Goes into an HTTP request as is: one line of visible ASCII.
         "lan_scan_user_agent" => crate::lan::fingerprint::check_user_agent(s),

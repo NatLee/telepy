@@ -774,6 +774,7 @@ mod tests {
             server_google_client_id: String::new(),
             server_public_url: String::new(),
             server_ssh_host: String::new(),
+            server_proxy_url: String::new(),
             app_name_mode: "telepy".into(),
             app_name: String::new(),
             notify_push: true,

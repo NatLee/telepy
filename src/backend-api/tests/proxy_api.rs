@@ -218,3 +218,99 @@ async fn a_token_proxies_through_a_device_only_while_everything_allows_it() {
     assert!(ends(&mut ws).await);
     assert!(events(app, spare.tunnel_id, "proxy_close").await[0].contains("turned off"));
 }
+
+/// 一個回「收到的請求第一行」的 HTTP 服務。/ An HTTP service answering with the request line it received.
+async fn echo_line_server() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let body = format!("got [{}] proxy-header={}", text.lines().next().unwrap_or_default(), text.to_ascii_lowercase().contains("proxy-authorization"));
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            });
+        }
+    });
+    port
+}
+
+/// 對代理入口送一段、讀到對方關閉。/ Send to the proxy endpoint and read until it closes.
+async fn through(proxy: u16, request: String) -> String {
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", proxy)).await.unwrap();
+    s.write_all(request.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(15), s.read_to_end(&mut out)).await;
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 標準的 HTTP 代理入口：通道寫在帳號、token 寫在密碼；之後跟 `/ws/proxy/` 是同一套檢查與同一個 session。
+/// The standard HTTP proxy endpoint: the tunnel as the user, the token as the password; from there the same checks and
+/// the same session as `/ws/proxy/`.
+#[tokio::test]
+async fn a_standard_proxy_client_gets_through_with_the_tunnel_as_user_and_a_token_as_password() {
+    use base64::Engine;
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let web = echo_line_server().await;
+    let closed = free_port();
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"proxy_enabled": true})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let (tok, _) = token(app, &alice.token, json!({"name": "curl", "scopes": ["proxy:use"], "expires_at": in_days(3)})).await;
+    let (no_scope, _) = token(app, &alice.token, json!({"name": "reader", "scopes": ["tunnels:read"], "expires_at": in_days(3)})).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = listener.local_addr().unwrap().port();
+    tokio::spawn(telepy_server::proxy::listener::accept_loop(app.state.clone(), listener, None));
+    let basic = |user: &str, pass: &str| format!("Proxy-Authorization: Basic {}\r\n", base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}")));
+    let get = |auth: String, port: u16| format!("GET http://127.0.0.1:{port}/status?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Proxy-Connection: keep-alive\r\n\r\n");
+
+    // 沒帶帳密 / token 不對 = 407，請客戶端帶帳密。/ No credentials or a wrong token = 407 asking for them.
+    let r = through(proxy, get(String::new(), web)).await;
+    assert!(r.starts_with("HTTP/1.1 407 ") && r.contains("Proxy-Authenticate: Basic realm=") && r.contains("token_required"), "{r}");
+    let r = through(proxy, get(basic("box", "tpt_nonsense"), web)).await;
+    assert!(r.starts_with("HTTP/1.1 407 ") && r.contains("token_invalid"), "{r}");
+    // 其他的拒絕跟 /ws/proxy/ 一樣。/ Other refusals are the same as /ws/proxy/.
+    assert!(through(proxy, get(basic("box", &no_scope), web)).await.starts_with("HTTP/1.1 403 "));
+    let r = through(proxy, get(basic("nope", &tok), web)).await;
+    assert!(r.starts_with("HTTP/1.1 404 ") && r.contains("tunnel_not_found"), "{r}");
+    let r = through(proxy, get(basic("box", &tok), closed)).await;
+    assert!(r.starts_with("HTTP/1.1 502 ") && r.contains("connect_failed"), "{r}");
+    assert!(through(proxy, "GET /not-a-proxy-request HTTP/1.1\r\n\r\n".to_string()).await.starts_with("HTTP/1.1 400 "));
+
+    // 一般 HTTP：改成 origin-form，我們的 Proxy-Authorization 不會流到目標。/ Plain HTTP: origin-form, and our Proxy-Authorization never reaches the target.
+    let r = through(proxy, get(basic("box", &tok), web)).await;
+    assert!(r.starts_with("HTTP/1.1 200 OK") && r.ends_with("got [GET /status?x=1 HTTP/1.1] proxy-header=false"), "{r}");
+    // 通道@裝置帳號、用 id、Bearer + Telepy-Tunnel 都行。/ tunnel@account, an id, and Bearer + Telepy-Tunnel all work.
+    assert!(through(proxy, get(basic("box@ubuntu", &tok), web)).await.starts_with("HTTP/1.1 200 OK"));
+    assert!(through(proxy, get(basic(&dev.tunnel_id.to_string(), &tok), web)).await.starts_with("HTTP/1.1 200 OK"));
+    assert!(through(proxy, get(format!("Proxy-Authorization: Bearer {tok}\r\nTelepy-Tunnel: box\r\n"), web)).await.starts_with("HTTP/1.1 200 OK"));
+    let r = through(proxy, get(basic("box@root", &tok), web)).await;
+    assert!(r.starts_with("HTTP/1.1 400 ") && r.contains("username"), "{r}");
+
+    // CONNECT：先回 200，之後原樣轉接。/ CONNECT: a 200 first, then bytes as they are.
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", proxy)).await.unwrap();
+    s.write_all(format!("CONNECT 127.0.0.1:{web} HTTP/1.1\r\nHost: 127.0.0.1:{web}\r\n{}\r\n", basic("box", &tok)).as_bytes()).await.unwrap();
+    let mut head = [0u8; 39];
+    tokio::time::timeout(Duration::from_secs(15), s.read_exact(&mut head)).await.expect("the CONNECT answer").unwrap();
+    assert_eq!(&head[..], b"HTTP/1.1 200 Connection established\r\n\r\n");
+    s.write_all(b"GET /through-connect HTTP/1.1\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(15), s.read_to_end(&mut out)).await;
+    assert!(String::from_utf8_lossy(&out).ends_with("got [GET /through-connect HTTP/1.1] proxy-header=false"), "{}", String::from_utf8_lossy(&out));
+
+    // 同一把 token、同一條通道：跟 WebSocket 那條路是同一個 session。/ Same token, same tunnel: one session with the WebSocket way.
+    let base = lab.ws_base().await;
+    let mut ws = dial(&base, Some(&tok), &format!("tunnel=box&host=127.0.0.1&port={}", shout_server().await)).await.expect("the websocket way");
+    assert_eq!(say(&mut ws, "both ways").await, "BOTH WAYS");
+    let list = app.get("/api/proxy/sessions", Some(&tok)).await.json;
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    assert!(list[0]["connections_total"].as_u64().unwrap() >= 6, "{list}");
+    assert!(boxm.logged_in("ubuntu", &lab.service));
+}

@@ -41,7 +41,7 @@ export function SectionHeading({
                     {icon}
                     <span className={cn("min-w-0", wrapTitle ? "[overflow-wrap:anywhere]" : "truncate")}>{title}</span>
                 </Tag>
-                {description && <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">{description}</p>}
+                {description && <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{description}</p>}
             </div>
             {action && <div className="shrink-0">{action}</div>}
         </div>

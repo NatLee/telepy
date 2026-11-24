@@ -29,6 +29,9 @@ pub mod mascot;
 pub mod oauth;
 pub mod prefs;
 pub mod proxy;
+/// HTTP 代理請求的讀法：跟後端的代理入口同一個檔。/ Reading HTTP proxy requests: the same file as the backend's proxy endpoint.
+#[path = "../../backend-api/src/proxy/request.rs"]
+pub mod proxy_request;
 #[path = "../../backend-api/src/release_key.rs"]
 pub mod release_key;
 pub mod signed_in;

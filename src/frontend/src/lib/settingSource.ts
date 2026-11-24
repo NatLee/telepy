@@ -113,10 +113,12 @@ export function layerStates(src: SettingSource): Record<SettingLayer, LayerState
 
 /** 伺服器分頁的分組（key 的順序就是畫面上的順序）。/ The Server tab's groups, in display order. */
 export const SERVER_GROUPS = [
+    // 三個讓人連進來的位址放在一起（網頁 / SSH / 代理），才看得出差別。/ The three addresses people connect to, together, so the differences show.
+    { id: "addresses", keys: ["server_public_url", "server_ssh_host", "server_proxy_url"] },
     { id: "visitor", keys: ["client_ip_hops", "client_ip_header", "client_ip_cloudflare"] },
-    { id: "devices", keys: ["server_ssh_host", "server_device_probe", "server_keep_shared_service_key", "server_gateway_proxy_protocol_from"] },
+    { id: "devices", keys: ["server_device_probe", "server_keep_shared_service_key", "server_gateway_proxy_protocol_from"] },
     { id: "logs", keys: ["server_log_level", "server_openapi_enabled"] },
-    { id: "signin", keys: ["server_google_client_id", "server_public_url"] },
+    { id: "signin", keys: ["server_google_client_id"] },
 ] as const;
 
 export type ServerGroupId = (typeof SERVER_GROUPS)[number]["id"];
@@ -144,6 +146,7 @@ export const ENV_ONLY: { vars: string[]; reasons: EnvOnlyReason[] }[] = [
     { vars: ["SECRET_KEY"], reasons: ["secret", "beforeStart"] },
     { vars: ["INTERNAL_API_TOKEN"], reasons: ["secret", "shared"] },
     { vars: ["WEB_SERVER_PORT", "REVERSE_SERVER_SSH_PORT"], reasons: ["compose"] },
+    { vars: ["PROXY_PORT", "PROXY_TLS_CERT", "PROXY_TLS_KEY"], reasons: ["compose", "beforeStart"] },
     { vars: ["SERVER_DOMAIN"], reasons: ["compose", "beforeStart"] },
     { vars: ["PROJECT_NAME"], reasons: ["compose"] },
     { vars: ["GEOIP_DIR", "OUI_DIR"], reasons: ["beforeStart", "compose"] },

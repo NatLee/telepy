@@ -31,6 +31,7 @@ pub const ENV_KEYS: &[(&str, &str)] = &[
     ("server_google_client_id", "SOCIAL_GOOGLE_CLIENT_ID"),
     ("server_public_url", "PUBLIC_URL"),
     ("server_ssh_host", "SSH_SERVER_DOMAIN"),
+    ("server_proxy_url", "PROXY_URL"),
 ];
 
 /// 一個鍵的環境變數名稱。/ The variable behind a key.
@@ -112,6 +113,7 @@ pub struct Saved {
     pub google_client_id: String,
     pub public_url: String,
     pub ssh_host: String,
+    pub proxy_url: String,
 }
 
 impl Default for Saved {
@@ -129,6 +131,7 @@ impl Default for Saved {
             google_client_id: String::new(),
             public_url: String::new(),
             ssh_host: String::new(),
+            proxy_url: String::new(),
         }
     }
 }
@@ -147,6 +150,7 @@ impl From<&SiteSettings> for Saved {
             google_client_id: s.server_google_client_id.clone(),
             public_url: s.server_public_url.clone(),
             ssh_host: s.server_ssh_host.clone(),
+            proxy_url: s.server_proxy_url.clone(),
         }
     }
 }
@@ -166,6 +170,7 @@ impl Saved {
             "server_google_client_id" => self.google_client_id.clone(),
             "server_public_url" => self.public_url.clone(),
             "server_ssh_host" => self.ssh_host.clone(),
+            "server_proxy_url" => self.proxy_url.clone(),
             _ => return None,
         })
     }
@@ -216,6 +221,7 @@ impl Config {
             "server_google_client_id" => self.google_client_id.clone(),
             "server_public_url" => self.public_url.clone(),
             "server_ssh_host" => self.ssh_server_domain.clone(),
+            "server_proxy_url" => self.proxy_url.clone(),
             _ => None,
         }
         .filter(|v| !v.trim().is_empty())
@@ -294,6 +300,14 @@ impl Config {
     /// `PUBLIC_URL` / `server_public_url`（去掉結尾斜線）。/ The public base URL, without a trailing slash.
     pub fn public_base(&self) -> Option<String> {
         Some(self.effective("server_public_url").0.trim().trim_end_matches('/').to_string()).filter(|v| !v.is_empty())
+    }
+
+    /// 裝置代理對外的標準代理位址（`PROXY_URL` / `server_proxy_url`）：有開代理入口（`PROXY_BIND`）而且這個有設才有。
+    /// The device proxy's public standard proxy address (`PROXY_URL` / `server_proxy_url`): only with the proxy endpoint
+    /// listening (`PROXY_BIND`) and this set.
+    pub fn proxy_url(&self) -> Option<String> {
+        self.proxy_bind.as_ref()?;
+        check_proxy_url(&self.effective("server_proxy_url").0).ok().filter(|v| !v.is_empty())
     }
 
     /// 裝置與筆電的 SSH 連的主機（`SSH_SERVER_DOMAIN` / `server_ssh_host`）；沒設（或設錯）= None，呼叫端退回網頁的
@@ -430,6 +444,29 @@ pub fn check_public_url(v: &str) -> Result<String, String> {
     Ok(v.trim_end_matches('/').to_string())
 }
 
+/// 裝置代理的標準代理位址：`http(s)://主機[:port]`，沒有帳密、路徑；可以空白（= 沒有，代理只走網頁 port 的 WebSocket）。
+/// The device proxy's standard proxy address: `http(s)://host[:port]`, no credentials or path; or blank (= none: the
+/// proxy only rides WebSockets on the web port).
+pub fn check_proxy_url(v: &str) -> Result<String, String> {
+    let v = v.trim();
+    if v.is_empty() {
+        return Ok(String::new());
+    }
+    let bad = || "Enter the address proxy clients connect to, like https://proxy.example.com:8443 (no path), or leave it blank.".to_string();
+    let u = reqwest::Url::parse(v).map_err(|_| bad())?;
+    let ok = matches!(u.scheme(), "http" | "https")
+        && u.host_str().is_some_and(|h| !h.is_empty())
+        && u.username().is_empty()
+        && u.password().is_none()
+        && matches!(u.path(), "" | "/")
+        && u.query().is_none()
+        && u.fragment().is_none();
+    if !ok {
+        return Err(bad());
+    }
+    Ok(v.trim_end_matches('/').to_string())
+}
+
 /// 容錯：`.env` 可能寫成 `ssh://host/` 或 `host:port`；只留主機。/ Tolerate `ssh://host/` or `host:port`: keep the host.
 pub fn strip_host(v: &str) -> String {
     let v = v.trim();
@@ -545,8 +582,33 @@ mod tests {
             assert!(check_public_url(bad).is_err(), "{bad}");
         }
 
+        assert_eq!(check_proxy_url("https://proxy.example.com:8443/").unwrap(), "https://proxy.example.com:8443");
+        assert_eq!(check_proxy_url("").unwrap(), "");
+        for bad in ["proxy.example.com:8443", "socks5://proxy.example.com", "https://box:token@proxy.example.com", "https://proxy.example.com/path"] {
+            assert!(check_proxy_url(bad).is_err(), "{bad}");
+        }
+
         assert_eq!(check_google_client_id(" 1-abc.apps.googleusercontent.com ").unwrap(), "1-abc.apps.googleusercontent.com");
         assert!(check_google_client_id("a b").is_err());
+    }
+
+    /// 代理位址只有在代理入口真的有開（`PROXY_BIND`）時才給人看：沒開的話那個網址連不上。
+    /// The proxy address is only shown while the endpoint really listens (`PROXY_BIND`): without it nobody could connect there.
+    #[test]
+    fn the_proxy_address_needs_a_listening_endpoint() {
+        let mut c = Config::from_env();
+        c.proxy_url = None;
+        c.proxy_bind = None;
+        c.live = Live::default();
+        let mut saved = Saved::default();
+        saved.proxy_url = "https://proxy.example.com:8443".into();
+        c.live.set(saved);
+        assert_eq!(c.proxy_url(), None, "saved, but nothing listens");
+        c.proxy_bind = Some("0.0.0.0:8444".into());
+        assert_eq!(c.proxy_url().as_deref(), Some("https://proxy.example.com:8443"));
+        c.proxy_url = Some("https://env.example.com".into());
+        assert_eq!(c.proxy_url().as_deref(), Some("https://env.example.com"), ".env wins");
+        assert_eq!(c.effective("server_proxy_url").1, Source::Env);
     }
 
     #[test]
