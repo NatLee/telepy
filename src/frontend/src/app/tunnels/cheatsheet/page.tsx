@@ -289,7 +289,7 @@ function CheatsheetInner() {
             case "jump": return tn("sheet.sentence.jump", { device, lanUser: blank("lanUser"), lanHost: blank("lanHost"), lanPort: blank("lanPort") });
             case "copy": return tn(upload ? "sheet.sentence.copyUp" : "sheet.sentence.copyDown", { device, localPath: blank("localPath"), remotePath: blank("remotePath"), tool });
             case "rustdesk": return tn("sheet.sentence.rustdesk", { device, lanHost: blank("lanHost"), remotePort: blank("remotePort"), localPort: blank("localPort") });
-            case "vpn": return tn("sheet.sentence.vpn", { device, network: blank("network") });
+            case "vpn": return resolved.scope === "all" ? tn("sheet.sentence.vpnAll", { device }) : tn("sheet.sentence.vpn", { device, network: blank("network") });
         }
     })();
 
@@ -303,7 +303,7 @@ function CheatsheetInner() {
             case "jump": return tn("sheet.caption.jump", { target: code(`${resolved.lanUser}@${resolved.lanHost}`), alias: name });
             case "copy": return tn(upload ? "sheet.caption.copyUp" : "sheet.caption.copyDown", { from: code(upload ? resolved.localPath : resolved.remotePath), to: code(upload ? resolved.remotePath : resolved.localPath), alias: name });
             case "rustdesk": return tn("sheet.caption.rustdesk", { you: code(`127.0.0.1:${resolved.localPort}`), target: code(`${resolved.lanHost}:${resolved.remotePort}`), alias: name });
-            case "vpn": return tn("sheet.caption.vpn", { network: code(resolved.network), alias: name });
+            case "vpn": return resolved.scope === "all" ? tn("sheet.caption.vpnAll", { alias: name }) : tn("sheet.caption.vpn", { network: code(resolved.network), alias: name });
         }
     })();
 
@@ -351,7 +351,8 @@ function CheatsheetInner() {
                 return (
                     <>
                         {!telepyWay && <p>{t("sheet.next.vpnTelepyOnly")}</p>}
-                        <p>{t("sheet.next.telepyVpn")}</p>
+                        <p>{t(resolved.scope === "all" ? "sheet.next.vpnAll" : "sheet.next.telepyVpn")}</p>
+                        <p className="text-xs">{tn("sheet.next.vpnCheck", { check: code("--check") })}</p>
                     </>
                 );
         }
@@ -600,6 +601,16 @@ function CheatsheetInner() {
                                     options={[
                                         { value: "upload", label: t("sheet.field.upload") },
                                         { value: "download", label: t("sheet.field.download") },
+                                    ]}
+                                />
+                            ) : recipe === "vpn" ? (
+                                <Segmented
+                                    value={resolved.scope === "all" ? "all" : "network"}
+                                    onChange={(v) => setParam("scope", v)}
+                                    ariaLabel={t("sheet.field.vpnScope")}
+                                    options={[
+                                        { value: "network", label: t("sheet.field.vpnScopeNetwork") },
+                                        { value: "all", label: t("sheet.field.vpnScopeAll") },
                                     ]}
                                 />
                             ) : undefined

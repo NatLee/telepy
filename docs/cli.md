@@ -398,6 +398,8 @@ telepy vpn box                                         # the device's own networ
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan    # names under corp.lan too, found by the device
 telepy vpn box 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1   # …or asked of the network's DNS server
 telepy vpn box 192.168.1.0/24 --carrier                # ping and UDP too, through the Telepy carrier already on the device
+telepy vpn box --all                                   # everything through the device: sites see its address
+telepy vpn box --all --check --probe 192.168.1.20:22   # try it first, without admin rights
 ```
 
 `telepy vpn` makes the networks behind a device reachable from this computer until Ctrl+C: `ssh`, a browser, a database client or anything else that speaks TCP connects to `192.168.1.20` as if you were on that network. It adds a network device and routes on this computer, so it asks for your password through sudo (macOS and Linux).
@@ -413,7 +415,19 @@ telepy vpn box 192.168.1.0/24 --carrier                # ping and UDP too, throu
 | Names (`--dns-server`) | names under the domain are asked of that DNS server instead, over TCP through the device: real answers (every record type), and it works for a Mac device too |
 | Connecting | the VPN connects from the device first and lets your program's connection through only once that worked, so a closed port answers "connection refused" at once instead of looking open |
 
-Without networks on the command line, `telepy vpn` takes the device's own networks Telepy learned from it, and leaves out any this computer is on too (routing your own LAN away would cut it); name one to route it anyway. A network that contains the Telepy server itself is refused: the VPN would route its own connection into itself.
+Without networks on the command line, `telepy vpn` takes the device's own networks Telepy learned from it, and leaves out any this computer is on too (routing your own LAN away would cut it); name one to route it anyway. A network that contains the Telepy server itself is fine: the server's addresses keep their own path, so the VPN never routes its own connection into itself. The default covers only the networks the device's own interfaces are on. A device in a cloud network often reaches other subnets through its router: name those too, or use `--all`.
+
+**Everything through the device (`--all`).** Use it when you want to leave through the device: a service that only lets the device's address in, or every subnet the device can reach rather than just the one its interface sits on. Sites then see the device's address.
+
+- Two routes (`0.0.0.0/1` and `128.0.0.0/1`) point at the VPN. Your default route is never touched, so a crash can't leave this computer without one, and Ctrl+C puts everything back.
+- The Telepy server keeps its own path (one host route per address, looked up again every 30 seconds), because the VPN's own connection runs to it.
+- Networks this computer is plugged into stay local: your printer and your router still answer.
+- IPv6 is refused while it runs. Otherwise a computer with IPv6 would reach dual-stack sites from its own address, around the VPN. Programs fall back to IPv4 at once.
+- Names are still looked up by your own DNS server when it is on your local network. A public DNS server (`1.1.1.1`) is reached through the device like everything else.
+
+**The same network on both sides.** If the device's network is 192.168.1.0/24 and so is yours, routing it whole would cut your own network. `telepy vpn` leaves it out and routes the hosts Telepy knows there one by one instead (from `telepy lan scan` or `telepy lan add`), skipping the addresses that are your own computer, gateway or DNS server here. Name any other host yourself: `telepy vpn box 192.168.1.50`.
+
+**Try it first (`--check`).** `telepy vpn box --check` starts nothing and needs no admin rights. It prints what would be routed, what is left out and why, and what keeps its own path, then opens the SSH connection and reaches a few hosts through the device: the ones a scan saw with an open port, plus any `--probe host:port`. If that works, so will the VPN; if not, the line says which host failed and how.
 
 TCP goes through, and so does DNS: a lookup sent to any DNS server behind the device (UDP port 53) is carried to it as TCP, which every DNS server also speaks. Without `--carrier`, ping and other UDP don't go through, because SSH carries TCP only; they get "packet filtered" at once instead of a silent timeout, and `telepy vpn` says so the first time. Names outside `--dns-domain` stay local. On a Mac device `--dns-domain` needs `--dns-server` or `--carrier`: Apple's sshd ends the whole SSH connection when asked to reach a name, so use the network's DNS server, addresses (`telepy lan ls box` lists them) or this computer's `/etc/hosts`. An idle connection stays open as long as both ends keep it (an SSH session left alone for an hour is fine). Access follows the same rules as `telepy ssh`: you need `tunnels:read`, your personal SSH key and an account you may use on the device, and the device's sshd must allow TCP forwarding (`telepy vpn` tells you when it doesn't). Telepy shows you as an SSH session on the tunnel while it runs.
 
