@@ -143,14 +143,14 @@ eval "$(telepy completions zsh)"     # 加在 ~/.zshrc
 
 ```sh
 telepy login https://telepy.example.com                 # 瀏覽器登入：OAuth + PKCE，回呼到本機
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files network:scan"
+telepy login https://telepy.example.com --scope "tunnels:read"            # 只要求比全部少的權限
 telepy login https://telepy.example.com --no-browser    # 只印出登入網址，不自動開瀏覽器
 telepy login https://telepy.example.com --token tpt_…   # 用個人 API token（API 頁面 → 你的 token）；--with-token 也可以
 telepy whoami                                           # 你是誰、用哪個 token / app、scope、通道與到期日
 telepy logout
 ```
 
-沒加 `--scope` 時，瀏覽器登入會要求 `tunnels:read ssh:exec ssh:files proxy:use`（伺服器還沒有裝置代理的話，`proxy:use` 會自動省略）。每個 scope 能做什麼，請看 [Scope](#scope)。
+瀏覽器登入會要求 CLI 用得到的全部權限（`tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use`），要給哪些由你在同意頁上決定。比較舊的伺服器還不認得的會自動省略。每個 scope 能做什麼，請看 [Scope](#scope)。
 
 核准之後，瀏覽器會停在 Telepy 的「已登入」頁面，列出 CLI 現在能做什麼，再附上幾個可以試試的指令。它的外觀跟著**網站設定 → 登入**裡核准頁面的設定走。較舊的 Telepy 伺服器沒有這個頁面，就改由 CLI 自己畫一個小頁面。
 
@@ -358,7 +358,7 @@ telepy lan os box 192.168.1.20             # 它跑什麼系統：ping 的 TTL�
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # 標籤與備註（tunnels:manage）
 ```
 
-列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`（用 `telepy login --scope` 加上）。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
+列出與 `show` 只需要 `tunnels:read`；`scan` 需要 `network:scan`。新增和移除需要 `tunnels:manage`，而這個 scope 只有 API token 拿得到。
 
 掃描預設會對每個開著的網頁 port 送一個 `GET /`（HTTPS 的還會看它的憑證），才分得出路由器、NAS 還是 Proxmox；那些機器的紀錄裡會看到一筆從裝置來的普通瀏覽器請求（桌面版 Chrome；管理員可以在網站設定 → 裝置與網路換成別的 User-Agent）。其他 port 只聽、不送。`--no-identify` 就不送那個 GET。
 

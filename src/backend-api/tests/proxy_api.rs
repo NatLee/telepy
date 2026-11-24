@@ -125,7 +125,10 @@ async fn a_token_proxies_through_a_device_only_while_everything_allows_it() {
     let (stranger, _) = token(app, &mallory.token, json!({"name": "m", "scopes": ["proxy:use"], "expires_at": in_days(3)})).await;
     let q = |port: u16| format!("tunnel=box&host=127.0.0.1&port={port}");
 
-    // 1) 預設關閉：token 連不了、列不了；網頁看得到「沒開」。/ Off by default: a token can neither connect nor list; the web sees "off".
+    // 1) 預設開著；管理員關掉後 token 連不了、列不了，網頁看得到「沒開」。/ On by default; once an administrator turns it off a token can neither connect nor list, and the web sees "off".
+    assert_eq!(app.get("/api/proxy/tunnels", Some(&alice.token)).await.json["enabled"], true, "on by default");
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"proxy_enabled": false})).await;
+    assert_eq!(r.json["values"]["proxy_enabled"], false, "{}", r.text);
     assert_eq!(refused(&base, Some(&tok), &q(shout)).await, (StatusCode::FORBIDDEN, "proxy_disabled".into()));
     assert_eq!(app.get("/api/proxy/tunnels", Some(&tok)).await.json["code"], "proxy_disabled");
     let r = app.get("/api/proxy/tunnels", Some(&alice.token)).await;

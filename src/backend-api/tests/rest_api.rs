@@ -474,7 +474,20 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["notify_push"], true, "people may turn on push notifications by default");
     assert_eq!(r.json["values"]["app_name_mode"], "telepy", "an installed app is called Telepy by default");
     assert_eq!(r.json["values"]["carrier_auto_update"], true, "device carriers follow new releases by default");
-    assert_eq!((r.json["values"]["proxy_enabled"].as_bool(), r.json["values"]["proxy_max_connections"].as_i64()), (Some(false), Some(64)), "the device proxy is off until an admin turns it on");
+    assert_eq!((r.json["values"]["proxy_enabled"].as_bool(), r.json["values"]["proxy_max_connections"].as_i64()), (Some(true), Some(64)), "the device proxy is on by default");
+    // v2.20.0 建的資料庫這一欄是關的：升級時開一次；之後管理員關掉就維持關。
+    // A database from v2.20.0 has it off: the upgrade switches it on once, and an administrator's later "off" stays off.
+    let db = &app.state.db;
+    sqlx::query("UPDATE site_settings_sitesettings SET proxy_enabled = 0").execute(&db.write).await.unwrap();
+    sqlx::query("DELETE FROM telepy_data_migration WHERE name = ?").bind(telepy_server::db::schema::PROXY_ON_BY_DEFAULT).execute(&db.write).await.unwrap();
+    telepy_server::db::schema::ensure_schema(&db.write).await.unwrap();
+    assert_eq!(app.get("/api/site/settings", Some(&admin)).await.json["values"]["proxy_enabled"], true, "switched on by the upgrade");
+    let r = app.post("/api/site/settings", Some(&admin), json!({"proxy_enabled": false})).await;
+    assert_eq!(r.json["values"]["proxy_enabled"], false, "{}", r.text);
+    telepy_server::db::schema::ensure_schema(&db.write).await.unwrap();
+    assert_eq!(app.get("/api/site/settings", Some(&admin)).await.json["values"]["proxy_enabled"], false, "an administrator's choice is kept");
+    let r = app.post("/api/site/settings", Some(&admin), json!({"proxy_enabled": true})).await;
+    assert_eq!(r.json["values"]["proxy_enabled"], true, "{}", r.text);
     assert_eq!(r.json["values"]["datasets_auto_update"], true, "installed GeoIP / vendor data is kept current by default");
     assert_eq!(r.json["values"]["signin_page_style"], "standard", "the sign-in page shows the product by default");
     assert_eq!(r.json["values"]["signin_oauth_style"], "standard");

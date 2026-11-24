@@ -69,7 +69,6 @@ export const CLI_EXAMPLES = [
     { id: "proxyCurl", topic: "network", lines: ["telepy proxy <tunnel> --port 8118", "curl -x http://127.0.0.1:8118 https://ifconfig.me"], needs: ["proxy:use"] },
     { id: "browsePorts", topic: "network", lines: ["telepy browse ports <tunnel>"], needs: ["browser:use"] },
     { id: "browse", topic: "network", lines: ["ID=$(telepy browse <tunnel> http://192.168.1.1/)", "telepy browse text \"$ID\" --selector main", "telepy browse shot \"$ID\" -o router.png", "telepy browse close \"$ID\""], needs: ["browser:use"] },
-    { id: "browseLogin", topic: "network", lines: ["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files browser:use\""], needs: ["browser:use"] },
     { id: "ciEnv", topic: "ci", lines: ["export TELEPY_URL=<url>", "export TELEPY_TOKEN=tpt_…", "telepy exec --label <label> -- uptime"], needs: ["ssh:exec"] },
     { id: "activity", topic: "ci", lines: ["telepy api activity --since 1h --follow"], needs: [] },
     { id: "login", topic: "setup", lines: ["telepy login <url>"], needs: [] },

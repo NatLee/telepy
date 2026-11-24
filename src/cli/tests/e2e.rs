@@ -562,7 +562,9 @@ async fn proxy_reaches_the_devices_network_from_this_computer() {
     let h = home.path();
     assert_eq!(telepy(h, &["login", &base, "--token", &secret]).await.code, 0);
 
-    // 預設關閉：說怎麼開。/ Off by default: it says how to turn it on.
+    // 管理員關掉時：說在哪裡開回來。/ Turned off by an administrator: it says where to turn it back on.
+    let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"proxy_enabled": false})).await;
+    assert!(r.status.is_success(), "{}", r.text);
     let o = telepy(h, &["proxy", "box"]).await;
     assert!(o.code != 0 && o.stderr.contains("Site settings") && o.stderr.contains("Device proxy"), "{}", o.stderr);
     let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"proxy_enabled": true})).await;

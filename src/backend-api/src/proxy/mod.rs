@@ -328,7 +328,7 @@ pub async fn find_tunnel(state: &AppState, p: &McpPrincipal, tunnel: &str) -> Re
 pub async fn check_allowed(state: &AppState, p: &McpPrincipal) -> Result<db::settings::SiteSettings, ProxyError> {
     let settings = db::settings::get_solo(&state.db).await.map_err(|_| ProxyError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Database error."))?;
     if !settings.proxy_enabled {
-        return Err(ProxyError::new(StatusCode::FORBIDDEN, "proxy_disabled", "The device proxy is turned off on this Telepy server (Site settings → Features → Device proxy)."));
+        return Err(ProxyError::new(StatusCode::FORBIDDEN, "proxy_disabled", "An administrator turned the device proxy off on this Telepy server (Site settings → Features → Device proxy)."));
     }
     if !p.has_scope(SCOPE) {
         return Err(ProxyError::new(StatusCode::FORBIDDEN, "token_scope", format!("This credential lacks the {SCOPE} permission.")));

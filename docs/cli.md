@@ -143,14 +143,14 @@ No colour when:
 
 ```sh
 telepy login https://telepy.example.com                 # browser: OAuth + PKCE, loopback callback
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files network:scan"
+telepy login https://telepy.example.com --scope "tunnels:read"            # ask for less than everything
 telepy login https://telepy.example.com --no-browser    # print the sign-in URL instead of opening a browser
 telepy login https://telepy.example.com --token tpt_…   # a personal API token (the API page → Your tokens); --with-token works too
 telepy whoami                                           # who, and with which token / app, scopes, tunnels and expiry
 telepy logout
 ```
 
-Without `--scope`, the browser sign-in asks for `tunnels:read ssh:exec ssh:files proxy:use` (`proxy:use` is left out for a server that doesn't have the device proxy yet). See [Scopes](#scopes) for what each one allows.
+The browser sign-in asks for everything the CLI can do (`tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use`), and you choose what to allow on the approval page. Ones an older server doesn't know are left out. See [Scopes](#scopes) for what each one allows.
 
 After you approve, the browser lands on Telepy's "signed in" page. It shows what the CLI may do now and a few commands to try, and it follows the approval page's look from **Site settings → Sign-in**. An older Telepy server without that page gets a small page drawn by the CLI itself.
 
@@ -358,7 +358,7 @@ telepy lan os box 192.168.1.20             # which OS it runs: ping TTL, SSH gre
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # labels and a note (tunnels:manage)
 ```
 
-Listing and `show` need `tunnels:read`; `scan` needs `network:scan` (add it with `telepy login --scope`). Adding and removing need `tunnels:manage`, which only API tokens can carry.
+Listing and `show` need `tunnels:read`; `scan` needs `network:scan`. Adding and removing need `tunnels:manage`, which only API tokens can carry.
 
 By default a scan sends one `GET /` to every open web port (HTTPS ones also show their certificate) so it can tell a router from a NAS or a Proxmox host; those machines log it as an ordinary browser visit from the device (desktop Chrome, unless an admin sets another user agent under Site settings → Devices & network). Every other port is only listened to. `--no-identify` turns the GET off.
 

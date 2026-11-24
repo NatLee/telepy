@@ -14,11 +14,11 @@
 
 眼前這台電腦什麼都不能裝的時候，還是用遠端瀏覽器；用腳本操作瀏覽器（`telepy browse`、MCP agent）也一樣，因為那需要一個 Telepy 能操控的瀏覽器。
 
-## 開啟
+## 誰可以用
 
-管理員開啟之前它是關的：「網站設定 → 功能 → 裝置代理 → 允許裝置代理」。
+裝置代理預設是開的。管理員可以在「網站設定 → 功能 → 裝置代理 → 允許裝置代理」對所有人關閉。
 
-開啟之後，下面每一項都成立的人才能用：
+下面每一項都成立的人才能用：
 
 | 檢查 | 在哪裡設定 |
 | --- | --- |
@@ -130,7 +130,7 @@ curl -x "https://box:$TELEPY_TOKEN@proxy.example.com:8444" https://ifconfig.me
 
 | 看到什麼 | 怎麼辦 |
 | --- | --- |
-| `proxy_disabled` | 請管理員在「網站設定 → 裝置代理」開啟 |
+| `proxy_disabled` | 管理員把它關掉了，到「網站設定 → 裝置代理」開回來 |
 | `token_scope` | 再執行一次 `telepy login`（比較早的登入沒有這個權限），或建一把勾了 `proxy:use` 的 token |
 | `step_up_refused` | 那條通道要求每次連線前先驗證，請改用網頁或 ssh |
 | 每個目的地都是 `connect_failed` | 裝置的 sshd 可能不准轉送，在它的 `sshd_config` 設 `AllowTcpForwarding yes` |

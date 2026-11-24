@@ -13,7 +13,7 @@ import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { ShellText } from "@/components/ui/shell-text";
-import { CLI_SUBCOMMANDS, LOGIN_SCOPES, type CliNeed, type OutputLine } from "@/lib/cliGuide";
+import { CLI_SUBCOMMANDS, type CliNeed, type OutputLine } from "@/lib/cliGuide";
 
 /**
  * 指令的字：上色、在空白處換行（`ShellText`，子指令照 `telepy` 的指令樹）。
@@ -56,11 +56,9 @@ export function NeedChips({ needs }: { needs: CliNeed[] }) {
                             <span className="font-mono">{need}</span> · {t("cli.need.tokenOnly")}
                         </Chip>
                     );
-                const extra = !LOGIN_SCOPES.includes(need);
                 return (
-                    <Chip key={need} tone={extra ? "warning" : "neutral"} title={extra ? t("cli.need.addScopeHint") : undefined}>
+                    <Chip key={need} tone="neutral">
                         <span className="font-mono">{need}</span>
-                        {extra && <> · {t("cli.need.addScope")}</>}
                     </Chip>
                 );
             })}

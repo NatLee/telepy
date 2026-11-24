@@ -49,7 +49,7 @@ impl std::fmt::Display for HttpError {
         });
         write!(f, "{msg} (HTTP {})", self.status)?;
         match self.body.get("code").and_then(Value::as_str) {
-            Some("token_scope") => write!(f, "\n  The token lacks this scope: create one that has it, or `telepy login <url> --scope …` again."),
+            Some("token_scope") => write!(f, "\n  This sign-in lacks that permission. Run `telepy login <url>` again and leave it ticked on the approval page; an API token needs it ticked when it is created."),
             Some("token_route") => write!(f, "\n  Tokens can't do this; use the Telepy web app."),
             Some("token_tunnels") => write!(f, "\n  The token is limited to some tunnels; this needs a token without a tunnel limit."),
             Some("admin_only") => write!(f, "\n  Only admins can see everyone's; leave out --all / --user."),

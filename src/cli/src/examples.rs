@@ -504,17 +504,6 @@ pub const EXAMPLES: &[Example] = &[
         needs: &["browser:use"],
     },
     Example {
-        id: "browseLogin",
-        topic: "network",
-        title: "Sign in with browser:use",
-        note: "The default sign-in leaves it out; ask for it once.",
-        lines: &["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files browser:use\""],
-        needs: &["browser:use"],
-    },
-    // ---------------------------------------------------------------- scripts & CI
-    // 網頁在這個主題後面多一個 GitHub Actions 的 job（`lib/cliGuide.githubActions`，是檔案範本不是指令）。
-    // The web adds a GitHub Actions job after this topic (`githubActions`: a file template, not a command).
-    Example {
         id: "ciEnv",
         topic: "ci",
         title: "Run it from a script",
@@ -535,7 +524,7 @@ pub const EXAMPLES: &[Example] = &[
         id: "login",
         topic: "setup",
         title: "Sign in",
-        note: "Opens your browser to approve it; the sign-in is kept in the system keychain. --scope asks for more than the default.",
+        note: "Opens your browser to approve it; the sign-in is kept in the system keychain. It asks for everything the CLI can do, and you choose what to allow on the approval page.",
         lines: &["telepy login <url>"],
         needs: &[],
     },

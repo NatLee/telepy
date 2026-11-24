@@ -63,14 +63,14 @@ use serde_json::{json, Value};
 use api::Api;
 use creds::Kind;
 
-/// OAuth 登入預設要的 scope（不含 `network:scan` / `browser:use`；要就用 `--scope`）。`proxy:use` 在裡面，`telepy proxy`
-/// 登入後就能用（伺服器沒開裝置代理時它什麼也做不了；比較舊、還不認得它的伺服器會自動拿掉，見 `oauth::fit_scope`）。
-/// Scopes the browser sign-in asks for by default. `proxy:use` is among them, so `telepy proxy` works right after
-/// signing in (it does nothing while the server's device proxy is off; an older server that doesn't know it has it
-/// dropped, see `oauth::fit_scope`).
-pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files proxy:use";
-/// 預設裡伺服器不認得就拿掉的 scope（比這個版本舊的伺服器）。/ Default scopes dropped when the server doesn't know them (servers older than this release).
-pub const OPTIONAL_DEFAULT_SCOPES: &[&str] = &["proxy:use"];
+/// OAuth 登入預設要的 scope：CLI 的指令用得到的全部（`tunnels:manage` 只有 API token 有）。要哪些由人在同意頁上決定，
+/// 所以指令與說明都不必叫人自己加 `--scope`；伺服器還不認得的（比較舊的伺服器）會自動拿掉，見 `oauth::fit_scope`。
+/// Scopes the browser sign-in asks for by default: everything the CLI's commands use (`tunnels:manage` is for API
+/// tokens only). The person decides on the approval page, so no command or hint has to tell them to add `--scope`;
+/// the ones a server doesn't know yet (an older server) are dropped, see `oauth::fit_scope`.
+pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use";
+/// 預設裡伺服器不認得就拿掉的 scope。/ Default scopes dropped when the server doesn't know them.
+pub const OPTIONAL_DEFAULT_SCOPES: &[&str] = &["network:scan", "browser:use", "proxy:use"];
 
 /// 版本：發行版由 CI 帶 `TELEPY_VERSION`（Telepy 發行的 tag，去掉開頭的 `v`）編進來，跟伺服器同一個版號；
 /// 自己編的就是 Cargo.toml 的版本（一直是 0.1.0）。
@@ -1814,7 +1814,7 @@ fn proxy_cmd(mut api: Api, a: ProxyArgs) -> Result<i32> {
             return Ok(0);
         }
         if info["enabled"] == false {
-            eprintln!("The device proxy is turned off on this server. An administrator turns it on in Site settings → Features → Device proxy.");
+            eprintln!("The device proxy is turned off on this server. An administrator can turn it back on in Site settings → Features → Device proxy.");
         }
         if tunnels.is_empty() {
             eprintln!("No tunnels to proxy through.");
