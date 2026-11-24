@@ -58,7 +58,8 @@ import { SetupGuide } from "@/components/cheatsheet/SetupGuide";
 import { ReadinessPath } from "@/components/cheatsheet/ReadinessPath";
 import { SHEET_CATALOGUE, SheetResults, SheetSearchBox, type WayFilter } from "@/components/cheatsheet/SheetSearch";
 import { WayMarks } from "@/components/cheatsheet/WayMarks";
-import { WaysDialog } from "@/components/cheatsheet/WaysDialog";
+import { WaysDialog, type WaysTab } from "@/components/cheatsheet/WaysDialog";
+import { TASK_FAMILY, TOPIC_FAMILY } from "@/lib/toolOverlap";
 import { TOPIC_ICON, TopicBoard, TopicTiles } from "@/components/cheatsheet/TopicBoard";
 import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
 import type { TranslationKey } from "@/locales/en";
@@ -196,7 +197,15 @@ function CheatsheetInner() {
 
     const setupLoading = checklist.steps.some((s) => s.state === "loading");
     const [openRequest, setOpenRequest] = useState<{ id: SetupStepId; n: number } | null>(null);
-    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | "ways" | "setup" | null>(null);
+    // `?compare=ways|reach|files|run` 直接打開比較對話框的那一頁。/ `?compare=…` opens the comparison dialog on that tab.
+    const compareParam = (["ways", "reach", "files", "run"] as const).find((v) => v === searchParams.get("compare")) ?? null;
+    const [dialog, setDialog] = useState<"all" | "tips" | "directions" | "ways" | "setup" | null>(compareParam ? "ways" : null);
+    // 「telepy 還是 ssh？」開在哪一頁：按鈕從任務或主題來時，直接開在那一組工具。/ Which tab the comparison opens on: from a task or a topic, straight on its family of tools.
+    const [waysTab, setWaysTab] = useState<WaysTab>(compareParam ?? "ways");
+    const openWays = (tab: WaysTab) => {
+        setWaysTab(tab);
+        setDialog("ways");
+    };
     // 搜尋：有字（或選了某個 CLI 主題）時，結果清單取代下面的任務與指令。`?q=` 可以帶著搜尋進來。
     // Search: while there is a query (or a CLI topic is being browsed) the result list replaces the tasks and the command. `?q=` opens with one.
     const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
@@ -385,6 +394,7 @@ function CheatsheetInner() {
     // 另一種工具的同一件事（並排看）：telepy ↔ ~/.ssh/config 的 ssh。/ The same task with the other tool, side by side.
     const otherMode: ConnectMode = telepyWay ? "alias" : "telepy";
     const otherSegments = def.telepyOnly ? null : buildSegments(recipe, params, { ...target, mode: otherMode }, options);
+    const taskFamily = TASK_FAMILY[recipe];
     const moreTopics = CLI_EXAMPLE_TOPICS.map((tp) => ({ id: tp.id, list: SHEET_CATALOGUE.filter((e) => e.kind === "example" && e.topic === tp.id) })).filter((tp) => tp.list.length > 0);
     // 方向圖用目前填的數字（埠轉發的三種各取對應任務的值）。/ The direction diagram with the numbers filled in.
     const fwd = (id: RecipeId) => resolveParams(id, paramsById[id]);
@@ -653,7 +663,7 @@ function CheatsheetInner() {
                 description={t("sheet.subtitle")}
                 actions={
                     <>
-                        <Button variant="outline" onClick={() => setDialog("ways")}>
+                        <Button variant="outline" onClick={() => openWays("ways")}>
                             <Scale size={16} /> {t("sheet.ways.button")}
                         </Button>
                     </>
@@ -682,6 +692,7 @@ function CheatsheetInner() {
                             onTopic={browse}
                             onTask={pickTask}
                             onBack={leaveSearch}
+                            onCompare={TOPIC_FAMILY[boardTopic] ? () => openWays(TOPIC_FAMILY[boardTopic]!) : undefined}
                         />
                     ) : (
                     <div className="min-w-0 space-y-3">
@@ -715,6 +726,11 @@ function CheatsheetInner() {
                             <Button variant="ghost" size="sm" onClick={() => setDialog("tips")}>
                                 <Lightbulb size={15} /> {t("sheet.more.tips")}
                             </Button>
+                            {taskFamily && (
+                                <Button variant="ghost" size="sm" onClick={() => openWays(taskFamily)}>
+                                    <Scale size={15} /> {t("sheet.overlap.button")}
+                                </Button>
+                            )}
                         </div>
                         <TopicTiles className="@[52rem]:hidden" topics={moreTopics.map((tp) => ({ id: tp.id, count: tp.list.length }))} onTopic={browse} />
                     </div>
@@ -758,7 +774,7 @@ function CheatsheetInner() {
                     ))}
                 </div>
             </Modal>
-            <WaysDialog isOpen={dialog === "ways"} onClose={() => setDialog(null)} entries={SHEET_CATALOGUE} onTask={pickTask} onTopic={browse} />
+            <WaysDialog isOpen={dialog === "ways"} onClose={() => setDialog(null)} tab={waysTab} onTab={setWaysTab} entries={SHEET_CATALOGUE} onTask={pickTask} onTopic={browse} />
             <Modal isOpen={dialog === "directions"} onClose={() => setDialog(null)} size="3xl" icon={<Info />} title={t("fwdKinds.title")} description={t("sheet.group.whichHint")}>
                 <ForwardKinds active={def.direction ?? null} values={forwardValues} titled={false} />
             </Modal>

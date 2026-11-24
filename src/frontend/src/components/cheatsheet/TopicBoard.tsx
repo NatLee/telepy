@@ -40,6 +40,7 @@ import {
     Play,
     Radar,
     Router,
+    Scale,
     Server,
     SquareTerminal,
     Stethoscope,
@@ -190,9 +191,11 @@ export interface TopicBoardProps {
     onTopic: (id: CliTopicId) => void;
     onTask: (id: RecipeId) => void;
     onBack: () => void;
+    /** 這個主題的工具跟別的工具重疊時：打開「差在哪」。/ When this topic's tools overlap with others: opens the comparison. */
+    onCompare?: () => void;
 }
 
-export function TopicBoard({ topic, entries, topics, way, onWay, tunnel, account, onTopic, onTask, onBack }: TopicBoardProps) {
+export function TopicBoard({ topic, entries, topics, way, onWay, tunnel, account, onTopic, onTask, onBack, onCompare }: TopicBoardProps) {
     const { t } = useI18n();
     const headId = React.useId();
     const Icon = TOPIC_ICON[topic];
@@ -226,12 +229,22 @@ export function TopicBoard({ topic, entries, topics, way, onWay, tunnel, account
                     <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-foreground" aria-hidden>
                         <Icon size={20} />
                     </span>
-                    <div className="min-w-0 space-y-1">
+                    <div className="min-w-0 flex-1 space-y-1">
                         <h2 id={headId} className="text-lg font-semibold tracking-tight text-foreground">{t(topicLabel(topic))}</h2>
                         <p className="text-sm leading-relaxed text-muted-foreground"><FlagText text={t(topicWhat(topic))} /></p>
                     </div>
+                    {onCompare && (
+                        <Button variant="ghost" size="sm" onClick={onCompare} className="hidden shrink-0 @[40rem]:inline-flex">
+                            <Scale size={15} /> {t("sheet.overlap.button")}
+                        </Button>
+                    )}
                 </header>
                 <TopicPath topic={topic} />
+                {onCompare && (
+                    <Button variant="ghost" size="sm" onClick={onCompare} className="-ml-2 @[40rem]:hidden">
+                        <Scale size={15} /> {t("sheet.overlap.button")}
+                    </Button>
+                )}
                 {intro && <p className="text-sm leading-relaxed text-muted-foreground"><FlagText text={t(intro)} /></p>}
                 {tasks.length > 0 && (
                     <div className="flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-border pt-3">
