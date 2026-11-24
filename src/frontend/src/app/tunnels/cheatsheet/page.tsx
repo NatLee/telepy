@@ -21,15 +21,23 @@ import { useSearchParams } from "next/navigation";
 import {
     ArrowRight,
     ChevronDown,
+    CornerDownRight,
     Cpu,
+    Files,
+    Globe,
+    HardDrive,
     Info,
     Lightbulb,
     ListTree,
+    MonitorSmartphone,
+    Network,
     Plus,
     Repeat,
     Route,
+    Router,
     Scale,
     Settings2,
+    Share2,
     SlidersHorizontal,
     SquareTerminal,
     type LucideIcon,
@@ -51,6 +59,7 @@ import { ReadinessPath } from "@/components/cheatsheet/ReadinessPath";
 import { SHEET_CATALOGUE, SheetResults, SheetSearchBox, type WayFilter } from "@/components/cheatsheet/SheetSearch";
 import { WayMarks } from "@/components/cheatsheet/WayMarks";
 import { WaysDialog } from "@/components/cheatsheet/WaysDialog";
+import { TOPIC_ICON, TopicBoard, TopicTiles } from "@/components/cheatsheet/TopicBoard";
 import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
 import type { TranslationKey } from "@/locales/en";
 import { useCheatsheetPage } from "@/hooks/useCheatsheetPage";
@@ -78,6 +87,9 @@ import {
 } from "@/lib/forwardRecipes";
 
 const CARD = "rounded-xl border border-border bg-card shadow-card";
+
+/** 任務的圖示：目標在哪裡（裝置自己 / 它區網裡的主機 / 網際網路…），兩個 -L 才分得出來。/ A task's icon: where the target is, so the two -L tasks can be told apart. */
+const TASK_ICON: Record<RecipeId, LucideIcon> = { local: HardDrive, lan: Router, socks: Globe, remote: Share2, rustdesk: MonitorSmartphone, jump: CornerDownRight, copy: Files, vpn: Network };
 
 /** 這些埠多半是網頁服務，「接著」直接給可點的網址。/ Ports that are usually web apps get a clickable URL. */
 const WEB_PORTS = new Set(["80", "443", "3000", "3001", "4200", "5000", "5173", "8000", "8080", "8123", "8443", "8888", "9000"]);
@@ -188,9 +200,12 @@ function CheatsheetInner() {
     // 搜尋：有字（或選了某個 CLI 主題）時，結果清單取代下面的任務與指令。`?q=` 可以帶著搜尋進來。
     // Search: while there is a query (or a CLI topic is being browsed) the result list replaces the tasks and the command. `?q=` opens with one.
     const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
-    const [browseTopic, setBrowseTopic] = useState<CliTopicId | null>(null);
+    // `?topic=<id>` 直接打開某個主題。/ `?topic=<id>` opens a topic directly.
+    const [browseTopic, setBrowseTopic] = useState<CliTopicId | null>(() => CLI_EXAMPLE_TOPICS.find((tp) => tp.id === searchParams.get("topic"))?.id ?? null);
     const [wayFilter, setWayFilter] = useState<WayFilter>("all");
     const searching = query.trim() !== "" || browseTopic !== null;
+    // 只選了主題、沒有打字：右邊換成那個主題的圖解頁，左邊的清單留著。/ A topic without a query: its illustrated page on the right, the list stays.
+    const boardTopic = query.trim() === "" ? browseTopic : null;
     const leaveSearch = () => {
         setQuery("");
         setBrowseTopic(null);
@@ -459,7 +474,8 @@ function CheatsheetInner() {
                     <h2 className={groupHead}>{g.title}</h2>
                     <ul>
                         {RECIPES.filter((r) => r.group === g.id).map((r) => {
-                            const active = r.id === recipe;
+                            const active = r.id === recipe && boardTopic === null;
+                            const TaskIcon = TASK_ICON[r.id];
                             return (
                                 <li key={r.id}>
                                     <button
@@ -468,6 +484,7 @@ function CheatsheetInner() {
                                         onClick={() => pickTask(r.id)}
                                         className={cn(rowBase, active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted/70")}
                                     >
+                                        <TaskIcon size={15} className={cn("shrink-0", active ? "text-primary" : "text-muted-foreground")} aria-hidden />
                                         <span className="min-w-0 flex-1 leading-snug">{t(r.title)}</span>
                                         <code className={cn("shrink-0 font-mono text-[0.6875rem]", active ? "text-primary/80" : "text-muted-foreground")}>{r.flag}</code>
                                     </button>
@@ -480,14 +497,19 @@ function CheatsheetInner() {
             {/* telepy CLI 才有的事：照主題列，點了看那個主題的範例。/ What only the telepy CLI does, by topic; a click lists that topic's examples. */}
             <h2 className={groupHead} title={t("sheet.ways.moreHint")}>{t("sheet.ways.more")}</h2>
             <ul>
-                {moreTopics.map((tp) => (
-                    <li key={tp.id}>
-                        <button type="button" onClick={() => browse(tp.id)} className={cn(rowBase, "text-foreground hover:bg-muted/70")}>
-                            <span className="min-w-0 flex-1 leading-snug">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
-                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{tp.list.length}</span>
-                        </button>
-                    </li>
-                ))}
+                {moreTopics.map((tp) => {
+                    const active = boardTopic === tp.id;
+                    const Icon = TOPIC_ICON[tp.id];
+                    return (
+                        <li key={tp.id}>
+                            <button type="button" aria-current={active ? "true" : undefined} onClick={() => browse(tp.id)} className={cn(rowBase, active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted/70")}>
+                                <Icon size={15} className={cn("shrink-0", active ? "text-primary" : "text-muted-foreground")} aria-hidden />
+                                <span className="min-w-0 flex-1 leading-snug">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
+                                <span className={cn("shrink-0 text-xs tabular-nums", active ? "text-primary/80" : "text-muted-foreground")}>{tp.list.length}</span>
+                            </button>
+                        </li>
+                    );
+                })}
             </ul>
         </nav>
     );
@@ -520,6 +542,18 @@ function CheatsheetInner() {
                     <p className="text-sm text-muted-foreground">{t("sheet.fillHint")}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    {/* 同樣是 -L：服務在裝置自己身上，還是在它區網裡的別台主機？一鍵互換。/ Both are -L: is the service on the device itself or on another host in its LAN? One click swaps. */}
+                    {(recipe === "local" || recipe === "lan") && (
+                        <Segmented<RecipeId>
+                            value={recipe}
+                            onChange={pickTask}
+                            ariaLabel={t("sheet.field.where")}
+                            options={[
+                                { value: "local", label: t("sheet.field.whereDevice") },
+                                { value: "lan", label: t("sheet.field.whereLan") },
+                            ]}
+                        />
+                    )}
                     {recipe === "copy" && (
                         <Segmented
                             value={upload ? "upload" : "download"}
@@ -630,12 +664,26 @@ function CheatsheetInner() {
 
             {topBar}
 
-            {searching ? (
-                <SheetResults query={query} topic={browseTopic} way={wayFilter} onWay={setWayFilter} tunnel={target.tunnel} onTask={pickTask} taskCommand={(id) => segmentsToString(buildSegments(id, paramsById[id], target, options))} onBack={leaveSearch} />
+            {searching && boardTopic === null ? (
+                <SheetResults query={query} topic={browseTopic} way={wayFilter} onWay={setWayFilter} tunnel={target.tunnel} account={account} onTask={pickTask} taskCommand={(id) => segmentsToString(buildSegments(id, paramsById[id], target, options))} onBack={leaveSearch} />
             ) : (
                 <div className="@container">
                 <div className="grid items-start gap-4 @[52rem]:grid-cols-[15rem_minmax(0,1fr)]">
                     {taskList}
+                    {boardTopic !== null ? (
+                        <TopicBoard
+                            topic={boardTopic}
+                            entries={SHEET_CATALOGUE}
+                            topics={moreTopics.map((tp) => tp.id)}
+                            way={wayFilter}
+                            onWay={setWayFilter}
+                            tunnel={target.tunnel}
+                            account={account}
+                            onTopic={browse}
+                            onTask={pickTask}
+                            onBack={leaveSearch}
+                        />
+                    ) : (
                     <div className="min-w-0 space-y-3">
                         {taskSelect}
                         {commandCard}
@@ -668,7 +716,9 @@ function CheatsheetInner() {
                                 <Lightbulb size={15} /> {t("sheet.more.tips")}
                             </Button>
                         </div>
+                        <TopicTiles className="@[52rem]:hidden" topics={moreTopics.map((tp) => ({ id: tp.id, count: tp.list.length }))} onTopic={browse} />
                     </div>
+                    )}
                 </div>
                 </div>
             )}

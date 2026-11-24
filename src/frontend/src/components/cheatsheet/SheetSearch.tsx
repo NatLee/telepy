@@ -17,6 +17,7 @@ import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { WayMarks } from "@/components/cheatsheet/WayMarks";
 import { useI18n } from "@/lib/i18n";
 import { DICTIONARIES } from "@/lib/translate";
+import { fillAccount } from "@/lib/topicScenes";
 import { catalogue, fillTunnel, searchCatalogue, type CatalogueEntry, type SearchHit, type Way } from "@/lib/sheetCatalogue";
 import type { CliTopicId } from "@/lib/cliExamples.gen";
 import type { RecipeId } from "@/lib/forwardRecipes";
@@ -76,12 +77,12 @@ export function SheetSearchBox({ value, onChange }: { value: string; onChange: (
     );
 }
 
-function Row({ hit, tunnel, open, onToggle, onTask, taskCommand }: { hit: SearchHit; tunnel: string; open: boolean; onToggle: () => void; onTask: (id: RecipeId) => void; taskCommand?: (id: RecipeId) => string }) {
+function Row({ hit, tunnel, account, open, onToggle, onTask, taskCommand }: { hit: SearchHit; tunnel: string; account: string | null; open: boolean; onToggle: () => void; onTask: (id: RecipeId) => void; taskCommand?: (id: RecipeId) => string }) {
     const { t } = useI18n();
     const e = hit.entry;
     // 任務的預覽是這一頁現在會給的指令（帳號、填好的數字都對）；範例是填上通道名的原文。
     // A task previews the command this page would give right now (account and numbers included); an example is its own lines with the tunnel filled in.
-    const lines = useMemo(() => (e.recipe && taskCommand ? [taskCommand(e.recipe)] : fillTunnel(e.lines, tunnel)), [e.lines, e.recipe, taskCommand, tunnel]);
+    const lines = useMemo(() => (e.recipe && taskCommand ? [taskCommand(e.recipe)] : fillAccount(fillTunnel(e.lines, tunnel), account)), [e.lines, e.recipe, taskCommand, tunnel, account]);
     const task = e.kind === "task";
     const via = hit.via ? DICTIONARIES[hit.via as keyof typeof DICTIONARIES]?.[e.title] : null;
     const body = (
@@ -135,6 +136,8 @@ export interface SheetResultsProps {
     onWay: (w: WayFilter) => void;
     /** 填進範例的通道名稱。/ The tunnel name filled into the examples. */
     tunnel: string;
+    /** 填進範例的帳號（沒有可用的就留著 `<account>`）。/ The account filled into the examples (`<account>` stays when there is none). */
+    account: string | null;
     onTask: (id: RecipeId) => void;
     /** 任務現在會給的指令（結果列的預覽）。/ The command a task gives right now (the row's preview). */
     taskCommand?: (id: RecipeId) => string;
@@ -142,7 +145,7 @@ export interface SheetResultsProps {
 }
 
 /** 搜尋結果（或某個主題的全部）。/ The search results (or everything in a topic). */
-export function SheetResults({ query, topic, way, onWay, tunnel, onTask, taskCommand, onBack }: SheetResultsProps) {
+export function SheetResults({ query, topic, way, onWay, tunnel, account, onTask, taskCommand, onBack }: SheetResultsProps) {
     const { t, locale } = useI18n();
     const [open, setOpen] = useState<string | null>(null);
     const hits = useMemo(() => searchCatalogue(SHEET_CATALOGUE, query, DICTIONARIES, locale, { topic, way: way === "all" ? null : way }), [query, topic, way, locale]);
@@ -183,7 +186,7 @@ export function SheetResults({ query, topic, way, onWay, tunnel, onTask, taskCom
             ) : (
                 <ul className="divide-y divide-border">
                     {hits.map((h) => (
-                        <Row key={h.entry.id} hit={h} tunnel={tunnel} open={open === h.entry.id} onToggle={() => setOpen((o) => (o === h.entry.id ? null : h.entry.id))} onTask={onTask} taskCommand={taskCommand} />
+                        <Row key={h.entry.id} hit={h} tunnel={tunnel} account={account} open={open === h.entry.id} onToggle={() => setOpen((o) => (o === h.entry.id ? null : h.entry.id))} onTask={onTask} taskCommand={taskCommand} />
                     ))}
                 </ul>
             )}
