@@ -31,14 +31,14 @@ After that, a person can use it when all of these hold:
 ## From your own computer
 
 ```sh
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files proxy:use"
+telepy login https://telepy.example.com
 telepy proxy                       # the tunnels you may proxy through
 telepy proxy box                   # a proxy on 127.0.0.1:8118, HTTP and SOCKS5 on the same port
 telepy proxy box --browser         # the same, plus Chrome using it (a separate profile)
 curl -x http://127.0.0.1:8118 https://ifconfig.me     # the device's address
 ```
 
-`telepy proxy` needs no SSH key and no admin rights. It only uses the web port, so it works wherever the Telepy web page opens. Each connection your programs make becomes one WebSocket to Telepy.
+A normal `telepy login` already includes the proxy permission. If your sign-in is older than that, `telepy proxy` signs you in again by itself the first time. `telepy proxy` needs no SSH key and no admin rights. It only uses the web port, so it works wherever the Telepy web page opens. Each connection your programs make becomes one WebSocket to Telepy.
 
 `--browser` looks for Chrome, Chromium, Edge or Brave and starts it with the proxy and its own profile folder, so your everyday browser and its settings are untouched. With any other browser, set its proxy to `http://127.0.0.1:8118` yourself.
 
@@ -131,7 +131,7 @@ All connections of one token (or app) through one tunnel as one device account f
 | What you see | What to do |
 | --- | --- |
 | `proxy_disabled` | An administrator turns it on in Site settings → Device proxy |
-| `token_scope` | Sign in again with `--scope "… proxy:use"`, or make a token that has it |
+| `token_scope` | Run `telepy login` again (an older sign-in lacks the permission), or make a token with `proxy:use` ticked |
 | `step_up_refused` | That tunnel asks for verification before every session. Use the web or ssh for it |
 | `connect_failed` on every destination | The device's sshd may forbid forwarding. Set `AllowTcpForwarding yes` in its `sshd_config` |
 | A page loads its text but not its pictures | The page needs more connections than the limit allows. Raise it in Site settings → Device proxy |

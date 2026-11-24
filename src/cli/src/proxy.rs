@@ -113,7 +113,7 @@ pub fn refusal_parts(r: &Refused) -> (String, String) {
 /// 第一次遇到某種拒絕時在終端機多說一句怎麼辦（之後同一種不再說）。/ What to add in the terminal the first time a kind of refusal shows up.
 pub fn advice(code: &str, server: &str) -> Option<String> {
     match code {
-        "token_scope" => Some(format!("This sign-in lacks proxy:use. Sign in again asking for it: telepy login {server} --scope \"tunnels:read ssh:exec ssh:files proxy:use\"  (or use an API token that has it)")),
+        "token_scope" => Some(format!("This sign-in lacks the proxy permission. Sign in again: telepy login {server}   (an API token needs proxy:use ticked when it is created)")),
         "proxy_disabled" => Some("An administrator has to turn it on: Site settings → Features → Device proxy.".into()),
         "feature_disabled" => Some("The device proxy is turned off for your account. Ask an administrator.".into()),
         "step_up_refused" => Some("This tunnel asks for a fresh verification before every session; the proxy can't give one. Use the web or ssh for it.".into()),
@@ -404,7 +404,7 @@ mod tests {
         let r = Refused { status: 403, body: r#"{"error":"This credential lacks the proxy:use permission.","code":"token_scope"}"#.into() };
         assert_eq!(refusal_parts(&r), ("This credential lacks the proxy:use permission.".into(), "token_scope".into()));
         assert_eq!(refusal_parts(&Refused { status: 502, body: String::new() }).0, "HTTP 502");
-        assert!(advice("token_scope", "https://t.example").unwrap().contains("telepy login https://t.example --scope"));
+        assert!(advice("token_scope", "https://t.example").unwrap().contains("telepy login https://t.example "));
         assert!(advice("connect_failed", "x").is_none());
         let e = String::from_utf8(http_error(502, "the device could not connect")).unwrap();
         assert!(e.starts_with("HTTP/1.1 502 Bad Gateway\r\n") && e.ends_with("telepy proxy: the device could not connect\n"), "{e}");

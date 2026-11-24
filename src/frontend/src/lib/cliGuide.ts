@@ -167,7 +167,7 @@ export const PLACEHOLDER = { tunnel: "<tunnel>", account: "<account>", other: "<
 export type CliNeed = "tunnels:read" | "ssh:exec" | "ssh:files" | "network:scan" | "browser:use" | "proxy:use" | "tunnels:manage" | "ssh-key";
 
 /** 瀏覽器登入預設要的 scope（`DEFAULT_SCOPE`）；其他的要 `--scope`，`tunnels:manage` 只有 token 有。 */
-export const LOGIN_SCOPES: readonly CliNeed[] = ["tunnels:read", "ssh:exec", "ssh:files"];
+export const LOGIN_SCOPES: readonly CliNeed[] = ["tunnels:read", "ssh:exec", "ssh:files", "proxy:use"];
 
 /** 主題順序（`examples.rs` 的 `TOPICS`）。/ The topic order (`TOPICS` in examples.rs). */
 export const CLI_TOPICS: readonly CliTopicId[] = CLI_EXAMPLE_TOPICS.map((t) => t.id);

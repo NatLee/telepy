@@ -150,7 +150,7 @@ telepy whoami                                           # 你是誰、用哪個 
 telepy logout
 ```
 
-沒加 `--scope` 時，瀏覽器登入會要求 `tunnels:read ssh:exec ssh:files`。每個 scope 能做什麼，請看 [Scope](#scope)。
+沒加 `--scope` 時，瀏覽器登入會要求 `tunnels:read ssh:exec ssh:files proxy:use`（伺服器還沒有裝置代理的話，`proxy:use` 會自動省略）。每個 scope 能做什麼，請看 [Scope](#scope)。
 
 核准之後，瀏覽器會停在 Telepy 的「已登入」頁面，列出 CLI 現在能做什麼，再附上幾個可以試試的指令。它的外觀跟著**網站設定 → 登入**裡核准頁面的設定走。較舊的 Telepy 伺服器沒有這個頁面，就改由 CLI 自己畫一個小頁面。
 

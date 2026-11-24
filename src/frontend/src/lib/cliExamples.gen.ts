@@ -67,7 +67,6 @@ export const CLI_EXAMPLES = [
     { id: "lanAdd", topic: "network", lines: ["telepy lan add <tunnel> 192.168.1.20 --label nas --user admin", "telepy lan edit <tunnel> nas --labels rack-2,prod --note \"top shelf, UPS on the left\""], needs: ["tunnels:manage"] },
     { id: "proxy", topic: "network", lines: ["telepy proxy <tunnel> --browser http://localhost:3000/"], needs: ["proxy:use"] },
     { id: "proxyCurl", topic: "network", lines: ["telepy proxy <tunnel> --port 8118", "curl -x http://127.0.0.1:8118 https://ifconfig.me"], needs: ["proxy:use"] },
-    { id: "proxyLogin", topic: "network", lines: ["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files proxy:use\""], needs: ["proxy:use"] },
     { id: "browsePorts", topic: "network", lines: ["telepy browse ports <tunnel>"], needs: ["browser:use"] },
     { id: "browse", topic: "network", lines: ["ID=$(telepy browse <tunnel> http://192.168.1.1/)", "telepy browse text \"$ID\" --selector main", "telepy browse shot \"$ID\" -o router.png", "telepy browse close \"$ID\""], needs: ["browser:use"] },
     { id: "browseLogin", topic: "network", lines: ["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files browser:use\""], needs: ["browser:use"] },

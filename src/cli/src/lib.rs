@@ -63,9 +63,14 @@ use serde_json::{json, Value};
 use api::Api;
 use creds::Kind;
 
-/// OAuth 登入預設要的 scope（不含 `network:scan` / `browser:use`；要就用 `--scope`）。
-/// Scopes the browser sign-in asks for by default.
-pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files";
+/// OAuth 登入預設要的 scope（不含 `network:scan` / `browser:use`；要就用 `--scope`）。`proxy:use` 在裡面，`telepy proxy`
+/// 登入後就能用（伺服器沒開裝置代理時它什麼也做不了；比較舊、還不認得它的伺服器會自動拿掉，見 `oauth::fit_scope`）。
+/// Scopes the browser sign-in asks for by default. `proxy:use` is among them, so `telepy proxy` works right after
+/// signing in (it does nothing while the server's device proxy is off; an older server that doesn't know it has it
+/// dropped, see `oauth::fit_scope`).
+pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files proxy:use";
+/// 預設裡伺服器不認得就拿掉的 scope（比這個版本舊的伺服器）。/ Default scopes dropped when the server doesn't know them (servers older than this release).
+pub const OPTIONAL_DEFAULT_SCOPES: &[&str] = &["proxy:use"];
 
 /// 版本：發行版由 CI 帶 `TELEPY_VERSION`（Telepy 發行的 tag，去掉開頭的 `v`）編進來，跟伺服器同一個版號；
 /// 自己編的就是 Cargo.toml 的版本（一直是 0.1.0）。
@@ -1021,7 +1026,10 @@ fn login(a: LoginArgs, global_token: Option<&str>) -> Result<()> {
             (Kind::Token, creds::Secret { access: t, refresh: None, expires_at: None }, None)
         }
         None => {
-            let l = oauth::login(&server, &a.scope, a.no_browser)?;
+            // 只有沒加 --scope 的預設才會被調整；自己指定的原樣送出（伺服器不認得就會說）。
+            // Only the default (no --scope) is fitted; an explicit list goes as is, and the server says so if it doesn't know one.
+            let optional: &[&str] = if a.scope == DEFAULT_SCOPE { OPTIONAL_DEFAULT_SCOPES } else { &[] };
+            let l = oauth::login(&server, &a.scope, optional, a.no_browser)?;
             (Kind::Oauth, l.secret, Some(l.client_id))
         }
     };
@@ -1770,8 +1778,20 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
 /// `telepy proxy [<tunnel>[@account]]`：沒給通道 = 列出能代理的通道；給了 = 在這台電腦開代理（見 `proxy.rs`）。
 /// `telepy proxy [<tunnel>[@account]]`: without a tunnel, the tunnels you may proxy through; with one, the proxy on this
 /// computer (see `proxy.rs`).
-fn proxy_cmd(api: Api, a: ProxyArgs) -> Result<i32> {
-    let info = match api.get("/api/proxy/tunnels") {
+fn proxy_cmd(mut api: Api, a: ProxyArgs) -> Result<i32> {
+    let mut first = api.get("/api/proxy/tunnels");
+    // 這次登入是在有 proxy 權限之前做的（瀏覽器登入）：在終端機上就直接重新登入一次補上，不用人自己查要加什麼。
+    // A browser sign-in from before the proxy permission existed: on a terminal, sign in again right here to add it,
+    // instead of leaving the person to work out what to ask for.
+    let scope_missing = |e: &anyhow::Error| e.downcast_ref::<api::HttpError>().is_some_and(|h| h.body["code"] == "token_scope");
+    if first.as_ref().is_err_and(scope_missing) && api.is_stored() && !api.is_token() && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        eprintln!("This sign-in doesn't include the proxy permission yet (it was made before it existed). Signing in again to add it…");
+        let server = api.server.clone();
+        login(LoginArgs { url: server.clone(), with_token: None, scope: DEFAULT_SCOPE.to_string(), no_browser: false }, None)?;
+        api = Api::open(Some(&server), None)?;
+        first = api.get("/api/proxy/tunnels");
+    }
+    let info = match first {
         Ok(v) => v,
         Err(e) => {
             let code = e.downcast_ref::<api::HttpError>().and_then(|h| h.body["code"].as_str().map(str::to_string)).unwrap_or_default();

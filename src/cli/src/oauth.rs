@@ -97,7 +97,14 @@ pub struct Login {
     pub client_id: String,
 }
 
-pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
+/// 把 `optional` 裡伺服器沒公告（`scopes_supported`）的 scope 拿掉；伺服器沒公告清單時原樣不動。
+/// Drops the `optional` scopes the server doesn't advertise (`scopes_supported`); unchanged when it advertises no list.
+pub fn fit_scope(scope: &str, optional: &[&str], supported: Option<&[String]>) -> String {
+    let Some(supported) = supported else { return scope.trim().to_string() };
+    scope.split_whitespace().filter(|s| !optional.contains(s) || supported.iter().any(|x| x == s)).collect::<Vec<_>>().join(" ")
+}
+
+pub fn login(server: &str, scope: &str, optional: &[&str], no_browser: bool) -> Result<Login> {
     let http = api::http_client()?;
     let meta = read(http.get(format!("{server}/.well-known/oauth-authorization-server")).send().with_context(|| format!("cannot reach {server}"))?)
         .context("this server has no OAuth sign-in (is it a Telepy server?)")?;
@@ -105,6 +112,9 @@ pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
     let (authorize, token, register) = (endpoint("authorization_endpoint")?, endpoint("token_endpoint")?, endpoint("registration_endpoint")?);
     // 換完 token 後瀏覽器去哪（Telepy 的擴充欄位；舊伺服器沒有）。/ Where the browser goes afterwards (a Telepy extension).
     let done_page = meta.get("telepy_cli_done_page").and_then(Value::as_str).map(str::to_string);
+    let supported: Option<Vec<String>> = meta.get("scopes_supported").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
+    let scope = fit_scope(scope, optional, supported.as_deref());
+    let scope = scope.as_str();
 
     let listener = TcpListener::bind("127.0.0.1:0").context("open a local port for the sign-in callback")?;
     let port = listener.local_addr()?.port();
@@ -214,6 +224,18 @@ pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_scopes_fit_what_the_server_knows() {
+        let new: Vec<String> = ["tunnels:read", "ssh:exec", "ssh:files", "network:scan", "browser:use", "proxy:use"].iter().map(|s| s.to_string()).collect();
+        let old: Vec<String> = new[..5].to_vec();
+        let d = "tunnels:read ssh:exec ssh:files proxy:use";
+        assert_eq!(fit_scope(d, &["proxy:use"], Some(&new)), d);
+        assert_eq!(fit_scope(d, &["proxy:use"], Some(&old)), "tunnels:read ssh:exec ssh:files", "an older server never sees a scope it would refuse");
+        assert_eq!(fit_scope(d, &["proxy:use"], None), d, "no list advertised: unchanged");
+        // 自己指定的 scope 不動（伺服器不認得就讓它說）。/ An explicit list is left alone.
+        assert_eq!(fit_scope("tunnels:read proxy:use", &[], Some(&old)), "tunnels:read proxy:use");
+    }
 
     #[test]
     fn callbacks_and_pkce() {

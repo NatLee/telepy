@@ -31,7 +31,7 @@ const hostOf = (url: string) => {
 
 /**
  * 三條：網頁位址沒設 = 從請求推導（顯示現在這個瀏覽器用的）；SSH 沒設 = 跟網頁同一個主機；代理沒設 = 沒有，走網頁
- * 位址上的 WebSocket。
+ * 位址上的 WebSocket（所以沒設時顯示那個網址，而且可以放在 CDN 後面）。
  * The three lanes: an unset web address is derived from the request (shown as what this browser uses); an unset SSH
  * host is the web host; an unset proxy address means none — the proxy rides WebSockets on the web address.
  */
@@ -40,9 +40,11 @@ export function addressLanes(values: Record<string, unknown>, env: EnvMap, origi
     const ssh = inForce(values, env, "server_ssh_host");
     const proxy = inForce(values, env, "server_proxy_url");
     const webShown = web || origin;
+    // 代理沒設定：連線走網頁位址上的 WebSocket。/ No proxy address: connections ride the WebSocket on the web address.
+    const ws = webShown ? `${webShown.replace(/^http/, "ws").replace(/\/$/, "")}/ws/proxy/` : "";
     return [
         { id: "web", value: webShown, set: web !== "", cdn: true },
         { id: "ssh", value: ssh || hostOf(webShown), set: ssh !== "", cdn: false },
-        { id: "proxy", value: proxy, set: proxy !== "", cdn: false },
+        { id: "proxy", value: proxy || ws, set: proxy !== "", cdn: proxy === "" },
     ];
 }
