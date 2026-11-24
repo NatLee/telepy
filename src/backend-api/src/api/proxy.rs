@@ -41,7 +41,9 @@ pub fn endpoints(state: &AppState, headers: &HeaderMap) -> Value {
         Some(rest) => format!("wss://{rest}/ws/proxy/"),
         None => format!("ws://{}/ws/proxy/", base.trim_start_matches("http://")),
     };
-    json!({ "websocket": ws, "http_proxy": state.config.proxy_url() })
+    // `http_listening`：標準代理入口有沒有在聽（`PROXY_BIND`）；設了位址卻沒在聽時，設定頁要說出來。
+    // `http_listening`: whether the standard endpoint listens (`PROXY_BIND`); the settings page says so when an address is set without it.
+    json!({ "websocket": ws, "http_proxy": state.config.proxy_url(), "http_listening": state.config.proxy_bind.is_some() })
 }
 
 #[utoipa::path(get, path = "/api/proxy/tunnels", tag = "Device Proxy", security(("bearer" = [])), responses((status = 200, description = "The tunnels this caller may proxy through (an app or token only sees the ones chosen at authorization), whether each is usable right now, and the proxy endpoints", body = super::schemas::ProxyTunnels), (status = 403, description = "code = proxy_disabled | token_scope | feature_disabled (tokens and apps only; a web sign-in gets `enabled: false` instead)", body = super::schemas::ErrorBody)))]

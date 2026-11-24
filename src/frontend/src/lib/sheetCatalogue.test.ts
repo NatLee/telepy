@@ -47,7 +47,8 @@ test("a search finds a task in any of the three languages, whatever the interfac
     assert.ok(top("proxy").startsWith("ex:proxy"), top("proxy"));
     assert.ok(ids("proxy").includes("task:socks"));
     assert.equal(top("socks proxy"), "task:socks");
-    assert.equal(top("代理", "en"), "task:socks");
+    assert.equal(top("代理", "en"), "ex:proxy", "the 繁體中文 title of telepy proxy says 代理");
+    assert.ok(ids("代理", "en").includes("task:socks"));
     assert.equal(top("rsync"), "task:copy");
     assert.equal(top("-D"), "task:socks");
     assert.equal(top("-R"), "task:remote");

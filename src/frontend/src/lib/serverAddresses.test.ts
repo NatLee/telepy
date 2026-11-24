@@ -16,7 +16,7 @@ test("each address falls back to something else when unset", () => {
     assert.deepEqual(none, [
         { id: "web", value: "https://telepy.example.com", set: false, cdn: true },
         { id: "ssh", value: "telepy.example.com", set: false, cdn: false },
-        { id: "proxy", value: "", set: false, cdn: false },
+        { id: "proxy", value: "wss://telepy.example.com/ws/proxy/", set: false, cdn: true },
     ]);
     const all = addressLanes({ server_public_url: "https://t.example.com", server_ssh_host: "ssh.example.com", server_proxy_url: "https://proxy.example.com:8444" }, {}, "http://localhost:3000");
     assert.deepEqual(all.map((l) => [l.value, l.set]), [["https://t.example.com", true], ["ssh.example.com", true], ["https://proxy.example.com:8444", true]]);

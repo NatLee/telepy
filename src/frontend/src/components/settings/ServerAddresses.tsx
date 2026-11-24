@@ -43,7 +43,7 @@ export function ServerAddresses({ values, env }: { values: Record<string, unknow
                         </div>
                         <p className="mt-auto flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
                             <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", lane.cdn ? "bg-success" : "bg-warning")} aria-hidden />
-                            {t(`settingsEnv.addr.${lane.id}Cdn`)}
+                            {t(lane.id === "proxy" && !lane.set ? "settingsEnv.addr.proxyCdnUnset" : `settingsEnv.addr.${lane.id}Cdn`)}
                         </p>
                     </li>
                 );

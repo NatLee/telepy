@@ -22,7 +22,7 @@ export interface ProxyInfo {
     scope: string;
     max_connections: number;
     idle_seconds: number;
-    endpoints: { websocket: string; http_proxy: string | null };
+    endpoints: { websocket: string; http_proxy: string | null; http_listening?: boolean };
     tunnels: ProxyTunnel[];
 }
 

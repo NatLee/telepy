@@ -30,6 +30,8 @@ pub struct ProxyEndpoints {
     pub websocket: String,
     /// A standard HTTP proxy URL (`CONNECT` + `Proxy-Authorization`), when this server has one configured
     pub http_proxy: Option<String>,
+    /// Whether the standard proxy endpoint is listening at all (`PROXY_PORT` / `PROXY_BIND`)
+    pub http_listening: bool,
 }
 
 #[derive(ToSchema)]

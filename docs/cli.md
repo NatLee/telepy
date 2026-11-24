@@ -150,7 +150,7 @@ telepy whoami                                           # who, and with which to
 telepy logout
 ```
 
-Without `--scope`, the browser sign-in asks for `tunnels:read ssh:exec ssh:files`. See [Scopes](#scopes) for what each one allows.
+Without `--scope`, the browser sign-in asks for `tunnels:read ssh:exec ssh:files proxy:use` (`proxy:use` is left out for a server that doesn't have the device proxy yet). See [Scopes](#scopes) for what each one allows.
 
 After you approve, the browser lands on Telepy's "signed in" page. It shows what the CLI may do now and a few commands to try, and it follows the approval page's look from **Site settings → Sign-in**. An older Telepy server without that page gets a small page drawn by the CLI itself.
 

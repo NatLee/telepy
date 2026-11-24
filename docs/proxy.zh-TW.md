@@ -31,14 +31,14 @@
 ## 在自己的電腦上用
 
 ```sh
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files proxy:use"
+telepy login https://telepy.example.com
 telepy proxy                       # 你能代理的通道
 telepy proxy box                   # 在 127.0.0.1:8118 開代理，同一個埠講 HTTP 與 SOCKS5
 telepy proxy box --browser         # 同上，另外開一個套用它的 Chrome（獨立的設定檔）
 curl -x http://127.0.0.1:8118 https://ifconfig.me     # 裝置的位址
 ```
 
-`telepy proxy` 不需要 SSH 金鑰，也不需要管理員權限。它只走網頁的埠，所以打得開 Telepy 網頁的地方就能用。你的程式每開一條連線，就是一條到 Telepy 的 WebSocket。
+一般的 `telepy login` 已經包含代理的權限。如果你的登入比這個功能還早，第一次執行 `telepy proxy` 時它會自己帶你重新登入一次。`telepy proxy` 不需要 SSH 金鑰，也不需要管理員權限。它只走網頁的埠，所以打得開 Telepy 網頁的地方就能用。你的程式每開一條連線，就是一條到 Telepy 的 WebSocket。
 
 `--browser` 會找 Chrome、Chromium、Edge 或 Brave，帶著代理設定與獨立的設定檔資料夾啟動，所以你平常用的瀏覽器和它的設定都不會被動到。用其他瀏覽器的話，自己把代理設成 `http://127.0.0.1:8118`。
 
@@ -131,7 +131,7 @@ curl -x "https://box:$TELEPY_TOKEN@proxy.example.com:8444" https://ifconfig.me
 | 看到什麼 | 怎麼辦 |
 | --- | --- |
 | `proxy_disabled` | 請管理員在「網站設定 → 裝置代理」開啟 |
-| `token_scope` | 用 `--scope "… proxy:use"` 重新登入，或建一把有它的 token |
+| `token_scope` | 再執行一次 `telepy login`（比較早的登入沒有這個權限），或建一把勾了 `proxy:use` 的 token |
 | `step_up_refused` | 那條通道要求每次連線前先驗證，請改用網頁或 ssh |
 | 每個目的地都是 `connect_failed` | 裝置的 sshd 可能不准轉送，在它的 `sshd_config` 設 `AllowTcpForwarding yes` |
 | 網頁的文字出來了，圖片沒出來 | 這個網頁需要的連線數超過上限，到「網站設定 → 裝置代理」調高 |

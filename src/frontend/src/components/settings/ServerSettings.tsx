@@ -25,6 +25,7 @@ import { SettingRow } from "./SettingRow";
 import { SettingSourceDialog } from "./SettingSourceDialog";
 import { SshHostControl } from "./SshHost";
 import { ServerAddresses } from "./ServerAddresses";
+import { ProxyUrlControl } from "./ProxyUrl";
 
 const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKey; hint: TranslationKey; anchor: string }> = {
     addresses: { icon: Signpost, title: "settingsEnv.group.addresses", hint: "settingsEnv.group.addressesHint", anchor: "addresses" },
@@ -151,6 +152,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
         client_ip_header: ClientIpHeaderControl,
         server_gateway_proxy_protocol_from: ProxySourcesControl,
         server_ssh_host: SshHostControl,
+        server_proxy_url: ProxyUrlControl,
     };
     const custom = (key: string) => {
         const Editor = EDITORS[key];

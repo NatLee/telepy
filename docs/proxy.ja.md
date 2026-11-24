@@ -31,14 +31,14 @@
 ## 自分のコンピューターから
 
 ```sh
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files proxy:use"
+telepy login https://telepy.example.com
 telepy proxy                       # プロキシに使えるトンネル
 telepy proxy box                   # 127.0.0.1:8118 にプロキシ。同じポートで HTTP と SOCKS5
 telepy proxy box --browser         # 同上に加えて、それを使う Chrome（別プロファイル）
 curl -x http://127.0.0.1:8118 https://ifconfig.me     # デバイスのアドレス
 ```
 
-`telepy proxy` には SSH 鍵も管理者権限も要りません。Web ポートだけを使うので、Telepy の Web ページが開ける場所ならどこでも動きます。プログラムが開く接続 1 本が、Telepy への WebSocket 1 本になります。
+通常の `telepy login` にはプロキシの権限がすでに含まれています。それより前のサインインの場合は、`telepy proxy` が初回に自動でサインインし直します。`telepy proxy` には SSH 鍵も管理者権限も要りません。Web ポートだけを使うので、Telepy の Web ページが開ける場所ならどこでも動きます。プログラムが開く接続 1 本が、Telepy への WebSocket 1 本になります。
 
 `--browser` は Chrome、Chromium、Edge、Brave を探し、プロキシ設定と専用のプロファイルフォルダーを付けて起動します。普段使っているブラウザーとその設定には触れません。ほかのブラウザーでは、プロキシを自分で `http://127.0.0.1:8118` に設定してください。
 
@@ -131,7 +131,7 @@ curl -x "https://box:$TELEPY_TOKEN@proxy.example.com:8444" https://ifconfig.me
 | 表示 | 対処 |
 | --- | --- |
 | `proxy_disabled` | 管理者が「サイト設定 → デバイスプロキシ」で有効にします |
-| `token_scope` | `--scope "… proxy:use"` でサインインし直すか、それを持つトークンを作ります |
+| `token_scope` | もう一度 `telepy login` を実行するか（以前のサインインにはこの権限がありません）、`proxy:use` にチェックを入れたトークンを作ります |
 | `step_up_refused` | そのトンネルはセッションごとに確認を求めます。Web か ssh を使ってください |
 | どの宛先でも `connect_failed` | デバイスの sshd が転送を禁じている可能性があります。`sshd_config` で `AllowTcpForwarding yes` にします |
 | ページの文字は出るが画像が出ない | そのページに必要な接続数が上限を超えています。「サイト設定 → デバイスプロキシ」で上げてください |

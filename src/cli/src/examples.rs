@@ -474,7 +474,7 @@ pub const EXAMPLES: &[Example] = &[
     Example {
         id: "proxy",
         topic: "network",
-        title: "Your own browser, leaving from the device",
+        title: "A proxy through the device, for your own browser",
         note: "A proxy on 127.0.0.1 (HTTP and SOCKS5) whose connections leave from the device: its localhost and network are reachable and sites see its address. --browser opens Chrome with it in a separate profile. No SSH key and no admin rights; needs the proxy:use permission.",
         lines: &["telepy proxy <tunnel> --browser http://localhost:3000/"],
         needs: &["proxy:use"],
@@ -485,14 +485,6 @@ pub const EXAMPLES: &[Example] = &[
         title: "curl and scripts through the device",
         note: "Start the proxy in one terminal, then point any program at it. Without a tunnel, telepy proxy lists the ones you may use.",
         lines: &["telepy proxy <tunnel> --port 8118", "curl -x http://127.0.0.1:8118 https://ifconfig.me"],
-        needs: &["proxy:use"],
-    },
-    Example {
-        id: "proxyLogin",
-        topic: "network",
-        title: "Sign in with proxy:use",
-        note: "The default sign-in leaves it out; ask for it once.",
-        lines: &["telepy login <url> --scope \"tunnels:read ssh:exec ssh:files proxy:use\""],
         needs: &["proxy:use"],
     },
     Example {
