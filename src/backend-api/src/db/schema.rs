@@ -1366,8 +1366,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 區網掃描辨識網頁時帶的 User-Agent（空白 = 一般瀏覽器的）。/ The LAN scan's identify User-Agent (blank = an ordinary browser's).
     ("site_settings_sitesettings", "lan_scan_user_agent", "varchar(256) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "carrier_auto_update", "bool NOT NULL DEFAULT 1"),
-    // 裝置代理（OAuth app / API token 經裝置連出去）：預設關，升級不會多開一個入口。/ The device proxy (apps and tokens connecting out through a device): off by default, so an upgrade opens nothing new.
-    ("site_settings_sitesettings", "proxy_enabled", "bool NOT NULL DEFAULT 0"),
+    // 裝置代理（OAuth app / API token 經裝置連出去）：預設開（使用者的決定）；scope、功能權限與通道檢查照樣把關。
+    // v2.20.0 這一欄預設是 0，已經有這一欄的資料庫由一次性的 `PROXY_ON_BY_DEFAULT` 改成開。
+    // The device proxy (apps and tokens connecting out through a device): on by default (the owner's decision); the
+    // scope, the feature and the tunnel checks still decide. v2.20.0 created this column with 0, so databases that
+    // already have it are switched on once by `PROXY_ON_BY_DEFAULT`.
+    ("site_settings_sitesettings", "proxy_enabled", "bool NOT NULL DEFAULT 1"),
     ("site_settings_sitesettings", "proxy_max_connections", "integer NOT NULL DEFAULT 64"),
     ("site_settings_sitesettings", "datasets_auto_update", "bool NOT NULL DEFAULT 1"),
     // 連線紀錄裡裝置自己回報的公網 IP（gateway 看到的是代理 / Docker 的內部位址時）。/ The public IP the device reported for that connection.
@@ -1593,6 +1597,7 @@ pub const TUNNEL_WAY_IN: &str = "2026-10-30-tunnel-way-in";
 /// Organization groups got "can be shared" (off by default); groups that already had tunnels shared with them get it
 /// on, so existing shares keep working.
 pub const SHAREABLE_GROUPS: &str = "2026-11-08-shareable-organization-groups";
+pub const PROXY_ON_BY_DEFAULT: &str = "2026-11-25-device-proxy-on-by-default";
 
 /// 角色與群組分開：被分享的組織群組變成群組。只為分享存在的（沒有功能規則、單一登入規則、SCIM 對應）就地轉成管理員
 /// 維護的群組；同時也當角色用的就複製一個同名群組（成員一樣）、把群組分享改指向它，角色留下它的成員、規則與對應。
@@ -1630,6 +1635,7 @@ pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     cli_signin_style(pool).await?;
     personal_command_rules(pool).await?;
     tunnel_way_in(pool).await?;
+    proxy_on_by_default(pool).await?;
     shareable_groups(pool).await?;
     roles_and_groups(pool).await
 }
@@ -1735,6 +1741,21 @@ async fn roles_and_groups(pool: &SqlitePool) -> anyhow::Result<()> {
     if !unsynced.is_empty() {
         tracing::warn!(groups = ?unsynced, "data migration: these groups were copied from SCIM-pushed roles that also had feature rules; SCIM keeps the roles, not the copies — check the copies' members on the admin Groups page");
     }
+    Ok(())
+}
+
+/// 裝置代理改成預設開：v2.20.0 建的那一欄預設是關，分不出「沒動過」與「刻意關掉」，所以開一次；之後管理員關掉就維持關。
+/// The device proxy became on by default: the column v2.20.0 created defaulted to off, and "never touched" can't be
+/// told from "turned off on purpose", so it is switched on once; an administrator turning it off afterwards stays off.
+async fn proxy_on_by_default(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, PROXY_ON_BY_DEFAULT).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let switched = sqlx::query("UPDATE site_settings_sitesettings SET proxy_enabled = 1 WHERE proxy_enabled = 0").execute(&mut *tx).await?.rows_affected();
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(PROXY_ON_BY_DEFAULT).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    tracing::debug!(switched, "data migration: the device proxy is on by default");
     Ok(())
 }
 

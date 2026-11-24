@@ -167,7 +167,7 @@ export function CliStart({ base, username, platform, setPlatform, signIns, brows
                                 <CommandLine value={`telepy login ${url}`} />
                                 <CliTerminal label={t("cli.signIn.sample")} lines={signInSample(url, username, p.os)} art={<Tapi pose="wave" size={52} label={t("eggs.tapiLabel")} />} />
                                 <p className="text-sm leading-relaxed text-muted-foreground">
-                                    {tn("cli.signIn.scopes", { scopes: code(LOGIN_SCOPES.join(" ")), flag: code("--scope") })} {tn("cli.signIn.stored", { file: code("~/.config/telepy/") })}
+                                    {tn("cli.signIn.scopes", { scopes: code(LOGIN_SCOPES.join(" ")) })} {tn("cli.signIn.stored", { file: code("~/.config/telepy/") })}
                                 </p>
                                 <div className="flex flex-wrap items-center gap-1.5 text-sm">
                                     <span className="text-muted-foreground">{signIns && signIns.length > 0 ? t("cli.signIn.seen") : t("cli.signIn.seenNone")}</span>

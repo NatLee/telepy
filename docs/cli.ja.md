@@ -143,14 +143,14 @@ eval "$(telepy completions zsh)"     # ~/.zshrc に追加
 
 ```sh
 telepy login https://telepy.example.com                 # ブラウザー：OAuth + PKCE、ループバックへのコールバック
-telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files network:scan"
+telepy login https://telepy.example.com --scope "tunnels:read"            # すべてより少ない権限だけを求める
 telepy login https://telepy.example.com --no-browser    # ブラウザーを開かず、サインイン用の URL を表示する
 telepy login https://telepy.example.com --token tpt_…   # 個人用 API トークン（API ページ → あなたのトークン）。--with-token でも可
 telepy whoami                                           # 誰として、どのトークン / アプリで、スコープ、トンネル、有効期限
 telepy logout
 ```
 
-`--scope` を付けなければ、ブラウザーでのサインインは `tunnels:read ssh:exec ssh:files proxy:use` を求めます（サーバーにまだデバイスプロキシがない場合、`proxy:use` は自動的に省かれます）。各スコープでできることは[スコープ](#スコープ)を見てください。
+ブラウザーでのサインインは、CLI が使うすべての権限（`tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use`）を求めます。どれを許可するかは承認ページで選べます。古いサーバーがまだ知らないものは自動的に省かれます。各スコープでできることは[スコープ](#スコープ)を見てください。
 
 承認すると、ブラウザーは Telepy の「サインイン完了」ページに移ります。CLI に今できることと、試せるコマンドがいくつか表示されます。見た目は**サイト設定 → サインイン**にある承認ページの設定に従います。このページがない古い Telepy サーバーでは、CLI 自身が描く小さなページが表示されます。
 
@@ -358,7 +358,7 @@ telepy lan os box 192.168.1.20             # 何の OS か：ping の TTL、SSH 
 telepy lan edit box nas --labels rack-2,prod --note "top shelf"   # ラベルとメモ（tunnels:manage）
 ```
 
-一覧と `show` に必要なのは `tunnels:read` だけで、`scan` には `network:scan` が必要です（`telepy login --scope` で追加）。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
+一覧と `show` に必要なのは `tunnels:read` だけで、`scan` には `network:scan` が必要です。追加と削除には `tunnels:manage` が必要で、このスコープは API トークンしか持てません。
 
 スキャンは既定で、開いている Web ポートごとに `GET /` を 1 回送ります（HTTPS なら証明書も見ます）。これでルーター、NAS、Proxmox などを見分けます。相手のマシンのログには、デバイスからの普通のブラウザー（デスクトップ版 Chrome）のアクセスとして 1 件残ります。User-Agent は管理者がサイト設定 → デバイスとネットワークで変えられます。ほかのポートは聞くだけです。`--no-identify` で GET を送らなくなります。
 

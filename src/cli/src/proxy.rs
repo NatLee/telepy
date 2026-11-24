@@ -114,7 +114,7 @@ pub fn refusal_parts(r: &Refused) -> (String, String) {
 pub fn advice(code: &str, server: &str) -> Option<String> {
     match code {
         "token_scope" => Some(format!("This sign-in lacks the proxy permission. Sign in again: telepy login {server}   (an API token needs proxy:use ticked when it is created)")),
-        "proxy_disabled" => Some("An administrator has to turn it on: Site settings → Features → Device proxy.".into()),
+        "proxy_disabled" => Some("An administrator turned it off; it is switched back on in Site settings → Features → Device proxy.".into()),
         "feature_disabled" => Some("The device proxy is turned off for your account. Ask an administrator.".into()),
         "step_up_refused" => Some("This tunnel asks for a fresh verification before every session; the proxy can't give one. Use the web or ssh for it.".into()),
         "token_invalid" | "token_required" => Some(format!("Sign in again: telepy login {server}")),

@@ -738,7 +738,7 @@ mod tests {
             device_ip_lookup_url: String::new(),
             lan_scan_user_agent: String::new(),
             carrier_auto_update: true,
-            proxy_enabled: false,
+            proxy_enabled: true,
             proxy_max_connections: 64,
             datasets_auto_update: true,
             notify_user_webhooks: true,

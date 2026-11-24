@@ -14,11 +14,11 @@ Nothing is installed or run on the device. It is the same forward its sshd alrea
 
 The remote browser is still the one to use when nothing can be installed on the computer in front of you, and for scripted browsing (`telepy browse`, MCP agents), which needs a browser Telepy can drive.
 
-## Turning it on
+## Who can use it
 
-It is off until an administrator turns it on: **Site settings → Features → Device proxy → Allow the device proxy**.
+The device proxy is on by default. An administrator can turn it off for everyone in **Site settings → Features → Device proxy → Allow the device proxy**.
 
-After that, a person can use it when all of these hold:
+A person can use it when all of these hold:
 
 | Check | Where it is set |
 | --- | --- |
@@ -130,7 +130,7 @@ All connections of one token (or app) through one tunnel as one device account f
 
 | What you see | What to do |
 | --- | --- |
-| `proxy_disabled` | An administrator turns it on in Site settings → Device proxy |
+| `proxy_disabled` | An administrator turned it off; it is switched back on in Site settings → Device proxy |
 | `token_scope` | Run `telepy login` again (an older sign-in lacks the permission), or make a token with `proxy:use` ticked |
 | `step_up_refused` | That tunnel asks for verification before every session. Use the web or ssh for it |
 | `connect_failed` on every destination | The device's sshd may forbid forwarding. Set `AllowTcpForwarding yes` in its `sshd_config` |
