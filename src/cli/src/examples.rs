@@ -107,8 +107,8 @@ pub const EXAMPLES: &[Example] = &[
     Example {
         id: "status",
         topic: "everyday",
-        title: "One device in detail",
-        note: "Health, uptime, device facts and warnings.",
+        title: "One device's status and IP addresses",
+        note: "Health, latency, its public and LAN addresses, hostname, uptime, device facts and warnings.",
         lines: &["telepy status <tunnel>"],
         needs: &["tunnels:read"],
     },

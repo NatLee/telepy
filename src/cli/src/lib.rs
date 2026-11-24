@@ -113,7 +113,7 @@ pub enum Cmd {
     Whoami(JsonFlag),
     /// List tunnels with health, latency, accounts and labels
     Ls(LsArgs),
-    /// One tunnel in detail: health, uptime, device facts and warnings
+    /// One tunnel in detail: health, addresses, uptime, device facts and warnings
     Status(StatusArgs),
     /// SSH into a device through its tunnel (system ssh with Telepy's generated config)
     Ssh(SshArgs),
@@ -1268,6 +1268,42 @@ fn ls(api: &Api, a: &LsArgs) -> Result<()> {
     Ok(())
 }
 
+/// 裝置的位址與連線（`status` 印的那幾行）：對外 IP（附國家 / 網路業者）、Telepy 看到的來源（跟對外 IP 不同時：
+/// 中間有代理或 NAT）、每張內網網卡的位址、現在連了多久或最後一次看到是什麼時候。
+/// The device's addresses and connection, as `status` prints them: the public IP (with country / network owner), the
+/// source Telepy sees when it differs (a proxy or NAT in between), every LAN interface's address, and since when it is
+/// connected or when it was last seen.
+fn address_lines(e: &Value) -> Vec<(&'static str, String)> {
+    let place = |g: &Value| {
+        let parts: Vec<&str> = ["country", "org"].iter().filter_map(|k| g[*k].as_str()).filter(|v| !v.is_empty()).collect();
+        if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
+    };
+    let mut out = Vec::new();
+    let seen = e["ip"].as_str();
+    let public = e["public_ip"].as_str();
+    if let Some(ip) = public.or(seen) {
+        out.push(("address", format!("{ip}{}", place(if public.is_some() { &e["public_geo"] } else { &e["geo"] }))));
+    }
+    if let (Some(p), Some(from)) = (public, seen) {
+        if p != from {
+            out.push(("seen from", from.to_string()));
+        }
+    }
+    for l in e["lan"].as_array().into_iter().flatten() {
+        if let Some(ip) = l["ip"].as_str() {
+            let prefix = l["prefix"].as_u64().map(|p| format!("/{p}")).unwrap_or_default();
+            let iface = l["iface"].as_str().filter(|v| !v.is_empty()).map(|v| format!(" ({v})")).unwrap_or_default();
+            out.push(("lan", format!("{ip}{prefix}{iface}")));
+        }
+    }
+    match (e["live"].as_bool(), e["connected_at"].as_str(), e["last_seen_at"].as_str()) {
+        (Some(true), Some(at), _) => out.push(("connected", format!("since {at}"))),
+        (Some(false), _, Some(at)) => out.push(("last seen", at.to_string())),
+        _ => {}
+    }
+    out
+}
+
 fn status(api: &Api, a: &StatusArgs) -> Result<()> {
     let d = dashboard(api)?;
     let (t, _) = resolve(&d.tunnels, &a.tunnel)?;
@@ -1285,8 +1321,8 @@ fn status(api: &Api, a: &StatusArgs) -> Result<()> {
     line("accounts", if acc.is_empty() { "-".into() } else { acc.join(", ") });
     line("labels", label_list(&t).join(" "));
     line("permission", s(&t, "user_permission").into());
-    if let Some(ip) = t["endpoint"]["public_ip"].as_str().or(t["endpoint"]["ip"].as_str()) {
-        line("address", ip.into());
+    for (k, v) in address_lines(&t["endpoint"]) {
+        line(k, v);
     }
     if let Some(h) = t["endpoint"]["hostname"].as_str() {
         line("hostname", h.into());
@@ -4288,6 +4324,31 @@ fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_lists_the_public_and_lan_addresses_and_since_when() {
+        let e = json!({
+            "ip": "172.19.0.1", "live": true, "connected_at": "2026-11-25T01:02:03Z", "last_seen_at": null,
+            "public_ip": "203.0.113.7", "public_geo": {"country": "TW", "org": "Example Net"}, "geo": {"country": null, "org": null},
+            "lan": [{"iface": "eth0", "ip": "192.168.1.20", "prefix": 24}, {"iface": "", "ip": "10.0.0.5"}],
+        });
+        let lines = address_lines(&e);
+        assert_eq!(
+            lines,
+            [
+                ("address", "203.0.113.7 (TW, Example Net)".to_string()),
+                ("seen from", "172.19.0.1".to_string()),
+                ("lan", "192.168.1.20/24 (eth0)".to_string()),
+                ("lan", "10.0.0.5".to_string()),
+                ("connected", "since 2026-11-25T01:02:03Z".to_string()),
+            ]
+        );
+        // 離線、裝置沒回報過：只有 Telepy 最後看到的來源與時間。/ Offline and never probed: only the source Telepy last saw, and when.
+        let off = json!({"ip": "198.51.100.9", "live": false, "connected_at": "2026-11-24T00:00:00Z", "last_seen_at": "2026-11-24T08:00:00Z", "public_ip": null, "geo": {"country": "JP", "org": null}, "lan": []});
+        assert_eq!(address_lines(&off), [("address", "198.51.100.9 (JP)".to_string()), ("last seen", "2026-11-24T08:00:00Z".to_string())]);
+        // 看不到這台的位址（只能看狀態的分享對象）：什麼都不印。/ Not allowed to see the endpoint: nothing.
+        assert!(address_lines(&Value::Null).is_empty());
+    }
 
     #[test]
     fn rsync_keeps_its_options_and_points_the_remote_side_at_the_generated_alias() {

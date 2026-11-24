@@ -194,7 +194,7 @@ CLI 會存下一組 access token 與 refresh token：
 telepy ls                                  # NAME  HEALTH  LATENCY  ACCOUNTS  LABELS  GROUP  SEEN
 telepy ls --label env=prod --online --json
 telepy ls --group "Lab"
-telepy status box                          # 健康狀態、上線時間、裝置資訊與警告
+telepy status box                          # 健康狀態、對外 IP 與內網位址、上線時間、裝置資訊與警告
 ```
 
 ### SSH、scp 與 sftp
@@ -475,7 +475,7 @@ telepy browse close "$ID"
 | `telepy logout` | 忘掉登入資料；瀏覽器登入還會在伺服器上撤銷 | — |
 | `telepy whoami` | 你是誰、用哪個 token 或 app、scope、通道與到期日 | — |
 | `telepy ls` | 列出通道與健康狀態、延遲、帳號、標籤和群組；`--label`、`--group`、`--online`、`--json` | `tunnels:read` |
-| `telepy status <tunnel>` | 單一通道：健康狀態、上線時間、裝置資訊與警告 | `tunnels:read` |
+| `telepy status <tunnel>` | 單一通道：健康狀態、對外 IP 與內網位址、上線時間、裝置資訊與警告 | `tunnels:read` |
 | `telepy ssh <target>` | SSH 進裝置；`-N`、`-L`、`-R`、`-D`、`-i`、`--ssh-opt`、`--via`、`--fallback`，`--` 後面接指令 | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy scp [-r] <from>… <to>` | 用 scp 複製；遠端寫成 `<tunnel>[@account]:<path>` | `tunnels:read` + 你的 SSH 金鑰 |
 | `telepy sftp <target>` | 對裝置開 sftp | `tunnels:read` + 你的 SSH 金鑰 |

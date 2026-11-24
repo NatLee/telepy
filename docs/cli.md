@@ -194,7 +194,7 @@ A target is a tunnel, optionally with a device account: `box` uses the tunnel's 
 telepy ls                                  # NAME  HEALTH  LATENCY  ACCOUNTS  LABELS  GROUP  SEEN
 telepy ls --label env=prod --online --json
 telepy ls --group "Lab"
-telepy status box                          # health, uptime, device facts and warnings
+telepy status box                          # health, public and LAN addresses, uptime, device facts and warnings
 ```
 
 ### SSH, scp and sftp
@@ -475,7 +475,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy logout` | Forget the sign-in; a browser sign-in is also revoked on the server | — |
 | `telepy whoami` | Who you are, with which token or app, scopes, tunnels and expiry | — |
 | `telepy ls` | Tunnels with health, latency, accounts, labels and group; `--label`, `--group`, `--online`, `--json` | `tunnels:read` |
-| `telepy status <tunnel>` | One tunnel: health, uptime, device facts and warnings | `tunnels:read` |
+| `telepy status <tunnel>` | One tunnel: health, public and LAN addresses, uptime, device facts and warnings | `tunnels:read` |
 | `telepy ssh <target>` | SSH into the device; `-N`, `-L`, `-R`, `-D`, `-i`, `--ssh-opt`, `--via`, `--fallback`, a command after `--` | `tunnels:read` + your SSH key |
 | `telepy scp [-r] <from>… <to>` | Copy with scp; the remote side is `<tunnel>[@account]:<path>` | `tunnels:read` + your SSH key |
 | `telepy sftp <target>` | Open sftp to the device | `tunnels:read` + your SSH key |
