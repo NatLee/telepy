@@ -1,11 +1,11 @@
 /**
- * 每個情境的插圖內容（節點 / 連線），以及情境卡片上的迷你插圖。
- * Scene content (nodes / links) per recipe, plus the mini illustration on each recipe card.
+ * 每個情境的插圖內容（節點 / 連線）。
+ * Scene content (nodes / links) per recipe.
  */
 import { Cpu, Globe, Laptop, Monitor, Network, Router, SquareTerminal } from "lucide-react";
 import type { Translate } from "@/lib/i18n";
 import { resolveParams, type ConnectTarget, type RecipeId, type RecipeParams } from "@/lib/forwardRecipes";
-import type { MiniItem, SceneLink, SceneNode } from "./TunnelScene";
+import type { SceneLink, SceneNode } from "./TunnelScene";
 
 export function sceneFor(id: RecipeId, rawParams: RecipeParams, target: ConnectTarget, t: Translate): { nodes: SceneNode[]; links: SceneLink[]; file: boolean } {
     const p = resolveParams(id, rawParams);
@@ -97,17 +97,3 @@ export function sceneFor(id: RecipeId, rawParams: RecipeParams, target: ConnectT
         }
     }
 }
-
-const YOU: MiniItem = { icon: Laptop, role: "you" };
-const DEVICE: MiniItem = { icon: Cpu, role: "device" };
-
-export const MINI_SCENES: Record<RecipeId, MiniItem[]> = {
-    local: [YOU, { link: "tunnel" }, DEVICE],
-    lan: [YOU, { link: "tunnel" }, DEVICE, { link: "plain" }, { icon: Router, role: "target" }],
-    socks: [YOU, { link: "tunnel" }, DEVICE, { link: "plain" }, { icon: Globe, role: "target" }],
-    remote: [YOU, { link: "tunnel", back: true }, DEVICE],
-    jump: [YOU, { link: "tunnel" }, DEVICE, { link: "ssh" }, { icon: SquareTerminal, role: "target" }],
-    copy: [YOU, { link: "tunnel", both: true }, DEVICE],
-    rustdesk: [YOU, { link: "tunnel" }, { icon: Monitor, role: "device" }],
-    vpn: [YOU, { link: "tunnel" }, DEVICE, { link: "plain" }, { icon: Network, role: "target" }],
-};
