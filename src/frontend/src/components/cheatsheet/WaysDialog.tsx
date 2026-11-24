@@ -15,6 +15,7 @@ import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { useI18n } from "@/lib/i18n";
 import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
 import { wayCounts, type CatalogueEntry } from "@/lib/sheetCatalogue";
+import { TOPIC_ICON } from "@/components/cheatsheet/TopicBoard";
 import type { RecipeId } from "@/lib/forwardRecipes";
 import type { TranslationKey } from "@/locales/en";
 
@@ -86,15 +87,21 @@ export function WaysDialog({ isOpen, onClose, entries, onTask, onTopic }: { isOp
                             </tr>
                         </thead>
                         <tbody>
-                            {topics.map((tp) => (
+                            {topics.map((tp) => {
+                                const Icon = TOPIC_ICON[tp.id];
+                                return (
                                 <tr key={tp.id} className="border-b border-border/70 last:border-0">
                                     <th scope="row" className="p-0 font-normal">
-                                        <button type="button" className={rowButton} onClick={() => onTopic(tp.id)}>{t(`cli.topic.${tp.id}` as TranslationKey)}</button>
+                                        <button type="button" className={`${rowButton} flex items-center gap-2`} onClick={() => onTopic(tp.id)}>
+                                            <Icon size={15} className="shrink-0 text-muted-foreground" aria-hidden />
+                                            <span className="min-w-0">{t(`cli.topic.${tp.id}` as TranslationKey)}</span>
+                                        </button>
                                     </th>
                                     <td className="text-center font-mono text-xs text-foreground">{tp.total}</td>
                                     <td className="text-center font-mono text-xs text-muted-foreground">{tp.ssh > 0 ? tp.ssh : <Mark on={false} label={no} />}</td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

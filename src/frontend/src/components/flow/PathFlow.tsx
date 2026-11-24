@@ -77,10 +77,12 @@ interface FlowNodeProps {
     wide?: boolean;
     /** 一列的矮節點（圖示在左、標題與狀態同一行）：一長串節點直排時用。/ A short row node, for long vertical paths. */
     compact?: boolean;
+    /** 說明用的圖：不畫狀態行（這個節點沒有「現在的狀態」）。/ An explanatory diagram: no status line (the node has no live state). */
+    plain?: boolean;
     className?: string;
 }
 
-export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText, control, wide = false, compact = false, className }: FlowNodeProps) {
+export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText, control, wide = false, compact = false, plain = false, className }: FlowNodeProps) {
     const Icon = icon;
     const tile = (size: string, iconSize: number) => (
         <span className={cn("grid shrink-0 place-items-center rounded-lg", size, brand ? "bg-brand-gradient text-white" : "bg-muted text-foreground")} aria-hidden>
@@ -109,7 +111,7 @@ export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText
             {tile("size-10", 20)}
             <span className="max-w-full text-sm text-foreground [overflow-wrap:break-word]">{title}</span>
             {sub && <span className="text-xs leading-snug text-muted-foreground">{sub}</span>}
-            <StateLine state={state} text={stateText} />
+            {!plain && <StateLine state={state} text={stateText} />}
         </li>
     );
 }
