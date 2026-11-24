@@ -1744,6 +1744,17 @@ fn vpn_cmd(api: &Api, a: &VpnArgs) -> Result<i32> {
     if !bypass.is_empty() && own_default_route().is_none() {
         bail!("These networks include the Telepy server itself, and this computer has no default route to keep it on. Pick narrower networks.");
     }
+    // 這台電腦就是 Telepy 伺服器時不能把全部流量導走：伺服器回給每台裝置的通道（包含 VPN 自己走的那一條）也會被吸進
+    // VPN，結果什麼都連不上，別人的連線也跟著卡住。看這台電腦的 SSH port 答出來的 host key 是不是閘道釘住的那幾把。
+    // On the Telepy server itself everything must not be routed away: the server's replies to every device's tunnel
+    // (the one the VPN rides included) would be pulled into the VPN too, so nothing connects and other people's
+    // sessions stall. The test: does this computer's SSH port answer with one of the gateway's pinned host keys?
+    if nets.iter().any(|n| n.prefix == 0) && server_is_this_computer(&file) {
+        bail!(
+            "This computer is the Telepy server itself, so everything can't be sent through a device from here: the server's own traffic — every device's tunnel, including the one this VPN would use — would be pulled into the VPN, nothing would connect and other people's sessions would stall.\n  From another computer: telepy vpn {t} --all\n  From here, to leave through the device without touching the routes: telepy ssh {t} -N -D 1080   then   curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me   (or: telepy proxy {t})\n  From here, for its networks only: telepy vpn {t} 172.31.0.0/16",
+            t = a.target
+        );
+    }
     let plan = VpnPlan { nets, domains, dns_server: a.dns_server, carrier: a.carrier, sshd_names: !mac, bypass, block_v6: a.all };
     if a.check {
         let addrs: Vec<String> = t["endpoint"]["lan"].as_array().into_iter().flatten().filter_map(|n| n["ip"].as_str().map(str::to_string)).collect();
@@ -1832,6 +1843,17 @@ fn proxy_cmd(api: Api, a: ProxyArgs) -> Result<i32> {
             }
         }
     })
+}
+
+/// 這台電腦是不是 Telepy 伺服器本身：對 127.0.0.1 上閘道的 SSH port 做 `ssh-keyscan`（2 秒），答出來的 host key 有一把
+/// 是設定檔釘住的閘道金鑰就是。查不到（沒有 ssh-keyscan、port 沒開）= 不是。
+/// Whether this computer is the Telepy server itself: `ssh-keyscan` the gateway's SSH port on 127.0.0.1 (2 s) and see
+/// whether an answered host key is one the config pins for the gateway. No answer (no ssh-keyscan, port closed) = no.
+fn server_is_this_computer(config_file: &std::path::Path) -> bool {
+    let Some((port, known_hosts)) = vpn::config_gateway(&std::fs::read_to_string(config_file).unwrap_or_default()) else { return false };
+    let Ok(pinned) = std::fs::read_to_string(&known_hosts) else { return false };
+    let Ok(out) = Command::new("ssh-keyscan").args(["-T", "2", "-p", &port.to_string(), "127.0.0.1"]).stderr(std::process::Stdio::null()).output() else { return false };
+    vpn::same_gateway(&String::from_utf8_lossy(&out.stdout), &pinned)
 }
 
 /// 這台電腦原本的預設路由（不用 root 就讀得到）。/ This computer's own default route (readable without root).
@@ -2188,7 +2210,9 @@ fn vpn_check(file: &std::path::Path, alias: &str, extra: &[String], plan: &VpnPl
     let _ = ssh.kill();
     let _ = ssh.wait();
     if failed == 0 {
-        println!("The path works. Start it: telepy vpn {target}{}", if everything { " --all" } else { "" });
+        // 開始的指令跟這次檢查的範圍一樣（自己指定的網段要寫回去）。/ The start command covers what was just checked (named networks included).
+        let scope = if everything { " --all".to_string() } else { plan.nets.iter().map(|n| format!(" {}", if n.prefix == 32 { n.addr.to_string() } else { n.to_string() })).collect::<String>() };
+        println!("The path works. Start it: telepy vpn {target}{scope}");
     } else if failed == tries.len() {
         println!("Nothing was reached. If the device's sshd forbids forwarding (AllowTcpForwarding) nothing can go through it; otherwise those hosts may be off or on another network.");
     }

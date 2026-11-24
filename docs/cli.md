@@ -423,6 +423,7 @@ Without networks on the command line, `telepy vpn` takes the device's own networ
 - The Telepy server keeps its own path (one host route per address, looked up again every 30 seconds), because the VPN's own connection runs to it.
 - Networks this computer is plugged into stay local: your printer and your router still answer.
 - IPv6 is refused while it runs. Otherwise a computer with IPv6 would reach dual-stack sites from its own address, around the VPN. Programs fall back to IPv4 at once.
+- **Not on the Telepy server itself.** There, the server's replies to every device's tunnel would be pulled into the VPN too, including the tunnel the VPN rides, so `telepy vpn --all` refuses (it recognises the server by its pinned host key answering on this computer). From that machine use `telepy proxy` or `telepy ssh <tunnel> -N -D 1080`, which leave the routes alone, or route chosen networks.
 - Names are still looked up by your own DNS server when it is on your local network. A public DNS server (`1.1.1.1`) is reached through the device like everything else.
 
 **The same network on both sides.** If the device's network is 192.168.1.0/24 and so is yours, routing it whole would cut your own network. `telepy vpn` leaves it out and routes the hosts Telepy knows there one by one instead (from `telepy lan scan` or `telepy lan add`), skipping the addresses that are your own computer, gateway or DNS server here. Name any other host yourself: `telepy vpn box 192.168.1.50`.
