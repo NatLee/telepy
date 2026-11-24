@@ -770,6 +770,54 @@ pub fn config_hostnames(config: &str) -> Vec<String> {
     out
 }
 
+/// 產生的 ssh 設定裡，直接連 Telepy 的那一段的 SSH port 與它的 known_hosts 檔（釘住的閘道 host key 在裡面）。
+/// The SSH port of the generated config's stanza that dials Telepy directly, and its known_hosts file (which pins the
+/// gateway's host keys).
+pub fn config_gateway(config: &str) -> Option<(u16, String)> {
+    let mut block: (Option<u16>, Option<String>, bool, bool) = (None, None, false, false);
+    let done = |b: &(Option<u16>, Option<String>, bool, bool)| if b.3 && !b.2 { Some((b.0.unwrap_or(22), b.1.clone()?)) } else { None };
+    for line in config.lines() {
+        let mut words = line.split_whitespace();
+        let Some(key) = words.next() else { continue };
+        match key.to_ascii_lowercase().as_str() {
+            "host" | "match" => {
+                if let Some(found) = done(&block) {
+                    return Some(found);
+                }
+                block = (None, None, false, false);
+            }
+            "hostname" => block.3 = true,
+            "port" => block.0 = words.next().and_then(|p| p.parse().ok()),
+            "userknownhostsfile" => block.1 = words.next().map(str::to_string),
+            "proxyjump" => block.2 = true,
+            "proxycommand" => block.2 |= line.split_whitespace().any(|w| w == "-W"),
+            _ => {}
+        }
+    }
+    done(&block)
+}
+
+/// known_hosts 或 `ssh-keyscan` 輸出裡的金鑰（`型別 內容`；註解與看不懂的行略過）。
+/// The keys in a known_hosts file or in `ssh-keyscan` output (`type blob`; comments and odd lines skipped).
+pub fn host_keys(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            let (_host, kind, blob) = (w.next()?, w.next()?, w.next()?);
+            (kind.starts_with("ssh-") || kind.starts_with("ecdsa-") || kind.starts_with("sk-")).then(|| (kind.to_string(), blob.to_string()))
+        })
+        .collect()
+}
+
+/// 這台電腦自己答出來的 host key 有沒有一把是 Telepy 閘道釘住的那幾把：有 = 這台電腦就是 Telepy 伺服器。
+/// Whether a host key this computer itself answers with is one of the pinned Telepy gateway keys: if so, this computer
+/// is the Telepy server.
+pub fn same_gateway(local_scan: &str, pinned: &str) -> bool {
+    let pinned = host_keys(pinned);
+    host_keys(local_scan).iter().any(|k| pinned.contains(k))
+}
+
 /// `/etc/resolv.conf` 裡的 IPv4 名稱伺服器。/ The IPv4 name servers in `/etc/resolv.conf`.
 pub fn resolv_nameservers(text: &str) -> Vec<Ipv4Addr> {
     text.lines()
@@ -954,6 +1002,19 @@ mod tests {
         let hop = "Host telepy-x\n    HostName ssh.example.com\nHost hd-dev\n    HostName hd-dev\n    ProxyCommand ssh -F /x/hd-dev.conf -W %h:%p telepy-x\nHost lan\n    HostName 10.0.0.9\n    ProxyJump hd-dev\n";
         assert_eq!(config_hostnames(hop), ["ssh.example.com"]);
         assert_eq!(resolv_nameservers("# made by the system\nnameserver 192.168.1.1\nnameserver fe80::1%en0\nsearch lan\nnameserver 1.1.1.1\n"), [Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(1, 1, 1, 1)]);
+    }
+
+    #[test]
+    fn this_computer_is_recognised_as_the_telepy_server_by_its_pinned_host_key() {
+        let config = "# Written by the telepy CLI\nHost telepy-t.example-56767\n    HostName ssh.example.com\n    Port 56767\n    UserKnownHostsFile /home/a/.ssh/telepy/known_hosts-t.example\n    ProxyCommand /usr/local/bin/telepy _carrier --url wss://t.example/ws/gateway/\nHost box\n    HostName box\n    Port 22\n    UserKnownHostsFile /home/a/.ssh/telepy/known_hosts-t.example\n    ProxyCommand ssh -F /x -W %h:%p telepy-t.example-56767\n";
+        assert_eq!(config_gateway(config), Some((56767, "/home/a/.ssh/telepy/known_hosts-t.example".into())));
+        assert_eq!(config_gateway("Host box\n  HostName box\n  ProxyJump x\n"), None);
+        let pinned = "telepy-t.example-56767 ssh-ed25519 AAAAC3gateway\ntelepy-t.example-56767 ssh-rsa AAAAB3gateway\ntelepy-t.example-56767-device-5 ssh-ed25519 AAAAC3device\n";
+        let scan = "# 127.0.0.1:56767 SSH-2.0-russh_0.64.1\n[127.0.0.1]:56767 ssh-ed25519 AAAAC3gateway\n";
+        assert!(same_gateway(scan, pinned));
+        assert!(!same_gateway("[127.0.0.1]:56767 ssh-ed25519 AAAAC3someoneelse\n", pinned), "another sshd on that port is not the gateway");
+        assert!(!same_gateway("", pinned) && !same_gateway("# only a banner\n", pinned));
+        assert_eq!(host_keys("garbage line\nhost ssh-ed25519 AAA comment here\n"), [("ssh-ed25519".to_string(), "AAA".to_string())]);
     }
 
     #[test]
