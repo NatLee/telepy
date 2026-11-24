@@ -9,8 +9,11 @@
  * under both tools, and per telepy CLI topic how many things ssh can do too. A topic row opens that topic's examples.
  */
 import React from "react";
-import { Check, HardDrive, Minus, Scale, Terminal } from "lucide-react";
+import { Check, Files, HardDrive, Minus, Network, Play, Scale, Terminal } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
+import { NavTabs } from "@/components/ui/nav-tabs";
+import { ToolOverlap } from "@/components/cheatsheet/ToolOverlap";
+import { FAMILIES, family, type FamilyId } from "@/lib/toolOverlap";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { useI18n } from "@/lib/i18n";
 import { CLI_EXAMPLE_TOPICS, type CliTopicId } from "@/lib/cliExamples.gen";
@@ -41,8 +44,16 @@ function Lane({ name, hint, link, telepySub }: { name: string; hint: string; lin
 const Mark = ({ on, label }: { on: boolean; label: string }) =>
     on ? <Check size={16} className="mx-auto text-success" aria-label={label} /> : <Minus size={16} className="mx-auto text-muted-foreground/50" aria-label={label} />;
 
-export function WaysDialog({ isOpen, onClose, entries, onTask, onTopic }: { isOpen: boolean; onClose: () => void; entries: CatalogueEntry[]; onTask: (id: RecipeId) => void; onTopic: (id: CliTopicId) => void }) {
+/** 對話框的分頁：telepy 或 ssh，以及功能重疊的三組工具。/ The dialog's tabs: telepy or ssh, then the three families of overlapping tools. */
+export type WaysTab = "ways" | FamilyId;
+const FAMILY_ICON: Record<FamilyId, React.ReactNode> = { reach: <Network />, files: <Files />, run: <Play /> };
+
+export function WaysDialog({ isOpen, onClose, tab, onTab, entries, onTask, onTopic }: { isOpen: boolean; onClose: () => void; tab: WaysTab; onTab: (tab: WaysTab) => void; entries: CatalogueEntry[]; onTask: (id: RecipeId) => void; onTopic: (id: CliTopicId) => void }) {
     const { t } = useI18n();
+    const tabs = [
+        { value: "ways" as WaysTab, label: t("sheet.overlap.tabWays"), icon: <Scale /> },
+        ...FAMILIES.map((f) => ({ value: f.id as WaysTab, label: t(`sheet.overlap.${f.id}.title` as TranslationKey), icon: FAMILY_ICON[f.id] })),
+    ];
     const n = wayCounts(entries);
     const tasks = entries.filter((e) => e.kind === "task");
     const topics = CLI_EXAMPLE_TOPICS.map((tp) => {
@@ -54,7 +65,19 @@ export function WaysDialog({ isOpen, onClose, entries, onTask, onTopic }: { isOp
     const th = "px-3 py-2 text-left text-xs font-normal text-muted-foreground";
     const rowButton = "w-full rounded px-3 py-2 text-left text-sm text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
     return (
-        <Modal isOpen={isOpen} onClose={onClose} size="4xl" icon={<Scale />} title={t("sheet.ways.title")} description={t("sheet.ways.description")}>
+        <Modal
+            isOpen={isOpen}
+            onClose={onClose}
+            size="5xl"
+            fixedHeight
+            icon={<Scale />}
+            title={tab === "ways" ? t("sheet.ways.title") : t(`sheet.overlap.${tab}.title` as TranslationKey)}
+            description={tab === "ways" ? t("sheet.ways.description") : t(`sheet.overlap.${tab}.hint` as TranslationKey)}
+            nav={<NavTabs aria-label={t("sheet.overlap.tabsAria")} tabs={tabs} value={tab} onChange={onTab} />}
+        >
+            {tab !== "ways" ? (
+                <ToolOverlap family={family(tab)} />
+            ) : (
             <div className="space-y-4">
                 <Lane name="ssh" hint={t("sheet.ways.sshHint")} link={t("sheet.ways.linkSsh")} telepySub={t("sheet.ways.gateway")} />
                 <Lane name="telepy" hint={t("sheet.ways.telepyHint")} link={t("sheet.ways.linkBoth")} telepySub={t("sheet.ways.gatewayApi")} />
@@ -107,6 +130,7 @@ export function WaysDialog({ isOpen, onClose, entries, onTask, onTopic }: { isOp
                 </div>
                 <p className="text-xs text-muted-foreground">{t("sheet.ways.tableHint")}</p>
             </div>
+            )}
         </Modal>
     );
 }
