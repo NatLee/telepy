@@ -181,6 +181,22 @@ async fn a_scan_lists_the_devices_own_services_its_gateway_and_what_changed() {
     };
     let host = |v: &Value, address: &str| v["hosts"].as_array().unwrap().iter().find(|h| h["address"] == address).cloned().unwrap_or_else(|| panic!("no {address} in {v}"));
 
+    // 0) 還沒掃描：瀏覽器面板直接問裝置在聽什麼（不探測、不存檔）；只綁在某個區網位址的 port 從 localhost 連不到。
+    // Before any scan: the browser panel asks the device what listens (no probing, nothing stored); a port bound to one
+    // LAN address isn't reachable on localhost.
+    let ports_url = format!("/api/reverse/server/{id}/remote-browser/ports");
+    let r = app.get(&ports_url, Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["username"].as_str(), r.json["listed"].as_bool(), r.json["scanned"].as_bool()), (Some("ubuntu"), Some(true), Some(false)), "{}", r.json);
+    let mut want = vec![own_web, dead];
+    want.sort_unstable();
+    let got: Vec<(u64, &str)> = r.json["ports"].as_array().unwrap().iter().map(|p| (p["port"].as_u64().unwrap(), p["web"].as_str().unwrap())).collect();
+    assert_eq!(got, want.iter().map(|p| (*p as u64, "maybe")).collect::<Vec<_>>(), "{}", r.json);
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token)).await.json["hosts"], json!([]), "asking for the ports stores nothing");
+    let mallory = lab.user("mallory").await;
+    assert_eq!(app.get(&ports_url, Some(&mallory.token)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(app.get(&format!("{ports_url}?username=root"), Some(&alice.token)).await.json["code"], "username");
+
     // 1) 第一次：新主機、閘道、裝置自己的網頁。/ First scan: a new host, the gateway, the device's own page.
     let (done, v) = scan(json!([nas.port, extra])).await;
     assert_eq!(done["gateway"], "127.0.0.1", "{done}");
@@ -192,6 +208,12 @@ async fn a_scan_lists_the_devices_own_services_its_gateway_and_what_changed() {
     assert_eq!((lanh["gateway"].as_bool(), lanh["own"].as_bool(), lanh["missing"].as_bool()), (Some(true), Some(false), Some(false)), "{lanh}");
     assert_eq!(lanh["since_last"], json!({"new": true, "opened": [], "closed": []}));
     assert_eq!(lanh["open_ports"], json!([nas.port, extra]));
+    // 掃過以後：看到網頁的 port 排最前面、帶標題。/ After the scan: the port a page was seen on comes first, with its title.
+    let r = app.get(&ports_url, Some(&alice.token)).await;
+    assert_eq!(r.json["scanned"], true, "{}", r.json);
+    let first = &r.json["ports"][0];
+    assert_eq!((first["port"].as_u64(), first["web"].as_str(), first["title"].as_str(), first["loopback_only"].as_bool()), (Some(own_web as u64), Some("seen"), Some("Grafana"), Some(true)), "{}", r.json);
+    assert_eq!(first["url"], format!("http://localhost:{own_web}/"));
     let own = host(&v, "localhost");
     assert_eq!((own["own"].as_bool(), own["source"].as_str(), own["missing"].as_bool()), (Some(true), Some("self"), Some(false)), "{own}");
     assert_eq!(own["open_ports"], json!([own_web]), "the dead port isn't open and a LAN-only bind isn't on localhost: {own}");

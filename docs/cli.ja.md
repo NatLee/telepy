@@ -428,6 +428,7 @@ TCP は通り、DNS も通ります。デバイスの向こうの DNS サーバ�
 ### デバイスのネットワーク上のブラウザー
 
 ```sh
+telepy browse ports box                        # デバイス自身が提供しているもの：ポートと対応する URL
 ID=$(telepy browse box http://192.168.1.1/)   # デバイスのネットワーク上でブラウザーを開き（browser:use）、その ID を表示する
 telepy browse text "$ID" --selector main
 telepy browse shot "$ID" -o router.png

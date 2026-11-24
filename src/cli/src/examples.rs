@@ -456,6 +456,14 @@ pub const EXAMPLES: &[Example] = &[
         needs: &["tunnels:manage"],
     },
     Example {
+        id: "browsePorts",
+        topic: "network",
+        title: "What a device serves",
+        note: "Lists the ports the device listens on, web pages first, with the URL to open. No need to run ss on it yourself.",
+        lines: &["telepy browse ports <tunnel>"],
+        needs: &["browser:use"],
+    },
+    Example {
         id: "browse",
         topic: "network",
         title: "A browser on the device's network",

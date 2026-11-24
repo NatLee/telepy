@@ -405,7 +405,7 @@ async fn mcp_requires_an_oauth_token() {
     assert!(r.json["result"]["instructions"].as_str().unwrap().contains("ssh_session_open"));
     let r = mcp_raw(&app, Some(&token), json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
     let names: HashSet<&str> = r.json["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for t in ["list_tunnels", "tunnel_status", "ssh_session_open", "ssh_exec", "ssh_session_close", "ssh_session_list", "sftp_list", "sftp_read", "sftp_write", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close", "browser_open", "browser_navigate", "browser_screenshot", "browser_read", "browser_click", "browser_type", "browser_close"] {
+    for t in ["list_tunnels", "tunnel_status", "ssh_session_open", "ssh_exec", "ssh_session_close", "ssh_session_list", "sftp_list", "sftp_read", "sftp_write", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close", "browser_open", "browser_ports", "browser_navigate", "browser_screenshot", "browser_read", "browser_click", "browser_type", "browser_close"] {
         assert!(names.contains(t), "missing tool {t}: {names:?}");
     }
     let exec = r.json["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "ssh_exec").unwrap();

@@ -93,7 +93,7 @@ MCP client ── POST /mcp ─────────────────�
 | `ssh:exec` | Run commands on your devices | `ssh_session_open`, `ssh_exec`, `shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close`, `lan_wake` |
 | `ssh:files` | Read and write files on your devices | `ssh_session_open`, `sftp_list` / `sftp_read` / `sftp_write`, `lan_files` |
 | `network:scan` | Discover machines on your devices' networks | `lan_scan`, `lan_check`, `lan_os` (only on tunnels you own or are ADMIN on) |
-| `browser:use` | Browse the web as your devices | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
+| `browser:use` | Browse the web as your devices | `browser_ports` / `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close` |
 
 `ssh:exec`, `ssh:files` and `browser:use` carry a **Can make changes** tag on the approval page. The other two are marked **Read only**.
 
@@ -169,6 +169,7 @@ These also work inside a session, opened with `ssh_session_open`.
 
 | Tool | What it does |
 | --- | --- |
+| `browser_ports(tunnel_id, username?)` | The ports the device listens on right now, web pages first, each with the `localhost` URL to open. Nothing is probed |
 | `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | Opens a remote browser (Chromium) through a device and returns `browser_id`. Can open `url` straight away |
 | `browser_navigate(browser_id, url)` | Goes to a URL (http / https only, `https://` is added if missing), waits for the page to load, and returns the final URL and title |
 | `browser_read(browser_id, selector?)` | Page text: title, URL, visible text (up to 100,000 characters), links. `selector` reads only part of the page |

@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Languages, X } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { ProgressSteps } from "@/components/flow/ProgressSteps";
+import { DevicePorts } from "@/components/tunnels/DevicePorts";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDevicePorts } from "@/hooks/useDevicePorts";
 import { afterStart, browserLine, browserSteps, BROWSER_STEPS, type BrowserStepEvent } from "@/lib/browserStart";
 import type { RunPhase } from "@/lib/progressSteps";
 import { useNotificationHandlers } from "@/lib/websocket";
@@ -30,6 +33,10 @@ export interface RemoteBrowserPanelProps {
     /** 不要自己的標題列（網路頁的 dock：分頁的 × 就是停止，IME 開關在 dock 的標題列）。
      *  No header of its own (the network page's dock: the tab's × stops it, the IME switch sits in the dock's bar). */
     bare?: boolean;
+    /** 面板現在看不看得到（終端機頁把它藏在終端機後面時 = false）：看得到才去問裝置的 port。預設看得到。
+     *  Whether the panel is on screen (false while the terminal page hides it behind the terminal): the device's ports
+     *  are only asked for while it is. Default true. */
+    visible?: boolean;
     /** 由外面控制的 IME 開關（`bare` 時用）。/ The IME switch, controlled from outside (with `bare`). */
     ime?: boolean;
 }
@@ -99,6 +106,7 @@ export function RemoteBrowserPanel({
     openRequest = null,
     onPhase,
     bare = false,
+    visible = true,
     ime,
 }: RemoteBrowserPanelProps) {
     const { t } = useI18n();
@@ -429,6 +437,21 @@ export function RemoteBrowserPanel({
 
     const active = phase === "connected";
     const busy = phase !== "idle";
+
+    // 裝置自己在聽的 port：停著時列在開始畫面，開著時在標題列的「Port」。dock 裡（bare）不列，網路頁自己有。
+    // The device's own ports: on the start screen while stopped, behind the header's "Ports" while running. Not in the
+    // dock (bare): the Network page lists them itself.
+    const [portsOpen, setPortsOpen] = useState(false);
+    const ports = useDevicePorts(serverId, username, !bare && visible && (phase === "idle" || portsOpen));
+    const openPort = useCallback((url: string) => {
+        setPortsOpen(false);
+        if (phaseRef.current === "connected") void openTab(url);
+        else if (phaseRef.current === "connecting") queuedTabsRef.current.push(url);
+        else {
+            nextUrlRef.current = url;
+            void startSession();
+        }
+    }, [openTab, startSession]);
     const run: RunPhase = phase === "connected" ? "done" : phase === "connecting" ? "running" : error ? "failed" : "idle";
     const stepList = (
         <ProgressSteps
@@ -449,6 +472,18 @@ export function RemoteBrowserPanel({
                 <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">
                     {t("browser.title")}
                 </span>
+                {busy && (
+                    <Popover open={portsOpen} onOpenChange={setPortsOpen}>
+                        <PopoverTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-8 gap-1" title={t("browser.ports.buttonTitle")}>
+                                <Network size={14} /> {t("browser.ports.button")}
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-[min(26rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
+                            <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running className="border-0 bg-transparent" />
+                        </PopoverContent>
+                    </Popover>
+                )}
                 {active && (
                     <Button
                         variant={imeEnabled ? "default" : "outline"}
@@ -503,6 +538,9 @@ export function RemoteBrowserPanel({
                             <Button onClick={startSession}>{error ? t("browser.tryAgain") : t("browser.clickToInitialize")}</Button>
                         </div>
                     </div>
+                    {!bare && (
+                        <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} className="mx-auto mt-6 max-w-2xl" />
+                    )}
                 </div>
             )}
 

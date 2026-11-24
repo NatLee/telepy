@@ -295,6 +295,7 @@ export function TerminalContent({
                                     onActiveChange={setIsBrowserActive}
                                     startUrl={browserStartUrl}
                                     autoStart={!!browserStartUrl}
+                                    visible={mainView === "browser"}
                                 />
                             )}
                         </div>

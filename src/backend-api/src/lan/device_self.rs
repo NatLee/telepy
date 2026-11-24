@@ -88,6 +88,72 @@ pub fn local_ports(listening: &[(String, u16)]) -> Vec<u16> {
     set.into_iter().take(MAX_OWN_PORTS).collect()
 }
 
+/// 一定不是網頁的常見 port（SSH、資料庫、檔案分享…）：瀏覽器打不開，列在「其他」。
+/// Well-known ports that never serve a web page (SSH, databases, file sharing…): listed under "other", not opened.
+pub const NOT_WEB_PORTS: &[u16] = &[21, 22, 23, 25, 53, 88, 110, 111, 139, 143, 389, 445, 465, 548, 587, 636, 993, 995, 1433, 1521, 1883, 2049, 3306, 3389, 5432, 5672, 5900, 5901, 6379, 11211, 21118, 27017];
+
+/// 遠端瀏覽器能不能打開裝置自己的某個 port。`web`：`seen` = 上次掃描真的看到網頁、`usual` = 這個 port 通常是網頁、
+/// `maybe` = 不知道（自己架的服務，點了才知道）、`no` = 不是網頁。
+/// Whether the remote browser can open one of the device's own ports. `web`: `seen` = the last scan saw a page there,
+/// `usual` = a port that usually serves one, `maybe` = unknown (a self-hosted service; try it), `no` = not a web page.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct BrowsePort {
+    pub port: u16,
+    pub web: &'static str,
+    pub scheme: Option<&'static str>,
+    pub url: Option<String>,
+    /// 上次掃描讀到的頁面標題 / Server。/ The page title or Server header the last scan read.
+    pub title: Option<String>,
+    /// 上次掃描認出的協定（`ssh`、`mysql`…）。/ The protocol the last scan recognised.
+    pub proto: Option<String>,
+    /// 只聽在 loopback：只有裝置自己（和經它的瀏覽器）連得到。/ Bound to loopback only: reachable from the device alone.
+    pub loopback_only: bool,
+}
+
+/// 裝置在聽的 port 給瀏覽器面板看的樣子：網頁排前面（看到的、通常是的、不知道的），不是網頁的排最後；同類照 port。
+/// `seen` = 上次掃描存下來的裝置自己的服務。網址一律是 `localhost`（瀏覽器是從裝置連出去的）。
+/// The device's listening ports as the browser panel shows them: web first (seen, usual, unknown), non-web last, by port
+/// within a kind. `seen` = the device's own services the last scan stored. URLs are always `localhost` (the browser
+/// connects from the device).
+pub fn browse_ports(listening: &[(String, u16)], seen: &[super::fingerprint::Service]) -> Vec<BrowsePort> {
+    let loopback = |a: &str| matches!(a, "::1" | "localhost") || a.starts_with("127.") || a.starts_with("::ffff:127.");
+    let mut out: Vec<BrowsePort> = local_ports(listening)
+        .into_iter()
+        .map(|port| {
+            let svc = seen.iter().filter(|s| s.port == port).max_by_key(|s| matches!(s.proto.as_str(), "http" | "https"));
+            let seen_scheme = svc.and_then(|s| match s.proto.as_str() {
+                "https" => Some("https"),
+                "http" => Some("http"),
+                _ => None,
+            });
+            let other_proto = svc.is_some_and(|s| !matches!(s.proto.as_str(), "http" | "https" | "raw"));
+            let (web, scheme) = match (seen_scheme, super::web::web_scheme(port)) {
+                (Some(s), _) => ("seen", Some(s)),
+                _ if other_proto || NOT_WEB_PORTS.contains(&port) => ("no", None),
+                (None, Some(s)) => ("usual", Some(s)),
+                (None, None) => ("maybe", Some("http")),
+            };
+            BrowsePort {
+                port,
+                web,
+                scheme,
+                url: scheme.map(|s| super::web::web_url("localhost", port, s)),
+                title: svc.and_then(|s| s.title.clone().or_else(|| s.server.clone())).filter(|t| !t.trim().is_empty()),
+                proto: svc.map(|s| s.proto.clone()).filter(|p| p != "raw"),
+                loopback_only: listening.iter().filter(|(_, p)| *p == port).all(|(a, _)| loopback(a)),
+            }
+        })
+        .collect();
+    let rank = |w: &str| match w {
+        "seen" => 0,
+        "usual" => 1,
+        "maybe" => 2,
+        _ => 3,
+    };
+    out.sort_by_key(|b| (rank(b.web), b.port));
+    out
+}
+
 /// 預設閘道（IPv4）。認得 `ip route` 的 `default via X`、macOS 的 `gateway: X`、`netstat -rn` 的 `default X` /
 /// `0.0.0.0 X`，以及 PowerShell 的 `GATEWAY|X`（0.0.0.0 = 沒有）。
 /// The default IPv4 gateway from `ip route` (`default via X`), macOS (`gateway: X`), `netstat -rn` (`default X` /
@@ -165,6 +231,35 @@ pub fn changes(before: &BTreeMap<String, Vec<u16>>, after: &BTreeMap<String, Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browse_ports_put_web_pages_first_and_never_offer_ssh() {
+        use crate::lan::fingerprint::Service;
+        let svc = |port: u16, proto: &str, title: Option<&str>| Service { port, proto: proto.into(), title: title.map(str::to_string), ..Default::default() };
+        let listening = parse_listening("LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 511 127.0.0.1:3000 0.0.0.0:*\nLISTEN 0 4096 [::]:22 [::]:*\nLISTEN 0 128 *:8443 *:*\nLISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:7681 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:9999 0.0.0.0:*\nLISTEN 0 128 192.168.1.5:8080 0.0.0.0:*\n");
+        // 上次掃描：8443 其實是 http、7681 有標題、9999 是 ssh。/ The last scan: 8443 is really http, 7681 has a title, 9999 speaks SSH.
+        let seen = [svc(8443, "http", None), svc(7681, "http", Some("ttyd")), svc(9999, "ssh", None)];
+        let v = browse_ports(&listening, &seen);
+        let brief: Vec<(u16, &str, Option<&str>)> = v.iter().map(|b| (b.port, b.web, b.url.as_deref())).collect();
+        assert_eq!(
+            brief,
+            [
+                (7681, "seen", Some("http://localhost:7681/")),
+                (8443, "seen", Some("http://localhost:8443/")),
+                (3000, "usual", Some("http://localhost:3000/")),
+                (22, "no", None),
+                (5432, "no", None),
+                (9999, "no", None),
+            ],
+            "a port bound to one LAN address only (8080) isn't reachable on localhost"
+        );
+        assert_eq!(v[0].title.as_deref(), Some("ttyd"));
+        assert!(v.iter().find(|b| b.port == 3000).unwrap().loopback_only && !v.iter().find(|b| b.port == 22).unwrap().loopback_only);
+        assert_eq!(v.iter().find(|b| b.port == 9999).unwrap().proto.as_deref(), Some("ssh"));
+        // 沒掃過：不在任何表裡的 port 是「可能」，用 http 試。/ Never scanned: an unknown port is a "maybe", tried over http.
+        let v = browse_ports(&[("0.0.0.0".into(), 5173), ("0.0.0.0".into(), 443)], &[]);
+        assert_eq!(v.iter().map(|b| (b.port, b.web, b.url.as_deref())).collect::<Vec<_>>(), [(443, "usual", Some("https://localhost/")), (5173, "maybe", Some("http://localhost:5173/"))]);
+    }
 
     #[test]
     fn listening_ports_from_every_tool() {

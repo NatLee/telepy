@@ -621,6 +621,12 @@ pub enum BrowseAction {
     },
     /// The browsers this sign-in has open
     Ls,
+    /// What the device itself serves: its listening ports, web pages first, with the URL to open
+    Ports {
+        /// <tunnel>[@account]
+        #[arg(add = ArgValueCompleter::new(complete::target))]
+        target: String,
+    },
     /// Go to a URL
     Go { id: String, url: String },
     /// Print the page's text (of one element with --selector)
@@ -2977,6 +2983,33 @@ fn page_line(v: &Value) -> String {
     if title.is_empty() { url.to_string() } else { format!("{title} — {url}") }
 }
 
+/// `browse ports` 的列：port、網址（不是網頁 = `-`）、它是什麼（掃描讀到的標題 / 協定，再來是「可能是網頁」這類說明）。
+/// The rows of `browse ports`: port, URL (`-` when it isn't a web page), and what it is (the scan's title / protocol,
+/// then how sure Telepy is).
+fn port_rows(ports: &[Value]) -> Vec<Vec<String>> {
+    ports
+        .iter()
+        .map(|p| {
+            let mut what: Vec<String> = Vec::new();
+            if let Some(t) = p["title"].as_str() {
+                what.push(t.to_string());
+            } else if let Some(proto) = p["proto"].as_str().filter(|x| !matches!(*x, "http" | "https")) {
+                what.push(proto.to_string());
+            }
+            match s(p, "web") {
+                "usual" => what.push("usually a web page".into()),
+                "maybe" => what.push("may be a web page".into()),
+                "no" if what.is_empty() => what.push("not a web page".into()),
+                _ => {}
+            }
+            if p["loopback_only"] == true {
+                what.push("localhost only".into());
+            }
+            vec![p["port"].to_string(), p["url"].as_str().unwrap_or("-").to_string(), what.join(", ")]
+        })
+        .collect()
+}
+
 fn browse(api: &Api, a: BrowseArgs) -> Result<()> {
     let as_json = a.json;
     let action = match (a.action, a.target) {
@@ -3000,6 +3033,29 @@ fn browse(api: &Api, a: BrowseArgs) -> Result<()> {
                 }
                 if let Some(e) = v.get("navigate_error").and_then(Value::as_str) {
                     eprintln!("The first page did not load: {e}");
+                }
+                return Ok(());
+            }
+            v
+        }
+        BrowseAction::Ports { target } => {
+            let d = dashboard(api)?;
+            let (t, acct) = resolve(&d.tunnels, &target)?;
+            let query = acct.as_deref().map(|a| format!("?username={}", urlencoding::encode(a))).unwrap_or_default();
+            let v = api.get(&format!("/api/reverse/server/{}/remote-browser/ports{query}", t["id"]))?;
+            if !as_json {
+                let list = v["ports"].as_array().cloned().unwrap_or_default();
+                if list.is_empty() {
+                    if v["listed"] == false {
+                        eprintln!("{} has no tool that lists its ports (ss, netstat, lsof or PowerShell).", name_of(&t));
+                    } else {
+                        eprintln!("Nothing on {} listens on localhost or every address.", name_of(&t));
+                    }
+                    return Ok(());
+                }
+                print_table(&["PORT", "URL", "WHAT"], &port_rows(&list), plain);
+                if let Some(first) = list.iter().find_map(|p| p["url"].as_str()) {
+                    eprintln!("Open one through the device: telepy browse {target} {first}");
                 }
                 return Ok(());
             }
@@ -4042,6 +4098,18 @@ mod tests {
         let c = Cli::try_parse_from(["telepy", "exec", "--label", "env=prod", "--", "uptime"]).unwrap();
         assert!(matches!(c.command, Cmd::Exec(ref e) if e.label == ["env=prod"]));
         // `browse <tunnel> [url]` 或子命令。/ `browse <tunnel> [url]` or a subcommand.
+        let c = Cli::try_parse_from(["telepy", "browse", "ports", "box@pi"]).unwrap();
+        assert!(matches!(c.command, Cmd::Browse(BrowseArgs { action: Some(BrowseAction::Ports { ref target }), .. }) if target == "box@pi"));
+        let rows = port_rows(&[
+            json!({"port": 3000, "web": "seen", "url": "http://localhost:3000/", "title": "Grafana", "proto": "http", "loopback_only": true}),
+            json!({"port": 5173, "web": "maybe", "url": "http://localhost:5173/", "title": null, "proto": null, "loopback_only": false}),
+            json!({"port": 22, "web": "no", "url": null, "title": null, "proto": "ssh", "loopback_only": false}),
+            json!({"port": 5432, "web": "no", "url": null, "title": null, "proto": null, "loopback_only": true}),
+        ]);
+        assert_eq!(rows[0], ["3000", "http://localhost:3000/", "Grafana, localhost only"]);
+        assert_eq!(rows[1], ["5173", "http://localhost:5173/", "may be a web page"]);
+        assert_eq!(rows[2], ["22", "-", "ssh"]);
+        assert_eq!(rows[3], ["5432", "-", "not a web page, localhost only"]);
         let c = Cli::try_parse_from(["telepy", "browse", "box@pi", "http://192.168.1.1"]).unwrap();
         assert!(matches!(c.command, Cmd::Browse(ref b) if b.action.is_none() && b.target.as_deref() == Some("box@pi") && b.url.as_deref() == Some("http://192.168.1.1")));
         let c = Cli::try_parse_from(["telepy", "browse", "shot", "aib_1", "-o", "x.png"]).unwrap();

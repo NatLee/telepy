@@ -16,7 +16,7 @@ export const SCOPES: { scope: string; label: TranslationKey; description: Transl
         scope: "browser:use",
         label: "oauth.scope.browserUse",
         description: "oauth.scope.browserUseDescription",
-        tools: ["browser_open", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type", "browser_close"],
+        tools: ["browser_ports", "browser_open", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type", "browser_close"],
     },
 ];
 
@@ -40,6 +40,7 @@ export const TOOL_LABELS: Record<string, TranslationKey> = {
     shell_read: "activity.tool.shell_read",
     shell_resize: "activity.tool.shell_resize",
     shell_close: "activity.tool.shell_close",
+    browser_ports: "activity.tool.browser_ports",
     browser_open: "activity.tool.browser_open",
     browser_navigate: "activity.tool.browser_navigate",
     browser_read: "activity.tool.browser_read",
