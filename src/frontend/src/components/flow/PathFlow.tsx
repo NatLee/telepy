@@ -97,7 +97,7 @@ export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText
                     <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
                             <span className="min-w-0 text-sm text-foreground [overflow-wrap:break-word]">{title}</span>
-                            <StateLine state={state} text={stateText} />
+                            {!plain && <StateLine state={state} text={stateText} />}
                         </div>
                         {sub && <span className="block text-xs leading-snug text-muted-foreground">{sub}</span>}
                     </div>

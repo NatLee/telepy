@@ -22,20 +22,25 @@ import { TOPIC_ICON } from "@/components/cheatsheet/TopicBoard";
 import type { RecipeId } from "@/lib/forwardRecipes";
 import type { TranslationKey } from "@/locales/en";
 
+/**
+ * 一條路一列：矮的節點、不畫狀態行（這是說明，不是現況）。兩條路疊在一起才兩列高，底下的對照表不用捲就看得到。
+ * One lane, one row: short nodes and no status line (this explains, it isn't live). Two lanes are two rows tall, so
+ * the comparison below shows without scrolling.
+ */
 function Lane({ name, hint, link, telepySub }: { name: string; hint: string; link: string; telepySub: string }) {
     const { t } = useI18n();
     return (
-        <section aria-label={name} className="space-y-2 rounded-xl border border-border p-3">
+        <section aria-label={name} className="space-y-1.5">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <code className="font-mono text-sm text-foreground">{name}</code>
                 <span className="text-xs text-muted-foreground">{hint}</span>
             </div>
             <FlowPath>
-                <FlowNode icon={Terminal} title={t("sheet.ways.you")} sub={name} state="ok" />
-                <FlowLink label={link} state="ok" />
-                <FlowNode brand title="Telepy" sub={telepySub} state="ok" />
-                <FlowLink label={t("sheet.ways.tunnel")} state="ok" />
-                <FlowNode icon={HardDrive} title={t("sheet.ways.device")} sub={t("sheet.ways.deviceSub")} state="ok" />
+                <FlowNode icon={Terminal} title={t("sheet.ways.you")} sub={name} compact plain />
+                <FlowLink label={link} state="ok" compact />
+                <FlowNode brand title="Telepy" sub={telepySub} compact plain />
+                <FlowLink label={t("sheet.ways.tunnel")} state="ok" compact />
+                <FlowNode icon={HardDrive} title={t("sheet.ways.device")} sub={t("sheet.ways.deviceSub")} compact plain />
             </FlowPath>
         </section>
     );
@@ -80,8 +85,11 @@ export function WaysDialog({ isOpen, onClose, tab, onTab, entries, onTask, onTop
             ) : (
             <div className="space-y-4">
                 <Lane name="ssh" hint={t("sheet.ways.sshHint")} link={t("sheet.ways.linkSsh")} telepySub={t("sheet.ways.gateway")} />
-                <Lane name="telepy" hint={t("sheet.ways.telepyHint")} link={t("sheet.ways.linkBoth")} telepySub={t("sheet.ways.gatewayApi")} />
+                <Lane name="telepy" hint={t("sheet.ways.telepyHint")} link={t("sheet.topic.linkBoth")} telepySub={t("sheet.ways.gatewayApi")} />
                 <p className="text-sm text-muted-foreground">{t("sheet.ways.summary", { both: n.both, telepyOnly: n.telepyOnly })}</p>
+                {/* 任務與主題並排（寬的時候）：整頁短一半。/ Tasks and topics side by side when wide: half the height. */}
+                <div className="@container">
+                <div className="grid items-start gap-3 @3xl:grid-cols-2">
                 <div className="overflow-x-auto rounded-xl border border-border">
                     <table className="w-full border-collapse text-sm">
                         <thead>
@@ -93,7 +101,7 @@ export function WaysDialog({ isOpen, onClose, tab, onTab, entries, onTask, onTop
                         </thead>
                         <tbody>
                             {tasks.map((e) => (
-                                <tr key={e.id} className="border-b border-border/70">
+                                <tr key={e.id} className="border-b border-border/70 last:border-0">
                                     <th scope="row" className="p-0 font-normal">
                                         <button type="button" className={rowButton} onClick={() => onTask(e.recipe!)}>{t(e.title)}</button>
                                     </th>
@@ -102,6 +110,10 @@ export function WaysDialog({ isOpen, onClose, tab, onTab, entries, onTask, onTop
                                 </tr>
                             ))}
                         </tbody>
+                    </table>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-border">
+                    <table className="w-full border-collapse text-sm">
                         <thead>
                             <tr className="border-b border-border bg-muted/40">
                                 <th scope="col" className={th}>{t("sheet.ways.more")}</th>
@@ -127,6 +139,8 @@ export function WaysDialog({ isOpen, onClose, tab, onTab, entries, onTask, onTop
                             })}
                         </tbody>
                     </table>
+                </div>
+                </div>
                 </div>
                 <p className="text-xs text-muted-foreground">{t("sheet.ways.tableHint")}</p>
             </div>

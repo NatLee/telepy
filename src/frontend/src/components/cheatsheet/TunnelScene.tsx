@@ -60,13 +60,14 @@ function Node({ node }: { node: SceneNode }) {
                     <span
                         className={cn(
                             // 直排時欄位是 stretch，self-start 讓插座跟內容一樣寬。/ self-start: content-wide in the stacked layout's stretched column.
-                            "inline-flex max-w-full items-center gap-1 self-start rounded-full px-2.5 py-1 font-mono text-xs ring-1 ring-inset @min-[42rem]:self-auto",
+                            // 太長就在框內換行（以前是截成 …，手機上看不到埠號）。/ Too long wraps inside the pill (it used to be cut with an ellipsis, hiding the port on phones).
+                            "inline-flex max-w-full items-center gap-1 self-start rounded-2xl px-2.5 py-1 font-mono text-xs ring-1 ring-inset @min-[42rem]:self-auto",
                             node.entry ? "bg-primary text-primary-foreground ring-primary" : "bg-muted text-foreground ring-border"
                         )}
                         title={node.socket}
                     >
                         <Plug size={12} className="shrink-0" aria-hidden />
-                        <span className="truncate">{node.socket}</span>
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{node.socket}</span>
                     </span>
                 )}
                 {node.entry && (
