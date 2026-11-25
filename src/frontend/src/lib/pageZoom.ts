@@ -18,6 +18,32 @@ export interface VisualViewportBox {
     offsetLeft: number;
     offsetTop: number;
     width: number;
+    height: number;
+}
+
+/** 放大倍數的百分比（取整）。/ The zoom as a whole percentage. */
+export function zoomPercent(scale: number): number {
+    return Math.round(scale * 100);
+}
+
+/**
+ * 蓋滿看得到的範圍、裡面的東西看起來是原本大小的一層（蓋板）：跟提示列同一個算法，再加上高度。
+ * A layer covering the visible area whose content looks its normal size (the overlay): the bar's maths plus a height.
+ */
+export function zoomCoverStyle(v: VisualViewportBox): { left: number; top: number; width: number; height: number; transform: string; transformOrigin: string } {
+    const s = v.scale > 0 ? v.scale : 1;
+    return { ...zoomBarStyle(v), height: v.height * s };
+}
+
+/**
+ * 小地圖：整個畫面（layout viewport）裡，現在看得到的是哪一塊，用百分比表示（夾在 0–100）。
+ * The minimap: which part of the whole screen (the layout viewport) is visible now, in percent (clamped to 0–100).
+ */
+export function minimapRect(v: VisualViewportBox, layoutWidth: number, layoutHeight: number): { left: number; top: number; width: number; height: number } {
+    const pct = (n: number, of: number) => (of > 0 ? Math.min(100, Math.max(0, (n / of) * 100)) : 0);
+    const width = pct(v.width, layoutWidth);
+    const height = pct(v.height, layoutHeight);
+    return { left: Math.min(100 - width, pct(v.offsetLeft, layoutWidth)), top: Math.min(100 - height, pct(v.offsetTop, layoutHeight)), width, height };
 }
 
 /**
