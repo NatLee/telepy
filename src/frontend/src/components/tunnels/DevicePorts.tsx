@@ -12,10 +12,12 @@
  * over everything, then the list pages, so the height stays put however many ports there are. A small path on top shows
  * why the address is localhost: this browser ─SSH─ localhost on the device.
  */
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Cpu, Lock, MonitorPlay, Search } from "lucide-react";
+import { Cpu, Info, Lock, MonitorPlay, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Pagination } from "@/components/ui/pagination";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -27,8 +29,37 @@ import { useI18n } from "@/lib/i18n";
 import { pageSlice } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 
-/** 超過一頁才給搜尋框。/ The search box appears once the ports don't fit on one page. */
+/** port 夠多才給搜尋框。/ The search box appears once there are this many ports. */
 const SEARCH_FROM = 10;
+/**
+ * 清單固定 4 列高：寬的時候兩欄（一頁 8 格）、窄的時候一欄（4 格）。不足的位置留空，所以切換分類、翻到最後一頁高度都不變。
+ * 「寬」= 元件至少 32rem（和 `@lg` 容器查詢同一條線）。
+ * The list is always 4 rows tall: two columns when wide (8 per page), one when narrow (4). Missing cells stay empty, so
+ * switching kinds or reaching the last page never changes the height. "Wide" = the component is at least 32rem (the
+ * same line as the `@lg` container query).
+ */
+const ROWS = 4;
+const CELL = "3rem";
+const GRID_HEIGHT = `calc(${ROWS} * ${CELL} + ${ROWS - 1} * 0.375rem)`;
+const WIDE_REM = 32;
+
+/** 元件夠不夠寬放兩欄（以 rem 算，跟著顯示比例）。/ Whether the component fits two columns (in rem, so it follows the display scale). */
+function useWide(ref: React.RefObject<HTMLElement | null>): boolean {
+    const [wide, setWide] = useState(true);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const check = () => {
+            const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+            setWide(el.clientWidth >= WIDE_REM * rem);
+        };
+        check();
+        const ro = new ResizeObserver(check);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ref]);
+    return wide;
+}
 
 export interface DevicePortsProps {
     serverId: number | string;
@@ -49,6 +80,9 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
     const [query, setQuery] = useState("");
     const [chosen, setChosen] = useState<PortGroup | null>(null);
     const listRef = useRef<HTMLDivElement>(null);
+    const sectionRef = useRef<HTMLElement>(null);
+    const wide = useWide(sectionRef);
+    const perPage = wide ? ROWS * 2 : ROWS;
     const all = data?.ports ?? [];
     const named = all.map((p) => ({ p, name: portName(p, serviceName) }));
     const nameOf = new Map(named.map(({ p, name }) => [p.port, name]));
@@ -57,11 +91,25 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
     const group = shownGroup(found, chosen);
     const rows = found[group];
     const groups = PORT_GROUPS.filter((g) => totals[g].length > 0);
-    const pager = usePagination(rows.length, { storageKey: "telepy.browserPortsPageSize", resetKey: `${group}|${query}` });
+    const pager = usePagination(rows.length, { storageKey: "telepy.browserPortsPageSize", resetKey: `${group}|${query}|${perPage}`, sizes: [perPage] });
     const unnamed = !!data && !data.scanned && totals.maybe.length > 0;
+    // 這一類的一句說明：不是網頁 = 瀏覽器打不開；可能是網頁 + 沒掃過 = 名稱要靠網路掃描。
+    // The kind's one-line hint: not web pages = the browser can't open them; maybe + never scanned = names need a scan.
+    const hint: React.ReactNode =
+        group === "no" ? t("browser.ports.otherHint")
+        : unnamed && group === "maybe" ? (
+            <>
+                {t("browser.ports.scanHint")}{" "}
+                {has("network") && (
+                    <Link href={`/tunnels/network?tunnel=${serverId}`} className="underline underline-offset-2 hover:text-foreground">
+                        {t("browser.ports.scanLink")}
+                    </Link>
+                )}
+            </>
+        ) : null;
 
     return (
-        <section className={cn("@container rounded-lg border border-border bg-background/60", className)} aria-label={t(running ? "browser.ports.title" : "browser.ports.titleStart")}>
+        <section ref={sectionRef} className={cn("@container rounded-lg border border-border bg-background/60", className)} aria-label={t(running ? "browser.ports.title" : "browser.ports.titleStart")}>
             <header className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <h4 className="min-w-0 flex-1 text-sm font-medium text-foreground">{t(running ? "browser.ports.title" : "browser.ports.titleStart")}</h4>
                 <RefreshButton onRefresh={onRefresh} busy={loading} failed={!!error} variant="ghost" size="icon" className="h-7 w-7" iconSize={14} aria-label={t("browser.ports.refresh")} title={t("browser.ports.refresh")} />
@@ -95,14 +143,28 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                     <div className="flex flex-col gap-3 @lg:flex-row @lg:items-start">
                         {/* 種類：窄的時候是一行下拉選單（四個按鈕會各佔一行），寬的時候是左邊一欄。
                             Kinds: a one-line select when narrow (four buttons would take a line each), a left column when wide. */}
-                        <NativeSelect value={group} onChange={(e) => setChosen(e.target.value as PortGroup)} aria-label={t("browser.ports.groups")} className="h-8 text-sm @lg:hidden">
+                        <div className="flex items-center gap-2 @lg:hidden">
+                        <NativeSelect value={group} onChange={(e) => setChosen(e.target.value as PortGroup)} aria-label={t("browser.ports.groups")} className="h-8 min-w-0 flex-1 text-sm">
                             {groups.map((g) => (
                                 <option key={g} value={g}>
                                     {t(groupKey(g))} ({found[g].length})
                                 </option>
                             ))}
                         </NativeSelect>
-                        <div role="tablist" aria-label={t("browser.ports.groups")} aria-orientation="vertical" className="hidden w-44 shrink-0 flex-col gap-1 @lg:flex">
+                            {/* 窄的時候說明收在 ⓘ 後面，清單高度才不會跟著分類變。/ When narrow the hint sits behind ⓘ, so the list's height never depends on the kind. */}
+                            {hint && (
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" aria-label={t("browser.ports.hintButton")} title={t("browser.ports.hintButton")}>
+                                            <Info size={14} />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent align="end" className="w-[min(18rem,calc(100vw-2rem))] p-3 text-xs text-muted-foreground">{hint}</PopoverContent>
+                                </Popover>
+                            )}
+                        </div>
+                        <div className="hidden w-44 shrink-0 flex-col gap-3 @lg:flex">
+                        <div role="tablist" aria-label={t("browser.ports.groups")} aria-orientation="vertical" className="flex flex-col gap-1">
                             {groups.map((g) => {
                                 const active = g === group;
                                 const count = found[g].length;
@@ -125,8 +187,11 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                                 );
                             })}
                         </div>
+                        {/* 寬的時候說明放在分類下面的空位，清單那邊的高度就不會跟著分類變。/ When wide the hint sits under the kinds, so the list's height never depends on the kind. */}
+                        {hint && <div className="px-1 text-xs text-muted-foreground">{hint}</div>}
+                        </div>
 
-                        <div ref={listRef} role="tabpanel" aria-label={t(groupKey(group))} className="min-w-0 flex-1 space-y-2">
+                        <div ref={listRef} role="tabpanel" aria-label={t(groupKey(group))} className="flex min-w-0 flex-1 flex-col gap-2">
                             {all.length > SEARCH_FROM && (
                                 <div className="relative">
                                     <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
@@ -134,41 +199,41 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                                 </div>
                             )}
 
+                            {/* 固定 4 列高的格子；不足的位置留空。/ A grid that is always 4 rows tall; missing cells stay empty. */}
                             {rows.length === 0 ? (
-                                <p className="px-1 py-2 text-sm text-muted-foreground">{t("browser.ports.noMatch", { query: query.trim() })}</p>
+                                <p className="grid place-items-center px-1 text-sm text-muted-foreground" style={{ height: GRID_HEIGHT }}>{t("browser.ports.noMatch", { query: query.trim() })}</p>
                             ) : (
-                                <ul data-refresh-list className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+                                <ul data-refresh-list className="grid grid-cols-1 gap-1.5 @lg:grid-cols-2" style={{ gridTemplateRows: `repeat(${ROWS}, ${CELL})`, height: GRID_HEIGHT }}>
                                     {pageSlice(rows, pager.page, pager.size).map((p) => {
                                         const name = nameOf.get(p.port) ?? null;
-                                        const line = (
+                                        const second = name ?? (p.url ? p.url.replace(/^https?:\/\//, "") : null);
+                                        const cell = (
                                             <>
-                                                <span className="w-[4.5rem] shrink-0 font-mono text-sm text-foreground">:{p.port}</span>
-                                                <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-                                                    <span className="flex min-w-0 items-center gap-1.5">
-                                                        {p.scheme === "https" && <Lock size={12} className="shrink-0 text-muted-foreground" aria-label="HTTPS" />}
-                                                        {name ? (
-                                                            <span className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
-                                                        ) : p.url ? (
-                                                            <span className="min-w-0 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{p.url.replace(/^https?:\/\//, "")}</span>
-                                                        ) : null}
-                                                    </span>
-                                                    {p.loopback_only && <span className="text-xs text-muted-foreground">{t("browser.ports.loopback")}</span>}
+                                                <span className="flex w-full items-center gap-1.5">
+                                                    <span className="font-mono text-sm text-foreground">:{p.port}</span>
+                                                    {p.scheme === "https" && <Lock size={12} className="shrink-0 text-muted-foreground" aria-label="HTTPS" />}
+                                                    {p.loopback_only && (
+                                                        <span className="ml-auto shrink-0 text-xs text-muted-foreground" title={t("browser.ports.loopback")}>{t("browser.ports.loopbackShort")}</span>
+                                                    )}
                                                 </span>
+                                                {/* 名稱只佔一行（格子高度固定），完整的在滑過提示。/ One line for the name (fixed cell height); the full name is in the tooltip. */}
+                                                {second && <span className={cn("block w-full truncate", name ? "text-sm text-foreground" : "font-mono text-xs text-muted-foreground")}>{second}</span>}
                                             </>
                                         );
+                                        const box = "flex h-full w-full min-w-0 flex-col justify-center rounded-md border border-border bg-card px-2.5 text-left";
                                         return (
-                                            <li key={p.port}>
+                                            <li key={p.port} className="min-w-0">
                                                 {p.url ? (
                                                     <button
                                                         type="button"
                                                         onClick={() => p.url && onOpen(p.url)}
-                                                        title={t("browser.ports.open", { url: p.url })}
-                                                        className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+                                                        title={[name, t("browser.ports.open", { url: p.url }), p.loopback_only ? t("browser.ports.loopback") : null].filter(Boolean).join("\n")}
+                                                        className={cn(box, "transition-colors hover:border-primary/60 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
                                                     >
-                                                        {line}
+                                                        {cell}
                                                     </button>
                                                 ) : (
-                                                    <div className="flex items-baseline gap-2 px-3 py-1.5">{line}</div>
+                                                    <div className={box} title={[name, p.loopback_only ? t("browser.ports.loopback") : null].filter(Boolean).join("\n") || undefined}>{cell}</div>
                                                 )}
                                             </li>
                                         );
@@ -176,19 +241,11 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                                 </ul>
                             )}
 
-                            <Pagination pager={pager} anchor={listRef} />
+                            {/* 分頁列永遠佔一行，沒有第二頁時也一樣。/ The pager row always takes its line, even with a single page. */}
+                            <div className="flex h-7 items-center justify-end">
+                                <Pagination pager={pager} anchor={listRef} compact />
+                            </div>
 
-                            {group === "no" && rows.length > 0 && <p className="px-1 text-xs text-muted-foreground">{t("browser.ports.otherHint")}</p>}
-                            {unnamed && group === "maybe" && (
-                                <p className="px-1 text-xs text-muted-foreground">
-                                    {t("browser.ports.scanHint")}{" "}
-                                    {has("network") && (
-                                        <Link href={`/tunnels/network?tunnel=${serverId}`} className="underline underline-offset-2 hover:text-foreground">
-                                            {t("browser.ports.scanLink")}
-                                        </Link>
-                                    )}
-                                </p>
-                            )}
                         </div>
                     </div>
                 )}

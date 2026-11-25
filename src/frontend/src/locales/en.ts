@@ -1960,6 +1960,8 @@ export const en = {
     "browser.ports.usual": "Usually web pages",
     "browser.ports.maybe": "Maybe web pages",
     "browser.ports.loopback": "Only reachable on the device",
+    "browser.ports.loopbackShort": "Device only",
+    "browser.ports.hintButton": "About this kind",
     "browser.ports.open": "Open {url}",
     "browser.ports.groupNo": "Not web pages",
     "browser.ports.groups": "Kinds of port",
