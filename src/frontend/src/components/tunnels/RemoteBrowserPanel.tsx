@@ -464,6 +464,23 @@ export function RemoteBrowserPanel({
         />
     );
 
+    // 還沒開始：三步畫成一條直線（細節在滑過提示），把位置留給兩種開始方式；失敗後才換回完整清單，看停在哪一步。
+    // Before the start: the three steps as one straight path (details on hover), leaving room for the two ways to start;
+    // after a failure the full list comes back to show where it stopped.
+    const plan = (
+        <div className="@container">
+            <ol aria-label={t("browser.step.title")} className="flex flex-col gap-2 @md:flex-row @md:items-center @md:gap-3">
+                {browserSteps([], "idle").map((v, i, all) => (
+                    <li key={v.id} className="flex items-center gap-2 @md:min-w-0 @md:flex-1" title={t(browserLine(v).key, { username, ...browserLine(v).vars })}>
+                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs text-muted-foreground tabular-nums">{i + 1}</span>
+                        <span className="text-sm text-foreground @md:shrink-0">{t(`browser.step.${v.id}` as TranslationKey, { username })}</span>
+                        {i < all.length - 1 && <span className="hidden h-px min-w-4 flex-1 bg-border @md:block" aria-hidden="true" />}
+                    </li>
+                ))}
+            </ol>
+        </div>
+    );
+
     return (
         <div className="flex flex-col h-full w-full bg-card overflow-hidden relative shadow-xl">
             {/* Header */}
@@ -479,7 +496,7 @@ export function RemoteBrowserPanel({
                                 <Network size={14} /> {t("browser.ports.button")}
                             </Button>
                         </PopoverTrigger>
-                        <PopoverContent align="end" className="w-[min(26rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
+                        <PopoverContent align="end" className="w-[min(40rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
                             <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running className="border-0 bg-transparent" />
                         </PopoverContent>
                     </Popover>
@@ -495,13 +512,10 @@ export function RemoteBrowserPanel({
                         <Languages size={14} /> IME
                     </Button>
                 )}
-                {busy ? (
+                {/* 停著時開始按鈕在下面的「直接開始」，標題列不再放一顆。/ While stopped, Start sits in "Start right away" below, not here too. */}
+                {busy && (
                     <Button variant="destructive" size="sm" onClick={stopSession} className="h-8 gap-1">
                         <MonitorX size={14} /> {t("browser.stopSession")}
-                    </Button>
-                ) : (
-                    <Button variant="default" size="sm" onClick={startSession} className="h-8 gap-1">
-                        <MonitorPlay size={14} /> {t("browser.startBrowser")}
                     </Button>
                 )}
             </div>}
@@ -526,21 +540,37 @@ export function RemoteBrowserPanel({
                 Idle or failed: the three steps (where it stopped, after a failure) and start / try again. */}
             {phase === "idle" && (
                 <div className="flex-1 overflow-auto p-4">
-                    <div className="mx-auto max-w-md space-y-4">
+                    <div className="mx-auto max-w-2xl space-y-4">
                         {!error && (
-                            <div className="space-y-1 text-center">
+                            <div className="mx-auto max-w-md space-y-1 text-center">
                                 <h3 className="text-lg text-foreground">{t("browser.idleTitle")}</h3>
                                 <p className="text-sm text-muted-foreground">{t("browser.idleBody", { username })}</p>
                             </div>
                         )}
-                        {stepList}
-                        <div className="text-center">
-                            <Button onClick={startSession}>{error ? t("browser.tryAgain") : t("browser.clickToInitialize")}</Button>
+                        {error ? stepList : plan}
+                        {/* 兩種開始方式，二選一：直接開始（新分頁），或點裝置上的一個 port。dock 裡（bare）只有第一種。
+                            Two ways to start, either one: right away (a new tab), or by clicking a port on the device. The dock (bare) has only the first. */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-background/60 px-3 py-3">
+                            <MonitorPlay size={18} className="shrink-0 text-muted-foreground" aria-hidden />
+                            <div className="min-w-0 flex-1 basis-48">
+                                <h4 className="text-sm font-medium text-foreground">{t("browser.start.directTitle")}</h4>
+                                <p className="text-xs text-muted-foreground">{t("browser.start.directBody")}</p>
+                            </div>
+                            <Button onClick={startSession} className="gap-1">
+                                <MonitorPlay size={14} /> {error ? t("browser.tryAgain") : t("browser.startBrowser")}
+                            </Button>
                         </div>
+                        {!bare && (
+                            <>
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden="true">
+                                    <span className="h-px flex-1 bg-border" />
+                                    {t("browser.start.or")}
+                                    <span className="h-px flex-1 bg-border" />
+                                </div>
+                                <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} />
+                            </>
+                        )}
                     </div>
-                    {!bare && (
-                        <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} className="mx-auto mt-6 max-w-2xl" />
-                    )}
                 </div>
             )}
 

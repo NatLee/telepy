@@ -1,21 +1,34 @@
 "use client";
 
 /**
- * 遠端瀏覽器面板的「這台裝置上」：裝置現在在聽的 port，網頁的一格一個、點了就開（還沒開瀏覽器 = 用它開始，
- * 開著 = 新分頁）；不是網頁的收在下面一行。上面一條小路徑說明為什麼網址是 localhost：瀏覽器 ─SSH─ 裝置的 localhost。
- * The remote browser panel's "On this device": the ports the device listens on right now. Web ones are tiles that open
- * on a click (a stopped browser starts on it, a running one opens a new tab); the rest fold into one line below. A
- * small path on top shows why the address is localhost: this browser ─SSH─ localhost on the device.
+ * 遠端瀏覽器面板的「這台裝置上」：裝置現在在聽的 port。左邊一欄是種類（網頁 / 通常是 / 可能是 / 不是網頁，各帶數量；
+ * 窄的時候變成上面一列），右邊是那一類的精簡列表，一個 port 一行、點了就開（還沒開瀏覽器 = 用它開始，開著 = 新分頁）；
+ * 搜尋先對全部做、再分頁，所以 port 再多高度也固定。上面一條小路徑說明為什麼網址是 localhost：瀏覽器 ─SSH─ 裝置。
+ * 開始畫面上它是「從這台裝置上的網頁開始」（和「直接開始」二選一）。
+ * The remote browser panel's "On this device" (on the start screen: "Start from a page on this device", the other way
+ * to start besides "Start right away"): the ports the device listens on right now. A left rail of kinds (web
+ * pages / usually / maybe / not web pages, each with a count; a row on top when narrow) and a compact list of that kind,
+ * one port per line that opens on a click (a stopped browser starts on it, a running one opens a new tab). Search runs
+ * over everything, then the list pages, so the height stays put however many ports there are. A small path on top shows
+ * why the address is localhost: this browser ─SSH─ localhost on the device.
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, Cpu, Lock, MonitorPlay } from "lucide-react";
+import { Cpu, Lock, MonitorPlay, Search } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Pagination } from "@/components/ui/pagination";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { useFeatures } from "@/hooks/useFeatures";
-import { emptyKey, portHint, portName, splitPorts, type DevicePortsData } from "@/lib/devicePorts";
+import { usePagination } from "@/hooks/usePagination";
+import { emptyKey, groupKey, groupPorts, matchPort, portName, PORT_GROUPS, shownGroup, type DevicePortsData, type PortGroup } from "@/lib/devicePorts";
 import { serviceName } from "@/lib/lanConnect";
 import { useI18n } from "@/lib/i18n";
+import { pageSlice } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
+
+/** 超過一頁才給搜尋框。/ The search box appears once the ports don't fit on one page. */
+const SEARCH_FROM = 10;
 
 export interface DevicePortsProps {
     serverId: number | string;
@@ -33,19 +46,30 @@ export interface DevicePortsProps {
 export function DevicePorts({ serverId, username, data, loading, error, onRefresh, onOpen, running = false, className }: DevicePortsProps) {
     const { t } = useI18n();
     const { has } = useFeatures();
-    const [showOther, setShowOther] = useState(false);
-    const { web, other } = splitPorts(data?.ports ?? []);
-    const unnamed = !!data && !data.scanned && web.some((p) => p.web === "maybe");
+    const [query, setQuery] = useState("");
+    const [chosen, setChosen] = useState<PortGroup | null>(null);
+    const listRef = useRef<HTMLDivElement>(null);
+    const all = data?.ports ?? [];
+    const named = all.map((p) => ({ p, name: portName(p, serviceName) }));
+    const nameOf = new Map(named.map(({ p, name }) => [p.port, name]));
+    const totals = groupPorts(all);
+    const found = groupPorts(named.filter(({ p, name }) => matchPort(p, query, name)).map(({ p }) => p));
+    const group = shownGroup(found, chosen);
+    const rows = found[group];
+    const groups = PORT_GROUPS.filter((g) => totals[g].length > 0);
+    const pager = usePagination(rows.length, { storageKey: "telepy.browserPortsPageSize", resetKey: `${group}|${query}` });
+    const unnamed = !!data && !data.scanned && totals.maybe.length > 0;
 
     return (
-        <section className={cn("@container rounded-lg border border-border bg-background/60", className)} aria-label={t("browser.ports.title")}>
+        <section className={cn("@container rounded-lg border border-border bg-background/60", className)} aria-label={t(running ? "browser.ports.title" : "browser.ports.titleStart")}>
             <header className="flex items-center gap-2 border-b border-border px-3 py-2">
-                <h4 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{t("browser.ports.title")}</h4>
+                <h4 className="min-w-0 flex-1 text-sm font-medium text-foreground">{t(running ? "browser.ports.title" : "browser.ports.titleStart")}</h4>
                 <RefreshButton onRefresh={onRefresh} busy={loading} failed={!!error} variant="ghost" size="icon" className="h-7 w-7" iconSize={14} aria-label={t("browser.ports.refresh")} title={t("browser.ports.refresh")} />
             </header>
 
-            {/* 為什麼是 localhost：瀏覽器 ─SSH─ 裝置。/ Why localhost: this browser ─SSH─ the device. */}
-            <div className="flex items-center gap-2 px-3 pt-3 text-xs text-muted-foreground" aria-hidden="true">
+            {/* 為什麼是 localhost：瀏覽器 ─SSH─ 裝置。開始畫面上面的步驟已經畫了這條路，只在執行中的 popover 畫。
+                Why localhost: this browser ─SSH─ the device. The start screen's steps already show that path, so only the running popover draws it. */}
+            {running && <div className="flex items-center gap-2 px-3 pt-3 text-xs text-muted-foreground" aria-hidden="true">
                 <span className="flex shrink-0 items-center gap-1.5 text-foreground">
                     <MonitorPlay size={14} className="text-muted-foreground" />
                     {t("browser.ports.pathBrowser")}
@@ -59,78 +83,113 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                     <Cpu size={14} className="text-muted-foreground" />
                     {t("browser.ports.pathDevice")}
                 </span>
-            </div>
+            </div>}
             <p className="px-3 pt-2 text-xs text-muted-foreground">{t(running ? "browser.ports.introTab" : "browser.ports.intro")}</p>
 
             <div className="p-3">
                 {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
                 {!error && !data && <p role="status" className="text-sm text-muted-foreground">{t("browser.ports.loading")}</p>}
-                {!error && data && data.ports.length === 0 && <p className="text-sm text-muted-foreground">{t(emptyKey(data))}</p>}
+                {!error && data && all.length === 0 && <p className="text-sm text-muted-foreground">{t(emptyKey(data))}</p>}
 
-                {!error && web.length > 0 && (
-                    <ul data-refresh-list className="grid grid-cols-1 gap-2 @sm:grid-cols-2 @2xl:grid-cols-3">
-                        {web.map((p) => {
-                            const name = portName(p, serviceName);
-                            const hint = portHint(p);
-                            return (
-                                <li key={p.port}>
+                {!error && all.length > 0 && (
+                    <div className="flex flex-col gap-3 @lg:flex-row @lg:items-start">
+                        {/* 種類：窄的時候是一行下拉選單（四個按鈕會各佔一行），寬的時候是左邊一欄。
+                            Kinds: a one-line select when narrow (four buttons would take a line each), a left column when wide. */}
+                        <NativeSelect value={group} onChange={(e) => setChosen(e.target.value as PortGroup)} aria-label={t("browser.ports.groups")} className="h-8 text-sm @lg:hidden">
+                            {groups.map((g) => (
+                                <option key={g} value={g}>
+                                    {t(groupKey(g))} ({found[g].length})
+                                </option>
+                            ))}
+                        </NativeSelect>
+                        <div role="tablist" aria-label={t("browser.ports.groups")} aria-orientation="vertical" className="hidden w-44 shrink-0 flex-col gap-1 @lg:flex">
+                            {groups.map((g) => {
+                                const active = g === group;
+                                const count = found[g].length;
+                                return (
                                     <button
+                                        key={g}
                                         type="button"
-                                        onClick={() => p.url && onOpen(p.url)}
-                                        title={t("browser.ports.open", { url: p.url ?? "" })}
-                                        className="flex h-full w-full flex-col items-start gap-0.5 rounded-md border border-border bg-card px-3 py-2 text-left transition-colors hover:border-primary/60 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                        role="tab"
+                                        aria-selected={active}
+                                        onClick={() => setChosen(g)}
+                                        className={cn(
+                                            "flex items-baseline gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                                            active ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+                                            count === 0 && !active && "opacity-50",
+                                        )}
                                     >
-                                        <span className="flex w-full items-center gap-1.5">
-                                            <span className="font-mono text-sm text-foreground">:{p.port}</span>
-                                            {p.scheme === "https" && <Lock size={12} className="shrink-0 text-muted-foreground" aria-label="HTTPS" />}
-                                            {name && <span className="min-w-0 flex-1 truncate text-sm text-foreground">{name}</span>}
-                                        </span>
-                                        <span className="text-xs text-muted-foreground">
-                                            {hint && <span className={p.web === "seen" ? "text-success" : undefined}>{t(hint)}</span>}
-                                            {p.loopback_only && <span>{hint ? " · " : ""}{t("browser.ports.loopback")}</span>}
-                                        </span>
+                                        <span className="min-w-0 flex-1">{t(groupKey(g))}</span>
+                                        <span className={cn("shrink-0 font-mono text-xs tabular-nums", active ? "text-primary" : "text-muted-foreground", g === "seen" && !active && "text-success")}>{count}</span>
                                     </button>
-                                </li>
-                            );
-                        })}
-                    </ul>
-                )}
+                                );
+                            })}
+                        </div>
 
-                {!error && unnamed && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                        {t("browser.ports.scanHint")}{" "}
-                        {has("network") && (
-                            <Link href={`/tunnels/network?tunnel=${serverId}`} className="underline underline-offset-2 hover:text-foreground">
-                                {t("browser.ports.scanLink")}
-                            </Link>
-                        )}
-                    </p>
-                )}
+                        <div ref={listRef} role="tabpanel" aria-label={t(groupKey(group))} className="min-w-0 flex-1 space-y-2">
+                            {all.length > SEARCH_FROM && (
+                                <div className="relative">
+                                    <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                                    <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("browser.ports.search")} aria-label={t("browser.ports.search")} className="h-8 pl-8" />
+                                </div>
+                            )}
 
-                {!error && other.length > 0 && (
-                    <div className={web.length > 0 ? "mt-3" : undefined}>
-                        <button
-                            type="button"
-                            onClick={() => setShowOther((v) => !v)}
-                            aria-expanded={showOther}
-                            className="flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                            <ChevronDown size={14} className={cn("transition-transform", !showOther && "-rotate-90")} />
-                            {t("browser.ports.other", { count: other.length })}
-                        </button>
-                        {showOther && (
-                            <div className="mt-1.5 space-y-1.5 pl-5">
-                                <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                                    {other.map((p) => (
-                                        <li key={p.port}>
-                                            <span className="font-mono text-foreground">:{p.port}</span>
-                                            {portName(p, serviceName) && <span> {portName(p, serviceName)}</span>}
-                                        </li>
-                                    ))}
+                            {rows.length === 0 ? (
+                                <p className="px-1 py-2 text-sm text-muted-foreground">{t("browser.ports.noMatch", { query: query.trim() })}</p>
+                            ) : (
+                                <ul data-refresh-list className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+                                    {pageSlice(rows, pager.page, pager.size).map((p) => {
+                                        const name = nameOf.get(p.port) ?? null;
+                                        const line = (
+                                            <>
+                                                <span className="w-[4.5rem] shrink-0 font-mono text-sm text-foreground">:{p.port}</span>
+                                                <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+                                                    <span className="flex min-w-0 items-center gap-1.5">
+                                                        {p.scheme === "https" && <Lock size={12} className="shrink-0 text-muted-foreground" aria-label="HTTPS" />}
+                                                        {name ? (
+                                                            <span className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
+                                                        ) : p.url ? (
+                                                            <span className="min-w-0 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{p.url.replace(/^https?:\/\//, "")}</span>
+                                                        ) : null}
+                                                    </span>
+                                                    {p.loopback_only && <span className="text-xs text-muted-foreground">{t("browser.ports.loopback")}</span>}
+                                                </span>
+                                            </>
+                                        );
+                                        return (
+                                            <li key={p.port}>
+                                                {p.url ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => p.url && onOpen(p.url)}
+                                                        title={t("browser.ports.open", { url: p.url })}
+                                                        className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+                                                    >
+                                                        {line}
+                                                    </button>
+                                                ) : (
+                                                    <div className="flex items-baseline gap-2 px-3 py-1.5">{line}</div>
+                                                )}
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
-                                <p className="text-xs text-muted-foreground">{t("browser.ports.otherHint")}</p>
-                            </div>
-                        )}
+                            )}
+
+                            <Pagination pager={pager} anchor={listRef} />
+
+                            {group === "no" && rows.length > 0 && <p className="px-1 text-xs text-muted-foreground">{t("browser.ports.otherHint")}</p>}
+                            {unnamed && group === "maybe" && (
+                                <p className="px-1 text-xs text-muted-foreground">
+                                    {t("browser.ports.scanHint")}{" "}
+                                    {has("network") && (
+                                        <Link href={`/tunnels/network?tunnel=${serverId}`} className="underline underline-offset-2 hover:text-foreground">
+                                            {t("browser.ports.scanLink")}
+                                        </Link>
+                                    )}
+                                </p>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>

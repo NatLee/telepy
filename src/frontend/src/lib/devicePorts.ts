@@ -35,6 +35,49 @@ export function splitPorts(ports: DevicePort[]): { web: DevicePort[]; other: Dev
     return { web: ports.filter((p) => p.url !== null), other: ports.filter((p) => p.url === null) };
 }
 
+/**
+ * 左側分類：掃描看過是網頁 / 通常是網頁 / 可能是網頁 / 不是網頁（瀏覽器打不開，沒有網址）。
+ * The left-hand groups: seen as a web page / usually one / maybe one / not a web page (no URL, the browser can't open it).
+ */
+export type PortGroup = "seen" | "usual" | "maybe" | "no";
+export const PORT_GROUPS: readonly PortGroup[] = ["seen", "usual", "maybe", "no"];
+
+export function portGroup(p: DevicePort): PortGroup {
+    return p.url === null ? "no" : p.web === "no" ? "maybe" : p.web;
+}
+
+/**
+ * 搜尋：port 號碼（「80」找到 80、8080）或名稱，不分大小寫；空字串 = 全部。
+ * Search: the port number ("80" finds 80 and 8080) or its name, case-insensitive; empty = everything.
+ */
+export function matchPort(p: DevicePort, query: string, name: string | null): boolean {
+    const q = query.trim().toLowerCase().replace(/^:/, "");
+    if (!q) return true;
+    return String(p.port).includes(q) || (name ?? "").toLowerCase().includes(q) || (p.title ?? "").toLowerCase().includes(q);
+}
+
+/** 依分類分好（各自維持後端的順序）。/ Ports per group, each in the backend's order. */
+export function groupPorts(ports: DevicePort[]): Record<PortGroup, DevicePort[]> {
+    const out: Record<PortGroup, DevicePort[]> = { seen: [], usual: [], maybe: [], no: [] };
+    for (const p of ports) out[portGroup(p)].push(p);
+    return out;
+}
+
+/**
+ * 要顯示哪一類：選的那類還有東西就是它，否則第一個有東西的（搜尋把它清空時跟著跳，網頁類優先）；全空 = 選的那類。
+ * Which group to show: the chosen one while it has ports, else the first that has any (follows a search that empties it,
+ * web groups first); all empty = the chosen one.
+ */
+export function shownGroup(groups: Record<PortGroup, DevicePort[]>, chosen: PortGroup | null): PortGroup {
+    if (chosen && groups[chosen].length > 0) return chosen;
+    return PORT_GROUPS.find((g) => groups[g].length > 0) ?? chosen ?? "seen";
+}
+
+/** 分類的名稱。/ A group's label. */
+export function groupKey(g: PortGroup): TranslationKey {
+    return g === "no" ? "browser.ports.groupNo" : g === "seen" ? "browser.ports.seen" : g === "usual" ? "browser.ports.usual" : "browser.ports.maybe";
+}
+
 const GENERIC = new Set(["HTTP", "HTTPS"]);
 
 /**
@@ -49,14 +92,6 @@ export function portName(p: DevicePort, known: (port: number) => string | null):
     const name = known(p.port);
     if (!name || (p.url !== null && GENERIC.has(name))) return null;
     return name;
-}
-
-/** 網頁 port 旁邊那句：有多確定它是網頁。/ The line beside a web port: how sure Telepy is that it is one. */
-export function portHint(p: DevicePort): TranslationKey | null {
-    if (p.web === "seen") return "browser.ports.seen";
-    if (p.web === "usual") return "browser.ports.usual";
-    if (p.web === "maybe") return "browser.ports.maybe";
-    return null;
 }
 
 /** 列不出來時說什麼（後端的 `code`）；null = 用後端的訊息。/ What to say when listing failed (the backend's `code`); null = its message. */
