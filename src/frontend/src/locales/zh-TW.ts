@@ -1950,6 +1950,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "browser.ports.usual": "通常是網頁",
     "browser.ports.maybe": "可能是網頁",
     "browser.ports.loopback": "只有裝置自己連得到",
+    "browser.ports.loopbackShort": "僅限裝置",
+    "browser.ports.hintButton": "這一類的說明",
     "browser.ports.open": "打開 {url}",
     "browser.ports.groupNo": "不是網頁",
     "browser.ports.groups": "port 的種類",
