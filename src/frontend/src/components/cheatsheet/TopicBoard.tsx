@@ -51,7 +51,7 @@ import {
     Wrench,
     type LucideIcon,
 } from "lucide-react";
-import { CommandLine } from "@/components/cli/CliBlocks";
+import { CommandLine, ExampleOutput } from "@/components/cli/CliBlocks";
 import { WayMarks } from "@/components/cheatsheet/WayMarks";
 import { ForwardKinds } from "@/components/flow/ForwardKinds";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
@@ -172,6 +172,7 @@ function Example({ entry, tunnel, account }: { entry: CatalogueEntry; tunnel: st
                         ))}
                     </ol>
                 )}
+                <ExampleOutput output={entry.output} className="mt-2" />
             </div>
         </li>
     );

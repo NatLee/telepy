@@ -35,6 +35,13 @@ pub struct Example {
     /// 要什麼：scope、`ssh-key`（系統的 OpenSSH 用你的金鑰）或 `tunnels:manage`（只有 API token 有）。
     /// What it needs: a scope, `ssh-key` (the system's OpenSSH logs in with your key) or `tunnels:manage` (tokens only).
     pub needs: &'static [&'static str],
+    /// 終端機印出來的樣子（一行一個字串；空 = 沒有可看的輸出，例如互動式的指令）。真的跑出來的：SSH lab 上的
+    /// `office-pi` / `nas-box`、帳號 `pi`、使用者 `alice`，路徑與伺服器位址換成示意的，太長的用 `…` 省略。
+    /// 範例有好幾行指令時，`$ ` 開頭的那行是指令。
+    /// What the terminal prints (a string per line; empty = nothing worth showing, e.g. an interactive command). From
+    /// real runs on the SSH lab (`office-pi` / `nas-box`, account `pi`, user `alice`) with paths and the server address
+    /// made generic and long output cut with `…`. With several commands, a line starting with `$ ` is a command.
+    pub output: &'static [&'static str],
 }
 
 /// 順序 = 網頁的主題順序。/ The web's topic order.
@@ -95,6 +102,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Every tunnel you can use, with health, latency, accounts and labels.",
         lines: &["telepy ls"],
         needs: &["tunnels:read"],
+        output: &["NAME       HEALTH  LATENCY  ACCOUNTS  LABELS    GROUP  SEEN", "office-pi  online  -        pi        env=prod         now", "nas-box    online  -        admin     env=prod         now"],
     },
     Example {
         id: "lsJson",
@@ -103,6 +111,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "For scripts: pipe it into jq.",
         lines: &["telepy ls --online --json"],
         needs: &["tunnels:read"],
+        output: &["[", "  {", "    \"accounts\": [", "      \"pi\"", "    ],", "    \"group\": null,", "    \"health\": \"online\",", "    \"id\": 1,", "    \"labels\": [", "      \"env=prod\"", "    ],", "    \"last_seen_at\": null,", "    \"latency_ms\": null,", "    \"name\": \"office-pi\",", "    \"permission\": \"owner\",", "    \"pinned\": false", "  },", "  …", "]"],
     },
     Example {
         id: "status",
@@ -111,6 +120,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Health, latency, its public and LAN addresses, hostname, uptime, device facts and warnings.",
         lines: &["telepy status <tunnel>"],
         needs: &["tunnels:read"],
+        output: &["name         office-pi", "health       online", "latency      -", "accounts     pi", "labels       env=prod", "permission   owner", "address      203.0.113.7", "seen from    172.19.0.1", "lan          192.168.1.20/24 (eth0)", "lan          10.0.0.5/24 (wlan0)", "connected    since 2026-11-25T05:13:20Z", "hostname     office-pi", "uptime 24h   100.0%", "uptime 7d    100.0%"],
     },
     Example {
         id: "ssh",
@@ -119,6 +129,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "With the tunnel's default account. Nothing to set up in ~/.ssh first.",
         lines: &["telepy ssh <tunnel>"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "sshAccount",
@@ -127,6 +138,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "<tunnel>@<account> picks the account; after -- comes a command instead of a shell.",
         lines: &["telepy ssh <tunnel>@<account> -- uname -a"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "keysAdd",
@@ -135,6 +147,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Opens the Keys page with the key filled in; you confirm it there (a sign-in from the terminal can't add keys on its own). No key yet? It makes one with ssh-keygen first.",
         lines: &["telepy keys add"],
         needs: &[],
+        output: &[],
     },
     Example {
         id: "keysCheck",
@@ -143,6 +156,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Checks each hop (your key in Telepy, the account, step-up, the device online, the key on the device) and with --yes puts your key on the device's list for that account.",
         lines: &["telepy keys check <tunnel>@<account> --yes"],
         needs: &["tunnels:read", "ssh:exec"],
+        output: &[],
     },
     Example {
         id: "configInstall",
@@ -151,6 +165,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Afterwards plain ssh, rsync and VS Code Remote reach them too. Re-running replaces the blocks instead of adding more.",
         lines: &["telepy config install --all"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &["Wrote 2 host(s) to ~/.ssh/config: office-pi, nas-box. Connect with: ssh office-pi"],
     },
     Example {
         id: "configTidy",
@@ -159,6 +174,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Lines several hosts share are written once and repeats ssh never reads go; every name is checked to read the same. Shows the diff and asks first; no sign-in needed.",
         lines: &["telepy config tidy"],
         needs: &[],
+        output: &["~/.ssh/config: 32 -> 30 lines (26 -> 22 settings). Checked 3 names: ssh reads each one exactly as before.", "", "What changed:", "  - HostName, Port, Compression, StrictHostKeyChecking, UserKnownHostsFile written once for office-pi nas-box (10 lines moved into one telepy shared block)", "", "--- ~/.ssh/config", "+++ simplified", "…", "", "Not written. Run again with --yes to write it (the current file is kept as ~/.ssh/config.bak)."],
     },
     // ---------------------------------------------------------------- port forwarding
     // 指令速查頁「用 telepy」的預設值產生的就是這幾行（網頁測試比對）。/ The command sheet's telepy way builds exactly these with its defaults.
@@ -169,6 +185,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Forwards the port through the device to localhost and opens it; the host can also be its label from telepy lan ls. Ctrl+C stops it.",
         lines: &["telepy forward <tunnel>@<account> 192.168.1.20:8080 --open"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forward",
@@ -177,6 +194,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The device's port 80 shows up as http://localhost:8080 on your computer.",
         lines: &["telepy forward <tunnel>@<account> localhost:80 --local 8080"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forwardLan",
@@ -185,6 +203,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Its page at https://localhost:8443. The device opens the connection, so only the device has to reach 192.168.1.1.",
         lines: &["telepy forward <tunnel>@<account> 192.168.1.1:443 --local 8443"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpn",
@@ -193,6 +212,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Every machine on 192.168.1.0/24 answers at its own address on your computer until Ctrl-C (TCP and DNS; ping with --carrier). Nothing runs on the device: its sshd only forwards. sudo asks for your password to add the network device here.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpnAll",
@@ -201,6 +221,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Sites see the device's address, and every network the device can reach is reachable. The Telepy server stays on your own network, your local network stays local, and IPv6 is refused while it runs.",
         lines: &["telepy vpn <tunnel>@<account> --all"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpnCheck",
@@ -209,6 +230,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Shows what would be routed and reaches a host through the device, without admin rights. --probe names a host and port to try.",
         lines: &["telepy vpn <tunnel>@<account> --all --check --probe 192.168.1.20:22"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpnDns",
@@ -217,6 +239,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The device's sshd finds names under corp.lan the device's own way, so http://nas.corp.lan works. Not for Mac devices.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpnDnsServer",
@@ -225,6 +248,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Asks 192.168.1.1 for names under corp.lan, over TCP through the device: real answers, Mac devices too.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --dns-domain corp.lan --dns-server 192.168.1.1"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "vpnCarrier",
@@ -233,6 +257,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Starts the Telepy carrier already on the device (added the automatic or web-port way) for as long as the VPN runs: ping, UDP and names. Nothing is installed or written there.",
         lines: &["telepy vpn <tunnel>@<account> 192.168.1.0/24 --carrier"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forwardMany",
@@ -241,6 +266,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "-L <local port>:<host>:<port> as in ssh, once per port. -N only forwards; leave it out to get a shell as well. Ctrl+C stops it.",
         lines: &["telepy ssh <tunnel>@<account> -N -L 8080:localhost:80 -L 15432:localhost:5432"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forwardSocks",
@@ -249,6 +275,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Set your browser's SOCKS5 proxy to localhost:1080 and every site loads as if from the device's network.",
         lines: &["telepy ssh <tunnel>@<account> -N -D 1080"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forwardRemote",
@@ -257,6 +284,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The other way round: localhost:9000 on the device reaches port 3000 on your computer, e.g. a dev server the device should call.",
         lines: &["telepy ssh <tunnel>@<account> -N -R 9000:localhost:3000"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "forwardRustdesk",
@@ -265,6 +293,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Then connect the RustDesk app to 127.0.0.1. Direct IP access must be on in RustDesk on the device.",
         lines: &["telepy forward <tunnel>@<account> localhost:21118 --local 21118"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     // ---------------------------------------------------------------- many devices
     Example {
@@ -274,6 +303,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Through Telepy, so command rules apply and it is audited.",
         lines: &["telepy exec <tunnel> -- uptime"],
         needs: &["ssh:exec"],
+        output: &["13:13  up 21 days, 17:24, 1 user, load averages: 2.67 2.07 2.18"],
     },
     Example {
         id: "execTwo",
@@ -282,6 +312,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "In parallel; each line starts with the device's name.",
         lines: &["telepy exec <tunnel> <tunnel2> -- df -h /"],
         needs: &["ssh:exec"],
+        output: &["office-pi | Filesystem        Size    Used   Avail Capacity iused ifree %iused  Mounted on", "office-pi | /dev/disk3s1s1   460Gi    13Gi   143Gi     9%    484k  1.5G    0%   /", "nas-box | Filesystem        Size    Used   Avail Capacity iused ifree %iused  Mounted on", "nas-box | /dev/disk3s1s1   460Gi    13Gi   143Gi     9%    484k  1.5G    0%   /", "office-pi | exit 0", "nas-box | exit 0", "2 ok, 0 failed"],
     },
     Example {
         id: "execLabel",
@@ -290,6 +321,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Labels are set in the tunnel details; repeat --label to require several.",
         lines: &["telepy exec --label <label> -- systemctl is-active nginx"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     Example {
         id: "execGroup",
@@ -298,6 +330,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Your tunnel groups from the tunnels page.",
         lines: &["telepy exec --group <group> -- free -h"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     Example {
         id: "execJson",
@@ -306,6 +339,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "One object per device: exit code, output, errors.",
         lines: &["telepy exec --label <label> --json -- hostname"],
         needs: &["ssh:exec"],
+        output: &["[", "  {", "    \"account\": \"pi\",", "    \"ok\": true,", "    \"result\": {", "      \"duration_ms\": 4,", "      \"exit_code\": 0,", "      \"reminder\": null,", "      \"signal\": null,", "      \"stderr\": \"\",", "      \"stderr_bytes\": 0,", "      \"stdout\": \"office-pi\\n\",", "      \"stdout_bytes\": 10,", "      \"timed_out\": false,", "      \"truncated\": false", "    },", "    \"tunnel\": \"office-pi\"", "  },", "  …", "]"],
     },
     Example {
         id: "execApproval",
@@ -314,6 +348,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "When a command rule asks for approval, keep waiting (up to 10 minutes) instead of failing.",
         lines: &["telepy exec <tunnel> --wait-approval -- sudo systemctl restart nginx"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     // ---------------------------------------------------------------- files
     Example {
@@ -323,6 +358,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Over Telepy's SFTP; write the device side as <tunnel>[@account]:<path>.",
         lines: &["telepy cp ./backup.tar.gz <tunnel>:/tmp/"],
         needs: &["ssh:files"],
+        output: &["./backup.tar.gz → office-pi /tmp/backup.tar.gz"],
     },
     Example {
         id: "cpDown",
@@ -331,6 +367,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Swap the two sides to download.",
         lines: &["telepy cp <tunnel>:/var/log/syslog ./syslog"],
         needs: &["ssh:files"],
+        output: &["office-pi:/var/log/syslog → ./syslog (48213 bytes)"],
     },
     Example {
         id: "scp",
@@ -339,6 +376,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Through your system's OpenSSH, so -r and every scp option work.",
         lines: &["telepy scp -r ./project <tunnel>@<account>:~/"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "rsync",
@@ -347,6 +385,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "rsync's own options as usual; only what changed travels. rsync has to be installed on the device too.",
         lines: &["telepy rsync -avz --progress ./project <tunnel>@<account>:~/"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "sftp",
@@ -355,6 +394,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Browse and move files interactively.",
         lines: &["telepy sftp <tunnel>"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     // ---------------------------------------------------------------- sessions & recordings
     Example {
@@ -364,6 +404,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Who is in a terminal, the file manager or a desktop right now.",
         lines: &["telepy sessions"],
         needs: &["tunnels:read"],
+        output: &[],
     },
     Example {
         id: "sessionsEnd",
@@ -372,6 +413,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Ending isn't revoking: they can reconnect.",
         lines: &["telepy sessions end 42"],
         needs: &["tunnels:manage"],
+        output: &[],
     },
     Example {
         id: "recordings",
@@ -380,6 +422,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "For tunnels that record their web terminals.",
         lines: &["telepy recordings ls --tunnel <tunnel>"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     Example {
         id: "play",
@@ -388,6 +431,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "With its timing, twice as fast; long pauses are shortened.",
         lines: &["telepy recordings play 17 --speed 2"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     // ---------------------------------------------------------------- toolbox
     Example {
@@ -397,6 +441,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Yours, the site's and this device's.",
         lines: &["telepy snippets ls --tunnel <tunnel>"],
         needs: &["ssh:exec"],
+        output: &["ID  SCOPE  NAME  COMMAND", "1   user   disk  df -h /"],
     },
     Example {
         id: "run",
@@ -405,6 +450,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Variables become --var name=value; snippets marked “ask first” ask unless you add -y.",
         lines: &["telepy run <snippet> <tunnel>"],
         needs: &["ssh:exec"],
+        output: &["Filesystem        Size    Used   Avail Capacity iused ifree %iused  Mounted on", "/dev/disk3s1s1   460Gi    13Gi   143Gi     9%    484k  1.5G    0%   /"],
     },
     // ---------------------------------------------------------------- network & browser
     Example {
@@ -414,6 +460,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The hosts Telepy knows there, from a scan or added by hand.",
         lines: &["telepy lan ls <tunnel>", "telepy lan map <tunnel>"],
         needs: &["tunnels:read"],
+        output: &["$ telepy lan ls office-pi", "ID  ADDRESS       NAME    WHAT  LOGIN  OPEN PORTS  SOURCE  NOTE", "1   192.168.1.20  nas                              manual", "2   192.168.1.1   router                           manual", "$ telepy lan map office-pi", "192.168.1.0/24  2 used, 254 free", "   .0 . # . . . . . . . . . . . . . .", "  .16 . . . . # . . . . . . . . . . .", "  .32 . . . . . . . . . . . . . . . .", "…", "", "# host  G gateway  D this device  x not seen this time  - network / broadcast  . free"],
     },
     Example {
         id: "lanScan",
@@ -422,6 +469,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Waits for the scan and lists the hosts with a WHAT column (Proxmox VE, OpenWrt, a printer…); show prints each port's page title, server, certificate or banner. --no-identify skips the one GET / per web port.",
         lines: &["telepy lan scan <tunnel>", "telepy lan show <tunnel> 192.168.1.20"],
         needs: &["network:scan"],
+        output: &[],
     },
     Example {
         id: "lanWatch",
@@ -430,6 +478,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "schedule repeats the scan as you while the device is online (new machines are told to you and the tunnel's Admins); watch tells you when a scan finds that machine gone, back or with other ports; check probes just that machine now.",
         lines: &["telepy lan schedule <tunnel> --every 6h", "telepy lan watch <tunnel> 192.168.1.20", "telepy lan check <tunnel> 192.168.1.20"],
         needs: &["network:scan"],
+        output: &["$ telepy lan schedule office-pi --every 6h", "Rescans every 6 hours, next 2026-11-25 19:13 (set by alice).", "$ telepy lan watch office-pi 192.168.1.20", "Watching 192.168.1.20: you'll be told when a scan finds it gone, back or with other ports."],
     },
     Example {
         id: "lanWake",
@@ -438,6 +487,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The device sends the Wake-on-LAN packet (wakeonlan, etherwake or python3 on it); it needs the MAC address from an earlier scan. Machines usually take 10–60 s to start.",
         lines: &["telepy lan wake <tunnel> 192.168.1.20", "telepy lan check <tunnel> 192.168.1.20"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     Example {
         id: "lanOs",
@@ -446,6 +496,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Only for the machine you name: the device pings it, Telepy reads its SSH greeting and asks its SMB server (no login); nmap -O runs too when the device has nmap and root. lan show prints the stored result.",
         lines: &["telepy lan os <tunnel> 192.168.1.20", "telepy lan show <tunnel> 192.168.1.20"],
         needs: &["network:scan"],
+        output: &[],
     },
     Example {
         id: "lanShell",
@@ -454,6 +505,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The device's own ssh logs in to that machine, with the device's keys or a password prompt; --ssh-opt -t gives it a terminal.",
         lines: &["telepy ssh <tunnel>@<account> --ssh-opt -t -- ssh ubuntu@192.168.1.20"],
         needs: &["tunnels:read", "ssh-key"],
+        output: &[],
     },
     Example {
         id: "lanCp",
@@ -462,6 +514,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Write the machine after a slash: <tunnel>/[login@]<host>:<path>, the host by its label, address or id. The device's sshd opens the hop and Telepy logs in with its key; set TELEPY_LAN_PASSWORD to use a password instead (used once, never stored).",
         lines: &["telepy cp <tunnel>/admin@192.168.1.20:/etc/hosts ./hosts", "TELEPY_LAN_PASSWORD=… telepy cp ./backup.tgz <tunnel>/nas:/srv/backup/"],
         needs: &["ssh:files"],
+        output: &[],
     },
     Example {
         id: "lanAdd",
@@ -470,6 +523,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "With a label, the login for its terminal and the SSH port.",
         lines: &["telepy lan add <tunnel> 192.168.1.20 --label nas --user admin", "telepy lan edit <tunnel> nas --labels rack-2,prod --note \"top shelf, UPS on the left\""],
         needs: &["tunnels:manage"],
+        output: &["$ telepy lan add office-pi 192.168.1.20 --label nas --user admin", "3", "Added 192.168.1.20 behind office-pi.", "$ telepy lan edit office-pi nas --labels rack-2,prod --note \"top shelf, UPS on the left\"", "192.168.1.20  nas", "  labels: prod, rack-2", "  note: top shelf, UPS on the left"],
     },
     Example {
         id: "proxy",
@@ -478,6 +532,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "A proxy on 127.0.0.1 (HTTP and SOCKS5) whose connections leave from the device: its localhost and network are reachable and sites see its address. --browser opens Chrome with it in a separate profile. No SSH key and no admin rights; needs the proxy:use permission.",
         lines: &["telepy proxy <tunnel> --browser http://localhost:3000/"],
         needs: &["proxy:use"],
+        output: &[],
     },
     Example {
         id: "proxyCurl",
@@ -486,6 +541,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Start the proxy in one terminal, then point any program at it. Without a tunnel, telepy proxy lists the ones you may use.",
         lines: &["telepy proxy <tunnel> --port 8118", "curl -x http://127.0.0.1:8118 https://ifconfig.me"],
         needs: &["proxy:use"],
+        output: &["$ telepy proxy office-pi --port 8118", "Proxy through office-pi as pi is on http://127.0.0.1:8118 (HTTP proxy and SOCKS5 on the same port). Ctrl-C stops it.", "  curl -x http://127.0.0.1:8118 https://ifconfig.me          # shows the device's address", "  export HTTPS_PROXY=http://127.0.0.1:8118 HTTP_PROXY=http://127.0.0.1:8118  # for programs that read the environment", "  Connections leave from the device: its localhost and its network are reachable, and nothing runs on it."],
     },
     Example {
         id: "browsePorts",
@@ -494,6 +550,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Lists the ports the device listens on, web pages first, with the URL to open. No need to run ss on it yourself.",
         lines: &["telepy browse ports <tunnel>"],
         needs: &["browser:use"],
+        output: &["PORT   URL                      WHAT", "5000   http://localhost:5000/   usually a web page", "8001   http://localhost:8001/   may be a web page", "8181   http://localhost:8181/   may be a web page"],
     },
     Example {
         id: "browse",
@@ -502,6 +559,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Opens a scripted browser through the device, reads the page, saves a screenshot and closes it.",
         lines: &["ID=$(telepy browse <tunnel> http://192.168.1.1/)", "telepy browse text \"$ID\" --selector main", "telepy browse shot \"$ID\" -o router.png", "telepy browse close \"$ID\""],
         needs: &["browser:use"],
+        output: &[],
     },
     Example {
         id: "ciEnv",
@@ -510,6 +568,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Two environment variables replace the sign-in; nothing is written to the machine.",
         lines: &["export TELEPY_URL=<url>", "export TELEPY_TOKEN=tpt_…", "telepy exec --label <label> -- uptime"],
         needs: &["ssh:exec"],
+        output: &[],
     },
     Example {
         id: "activity",
@@ -518,6 +577,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The API page's Activity tab, live in the terminal.",
         lines: &["telepy api activity --since 1h --follow"],
         needs: &[],
+        output: &["TIME                 TOKEN   METHOD  ROUTE                               TUNNEL     STATUS  DURATION  IP", "2026-11-25 13:17:01  laptop  GET     /api/reverse/server/{id}/lan/scan   office-pi  200     1 ms      127.0.0.1", "2026-11-25 13:17:01  laptop  POST    /api/reverse/server/{id}/ssh-check  office-pi  200     6 ms      127.0.0.1", "2026-11-25 13:16:59  laptop  GET     /api/reverse/server/{id}/lan/scan   office-pi  200     2 ms      127.0.0.1"],
     },
     // ---------------------------------------------------------------- sign-in & upkeep
     Example {
@@ -527,6 +587,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Opens your browser to approve it; the sign-in is kept in the system keychain. It asks for everything the CLI can do, and you choose what to allow on the approval page.",
         lines: &["telepy login <url>"],
         needs: &[],
+        output: &[],
     },
     Example {
         id: "loginToken",
@@ -535,6 +596,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "No browser needed, e.g. on a server: make the token on the API page.",
         lines: &["telepy login <url> --with-token tpt_…"],
         needs: &[],
+        output: &["Signed in to https://telepy.example.com as alice (credentials in the config file)."],
     },
     Example {
         id: "whoami",
@@ -543,6 +605,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The account, the server and what the sign-in may do.",
         lines: &["telepy whoami"],
         needs: &[],
+        output: &["alice on https://telepy.example.com", "  via API token \"laptop\" · tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use tunnels:manage", "  tunnels: every tunnel", "  expires: 2026-11-26T23:59:59Z"],
     },
     Example {
         id: "doctor",
@@ -551,6 +614,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Checks the server, the sign-in, its scopes and the local ssh, and says whether a newer telepy is out.",
         lines: &["telepy doctor"],
         needs: &[],
+        output: &["✓ server: https://telepy.example.com", "✓ sign-in: alice (Token in the file)", "✓ scopes: tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use tunnels:manage", "✓ expiry: 2026-11-26T23:59:59Z (1 day(s) left)", "✓ ssh: found", "✓ scp: found", "✓ sftp: found", "✓ ssh config dir: ~/.ssh/telepy", "✓ ssh way in: the web port; if the web port can't be reached: ask (telepy config fallback)"],
     },
     Example {
         id: "completions",
@@ -559,6 +623,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Prints the line to add for your shell. Tunnel names, accounts and labels complete too.",
         lines: &["telepy completions"],
         needs: &[],
+        output: &["Tab completion for zsh: add this line to ~/.zshrc and open a new terminal.", "", "  eval \"$(telepy completions zsh)\""],
     },
     Example {
         id: "update",
@@ -567,6 +632,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "--check only says whether a newer release is out. The update is checked against the release's SHA-256 and rolled back if the new binary doesn't start; --to v2.9.0 installs a given release.",
         lines: &["telepy update --check", "telepy update"],
         needs: &[],
+        output: &[],
     },
     Example {
         id: "apiTokens",
@@ -575,6 +641,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Each token with a summary of its calls; telepy api activity lists the calls themselves.",
         lines: &["telepy api tokens"],
         needs: &[],
+        output: &["NAME    PREFIX       SCOPES                                                                             TUNNELS  EXPIRES     LAST USED  24H  7D  ERRORS 7D  STATE", "laptop  tpt_fXjjtN…  tunnels:read ssh:exec ssh:files network:scan browser:use proxy:use tunnels:manage  all      2026-11-27  0s ago     0    0   0          active"],
     },
     Example {
         id: "examples",
@@ -583,6 +650,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "By topic or by command: telepy examples forward, telepy examples lan.",
         lines: &["telepy examples forward"],
         needs: &[],
+        output: &[],
     },
     Example {
         id: "logout",
@@ -591,6 +659,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Forgets the sign-in here and revokes it on the server.",
         lines: &["telepy logout"],
         needs: &[],
+        output: &["Signed out of https://telepy.example.com.", "The API token itself still works until you revoke it in Telepy (the API page → Your tokens)."],
     },
 ];
 
@@ -755,7 +824,7 @@ fn help_text(found: &[&Example], path: &[String]) -> clap::builder::StyledStr {
 // ---------------------------------------------------------------- telepy examples
 
 /// `telepy examples [主題|指令]`。/ `telepy examples [topic|command]`.
-pub fn run(query: &[String], root: &clap::Command) -> Result<i32> {
+pub fn run(query: &[String], output: bool, root: &clap::Command) -> Result<i32> {
     let q: Vec<String> = query.iter().map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty()).collect();
     if q.is_empty() {
         print!("{}", list_topics());
@@ -764,7 +833,7 @@ pub fn run(query: &[String], root: &clap::Command) -> Result<i32> {
     if q.len() == 1 {
         if let Some(topic) = TOPICS.iter().find(|t| t.id == q[0] || t.title.to_lowercase() == q[0]) {
             let found: Vec<&Example> = EXAMPLES.iter().filter(|e| e.topic == topic.id).collect();
-            print!("{}", render(topic.title, topic.intro, &found, width()));
+            print!("{}", render(topic.title, topic.intro, &found, width(), output));
             return Ok(0);
         }
     }
@@ -785,7 +854,7 @@ pub fn run(query: &[String], root: &clap::Command) -> Result<i32> {
         if found.is_empty() {
             bail!("No examples for `telepy {}` yet; try `telepy {} --help`.", path.join(" "), path.join(" "));
         }
-        print!("{}", render(&format!("telepy {}", path.join(" ")), "", &found, width()));
+        print!("{}", render(&format!("telepy {}", path.join(" ")), "", &found, width(), output));
         return Ok(0);
     }
     let topics: Vec<&str> = TOPICS.iter().map(|t| t.id).collect();
@@ -812,7 +881,10 @@ fn width() -> Option<usize> {
 /// 一組範例：標題、開頭一句、每個範例的標題、說明（照 `cols` 折行、縮排）、指令（不折，複製得到整行）。
 /// A set of examples: heading, intro, then each example's title, note (wrapped to `cols`, indented) and commands
 /// (never wrapped, so they copy whole).
-pub fn render(heading: &str, intro: &str, found: &[&Example], cols: Option<usize>) -> String {
+/// `output` = 每個範例底下再印它的範例輸出（淡色、縮排；多行指令的範例輸出裡自己帶 `$ ` 行，就不重複印指令）。
+/// `output` = each example's sample output under it (dim, indented; a several-command example's output carries its
+/// own `$ ` lines, so the commands aren't printed twice).
+pub fn render(heading: &str, intro: &str, found: &[&Example], cols: Option<usize>, output: bool) -> String {
     let wrapped = |text: &str, indent: usize| -> Vec<String> {
         match cols {
             Some(c) => crate::tapi::wrap(&[text], c.saturating_sub(indent).max(20)),
@@ -832,9 +904,27 @@ pub fn render(heading: &str, intro: &str, found: &[&Example], cols: Option<usize
         for l in wrapped(ex.note, 2) {
             let _ = writeln!(s, "  {}", color::out(color::DIM, &l));
         }
-        for line in ex.lines {
-            let _ = writeln!(s, "  {} {line}", color::out(color::DIM, "$"));
+        let transcript = output && ex.output.iter().any(|l| l.starts_with("$ "));
+        if !transcript {
+            for line in ex.lines {
+                let _ = writeln!(s, "  {} {line}", color::out(color::DIM, "$"));
+            }
         }
+        if output {
+            for l in ex.output {
+                match l.strip_prefix("$ ") {
+                    Some(cmd) => {
+                        let _ = writeln!(s, "  {} {cmd}", color::out(color::DIM, "$"));
+                    }
+                    None => {
+                        let _ = writeln!(s, "  {}", color::out(color::DIM, l).trim_end());
+                    }
+                }
+            }
+        }
+    }
+    if output && found.iter().all(|e| e.output.is_empty()) {
+        let _ = writeln!(s, "\n{}", color::out(color::DIM, "None of these has sample output (they are interactive, or print what the device prints)."));
     }
     s
 }
@@ -932,12 +1022,60 @@ mod tests {
     #[test]
     fn the_examples_command_finds_topics_and_commands() {
         let root = crate::command();
-        assert!(run(&["forward".into()], &root).is_ok());
-        assert!(run(&["lan".into(), "wake".into()], &root).is_ok());
-        assert!(run(&["Port forwarding".into()], &root).is_ok());
-        assert!(run(&["nonsense".into()], &root).is_err());
-        let text = render("Port forwarding", "", &EXAMPLES.iter().filter(|e| e.topic == "forward").collect::<Vec<_>>(), Some(40));
+        assert!(run(&["forward".into()], false, &root).is_ok());
+        assert!(run(&["lan".into(), "wake".into()], false, &root).is_ok());
+        assert!(run(&["Port forwarding".into()], false, &root).is_ok());
+        assert!(run(&["nonsense".into()], false, &root).is_err());
+        let text = render("Port forwarding", "", &EXAMPLES.iter().filter(|e| e.topic == "forward").collect::<Vec<_>>(), Some(40), false);
         assert!(text.contains("$ telepy ssh <tunnel>@<account> -N -R 9000:localhost:3000"), "commands are never wrapped");
         assert!(text.lines().all(|l| l.contains("$ telepy") || crate::tapi::visible_width(l) <= 40), "notes are wrapped to the width");
+    }
+    /// 範例輸出：沒有本機路徑、沒有尾端空白、不會太長；有好幾行指令的範例，輸出裡的 `$ ` 行就是它自己的指令（照順序）。
+    /// Sample output: no local paths, no trailing spaces, not too long; in an example with several commands the
+    /// `$ ` lines are its own commands, in order.
+    #[test]
+    fn sample_outputs_are_clean_and_follow_their_commands() {
+        let mut with = 0;
+        for ex in EXAMPLES {
+            if ex.output.is_empty() {
+                continue;
+            }
+            with += 1;
+            assert!(ex.output.len() <= 24, "{}: cut it with … ({} lines)", ex.id, ex.output.len());
+            for l in ex.output {
+                assert_eq!(l.trim_end(), *l, "{}: trailing space in {l:?}", ex.id);
+                assert!(!l.contains('\t') && !l.contains('\x1b'), "{}: {l:?}", ex.id);
+                for bad in ["/var/folders", "/Users/", "/private/", "127.0.0.1:5", "mac-mini"] {
+                    assert!(!l.contains(bad), "{}: {bad} in {l:?}", ex.id);
+                }
+            }
+            let shown: Vec<String> = ex.output.iter().filter_map(|l| l.strip_prefix("$ ")).map(str::to_string).collect();
+            if !shown.is_empty() {
+                assert!(ex.lines.len() > 1, "{}: one command needs no `$ ` line", ex.id);
+                let own: Vec<String> = ex.lines.iter().map(|l| sample(l).replace("box", "office-pi")).collect();
+                let mut at = 0;
+                for cmd in &shown {
+                    let found = own[at..].iter().position(|o| o == cmd);
+                    assert!(found.is_some(), "{}: `{cmd}` is not one of its commands (in order): {own:?}", ex.id);
+                    at += found.unwrap() + 1;
+                }
+            } else {
+                assert!(ex.output.iter().all(|l| !l.starts_with('$')), "{}", ex.id);
+            }
+        }
+        assert!(with >= 20, "{with} examples have output");
+    }
+
+    #[test]
+    fn examples_print_their_output_only_when_asked() {
+        let found: Vec<&Example> = EXAMPLES.iter().filter(|e| e.id == "ls" || e.id == "lanLs").collect();
+        let plain = render("x", "", &found, None, false);
+        assert!(plain.contains("$ telepy ls") && !plain.contains("NAME       HEALTH"), "{plain}");
+        let with = render("x", "", &found, None, true);
+        assert!(with.contains("$ telepy ls\n  NAME       HEALTH  LATENCY"), "{with}");
+        // 多行指令的範例：輸出裡自己帶指令，不重複印 `<tunnel>` 那幾行。/ A several-command example: its output carries the commands.
+        assert!(with.contains("$ telepy lan map office-pi") && !with.contains("telepy lan map <tunnel>"), "{with}");
+        let none: Vec<&Example> = EXAMPLES.iter().filter(|e| e.id == "ssh").collect();
+        assert!(render("x", "", &none, None, true).contains("None of these has sample output"));
     }
 }

@@ -18,7 +18,7 @@ import { Field } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
 import { NavTabs } from "@/components/ui/nav-tabs";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { CommandLine, NeedChips } from "@/components/cli/CliBlocks";
+import { CommandLine, ExampleOutput, NeedChips } from "@/components/cli/CliBlocks";
 import { useI18n } from "@/lib/i18n";
 import { CLI_TOPICS, cliRecipes, topicIntro, type CliContext, type CliTopicId } from "@/lib/cliGuide";
 import type { TranslationKey } from "@/locales/en";
@@ -109,6 +109,7 @@ export function CliExamples({ context, tunnels, selected, setTunnel, online }: P
                                 <NeedChips needs={r.needs} />
                             </div>
                             {r.command.language === "bash" ? <CommandLine value={r.command.value} /> : <CodeBlock language={r.command.language} value={r.command.value} />}
+                            <ExampleOutput output={r.output} />
                         </li>
                     ))}
                 </ul>

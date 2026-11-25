@@ -326,6 +326,8 @@ telepy cp box/admin@nas:/srv/backup/db.tgz .   # 裝置後面的機器
 
 `cp` 透過 Telepy 的 API 走 SFTP 複製，需要 `ssh:files` scope。要碰裝置後面的機器，就在斜線後面寫它：`<tunnel>[@account]/[login@]<host>:<path>`，主機用 `lan ls` 列出的標籤、位址或 id 都可以。由裝置的 sshd 開出這一跳，Telepy 用自己的金鑰登入那台；要改用密碼就設定 `TELEPY_LAN_PASSWORD`（只用這一次，不會存起來）。兩台機器都不用裝任何東西。`scp` 則是 OpenSSH 的做法，需要你的個人 SSH 金鑰。
 
+裝置那一邊寫的是資料夾，或是指向資料夾的連結（Mac 上的 `/tmp` 就是）時，檔案會用原本的檔名放進去。
+
 下載直接寫進磁碟（裝置上的資料夾會變成一個 zip）。上傳每 8 MiB 送一段，所以就算 Telepy 前面的代理限制了請求大小（Cloudflare 是 100 MB），大檔案也傳得過去，哪一段斷了就重送那一段。
 
 ### 連線、錄影與片段
@@ -462,6 +464,20 @@ telepy browse close "$ID"
 - 每個動作都記在 AI 活動紀錄裡。輸入的文字只記長度，除非加上 `--show`。
 - 要求先確認身分（step-up）的通道會拒絕它。
 
+### 網頁上的指令速查頁
+
+上面這些在網頁的**指令速查**頁也都有，而且已經填好你自己的通道和帳號，複製下來就能跑。
+
+![指令速查頁的一個 CLI 主題：走哪條路、有哪些指令、跑出來長什麼樣](images/zh-TW/sheet-topic.png)
+
+- **任務**（埠轉發、跳到另一台機器、複製檔案）：把空格填一填，指令就跟著變。
+- **telepy CLI 還能做的事**：一個主題一頁。先畫出這類指令走哪條路，再列出每個範例的指令；有東西可看的，底下附一段範例輸出。範例輸出是實際跑出來的，裡面的名稱是示意的。
+- **telepy 還是 ssh？** 把功能重疊的工具放在一起比：連到埠與網路的 `forward`、`ssh`、`proxy`、`vpn`，搬檔案的 `cp`、`scp`、`rsync`、`sftp`，執行指令的 `ssh`、`exec`、`run`。看得出每個做得到什麼、需要什麼、誰包含誰。
+
+![連到埠與網路：forward、ssh、proxy、vpn 各自做得到的事](images/zh-TW/sheet-tools.png)
+
+同一份範例輸出在終端機也看得到：`telepy examples everyday --output`。
+
 ## 指令速查
 
 每個指令也都接受 `--server <url>` 和 `--token tpt_…`（或 `TELEPY_URL`、`TELEPY_TOKEN`），用來指定這一次要用哪台伺服器、哪個憑證；顏色則用 `--color auto|always|never` 選。
@@ -515,7 +531,7 @@ telepy browse close "$ID"
 | `telepy doctor` | 檢查伺服器、登入、scope、到期日、本機的 ssh 工具與版本 | — |
 | `telepy update` | 更新 telepy；`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | 印出 bash、zsh、fish、powershell 或 elvish 的 Tab 補完腳本；不給 shell 就告訴你該加哪一行、加在哪 | — |
-| `telepy examples [topic\|command]` | 依主題（`forward`、`network`…）或依指令（`lan wake`）列出範例；不給就列出主題。不用登入 | — |
+| `telepy examples [topic\|command]` | 依主題（`forward`、`network`…）或依指令（`lan wake`）列出範例；不給就列出主題。加 `--output` 連每個範例印出來的樣子一起列。不用登入 | — |
 
 </details>
 

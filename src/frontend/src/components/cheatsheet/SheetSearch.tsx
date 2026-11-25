@@ -14,6 +14,7 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, ChevronDown, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
+import { ExampleOutput } from "@/components/cli/CliBlocks";
 import { WayMarks } from "@/components/cheatsheet/WayMarks";
 import { useI18n } from "@/lib/i18n";
 import { DICTIONARIES } from "@/lib/translate";
@@ -119,6 +120,7 @@ function Row({ hit, tunnel, account, open, onToggle, onTask, taskCommand }: { hi
             {open && (
                 <div className="space-y-2 px-4 pb-4">
                     {lines.map((l, i) => <MiniCommand key={i} command={l} />)}
+                    <ExampleOutput output={e.output} />
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
                         <span>{lines.some((l) => /<[^<>\s]+>/.test(l)) ? t("sheet.search.fillHint") : ""}</span>
                         <Link href="/tunnels/cli?tab=examples" prefetch={false} className="underline underline-offset-2 hover:text-foreground">{t("sheet.search.openCli")}</Link>

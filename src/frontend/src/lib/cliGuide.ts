@@ -186,6 +186,8 @@ export interface CliRecipe {
     needs: CliNeed[];
     /** 範例裡還有佔位字（沒有真的隧道 / 標籤…）。/ The example still has a placeholder. */
     placeholder: boolean;
+    /** 終端機印出來的樣子（真的跑出來的，名稱是示意的；空 = 沒有）。/ What the terminal prints (from a real run, with sample names; empty = none). */
+    output: readonly string[];
 }
 
 function sh(value: string): Snippet {
@@ -216,7 +218,7 @@ export function fillExample(lines: readonly string[], c: CliContext): string[] {
 
 const PLACEHOLDER_LEFT = /<[a-z0-9]+>/;
 
-function recipe(id: string, lines: readonly string[], needs: readonly string[], c: CliContext): CliRecipe {
+function recipe(id: string, lines: readonly string[], needs: readonly string[], c: CliContext, output: readonly string[] = []): CliRecipe {
     const filled = fillExample(lines, c);
     return {
         id,
@@ -225,6 +227,7 @@ function recipe(id: string, lines: readonly string[], needs: readonly string[], 
         command: sh(filled.join("\n")),
         needs: needs as CliNeed[],
         placeholder: filled.some((l) => PLACEHOLDER_LEFT.test(l)),
+        output,
     };
 }
 
@@ -233,11 +236,16 @@ function recipe(id: string, lines: readonly string[], needs: readonly string[], 
  * A topic's examples (the ones in examples.rs, filled in); "Scripts & CI" adds a GitHub Actions job (a file template the CLI doesn't carry).
  */
 export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
-    const out = CLI_EXAMPLES.filter((e) => e.topic === topic).map((e) => recipe(e.id, e.lines, e.needs, c));
+    const out = CLI_EXAMPLES.filter((e) => e.topic === topic).map((e) => recipe(e.id, e.lines, e.needs, c, e.output));
     if (topic === "ci") {
         out.push({ ...recipe("ciActions", [], ["ssh:exec"], c), command: { language: "yaml", value: githubActions(c.base, c.label ? shq(c.label) : PLACEHOLDER.label) }, placeholder: !c.label });
     }
     return out;
+}
+
+/** 範例輸出的每一行：`$ ` 開頭的是指令（提示字元那種樣子），其他是輸出。/ A sample output's lines: `$ ` starts a command (shown as a prompt), the rest is output. */
+export function outputLines(output: readonly string[]): OutputLine[] {
+    return output.map((l) => (l.startsWith("$ ") ? { text: l.slice(2), tone: "prompt" as const } : { text: l }));
 }
 
 /** 一行裡呼叫的 telepy 子指令（第一層）。/ The telepy subcommands a line calls (first level). */
@@ -247,7 +255,7 @@ export function invokedCommands(line: string): string[] {
 
 /** 用到某個指令的範例（指令表展開時看的）。/ The examples that use a command (the command list's expanded rows). */
 export function examplesForCommand(key: string, c: CliContext): CliRecipe[] {
-    return CLI_EXAMPLES.filter((e) => e.lines.some((l) => invokedCommands(l).includes(key))).map((e) => recipe(e.id, e.lines, e.needs, c));
+    return CLI_EXAMPLES.filter((e) => e.lines.some((l) => invokedCommands(l).includes(key))).map((e) => recipe(e.id, e.lines, e.needs, c, e.output));
 }
 
 /** GitHub Actions 的範例 job：裝 CLI、用 secret 的 token、在有標籤的裝置上部署。/ A GitHub Actions job. */
