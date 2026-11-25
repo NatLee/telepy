@@ -24,7 +24,7 @@ Starting takes three steps, and the panel shows each one as it happens:
 - **Start Chromium**: a fresh Chromium starts in Telepy's browser container and uses that proxy.
 - **Show the picture here**: your tab connects to the browser's screen.
 
-The start screen draws these steps as one path: the page to open, the device, Chromium and this tab. Once you start, the same path moves into the starting card and lights up step by step, with the page you picked (a port and its name, or a new tab) at the left end and any tabs waiting for the browser. While it starts, the header has **Ports** and **Cancel**; once the picture is up, **Ports**, **IME** and **Stop**.
+The start screen draws these three steps as stations on one line, with what will open underneath. Once you start, the same diagram moves into the starting card and lights up step by step (a spinner, then a green tick), and the line underneath names the page you picked (a port and its name, or a new tab) and any tabs waiting for the browser. While it starts, the header has **Ports** and **Cancel**; once the picture is up, **Ports**, **IME** and **Stop**.
 
 ![Starting a remote browser step by step](images/en/browser-start.gif)
 

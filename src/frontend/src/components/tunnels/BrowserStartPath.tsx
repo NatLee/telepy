@@ -1,18 +1,22 @@
 "use client";
 
 /**
- * 遠端瀏覽器的路徑圖：要開的網頁 ─ 裝置 ─①SSH─ Chromium② ─③畫面─ 這個分頁。開始畫面上全灰（說明會怎麼走），按下開始後
- * 同一張圖移到啟動卡片裡、依實際步驟亮起來（轉圈 → 綠勾 / 紅叉），最左邊是這次選的網頁（port 名稱或新分頁）和排隊的分頁。
- * 寬的時候橫排，窄的時候直排；線都是直線。
- * The remote browser's path: the page to open ─ the device ─①SSH─ Chromium② ─③picture─ this tab. Grey on the start
- * screen (how it will go); after Start the same diagram sits in the starting card and lights up with the real steps
- * (spinner → green tick / red cross), with the chosen page (a port's name or a new tab) and any queued tabs on the left.
- * A row when wide, a column when narrow; straight lines only.
+ * 遠端瀏覽器的三個步驟站：①經由裝置開代理 ─ ②啟動 Chromium ─ ③在這裡顯示畫面。每站一樣的畫法：編號在圖示正上方，
+ * 站名、一行說明；站與站之間一條直線，前一站做完就變綠。開始畫面上全灰（說明會怎麼走），按下開始後同一張圖移到啟動
+ * 卡片裡、依實際步驟亮起來（轉圈 → 綠勾 / 紅叉）。圖下方置中一行：這次要開的網頁（port 名稱、網址或新分頁）和排隊的分頁數。
+ * 一排只有三欄，手機上也放得下。
+ * The remote browser's three step stations: ① open a proxy through the device ─ ② start Chromium ─ ③ show the picture
+ * here. Every station is drawn the same way: the number right above the icon, a name and one line; a straight line
+ * joins the stations and turns green once the one before is done. Grey on the start screen (how it will go); after Start
+ * the same diagram sits in the starting card and lights up with the real steps (spinner → green tick / red cross). One
+ * centred line below says what opens (a port's name, a URL or a new tab) and how many tabs are queued. Three columns
+ * only, so it fits a phone too.
  */
 import React from "react";
-import { AlertTriangle, AppWindow, Check, Cpu, Globe, Loader2, MonitorPlay, X } from "lucide-react";
+import { AlertTriangle, AppWindow, Check, Loader2, MonitorPlay, Route, X } from "lucide-react";
 import type { BrowserStepId, startTarget } from "@/lib/browserStart";
 import type { StepState } from "@/lib/progressSteps";
+import type { TranslationKey } from "@/locales/en";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -29,18 +33,9 @@ export interface BrowserStartPathProps {
     className?: string;
 }
 
-const LINE: Record<StepState, string> = {
-    waiting: "bg-border",
-    skipped: "bg-border",
-    active: "bg-warning",
-    done: "bg-success",
-    warn: "bg-warning",
-    failed: "bg-destructive",
-};
-
 function Marker({ n, state }: { n: number; state: StepState }) {
     const { t } = useI18n();
-    const base = "relative z-10 grid size-5 shrink-0 place-items-center rounded-full text-[0.6875rem] tabular-nums [&_svg]:size-3";
+    const base = "grid size-6 shrink-0 place-items-center rounded-full text-xs tabular-nums [&_svg]:size-3.5";
     if (state === "done") return <span className={cn(base, "bg-success text-success-foreground")} role="img" aria-label={t("steps.state.done")}><Check strokeWidth={3} /></span>;
     if (state === "active") return <span className={cn(base, "bg-card text-warning ring-1 ring-inset ring-warning/60")} role="img" aria-label={t("steps.state.active")}><Loader2 className="animate-spin" /></span>;
     if (state === "failed") return <span className={cn(base, "bg-destructive text-destructive-foreground")} role="img" aria-label={t("steps.state.failed")}><X strokeWidth={3} /></span>;
@@ -48,79 +43,57 @@ function Marker({ n, state }: { n: number; state: StepState }) {
     return <span className={cn(base, "bg-card text-muted-foreground ring-1 ring-inset ring-border")} aria-hidden>{n}</span>;
 }
 
-function Node({ icon: Icon, name, sub, marker, tone }: { icon: React.ElementType; name: React.ReactNode; sub?: React.ReactNode; marker?: React.ReactNode; tone?: StepState }) {
-    return (
-        <li className="flex items-center gap-2.5 @xl:w-24 @xl:shrink-0 @xl:flex-col @xl:gap-1 @xl:text-center">
-            <span
-                className={cn(
-                    "relative grid size-9 shrink-0 place-items-center rounded-md border bg-card text-muted-foreground",
-                    tone === "active" ? "border-warning/60 text-warning" : tone === "done" ? "border-success/60 text-success" : tone === "failed" ? "border-destructive/60 text-destructive" : "border-border",
-                )}
-            >
-                <Icon size={18} aria-hidden />
-                {marker && <span className="absolute -right-2 -top-2">{marker}</span>}
-            </span>
-            <span className="min-w-0">
-                <span className="block text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
-                {sub && <span className="block text-xs text-muted-foreground [overflow-wrap:anywhere]">{sub}</span>}
-            </span>
-        </li>
-    );
-}
-
-/** 兩格之間的直線：可以帶一個步驟記號和一行「走的是什麼」。/ The straight link between two nodes, with an optional step marker and label. */
-function Link({ state, marker, label }: { state: StepState; marker?: React.ReactNode; label?: React.ReactNode }) {
-    return (
-        <li aria-hidden={!label && !marker} className="relative flex min-h-8 items-center gap-2 py-1 pl-2 @xl:min-w-0 @xl:flex-1 @xl:flex-col @xl:gap-1 @xl:py-0 @xl:pl-0 @xl:pt-3.5">
-            {/* 直排：左邊一條直線對齊格子中心；橫排：一條橫線在格子中線。/ Column: a vertical line on the nodes' centre; row: a horizontal one. */}
-            <span className={cn("absolute bottom-0 left-[1.0625rem] top-0 w-0.5 @xl:hidden", LINE[state])} />
-            <span className="relative hidden h-0.5 w-full @xl:block">
-                <span className={cn("absolute inset-0", LINE[state])} />
-            </span>
-            {marker && <span className="relative @xl:absolute @xl:left-1/2 @xl:top-1 @xl:-translate-x-1/2">{marker}</span>}
-            {!marker && <span className="size-5 shrink-0 @xl:hidden" />}
-            {label && <span className="text-xs text-muted-foreground @xl:mt-1.5 @xl:text-center">{label}</span>}
-        </li>
-    );
-}
+const STATIONS: { id: BrowserStepId; icon: React.ElementType; sub: TranslationKey }[] = [
+    { id: "proxy", icon: Route, sub: "browser.ports.pathVia" },
+    { id: "browser", icon: AppWindow, sub: "browser.path.chromium" },
+    { id: "stream", icon: MonitorPlay, sub: "browser.path.view" },
+];
 
 export function BrowserStartPath({ username, steps, target, queued = 0, className }: BrowserStartPathProps) {
     const { t } = useI18n();
     const state = (id: BrowserStepId): StepState => steps.find((s) => s.id === id)?.state ?? "waiting";
-    const proxy = state("proxy");
-    const browser = state("browser");
-    const stream = state("stream");
 
-    let targetName: React.ReactNode;
-    let targetSub: React.ReactNode = null;
-    if (!target) {
-        targetName = t("browser.path.target");
-        targetSub = t("browser.path.targetIdle");
-    } else if (target.kind === "newTab") {
-        targetName = t("browser.path.newTab");
-    } else if (target.kind === "port") {
-        targetName = (
-            <>
-                <span className="font-mono">:{target.port}</span>
-                {target.name && <> {target.name}</>}
-            </>
-        );
-    } else {
-        targetName = <span className="font-mono text-xs">{target.text}</span>;
-    }
-    if (target && queued > 0) targetSub = t("browser.path.queued", { count: queued });
+    let page: React.ReactNode;
+    if (!target) page = t("browser.path.targetIdle");
+    else if (target.kind === "newTab") page = t("browser.path.newTab");
+    else if (target.kind === "port") page = <><span className="font-mono">:{target.port}</span>{target.name && <> {target.name}</>}</>;
+    else page = <span className="font-mono">{target.text}</span>;
 
     return (
-        <div className={cn("@container", className)}>
-            <ol aria-label={t("browser.path.aria")} className="flex flex-col @xl:flex-row @xl:items-start">
-                <Node icon={Globe} name={targetName} sub={targetSub} />
-                <Link state="waiting" label={target?.kind === "url" ? null : "localhost"} />
-                <Node icon={Cpu} name={t("browser.path.device")} sub={username} />
-                <Link state={proxy} marker={<Marker n={1} state={proxy} />} label={t("browser.ports.pathVia", { username })} />
-                <Node icon={AppWindow} name="Chromium" sub={t("browser.path.chromium")} marker={<Marker n={2} state={browser} />} tone={browser} />
-                <Link state={stream} marker={<Marker n={3} state={stream} />} label={t("browser.path.view")} />
-                <Node icon={MonitorPlay} name={t("browser.path.tab")} tone={stream === "done" ? "done" : undefined} />
+        <div className={cn("@container space-y-3", className)}>
+            <ol aria-label={t("browser.path.aria")} className="grid grid-cols-3">
+                {STATIONS.map(({ id, icon: Icon, sub }, i) => {
+                    const s = state(id);
+                    // 站與站之間的線：前一站做完就是綠的。/ The line between stations: green once the station before is done.
+                    const before = i > 0 && state(STATIONS[i - 1].id) === "done";
+                    const after = s === "done";
+                    return (
+                        <li key={id} className="relative flex min-w-0 flex-col items-center gap-1.5 text-center">
+                            <Marker n={i + 1} state={s} />
+                            <span className="relative flex w-full justify-center">
+                                {/* 左右兩半條線對齊圖示的中線。/ Two half-lines on the icon's centre line. */}
+                                {i > 0 && <span className={cn("absolute left-0 right-1/2 top-1/2 h-0.5 -translate-y-1/2", before ? "bg-success" : "bg-border")} aria-hidden />}
+                                {i < STATIONS.length - 1 && <span className={cn("absolute left-1/2 right-0 top-1/2 h-0.5 -translate-y-1/2", after ? "bg-success" : "bg-border")} aria-hidden />}
+                                <span
+                                    className={cn(
+                                        "relative grid size-10 place-items-center rounded-md border bg-card text-muted-foreground",
+                                        s === "active" ? "border-warning/60 text-warning" : s === "done" ? "border-success/60 text-success" : s === "failed" ? "border-destructive/60 text-destructive" : "border-border",
+                                    )}
+                                >
+                                    <Icon size={20} aria-hidden />
+                                </span>
+                            </span>
+                            <span className="max-w-full break-words px-1 text-xs leading-snug text-balance text-foreground @sm:text-sm">{t(`browser.step.${id}` as TranslationKey, { username })}</span>
+                            <span className="max-w-full break-words px-1 text-xs leading-snug text-muted-foreground">{t(sub, { username })}</span>
+                        </li>
+                    );
+                })}
             </ol>
+            <p className="text-center text-xs text-muted-foreground">
+                <span>{t("browser.path.opens")}</span>{" "}
+                <span className="text-foreground">{page}</span>
+                {target && queued > 0 && <span> · {t("browser.path.queued", { count: queued })}</span>}
+            </p>
         </div>
     );
 }
