@@ -1921,6 +1921,8 @@ export const en = {
     "browser.step.proxy": "Open a proxy through the device",
     "browser.step.browser": "Start Chromium",
     "browser.step.stream": "Show the picture here",
+    "browser.zoom.notice": "The page is zoomed in, so touches move the page instead of the remote browser.",
+    "browser.zoom.reset": "Reset zoom",
     "browser.path.aria": "How the browser connects",
     "browser.path.targetIdle": "A new tab, or a port below",
     "browser.path.opens": "Opens",

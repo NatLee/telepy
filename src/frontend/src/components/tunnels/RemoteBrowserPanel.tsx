@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X, ZoomIn } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { ProgressSteps } from "@/components/flow/ProgressSteps";
 import { BrowserStartPath } from "@/components/tunnels/BrowserStartPath";
 import { DevicePorts } from "@/components/tunnels/DevicePorts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDevicePorts } from "@/hooks/useDevicePorts";
+import { useVisualZoom } from "@/hooks/useVisualZoom";
+import { isZoomed, resetPageZoom, zoomBarStyle } from "@/lib/pageZoom";
 import { afterStart, browserLine, browserSteps, BROWSER_STEPS, startTarget, type BrowserStepEvent } from "@/lib/browserStart";
 import { portName } from "@/lib/devicePorts";
 import { serviceName } from "@/lib/lanConnect";
@@ -449,6 +453,13 @@ export function RemoteBrowserPanel({
 
     const active = phase === "connected";
     const busy = phase !== "idle";
+    // 手機兩指放大：遠端畫面把每個觸控都拿去操作遠端，放大到畫面塞滿螢幕就縮不回來。所以放大時遠端畫面暫時不收觸控
+    // （交給瀏覽器縮回、捲動），頂端一條原本大小的提示列附「還原縮放」。
+    // Pinch zoom on phones: the remote screen takes every touch for the remote side, so a page zoomed until the screen
+    // fills the display could never zoom back. While zoomed the screen ignores touches (the browser gets them back to
+    // zoom out and pan), and a normal-sized bar on top offers "Reset zoom".
+    const zoom = useVisualZoom(busy);
+    const zoomed = busy && isZoomed(zoom?.scale);
 
     // 裝置自己在聽的 port：停著時列在開始畫面，開著時在標題列的「Port」。dock 裡（bare）不列，網路頁自己有。
     // The device's own ports: on the start screen while stopped, behind the header's "Ports" while running. Not in the
@@ -613,7 +624,7 @@ export function RemoteBrowserPanel({
                 Loading spinner overlays it until the RFB 'connect' event fires. */}
             {busy && (
                 <div className="flex-1 min-h-0 relative bg-black">
-                    <div ref={screenRef} className="absolute inset-0">
+                    <div ref={screenRef} className={cn("absolute inset-0", zoomed && "pointer-events-none [&_*]:pointer-events-none")} data-zoomed={zoomed || undefined}>
                         {/* IME/行動鍵盤輸入用的隱形 textarea(對齊 kasm vnc.html 的 #noVNC_keyboardinput):
                             要可聚焦(不能 display:none),擺在畫面中段讓 IME 候選窗出現在內容附近。 */}
                         <textarea
@@ -636,6 +647,14 @@ export function RemoteBrowserPanel({
                         </div>
                     )}
                 </div>
+            )}
+            {zoomed && zoom && typeof document !== "undefined" && createPortal(
+                <div role="status" style={zoomBarStyle(zoom)} className="fixed z-[100] flex items-center gap-2 border-b border-warning/40 bg-card px-3 py-2 text-sm text-foreground shadow-dialog">
+                    <ZoomIn size={16} className="shrink-0 text-warning" aria-hidden />
+                    <span className="min-w-0 flex-1">{t("browser.zoom.notice")}</span>
+                    <Button size="sm" className="h-8 shrink-0" onClick={() => resetPageZoom()}>{t("browser.zoom.reset")}</Button>
+                </div>,
+                document.body,
             )}
         </div>
     );
