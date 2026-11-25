@@ -470,7 +470,10 @@ Everything above is also on the **Command Sheet** page of the web interface, fil
 
 ![A CLI topic on the command sheet: its path, the commands and what they print](images/en/sheet-topic.png)
 
-- **Tasks** (port forwarding, hopping to another machine, copying files): fill in the blanks and the command follows.
+- **Tasks** (port forwarding, hopping to another machine, copying files): fill in the blanks and the command follows. Point at any part of the command to read what it does; the blanks it uses light up, and a blank you are editing lights its part of the command. Under it is what a run looks like, with your own numbers. A command that prints nothing when it works (`ssh -N`) says so.
+
+![A task on the command sheet: the command explained part by part, and what a run looks like](images/en/sheet-task.png)
+
 - **More with the telepy CLI**: one page per topic. It draws where such a command goes, then lists each example with its command and, where there is something to see, a sample of what it prints. The samples come from real runs; the names in them are examples.
 - **telepy or ssh?** compares the tools that overlap: `forward`, `ssh`, `proxy` and `vpn` for ports and networks, `cp`, `scp`, `rsync` and `sftp` for files, `ssh`, `exec` and `run` for commands. It shows what each can do, what each needs, and which one covers another.
 

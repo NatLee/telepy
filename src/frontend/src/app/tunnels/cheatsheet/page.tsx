@@ -53,7 +53,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { TunnelScene } from "@/components/cheatsheet/TunnelScene";
 import { sceneFor } from "@/components/cheatsheet/sceneSpec";
-import { AnnotatedCommand, CommandBar, InlineCommand, MiniCommand } from "@/components/cheatsheet/CommandView";
+import { InlineCommand, MiniCommand } from "@/components/cheatsheet/CommandView";
+import { CommandExplainer, TaskRun } from "@/components/cheatsheet/CommandExplainer";
+import { fieldSegments, segmentFields, taskOutput } from "@/lib/taskOutput";
 import { SetupGuide } from "@/components/cheatsheet/SetupGuide";
 import { ReadinessPath } from "@/components/cheatsheet/ReadinessPath";
 import { SHEET_CATALOGUE, SheetResults, SheetSearchBox, type WayFilter } from "@/components/cheatsheet/SheetSearch";
@@ -126,7 +128,7 @@ function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
 }
 
 /** 句子裡的填空格。/ A fill-in blank inside the sentence. */
-function Blank({ field, value, onChange }: { field: FieldDef; value: string; onChange: (v: string) => void }) {
+function Blank({ field, value, onChange, lit = false, onFocusChange }: { field: FieldDef; value: string; onChange: (v: string) => void; lit?: boolean; onFocusChange?: (focused: boolean) => void }) {
     const { t } = useI18n();
     const trimmed = value.trim();
     const invalid = trimmed !== "" && ((field.kind === "port" && !isValidPort(trimmed)) || (field.key === "lanHost" && !isValidHost(trimmed)));
@@ -135,6 +137,8 @@ function Blank({ field, value, onChange }: { field: FieldDef; value: string; onC
         <input
             value={value}
             onChange={(e) => onChange(e.target.value)}
+            onFocus={() => onFocusChange?.(true)}
+            onBlur={() => onFocusChange?.(false)}
             aria-label={t(field.label)}
             title={t(field.label)}
             aria-invalid={invalid || undefined}
@@ -145,7 +149,9 @@ function Blank({ field, value, onChange }: { field: FieldDef; value: string; onC
             className={cn(
                 "mx-0.5 inline-block h-7 rounded-md border border-dashed px-1.5 text-center align-middle font-mono text-sm font-semibold shadow-xs transition-colors",
                 "focus:border-solid focus:outline-none focus:ring-2 focus:ring-ring/30",
-                invalid ? "border-destructive bg-destructive/5 text-destructive" : "border-primary/50 bg-background text-primary hover:border-primary"
+                invalid ? "border-destructive bg-destructive/5 text-destructive" : "border-primary/50 bg-background text-primary hover:border-primary",
+                // 指令裡指到的那一段用到這一格。/ The part of the command being pointed at uses this blank.
+                lit && "border-solid border-primary ring-2 ring-primary/40"
             )}
         />
     );
@@ -221,6 +227,9 @@ function CheatsheetInner() {
         setWayFilter("all");
     };
     const headId = useId();
+    // 指令解說指到哪一段、填空句正在編輯哪一格（兩邊互相點亮）。/ The part the explainer points at and the blank being edited (each lights the other).
+    const [activeSeg, setActiveSeg] = useState<number | null>(null);
+    const [editing, setEditing] = useState<string | null>(null);
 
     const def = RECIPE_BY_ID[recipe];
     const params = paramsById[recipe];
@@ -262,13 +271,17 @@ function CheatsheetInner() {
         );
     }
 
+    // 指令解說與填空句的連動：指令裡指到哪一段 → 亮它用到的空格；正在編輯哪一格 → 亮指令裡有它的那幾段。
+    // The explainer and the sentence, linked: the part pointed at lights the blanks it uses; the blank being edited lights the parts it is in.
+    const litFields = activeSeg !== null && segments[activeSeg] ? segmentFields(segments[activeSeg], def.fields, resolved) : [];
+    const litSegments = editing ? fieldSegments(editing, segments, def.fields, resolved) : [];
     const telepyWay = mode === "telepy";
     // 句子與圖裡的裝置名：telepy 用通道名，ssh 用 ~/.ssh/config 的別名。/ The device name: the tunnel for telepy, the Host alias for ssh.
     const alias = telepyWay ? target.tunnel : target.alias;
     const needsSetup = checklist.current !== null;
     const code = (s: string) => <code className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[0.9em] text-foreground ring-1 ring-border">{s}</code>;
     const field = (key: string) => def.fields.find((f) => f.key === key)!;
-    const blank = (key: string) => <Blank field={field(key)} value={params[key] ?? ""} onChange={(v) => setParam(key, v)} />;
+    const blank = (key: string) => <Blank field={field(key)} value={params[key] ?? ""} onChange={(v) => setParam(key, v)} lit={litFields.includes(key)} onFocusChange={(f) => setEditing((cur) => (f ? key : cur === key ? null : cur))} />;
     const device = (
         <span className="mx-0.5 inline-flex h-7 items-center gap-1 rounded-md bg-primary/10 px-2 align-middle text-sm font-semibold text-primary">
             <Cpu size={14} aria-hidden />{alias}
@@ -621,7 +634,8 @@ function CheatsheetInner() {
                 )}
             </div>
             <div className="space-y-2">
-                <CommandBar segments={segments} />
+                <CommandExplainer key={`${recipe}:${mode}`} segments={segments} lit={litSegments} onActive={setActiveSeg} />
+                <TaskRun command={segmentsToString(segments)} output={taskOutput(recipe, resolved, target.tunnel, mode, options)} />
                 {otherSegments ? (
                     <div className="grid gap-1.5 pt-1">
                         <span className="text-xs text-muted-foreground">{t(telepyWay ? "sheet.compare.ssh" : "sheet.compare.telepy")}</span>
@@ -703,12 +717,6 @@ function CheatsheetInner() {
                                 <TunnelScene nodes={scene.nodes} links={scene.links} file={scene.file} caption={caption} />
                             </Disclosure>
                         )}
-                        <Disclosure icon={Info} title={t("sheet.more.explain")}>
-                            <div className="space-y-2">
-                                <AnnotatedCommand segments={segments} />
-                                <p className="text-xs text-muted-foreground">{t("sheet.more.explainHint")}</p>
-                            </div>
-                        </Disclosure>
                         {/* telepy 自己處理這些（等到接通、保持連線）；ssh 的跑法才有。/ telepy handles these itself; only the ssh ways have them. */}
                         {def.forwarding && !telepyWay && (
                             <Disclosure icon={SlidersHorizontal} title={t("sheet.more.options")}>

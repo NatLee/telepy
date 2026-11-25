@@ -33,7 +33,7 @@ function useCopy(text: string) {
     return { copied, copy };
 }
 
-function CopyButton({ text, big = false, onCopy }: { text: string; big?: boolean; onCopy?: () => void }) {
+export function CopyButton({ text, big = false, onCopy }: { text: string; big?: boolean; onCopy?: () => void }) {
     const { t } = useI18n();
     const { copied, copy } = useCopy(text);
     return (
@@ -67,7 +67,7 @@ function CopyButton({ text, big = false, onCopy }: { text: string; big?: boolean
  * phone). The one-line quick-reference rows (InlineCommand) still stay on one line and scroll sideways.
  */
 /** 逗號後面可以斷行（`-J a,b` 的跳板鏈先在逗號斷，不在數字中間斷）。/ A break opportunity after each comma (jump chains break there first). */
-function Breakable({ text }: { text: string }) {
+export function Breakable({ text }: { text: string }) {
     const parts = text.split(/(?<=,)/);
     return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
 }
@@ -129,7 +129,7 @@ export function InlineCommand({ segments }: { segments: Segment[] }) {
     );
 }
 
-const PART_COLORS = [
+export const PART_COLORS = [
     { text: "text-(--code-cmd)", bar: "bg-(--code-cmd)" },
     { text: "text-(--code-flag)", bar: "bg-(--code-flag)" },
     { text: "text-(--code-string)", bar: "bg-(--code-string)" },

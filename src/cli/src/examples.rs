@@ -185,7 +185,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Forwards the port through the device to localhost and opens it; the host can also be its label from telepy lan ls. Ctrl+C stops it.",
         lines: &["telepy forward <tunnel>@<account> 192.168.1.20:8080 --open"],
         needs: &["tunnels:read", "ssh-key"],
-        output: &[],
+        output: &["http://localhost:8080/", "Forwarding http://localhost:8080/ → 192.168.1.20:8080 behind office-pi. Press Ctrl+C to stop."],
     },
     Example {
         id: "forward",
@@ -194,7 +194,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "The device's port 80 shows up as http://localhost:8080 on your computer.",
         lines: &["telepy forward <tunnel>@<account> localhost:80 --local 8080"],
         needs: &["tunnels:read", "ssh-key"],
-        output: &[],
+        output: &["http://localhost:8080/", "Forwarding http://localhost:8080/ → localhost:80 behind office-pi. Press Ctrl+C to stop."],
     },
     Example {
         id: "forwardLan",
@@ -203,7 +203,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Its page at https://localhost:8443. The device opens the connection, so only the device has to reach 192.168.1.1.",
         lines: &["telepy forward <tunnel>@<account> 192.168.1.1:443 --local 8443"],
         needs: &["tunnels:read", "ssh-key"],
-        output: &[],
+        output: &["https://localhost:8443/", "Forwarding https://localhost:8443/ → 192.168.1.1:443 behind office-pi. Press Ctrl+C to stop."],
     },
     Example {
         id: "vpn",
@@ -293,7 +293,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "Then connect the RustDesk app to 127.0.0.1. Direct IP access must be on in RustDesk on the device.",
         lines: &["telepy forward <tunnel>@<account> localhost:21118 --local 21118"],
         needs: &["tunnels:read", "ssh-key"],
-        output: &[],
+        output: &["localhost:21118", "Forwarding localhost:21118 → localhost:21118 behind office-pi. Press Ctrl+C to stop."],
     },
     // ---------------------------------------------------------------- many devices
     Example {
@@ -385,7 +385,7 @@ pub const EXAMPLES: &[Example] = &[
         note: "rsync's own options as usual; only what changed travels. rsync has to be installed on the device too.",
         lines: &["telepy rsync -avz --progress ./project <tunnel>@<account>:~/"],
         needs: &["tunnels:read", "ssh-key"],
-        output: &[],
+        output: &["Transfer starting: 4 files", "project/", "project/index.html", "              6 100%  210.05KB/s   00:00:00 (xfer#1, to-check=1/4)", "project/css/", "project/css/site.css", "              7 100%  201.92KB/s   00:00:00 (xfer#2, to-check=3/4)", "", "sent 317 bytes  received 76 bytes  187142 bytes/sec", "total size is 13  speedup is 0.03"],
     },
     Example {
         id: "sftp",
