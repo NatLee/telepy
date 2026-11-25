@@ -49,3 +49,20 @@ export function browserLine(view: StepView<BrowserStepId> & { event?: BrowserSte
     if (view.state === "done") return { key: `browser.step.${view.id}Done` as TranslationKey };
     return { key: `browser.step.${view.id}Plan` as TranslationKey };
 }
+
+/**
+ * 路徑圖最左邊那格：這次要開的網頁。沒有網址 = 新分頁；裝置自己的 port（`localhost:<port>`）= 「:port」加上清單裡的名稱；
+ * 其他（區網主機的網頁）= 去掉 scheme 的網址。
+ * The path diagram's first node: the page this start opens. No URL = a new tab; one of the device's own ports
+ * (`localhost:<port>`) = ":port" plus its name from the list; anything else (a LAN host's page) = the URL without its scheme.
+ */
+export function startTarget(url: string | null, nameOf: (port: number) => string | null): { kind: "newTab" } | { kind: "port"; port: number; name: string | null } | { kind: "url"; text: string } {
+    if (!url) return { kind: "newTab" };
+    let u: URL;
+    try { u = new URL(url); } catch { return { kind: "url", text: url }; }
+    const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+        if (u.pathname === "/" && !u.search) return { kind: "port", port, name: nameOf(port) };
+    }
+    return { kind: "url", text: url.replace(/^https?:\/\//, "").replace(/\/$/, "") };
+}

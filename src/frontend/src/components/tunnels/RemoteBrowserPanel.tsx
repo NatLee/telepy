@@ -3,10 +3,13 @@ import { Button } from "@/components/ui/button";
 import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { ProgressSteps } from "@/components/flow/ProgressSteps";
+import { BrowserStartPath } from "@/components/tunnels/BrowserStartPath";
 import { DevicePorts } from "@/components/tunnels/DevicePorts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDevicePorts } from "@/hooks/useDevicePorts";
-import { afterStart, browserLine, browserSteps, BROWSER_STEPS, type BrowserStepEvent } from "@/lib/browserStart";
+import { afterStart, browserLine, browserSteps, BROWSER_STEPS, startTarget, type BrowserStepEvent } from "@/lib/browserStart";
+import { portName } from "@/lib/devicePorts";
+import { serviceName } from "@/lib/lanConnect";
 import type { RunPhase } from "@/lib/progressSteps";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
@@ -119,6 +122,9 @@ export function RemoteBrowserPanel({
     const phaseRef = useRef<RemoteBrowserPhase>("idle");
     // 開著時要求的分頁：連上以後才開。/ Tabs asked for while starting, opened once connected.
     const queuedTabsRef = useRef<string[]>([]);
+    // 路徑圖上這次要開的網頁與排隊的分頁數（畫面用；真正的值在上面兩個 ref）。/ What the path diagram shows: this start's page and the queue length.
+    const [startedUrl, setStartedUrl] = useState<string | null>(null);
+    const [queuedCount, setQueuedCount] = useState(0);
     const seenOpenRef = useRef<number>(openRequest?.n ?? 0);
     const [imeEnabled, setImeEnabled] = useState(true);   // 中文輸入預設開啟
     // 開起來的三步（後端報前兩步，第三步這裡自己知道）與這次開始的 id。/ The three start steps and this start's id.
@@ -236,6 +242,7 @@ export function RemoteBrowserPanel({
 
     const startSession = useCallback(async () => {
         setError(null);
+        setStartedUrl(nextUrlRef.current);
         setPhase("connecting");
         setEvents([]);
         const progressId = `rb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -321,6 +328,7 @@ export function RemoteBrowserPanel({
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
         queuedTabsRef.current = [];
+        setQueuedCount(0);
         cleanup(true);
     }, [cleanup]);
 
@@ -353,7 +361,10 @@ export function RemoteBrowserPanel({
         if (!openRequest || openRequest.n === seenOpenRef.current) return;
         seenOpenRef.current = openRequest.n;
         if (phaseRef.current === "connected") void openTab(openRequest.url);
-        else if (phaseRef.current === "connecting") queuedTabsRef.current.push(openRequest.url);
+        else if (phaseRef.current === "connecting") {
+            queuedTabsRef.current.push(openRequest.url);
+            setQueuedCount(queuedTabsRef.current.length);
+        }
         else {
             nextUrlRef.current = openRequest.url;
             void startSession();
@@ -364,6 +375,7 @@ export function RemoteBrowserPanel({
     useEffect(() => {
         if (phase !== "connected") return;
         const queued = queuedTabsRef.current.splice(0);
+        setQueuedCount(0);
         for (const url of queued) void openTab(url);
     }, [phase, openTab]);
 
@@ -446,8 +458,10 @@ export function RemoteBrowserPanel({
     const openPort = useCallback((url: string) => {
         setPortsOpen(false);
         if (phaseRef.current === "connected") void openTab(url);
-        else if (phaseRef.current === "connecting") queuedTabsRef.current.push(url);
-        else {
+        else if (phaseRef.current === "connecting") {
+            queuedTabsRef.current.push(url);
+            setQueuedCount(queuedTabsRef.current.length);
+        } else {
             nextUrlRef.current = url;
             void startSession();
         }
@@ -464,22 +478,27 @@ export function RemoteBrowserPanel({
         />
     );
 
-    // 還沒開始：三步畫成一條直線（細節在滑過提示），把位置留給兩種開始方式；失敗後才換回完整清單，看停在哪一步。
-    // Before the start: the three steps as one straight path (details on hover), leaving room for the two ways to start;
-    // after a failure the full list comes back to show where it stopped.
-    const plan = (
-        <div className="@container">
-            <ol aria-label={t("browser.step.title")} className="flex flex-col gap-2 @md:flex-row @md:items-center @md:gap-3">
-                {browserSteps([], "idle").map((v, i, all) => (
-                    <li key={v.id} className="flex items-center gap-2 @md:min-w-0 @md:flex-1" title={t(browserLine(v).key, { username, ...browserLine(v).vars })}>
-                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs text-muted-foreground tabular-nums">{i + 1}</span>
-                        <span className="text-sm text-foreground @md:shrink-0">{t(`browser.step.${v.id}` as TranslationKey, { username })}</span>
-                        {i < all.length - 1 && <span className="hidden h-px min-w-4 flex-1 bg-border @md:block" aria-hidden="true" />}
-                    </li>
-                ))}
-            </ol>
-        </div>
+    // 路徑圖：開始畫面上全灰（說明），開始後同一張圖在啟動卡片裡跟著步驟亮起，最左邊是這次要開的網頁。失敗時留在開始畫面、停在那一步。
+    // The path diagram: grey on the start screen (the explanation); after Start the same diagram lights up in the starting
+    // card, with this start's page on the left. After a failure it stays on the start screen, stopped on that step.
+    const nameOfPort = (port: number) => {
+        const p = ports.data?.ports.find((x) => x.port === port);
+        return p ? portName(p, serviceName) : serviceName(port);
+    };
+    const path = (
+        <BrowserStartPath
+            username={username}
+            steps={browserSteps(run === "idle" ? [] : events, run)}
+            target={run === "idle" ? null : startTarget(startedUrl, nameOfPort)}
+            queued={queuedCount}
+        />
     );
+    // 「直接開始」永遠是新分頁；失敗後步驟下面的「再試一次」= 同一個網頁再來一次。
+    // "Start right away" is always a new tab; "Try again" under the failed steps retries the same page.
+    const startDirect = () => {
+        nextUrlRef.current = null;
+        void startSession();
+    };
 
     return (
         <div className="flex flex-col h-full w-full bg-card overflow-hidden relative shadow-xl">
@@ -513,11 +532,16 @@ export function RemoteBrowserPanel({
                     </Button>
                 )}
                 {/* 停著時開始按鈕在下面的「直接開始」，標題列不再放一顆。/ While stopped, Start sits in "Start right away" below, not here too. */}
-                {busy && (
+                {/* 啟動中 = 取消（還沒有畫面可停），開好後 = 停止。/ Starting = Cancel (nothing to stop yet), running = Stop. */}
+                {busy && (active ? (
                     <Button variant="destructive" size="sm" onClick={stopSession} className="h-8 gap-1">
                         <MonitorX size={14} /> {t("browser.stopSession")}
                     </Button>
-                )}
+                ) : (
+                    <Button variant="outline" size="sm" onClick={stopSession} className="h-8 gap-1">
+                        <X size={14} /> {t("common.cancel")}
+                    </Button>
+                ))}
             </div>}
 
             {error && (
@@ -547,7 +571,15 @@ export function RemoteBrowserPanel({
                                 <p className="text-sm text-muted-foreground">{t("browser.idleBody", { username })}</p>
                             </div>
                         )}
-                        {error ? stepList : plan}
+                        {path}
+                        {error && (
+                            <>
+                                {stepList}
+                                <div className="text-center">
+                                    <Button variant="outline" onClick={() => void startSession()}>{t("browser.tryAgain")}</Button>
+                                </div>
+                            </>
+                        )}
                         {/* 兩種開始方式，二選一：直接開始（新分頁），或點裝置上的一個 port。dock 裡（bare）只有第一種。
                             Two ways to start, either one: right away (a new tab), or by clicking a port on the device. The dock (bare) has only the first. */}
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-background/60 px-3 py-3">
@@ -556,8 +588,8 @@ export function RemoteBrowserPanel({
                                 <h4 className="text-sm font-medium text-foreground">{t("browser.start.directTitle")}</h4>
                                 <p className="text-xs text-muted-foreground">{t("browser.start.directBody")}</p>
                             </div>
-                            <Button onClick={startSession} className="gap-1">
-                                <MonitorPlay size={14} /> {error ? t("browser.tryAgain") : t("browser.startBrowser")}
+                            <Button onClick={startDirect} className="gap-1">
+                                <MonitorPlay size={14} /> {t("browser.startBrowser")}
                             </Button>
                         </div>
                         {!bare && (
@@ -593,8 +625,9 @@ export function RemoteBrowserPanel({
                     </div>
                     {!active && (
                         <div className="absolute inset-0 overflow-auto bg-black/80 p-4">
-                            <div className="mx-auto mt-[8vh] max-w-md space-y-3 rounded-xl border border-border bg-card p-4 shadow-dialog" role="status">
+                            <div className="mx-auto mt-[6vh] max-w-2xl space-y-4 rounded-xl border border-border bg-card p-4 shadow-dialog" role="status">
                                 <p className="text-sm text-foreground">{t("browser.starting")}</p>
+                                {path}
                                 {stepList}
                             </div>
                         </div>
