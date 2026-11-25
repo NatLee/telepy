@@ -41,6 +41,7 @@ interface RustExample {
     note: string;
     lines: string[];
     needs: string[];
+    output: string[];
 }
 
 function parse(src: string): { topics: RustTopic[]; examples: RustExample[] } {
@@ -54,6 +55,7 @@ function parse(src: string): { topics: RustTopic[]; examples: RustExample[] } {
         note: str(b, "note"),
         lines: list(b, "lines"),
         needs: list(b, "needs"),
+        output: list(b, "output"),
     }));
     return { topics, examples };
 }
@@ -72,10 +74,10 @@ function generate(topics: RustTopic[], examples: RustExample[]): string {
         ...topics.map((t) => `    { id: ${q(t.id)}, intro: ${t.intro !== ""} },`),
         "] as const satisfies readonly { id: CliTopicId; intro: boolean }[];",
         "",
-        "/** 範例：`cli.ex.<id>` / `cli.ex.<id>Note` 是標題與說明。/ Examples; `cli.ex.<id>` / `cli.ex.<id>Note` are the title and note. */",
+        "/** 範例：`cli.ex.<id>` / `cli.ex.<id>Note` 是標題與說明；`output` = 終端機印出來的樣子（`$ ` 開頭的是指令）。/ Examples; `cli.ex.<id>` / `cli.ex.<id>Note` are the title and note; `output` = what the terminal prints (`$ ` lines are commands). */",
         "export const CLI_EXAMPLES = [",
-        ...examples.map((e) => `    { id: ${q(e.id)}, topic: ${q(e.topic)}, lines: [${e.lines.map(q).join(", ")}], needs: [${e.needs.map(q).join(", ")}] },`),
-        "] as const satisfies readonly { id: string; topic: CliTopicId; lines: readonly string[]; needs: readonly string[] }[];",
+        ...examples.map((e) => `    { id: ${q(e.id)}, topic: ${q(e.topic)}, lines: [${e.lines.map(q).join(", ")}], needs: [${e.needs.map(q).join(", ")}], output: [${e.output.map(q).join(", ")}] },`),
+        "] as const satisfies readonly { id: string; topic: CliTopicId; lines: readonly string[]; needs: readonly string[]; output: readonly string[] }[];",
         "",
     ];
     return out.join("\n");
@@ -104,6 +106,6 @@ test("en.ts says exactly what the CLI says", () => {
 });
 
 test("example ids never take the page's own cli.ex keys", () => {
-    const own = ["title", "description", "topic", "for", "offlineOption", "placeholder", "ciActions"];
+    const own = ["title", "description", "topic", "for", "offlineOption", "placeholder", "ciActions", "output", "outputHint", "outputMore", "outputLess"];
     for (const e of examples) assert.ok(!own.includes(e.id), `${e.id} is one of the page's own keys`);
 });

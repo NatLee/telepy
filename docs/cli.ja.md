@@ -326,6 +326,8 @@ telepy cp box/admin@nas:/srv/backup/db.tgz .   # デバイスの奥のマシン
 
 `cp` は Telepy の API を通して SFTP でコピーし、`ssh:files` スコープが必要です。デバイスの奥のマシンには、スラッシュの後にそのマシンを書きます：`<tunnel>[@account]/[login@]<host>:<path>`。ホストは `lan ls` に出るラベル・アドレス・id のどれでも構いません。デバイスの sshd が中継を開き、Telepy は自分の鍵でそのマシンにログインします。パスワードを使うには `TELEPY_LAN_PASSWORD` を設定します（一度だけ使い、保存しません）。どちらのマシンにも何もインストールしません。`scp` は OpenSSH を使う方法で、個人用 SSH 鍵が必要です。
 
+デバイス側がフォルダー、またはフォルダーへのリンク（Mac の `/tmp` など）のときは、ファイルは元の名前のままその中に置かれます。
+
 ダウンロードはそのままディスクに書き込みます（デバイス上のフォルダーは 1 つの zip になります）。アップロードは 8 MiB ずつ送るので、Telepy の前にあるプロキシがリクエストサイズを制限していても（Cloudflare は 100 MB）大きなファイルを送れ、途切れた部分だけ送り直します。
 
 ### セッション、録画、スニペット
@@ -462,6 +464,20 @@ telepy browse close "$ID"
 - すべての操作が AI アクティビティログに残ります。入力したテキストは、`--show` を付けない限り長さだけが記録されます。
 - 本人確認（ステップアップ）を求めるトンネルは、これを拒否します。
 
+### Web のコマンド早見表
+
+ここまでの内容は Web の**コマンド早見表**ページにもあります。自分のトンネルとアカウントが入った状態なので、そのままコピーして実行できます。
+
+![コマンド早見表の CLI トピック：経路、コマンド、実行結果](images/ja/sheet-topic.png)
+
+- **タスク**（ポートフォワーディング、別のマシンへの接続、ファイルのコピー）：空欄を埋めると、コマンドがそれに合わせて変わります。
+- **telepy CLI でさらにできること**：トピックごとに 1 ページ。その種類のコマンドがどこを通るかを図で示し、続けて例ごとにコマンドを並べます。見るものがある例には出力例が付きます。出力例は実際に実行したもので、中の名前はサンプルです。
+- **telepy と ssh、どちら？** は役割の重なるツールを並べて比べます。ポートとネットワークの `forward`・`ssh`・`proxy`・`vpn`、ファイル転送の `cp`・`scp`・`rsync`・`sftp`、コマンド実行の `ssh`・`exec`・`run`。それぞれにできること、必要なもの、どれがどれを含むかが分かります。
+
+![ポートとネットワーク：forward・ssh・proxy・vpn にできること](images/ja/sheet-tools.png)
+
+同じ出力例はターミナルでも見られます：`telepy examples everyday --output`。
+
 ## コマンド一覧
 
 どのコマンドも `--server <url>` と `--token tpt_…`（または `TELEPY_URL` と `TELEPY_TOKEN`）を受け付け、その実行で使うサーバーと認証情報を選べます。色は `--color auto|always|never` で選べます。
@@ -515,7 +531,7 @@ telepy browse close "$ID"
 | `telepy doctor` | サーバー、サインイン、スコープ、有効期限、手元の ssh ツール、バージョンを確認 | — |
 | `telepy update` | telepy を更新。`--check`、`--to <version>` | — |
 | `telepy completions [shell]` | bash、zsh、fish、powershell、elvish の Tab 補完スクリプトを出力。シェルを省くと、どのファイルにどの行を追加するかを表示 | — |
-| `telepy examples [topic\|command]` | トピック別（`forward`、`network`…）またはコマンド別（`lan wake`）の例。省くとトピックの一覧。サインイン不要 | — |
+| `telepy examples [topic\|command]` | トピック別（`forward`、`network`…）またはコマンド別（`lan wake`）の例。省くとトピックの一覧。`--output` を付けると各例の出力例も表示します。サインイン不要 | — |
 
 </details>
 

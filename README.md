@@ -27,7 +27,7 @@ No port forwarding, no VPN, no public IP. The device only needs to reach the int
 - **Remote desktop.** RDP and VNC through the tunnel, or RustDesk right in the tab, with sound, clipboard control and multiple monitors.
 - **Remote browser.** A real Chromium whose traffic leaves from the device, for admin pages that only open on that network and still look like 2009.
 - **The network behind it.** Scan the device's LAN without installing anything, then open a terminal or desktop on any host there.
-- **From your own laptop.** One command adds every device to your SSH config, and the command sheet hands you ready-made `ssh -L`, `scp` and `rsync` lines.
+- **From your own laptop.** One command adds every device to your SSH config, and the command sheet hands you ready-made `ssh -L`, `scp` and `rsync` lines, shows what the `telepy` commands print, and draws how the overlapping ones (`forward`, `proxy`, `vpn`…) differ.
 
 ### Teams and control
 

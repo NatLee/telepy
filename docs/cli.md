@@ -326,6 +326,8 @@ telepy cp box/admin@nas:/srv/backup/db.tgz .   # a machine behind the device
 
 `cp` copies over SFTP through Telepy's API and needs the `ssh:files` scope. To reach a machine behind the device, write it after a slash: `<tunnel>[@account]/[login@]<host>:<path>`, the host by its label, address or id from `lan ls`. The device's sshd opens the hop and Telepy logs in there with its key; set `TELEPY_LAN_PASSWORD` to log in with a password instead (it's used once and never stored). Nothing is installed on either machine. `scp` is the OpenSSH way and needs your personal SSH key.
 
+When the device side is a folder, or a link to one (`/tmp` on a Mac), the file goes into it under its own name.
+
 A download is written straight to disk (a device folder arrives as one zip). An upload goes in 8 MiB parts, so a proxy in front of Telepy with a request size limit (Cloudflare allows 100 MB) doesn't stop a big file, and a part that drops is sent again.
 
 ### Sessions, recordings and snippets
@@ -462,6 +464,20 @@ telepy browse close "$ID"
 - Every action is in the AI activity log. Typed text is logged by its length only, unless you add `--show`.
 - Tunnels that ask for step-up refuse them.
 
+### The command sheet on the web
+
+Everything above is also on the **Command Sheet** page of the web interface, filled in with your own tunnel and account, so a line can be copied as it is.
+
+![A CLI topic on the command sheet: its path, the commands and what they print](images/en/sheet-topic.png)
+
+- **Tasks** (port forwarding, hopping to another machine, copying files): fill in the blanks and the command follows.
+- **More with the telepy CLI**: one page per topic. It draws where such a command goes, then lists each example with its command and, where there is something to see, a sample of what it prints. The samples come from real runs; the names in them are examples.
+- **telepy or ssh?** compares the tools that overlap: `forward`, `ssh`, `proxy` and `vpn` for ports and networks, `cp`, `scp`, `rsync` and `sftp` for files, `ssh`, `exec` and `run` for commands. It shows what each can do, what each needs, and which one covers another.
+
+![Ports and networks: what forward, ssh, proxy and vpn can each do](images/en/sheet-tools.png)
+
+The same samples are in the terminal: `telepy examples everyday --output`.
+
 ## Command reference
 
 Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL` and `TELEPY_TOKEN`) to choose the server and the credential for that run, and `--color auto|always|never`.
@@ -515,7 +531,7 @@ Every command also takes `--server <url>` and `--token tpt_…` (or `TELEPY_URL`
 | `telepy doctor` | Check the server, the sign-in, scopes, expiry, the local ssh tools and the version | — |
 | `telepy update` | Update telepy; `--check`, `--to <version>` | — |
 | `telepy completions [shell]` | Print the Tab completion script for bash, zsh, fish, powershell or elvish; without a shell, which line to add where | — |
-| `telepy examples [topic\|command]` | Examples by topic (`forward`, `network`…) or by command (`lan wake`); without one, the topics. No sign-in needed | — |
+| `telepy examples [topic\|command]` | Examples by topic (`forward`, `network`…) or by command (`lan wake`); without one, the topics. `--output` adds what each example prints. No sign-in needed | — |
 
 </details>
 

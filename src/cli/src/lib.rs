@@ -265,6 +265,9 @@ pub struct CarrierArgs {
 pub struct ExamplesArgs {
     /// A topic (everyday, forward, many, files, sessions, toolbox, network, ci, setup) or a command (lan, lan wake…)
     pub query: Vec<String>,
+    /// Also print what each example prints (sample output from a real run)
+    #[arg(long, short = 'o')]
+    pub output: bool,
 }
 
 #[derive(Args, Debug)]
@@ -953,7 +956,7 @@ fn run_command(cli: Cli) -> Result<i32> {
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
         Cmd::Completions(a) => complete::run(a.shell.as_deref()),
         // 範例在 binary 裡，不用登入。/ The examples are built in: no sign-in needed.
-        Cmd::Examples(a) => examples::run(&a.query, &command()),
+        Cmd::Examples(a) => examples::run(&a.query, a.output, &command()),
         // ssh 執行的 ProxyCommand：不用登入（網址與退回的設定都在參數裡）。/ Run by ssh; everything it needs is in its arguments.
         Cmd::Carrier(a) => carrier::run(&a.url, a.tcp.as_deref(), prefs::Fallback::parse(&a.fallback).unwrap_or_default(), &a.server),
         // sudo 跑的特權部分：不用登入（root 沒有你的登入資料，需要的都在參數裡）。/ Run under sudo: everything it needs is in its arguments.
@@ -2930,7 +2933,10 @@ fn upload_in_parts(api: &Api, id: i64, user: &str, src: &Path, path: &str, name:
     let target = match stat.status().as_u16() {
         200 => {
             let v = api::read(stat)?;
-            if v["type"] == "directory" {
+            // 指向資料夾的連結也是資料夾（macOS 的 /tmp、/var、/etc 都是連結）：以前把它當成檔名去蓋，伺服器回「is a folder」。
+            // A link to a folder is a folder too (macOS's /tmp, /var and /etc are links); it used to be taken for the
+            // file's name, and the server answered "is a folder".
+            if v["type"] == "directory" || (v["type"] == "symlink" && v["target_type"] == "directory") {
                 format!("{}/{name}", v["path"].as_str().unwrap_or(remote).trim_end_matches('/'))
             } else {
                 remote.to_string()

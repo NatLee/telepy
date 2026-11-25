@@ -33,6 +33,8 @@ export interface CatalogueEntry {
     lines: string[];
     /** 只給搜尋看的字：ssh 的旗標、同義詞。/ Search-only words: ssh flags, synonyms. */
     keywords: string[];
+    /** 範例輸出（`examples.rs` 的 `output`；任務沒有）。/ The sample output (`output` in examples.rs; tasks have none). */
+    output: readonly string[];
 }
 
 /** 這些 telepy 子指令只是包住系統的 OpenSSH / rsync：單純的 ssh 也做得到。/ These telepy subcommands wrap the system's OpenSSH / rsync, so plain ssh can do the same. */
@@ -70,6 +72,7 @@ export function catalogue(): CatalogueEntry[] {
             alsoKeys: ex.flatMap((e) => [`cli.ex.${e.id}`, `cli.ex.${e.id}Note`] as TranslationKey[]),
             lines: ex.flatMap((e) => [...e.lines]),
             keywords: [r.flag, ...TASK_KEYWORDS[r.id]],
+            output: [],
         };
     });
     const examples: CatalogueEntry[] = CLI_EXAMPLES.filter((e) => !folded.has(e.id)).map((e) => {
@@ -85,6 +88,7 @@ export function catalogue(): CatalogueEntry[] {
             alsoKeys: [],
             lines: [...e.lines],
             keywords: [],
+            output: e.output,
         };
     });
     return [...tasks, ...examples];

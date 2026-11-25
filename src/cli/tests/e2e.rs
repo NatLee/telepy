@@ -95,6 +95,21 @@ async fn cli_against_the_server() {
     assert_eq!(telepy(h, &["ls", "--label", "env=prod", "--json"]).await.stdout.trim(), "[]");
     let table = telepy(h, &["ls"]).await.stdout;
     assert!(table.starts_with("NAME") && table.contains("box"), "{table}");
+    // 範例輸出不是另外寫的一份：它的表頭 / 欄位名就是 CLI 現在印的。/ The sample outputs are not a second copy: their header / field names are what the CLI prints now.
+    let sample = |id: &str| telepy_cli::examples::EXAMPLES.iter().find(|e| e.id == id).unwrap().output;
+    assert_eq!(table.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), sample("ls")[0].split_whitespace().collect::<Vec<_>>(), "ls header");
+    let status = telepy(h, &["status", "box"]).await.stdout;
+    let keys = |text: &[&str]| text.iter().filter_map(|l| l.split("  ").next()).map(|k| k.trim().to_string()).collect::<std::collections::BTreeSet<_>>();
+    let real = keys(&status.lines().collect::<Vec<_>>());
+    let shown = keys(sample("status"));
+    for k in &real {
+        assert!(shown.contains(k), "status prints `{k}`, the sample doesn't show it: {status}");
+    }
+    for k in shown.difference(&real) {
+        assert!(["seen from", "lan", "hostname"].contains(&k.as_str()), "the sample shows `{k}`, status didn't print it: {status}");
+    }
+    let tokens = telepy(h, &["api", "tokens"]).await.stdout;
+    assert_eq!(tokens.lines().next().unwrap().split_whitespace().collect::<Vec<_>>(), sample("apiTokens")[0].split_whitespace().collect::<Vec<_>>(), "api tokens header");
     assert!(!table.contains('\x1b'), "a pipe never gets colour: {table:?}");
     let coloured = telepy(h, &["--color", "always", "ls"]).await.stdout;
     assert!(coloured.starts_with("\x1b[1mNAME\x1b[0m") && coloured.contains("box"), "{coloured:?}");
@@ -131,6 +146,19 @@ async fn cli_against_the_server() {
         let o = telepy(h, &["cp", "box@pi:up.txt", back.to_str().unwrap()]).await;
         assert_eq!(o.code, 0, "cp down: {}", o.stderr);
         assert_eq!(std::fs::read_to_string(&back).unwrap(), "from the laptop\n");
+        // 目的地是「指向資料夾的連結」（macOS 的 /tmp 就是）：檔案放進那個資料夾，不是去蓋那個連結。
+        // The destination is a link to a folder (macOS's /tmp is one): the file goes into the folder, not over the link.
+        #[cfg(unix)]
+        {
+            let pi = m.home.join("pi");
+            let base = if pi.is_dir() { pi } else { m.home.clone() };
+            std::fs::create_dir_all(base.join("real-dir")).unwrap();
+            std::os::unix::fs::symlink(base.join("real-dir"), base.join("inbox")).unwrap();
+            let o = telepy(h, &["cp", h.join("up.txt").to_str().unwrap(), "box@pi:inbox/"]).await;
+            assert_eq!(o.code, 0, "cp into a linked folder: {}", o.stderr);
+            assert_eq!(std::fs::read_to_string(base.join("real-dir").join("up.txt")).unwrap(), "from the laptop\n");
+            assert!(base.join("inbox").is_symlink(), "the link is still a link");
+        }
     }
 
     // ssh：系統的 OpenSSH 經 gateway（產生的 config、釘住的 gateway host key）。/ ssh through the gateway with the generated config.
