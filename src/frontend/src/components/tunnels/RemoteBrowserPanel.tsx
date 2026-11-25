@@ -10,6 +10,7 @@ import { DevicePorts } from "@/components/tunnels/DevicePorts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDevicePorts } from "@/hooks/useDevicePorts";
 import { useVisualZoom } from "@/hooks/useVisualZoom";
+import { useKeyboardSteady } from "@/hooks/useKeyboardSteady";
 import { isZoomed } from "@/lib/pageZoom";
 import { ZoomOverlay } from "@/components/tunnels/ZoomOverlay";
 import { afterStart, browserLine, browserSteps, BROWSER_STEPS, startTarget, type BrowserStepEvent } from "@/lib/browserStart";
@@ -138,6 +139,8 @@ export function RemoteBrowserPanel({
     const imeEnabledRef = useRef(true);
 
     const screenRef = useRef<HTMLDivElement | null>(null);
+    // 遠端畫面外框（鍵盤彈起時畫面在裡面往上推）。/ The remote screen's frame (the picture moves up inside it while a keyboard is up).
+    const frameRef = useRef<HTMLDivElement | null>(null);
     const keyboardInputRef = useRef<HTMLTextAreaElement | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const rfbRef = useRef<KasmRFB | null>(null);
@@ -460,6 +463,8 @@ export function RemoteBrowserPanel({
     // fills the display could never zoom back. While zoomed the screen ignores touches (the browser gets them back to
     // zoom out and pan), and a normal-sized bar on top offers "Reset zoom".
     const zoom = useVisualZoom(busy);
+    // 手機鍵盤彈起：遠端大小不變，畫面往上推到剛剛點的地方在鍵盤上方。/ Phone keyboard up: the remote keeps its size, the picture moves up so the tapped spot stays above the keyboard.
+    useKeyboardSteady(active, frameRef, screenRef, rfbRef);
     const zoomed = busy && isZoomed(zoom?.scale);
 
     // 裝置自己在聽的 port：停著時列在開始畫面，開著時在標題列的「Port」。dock 裡（bare）不列，網路頁自己有。
@@ -624,7 +629,7 @@ export function RemoteBrowserPanel({
             {/* VNC viewport area — mounted while connecting/connected so the client has a sized div.
                 Loading spinner overlays it until the RFB 'connect' event fires. */}
             {busy && (
-                <div className="flex-1 min-h-0 relative bg-black">
+                <div ref={frameRef} className="flex-1 min-h-0 relative overflow-hidden bg-black">
                     <div ref={screenRef} className={cn("absolute inset-0", zoomed && "pointer-events-none [&_*]:pointer-events-none")} data-zoomed={zoomed || undefined}>
                         {/* IME/行動鍵盤輸入用的隱形 textarea(對齊 kasm vnc.html 的 #noVNC_keyboardinput):
                             要可聚焦(不能 display:none),擺在畫面中段讓 IME 候選窗出現在內容附近。 */}
