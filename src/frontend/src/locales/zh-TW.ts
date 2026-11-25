@@ -1900,7 +1900,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "browser.connectionClosed": "連線已關閉",
     "browser.unknownError": "發生未知錯誤",
     "browser.deviceOffline": "目標裝置離線 — 反向通道尚未連上。請在裝置上執行連線腳本（見「腳本」）後再試一次。",
-    "browser.imeTitle": "切換 IME 模式以輸入中日韓文字（中文輸入）",
+    "browser.imeTitle": "IME 開著（預設）才能輸入中日韓文字。關掉時數字鍵改成以按鍵送出，給 Ctrl＋數字這類快捷鍵用。",
     "browser.stopSession": "停止工作階段",
     "browser.startBrowser": "啟動瀏覽器",
     "browser.idleTitle": "透過 SSH 的代理瀏覽器",

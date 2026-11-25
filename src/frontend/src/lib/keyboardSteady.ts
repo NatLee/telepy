@@ -33,3 +33,20 @@ export function keyboardShift({ tapY, frozenHeight, visibleHeight, margin = 56 }
     if (tapY === null) return max;
     return Math.round(Math.min(max, Math.max(0, tapY - (visibleHeight - margin))));
 }
+
+/**
+ * 觸控裝置上什麼時候才請遠端改大小：寬度變了（轉向、分割畫面）或高度變了超過四分之一。網址列伸縮、鍵盤這類小變化都不算，
+ * 畫面照比例縮放就好——每次改大小遠端瀏覽器都要重排、整個畫面重送，看起來就是閃一下。
+ * When a touch device should ask the remote to resize: the width changed (rotation, split screen) or the height changed by
+ * more than a quarter. Small changes such as the address bar or a keyboard don't count; the picture just scales — every
+ * resize makes the remote browser re-lay out and resend the whole screen, which shows as a flicker.
+ */
+/** 比這矮的畫面不要求遠端改大小（手機橫放時標題列幾乎吃掉整個高度），照比例縮放就好。/ Below this height the remote isn't resized (a phone on its side leaves almost no height under the headers); the picture just scales. */
+export const MIN_REMOTE_HEIGHT_PX = 160;
+
+export function needsRemoteResize(asked: { width: number; height: number } | null, now: { width: number; height: number }): boolean {
+    if (now.height < MIN_REMOTE_HEIGHT_PX) return false;
+    if (!asked) return true;
+    if (Math.abs(asked.width - now.width) > 1) return true;
+    return asked.height > 0 && Math.abs(asked.height - now.height) / asked.height > 0.25;
+}

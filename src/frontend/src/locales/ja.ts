@@ -1900,7 +1900,7 @@ export const ja: Record<TranslationKey, string> = {
     "browser.connectionClosed": "接続が閉じられました",
     "browser.unknownError": "不明なエラーが発生しました",
     "browser.deviceOffline": "ターゲットデバイスがオフラインです — リバーストンネルが接続されていません。デバイス側で接続スクリプト（「スクリプト」参照）を実行してから、もう一度お試しください。",
-    "browser.imeTitle": "CJK 入力用の IME モードを切り替え（中文輸入）",
+    "browser.imeTitle": "IME オン（既定）で日本語・中国語・韓国語を入力できます。オフにすると数字キーをキーとして送り、Ctrl＋数字のショートカットに使えます。",
     "browser.stopSession": "セッションを停止",
     "browser.startBrowser": "ブラウザを起動",
     "browser.idleTitle": "SSH 経由のプロキシブラウザ",

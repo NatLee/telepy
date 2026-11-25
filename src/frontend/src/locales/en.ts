@@ -1910,7 +1910,7 @@ export const en = {
     "browser.connectionClosed": "Connection closed",
     "browser.unknownError": "An unknown error occurred",
     "browser.deviceOffline": "The target device is offline — its reverse tunnel is not connected. Run the connection script on the device (see Scripts) and try again.",
-    "browser.imeTitle": "Toggle IME mode for CJK input (中文輸入)",
+    "browser.imeTitle": "IME on (default): type Chinese, Japanese or Korean. Off sends the number keys as keys, for Ctrl+number shortcuts.",
     "browser.stopSession": "Stop Session",
     "browser.startBrowser": "Start Browser",
     "browser.idleTitle": "Proxy Browser via SSH",

@@ -8,6 +8,7 @@ import { ProgressSteps } from "@/components/flow/ProgressSteps";
 import { BrowserStartPath } from "@/components/tunnels/BrowserStartPath";
 import { DevicePorts } from "@/components/tunnels/DevicePorts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Modal } from "@/components/ui/Modal";
 import { useDevicePorts } from "@/hooks/useDevicePorts";
 import { useVisualZoom } from "@/hooks/useVisualZoom";
 import { useKeyboardSteady } from "@/hooks/useKeyboardSteady";
@@ -494,6 +495,7 @@ export function RemoteBrowserPanel({
     // Touch devices: tapping the screen no longer brings up the keyboard (the header's keyboard button does), and the
     // default is pointer mode (the finger works like a touchpad).
     const coarse = useMediaQuery("(pointer: coarse)") === true;
+    const narrow = useMediaQuery("(max-width: 639.98px)") === true;
     const [touchMode, setTouchMode] = useStoredChoice<TouchMode>(TOUCH_MODE_KEY, ["pointer", "touch"], "pointer");
     const pointerMode = active && coarse && touchMode === "pointer";
     useTouchpad(pointerMode, screenRef, rfbRef, pointYRef);
@@ -580,16 +582,30 @@ export function RemoteBrowserPanel({
                 </span>
                 {busy && <span className="flex-1 sm:hidden" />}
                 {busy && (
-                    <Popover open={portsOpen} onOpenChange={setPortsOpen}>
-                        <PopoverTrigger asChild>
-                            <Button variant="outline" size="sm" className="h-8 gap-1" title={t("browser.ports.buttonTitle")}>
-                                <Network size={14} /> <span className="max-sm:sr-only">{t("browser.ports.button")}</span>
+                    // 手機：底部面板（背景鎖住、不會滑到整頁，整頁一捲動網址列伸縮就會讓遠端跟著改大小而閃爍）；寬螢幕：彈出框。
+                    // Phones: a bottom sheet (the page behind is locked, so a swipe can't scroll it — scrolling the page
+                    // moves the address bar, resizes the panel and made the remote flicker); wide screens: a popover.
+                    narrow ? (
+                        <>
+                            <Button variant="outline" size="sm" className="h-8 gap-1" title={t("browser.ports.buttonTitle")} aria-label={t("browser.ports.button")} onClick={() => setPortsOpen(true)}>
+                                <Network size={14} />
                             </Button>
-                        </PopoverTrigger>
-                        <PopoverContent align="end" className="w-[min(40rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
-                            <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running className="border-0 bg-transparent" />
-                        </PopoverContent>
-                    </Popover>
+                            <Modal isOpen={portsOpen} onClose={() => setPortsOpen(false)} title={t("browser.ports.title")} icon={<Network />} size="2xl" bodyClassName="p-0">
+                                <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running headless className="border-0 bg-transparent" />
+                            </Modal>
+                        </>
+                    ) : (
+                        <Popover open={portsOpen} onOpenChange={setPortsOpen}>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" size="sm" className="h-8 gap-1" title={t("browser.ports.buttonTitle")}>
+                                    <Network size={14} /> <span className="max-sm:sr-only">{t("browser.ports.button")}</span>
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent align="end" className="w-[min(40rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
+                                <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running className="border-0 bg-transparent" />
+                            </PopoverContent>
+                        </Popover>
+                    )
                 )}
                 {active && coarse && (
                     <>
@@ -618,7 +634,9 @@ export function RemoteBrowserPanel({
                         </Button>
                     </>
                 )}
-                {active && (
+                {/* IME：手機上一定要開（螢幕鍵盤只能從隱形輸入框打字），所以只有桌機給開關。
+                    IME: always on for touch devices (the on-screen keyboard can only type through the hidden input), so only desktops get the switch. */}
+                {active && !coarse && (
                     <Button
                         variant={imeEnabled ? "default" : "outline"}
                         size="sm"
