@@ -582,15 +582,18 @@ export function RemoteBrowserPanel({
                         )}
                         {/* 兩種開始方式，二選一：直接開始（新分頁），或點裝置上的一個 port。dock 裡（bare）只有第一種。
                             Two ways to start, either one: right away (a new tab), or by clicking a port on the device. The dock (bare) has only the first. */}
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-background/60 px-3 py-3">
-                            <MonitorPlay size={18} className="shrink-0 text-muted-foreground" aria-hidden />
-                            <div className="min-w-0 flex-1 basis-48">
+                        {/* 窄的時候（手機直式）置中堆疊，寬的時候一列。/ Centred and stacked when narrow (a phone held upright), one row when wide. */}
+                        <div className="@container rounded-lg border border-border bg-background/60 px-3 py-3">
+                        <div className="flex flex-col items-center gap-2 text-center @md:flex-row @md:gap-3 @md:text-left">
+                            <MonitorPlay size={18} className="hidden shrink-0 text-muted-foreground @md:block" aria-hidden />
+                            <div className="min-w-0 @md:flex-1">
                                 <h4 className="text-sm font-medium text-foreground">{t("browser.start.directTitle")}</h4>
                                 <p className="text-xs text-muted-foreground">{t("browser.start.directBody")}</p>
                             </div>
                             <Button onClick={startDirect} className="gap-1">
                                 <MonitorPlay size={14} /> {t("browser.startBrowser")}
                             </Button>
+                        </div>
                         </div>
                         {!bare && (
                             <>
@@ -624,8 +627,8 @@ export function RemoteBrowserPanel({
                         />
                     </div>
                     {!active && (
-                        <div className="absolute inset-0 overflow-auto bg-black/80 p-4">
-                            <div className="mx-auto mt-[6vh] max-w-2xl space-y-4 rounded-xl border border-border bg-card p-4 shadow-dialog" role="status">
+                        <div className="absolute inset-0 overflow-auto bg-black/80 p-2 sm:p-4">
+                            <div className="mx-auto mt-[6vh] max-w-2xl space-y-4 rounded-xl border border-border bg-card p-3 shadow-dialog sm:p-4" role="status">
                                 <p className="text-sm text-foreground">{t("browser.starting")}</p>
                                 {path}
                                 {stepList}
