@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Languages, Network, X, Keyboard, MousePointer2, Hand } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { ProgressSteps } from "@/components/flow/ProgressSteps";
@@ -11,6 +11,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useDevicePorts } from "@/hooks/useDevicePorts";
 import { useVisualZoom } from "@/hooks/useVisualZoom";
 import { useKeyboardSteady } from "@/hooks/useKeyboardSteady";
+import { useTouchpad } from "@/hooks/useTouchpad";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { TOUCH_MODE_KEY, type TouchMode } from "@/lib/touchpad";
 import { isZoomed } from "@/lib/pageZoom";
 import { ZoomOverlay } from "@/components/tunnels/ZoomOverlay";
 import { afterStart, browserLine, browserSteps, BROWSER_STEPS, startTarget, type BrowserStepEvent } from "@/lib/browserStart";
@@ -50,6 +54,24 @@ export interface RemoteBrowserPanelProps {
     ime?: boolean;
 }
 
+/**
+ * 切換 IME 並把焦點交回遠端畫面。noVNC 設定 IME 時自己會 focus；觸控裝置上焦點就是鍵盤，所以只有切換前就在打字時才留著，
+ * 否則收回——鍵盤不會自己跳出來，要打字用標題列的鍵盤按鈕。
+ * Switch the IME and give focus back to the remote screen. noVNC focuses by itself when the IME is set; on touch devices
+ * focus means the keyboard, so it stays only if you were already typing, else it is taken back — the keyboard never
+ * pops up on its own; the header's keyboard button is the way to type.
+ */
+function setIme(rfb: { keyboard: { enableIME: boolean }; focus(): void; blur(): void }, on: boolean) {
+    const coarse = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+    const typing = document.activeElement?.tagName === "TEXTAREA";
+    rfb.keyboard.enableIME = on;
+    try {
+        if (!coarse) rfb.focus();
+        else if (typing) rfb.focus();
+        else rfb.blur();
+    } catch { /* noop */ }
+}
+
 const CLOSE_MESSAGES: Record<number, TranslationKey> = {
     4403: "browser.permissionDenied",
     4404: "browser.sessionNotFound",
@@ -70,7 +92,9 @@ type KasmRFB = {
     translateShortcuts: boolean;
     mouseButtonMapper: unknown;
     readonly keyboard: { enableIME: boolean } & Record<string, unknown>;
+    focusOnClick: boolean;
     focus(): void;
+    blur(): void;
     disconnect(): void;
     addEventListener(type: string, listener: (e: Event) => void): void;
 };
@@ -141,6 +165,8 @@ export function RemoteBrowserPanel({
     const screenRef = useRef<HTMLDivElement | null>(null);
     // 遠端畫面外框（鍵盤彈起時畫面在裡面往上推）。/ The remote screen's frame (the picture moves up inside it while a keyboard is up).
     const frameRef = useRef<HTMLDivElement | null>(null);
+    // 指標模式游標的位置（鍵盤彈起時用）。/ Pointer mode's cursor spot (used when a keyboard comes up).
+    const pointYRef = useRef<number | null>(null);
     const keyboardInputRef = useRef<HTMLTextAreaElement | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const rfbRef = useRef<KasmRFB | null>(null);
@@ -234,7 +260,9 @@ export function RemoteBrowserPanel({
             setEvents((prev) => [...prev, { step: "stream", state: "done", at: Date.now() }]);
             setPhase("connected");
             onActiveChange?.(true);
-            try { rfb.focus(); } catch { /* noop */ }
+            // 觸控裝置：設定 IME 時 noVNC 會自己 focus（= 跳出鍵盤），連上時收回來；要打字按鍵盤按鈕。
+            // Touch devices: setting the IME makes noVNC focus (= the keyboard pops up); take it back on connect.
+            if (window.matchMedia("(pointer: coarse)").matches) { try { rfb.blur(); } catch { /* noop */ } } else { try { rfb.focus(); } catch { /* noop */ } }
         });
         rfb.addEventListener("disconnect", () => cleanup(true));
         rfbRef.current = rfb;
@@ -394,8 +422,7 @@ export function RemoteBrowserPanel({
         setImeEnabled(ime);
         const rfb = rfbRef.current;
         if (rfb) {
-            rfb.keyboard.enableIME = ime;
-            try { rfb.focus(); } catch { /* noop */ }
+            setIme(rfb, ime);
         }
     }, [ime]);
 
@@ -419,8 +446,7 @@ export function RemoteBrowserPanel({
             imeEnabledRef.current = next;
             const rfb = rfbRef.current;
             if (rfb) {
-                rfb.keyboard.enableIME = next;
-                try { rfb.focus(); } catch { /* noop */ }
+                setIme(rfb, next);
             }
             return next;
         });
@@ -464,7 +490,34 @@ export function RemoteBrowserPanel({
     // zoom out and pan), and a normal-sized bar on top offers "Reset zoom".
     const zoom = useVisualZoom(busy);
     // 手機鍵盤彈起：遠端大小不變，畫面往上推到剛剛點的地方在鍵盤上方。/ Phone keyboard up: the remote keeps its size, the picture moves up so the tapped spot stays above the keyboard.
-    useKeyboardSteady(active, frameRef, screenRef, rfbRef);
+    // 觸控裝置：點畫面不再叫出鍵盤（標題列的鍵盤按鈕才會），預設「指標模式」（手指當觸控板）。
+    // Touch devices: tapping the screen no longer brings up the keyboard (the header's keyboard button does), and the
+    // default is pointer mode (the finger works like a touchpad).
+    const coarse = useMediaQuery("(pointer: coarse)") === true;
+    const [touchMode, setTouchMode] = useStoredChoice<TouchMode>(TOUCH_MODE_KEY, ["pointer", "touch"], "pointer");
+    const pointerMode = active && coarse && touchMode === "pointer";
+    useTouchpad(pointerMode, screenRef, rfbRef, pointYRef);
+    useKeyboardSteady(active, frameRef, screenRef, rfbRef, pointerMode ? pointYRef : undefined);
+    useEffect(() => {
+        const rfb = rfbRef.current;
+        if (rfb && active) rfb.focusOnClick = !coarse;
+    }, [active, coarse]);
+    // 鍵盤開著沒（隱形輸入框有沒有焦點）。/ Whether the keyboard is up (the hidden input has focus).
+    const [kbShown, setKbShown] = useState(false);
+    useEffect(() => {
+        const el = keyboardInputRef.current;
+        if (!el || !active) return;
+        const on = () => setKbShown(true), off = () => setKbShown(false);
+        el.addEventListener("focus", on);
+        el.addEventListener("blur", off);
+        return () => { el.removeEventListener("focus", on); el.removeEventListener("blur", off); };
+    }, [active]);
+    const toggleKeyboard = () => {
+        const rfb = rfbRef.current;
+        if (!rfb) return;
+        if (kbShown) rfb.blur(); else rfb.focus();
+    };
+    const [hintSeen, setHintSeen] = useStoredChoice<"0" | "1">("telepy.browserPointerHintSeen", ["0", "1"], "0");
     const zoomed = busy && isZoomed(zoom?.scale);
 
     // 裝置自己在聽的 port：停著時列在開始畫面，開著時在標題列的「Port」。dock 裡（bare）不列，網路頁自己有。
@@ -522,20 +575,48 @@ export function RemoteBrowserPanel({
             {/* Header */}
             {!bare && <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
                 <MonitorPlay size={18} className="text-muted-foreground shrink-0" />
-                <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">
+                <span className={cn("flex-1 text-sm font-semibold tracking-tight text-foreground", busy && "max-sm:sr-only")}>
                     {t("browser.title")}
                 </span>
+                {busy && <span className="flex-1 sm:hidden" />}
                 {busy && (
                     <Popover open={portsOpen} onOpenChange={setPortsOpen}>
                         <PopoverTrigger asChild>
                             <Button variant="outline" size="sm" className="h-8 gap-1" title={t("browser.ports.buttonTitle")}>
-                                <Network size={14} /> {t("browser.ports.button")}
+                                <Network size={14} /> <span className="max-sm:sr-only">{t("browser.ports.button")}</span>
                             </Button>
                         </PopoverTrigger>
                         <PopoverContent align="end" className="w-[min(40rem,calc(100vw-2rem))] max-h-[70vh] overflow-auto p-0">
                             <DevicePorts serverId={serverId} username={username} data={ports.data} loading={ports.loading} error={ports.error} onRefresh={ports.refresh} onOpen={openPort} running className="border-0 bg-transparent" />
                         </PopoverContent>
                     </Popover>
+                )}
+                {active && coarse && (
+                    <>
+                        <Button
+                            variant={kbShown ? "default" : "outline"}
+                            size="icon"
+                            className="h-8 w-8"
+                            // 按鈕上按下時別把焦點搶走，鍵盤才不會先收再開。/ Keep focus where it is on press, so the keyboard doesn't close and reopen.
+                            onPointerDown={(e) => e.preventDefault()}
+                            onClick={toggleKeyboard}
+                            aria-label={t(kbShown ? "browser.keyboard.hide" : "browser.keyboard.show")}
+                            title={t(kbShown ? "browser.keyboard.hide" : "browser.keyboard.show")}
+                            aria-pressed={kbShown}
+                        >
+                            <Keyboard size={16} />
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setTouchMode(touchMode === "pointer" ? "touch" : "pointer")}
+                            aria-label={t(touchMode === "pointer" ? "browser.touch.pointerOn" : "browser.touch.touchOn")}
+                            title={t(touchMode === "pointer" ? "browser.touch.pointerOn" : "browser.touch.touchOn")}
+                        >
+                            {touchMode === "pointer" ? <MousePointer2 size={16} /> : <Hand size={16} />}
+                        </Button>
+                    </>
                 )}
                 {active && (
                     <Button
@@ -552,7 +633,7 @@ export function RemoteBrowserPanel({
                 {/* 啟動中 = 取消（還沒有畫面可停），開好後 = 停止。/ Starting = Cancel (nothing to stop yet), running = Stop. */}
                 {busy && (active ? (
                     <Button variant="destructive" size="sm" onClick={stopSession} className="h-8 gap-1">
-                        <MonitorX size={14} /> {t("browser.stopSession")}
+                        <MonitorX size={14} /> <span className="max-sm:sr-only">{t("browser.stopSession")}</span>
                     </Button>
                 ) : (
                     <Button variant="outline" size="sm" onClick={stopSession} className="h-8 gap-1">
@@ -560,6 +641,17 @@ export function RemoteBrowserPanel({
                     </Button>
                 ))}
             </div>}
+
+            {/* 第一次用指標模式：一行說明手勢，看過就收。/ First time in pointer mode: one line of gestures, dismissed for good. */}
+            {pointerMode && hintSeen === "0" && (
+                <div role="status" className="flex items-start gap-2 border-b border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                    <MousePointer2 size={14} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+                    <span className="min-w-0 flex-1">{t("browser.touch.hint")}</span>
+                    <button type="button" onClick={() => setHintSeen("1")} aria-label={t("common.close")} className="rounded p-0.5 hover:bg-muted hover:text-foreground">
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
 
             {error && (
                 <div className="p-3 m-3 bg-destructive/10 border border-destructive/20 text-destructive text-sm rounded-md flex items-start gap-2">
