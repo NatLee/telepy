@@ -32,19 +32,33 @@ export function zoomBarStyle(v: VisualViewportBox): { left: number; top: number;
 }
 
 /**
- * 把頁面縮放還原：暫時把 viewport 的 maximum-scale 設成 1（手機瀏覽器會因此縮回 1 倍），再放回原本的設定，之後一樣能縮放。
- * Reset the page zoom: set the viewport's maximum-scale to 1 for a moment (mobile browsers zoom back to 1 for it), then
- * restore the original content, so zooming keeps working afterwards.
+ * 還原時暫用的 viewport：保留其他設定，initial-scale 與 maximum-scale 都定成 1。
+ * The viewport used for a moment while resetting: the rest kept, initial-scale and maximum-scale both 1.
  */
-export function withMaxScale(content: string): string {
-    const kept = content.split(",").map((p) => p.trim()).filter((p) => p && !/^maximum-scale\s*=/.test(p));
-    return [...kept, "maximum-scale=1"].join(", ");
+export function cappedViewport(content: string): string {
+    const kept = content.split(",").map((p) => p.trim()).filter((p) => p && !/^(maximum|initial)-scale\s*=/.test(p));
+    return [...kept, "initial-scale=1", "maximum-scale=1"].join(", ");
 }
 
-export function resetPageZoom(doc: Document = document): void {
+/**
+ * 試著把頁面縮放還原，回傳有沒有真的回到 1 倍。網頁沒有標準方法改使用者的縮放：這裡把 viewport 暫時定在 1 倍
+ * （Chrome 會照做；Safari 要把標籤重新插入才會重讀，而且常常不理），等到頁面回到 1 倍或最多 1.5 秒，再放回原本的設定，
+ * 之後一樣能縮放。回傳 false 時，畫面要請使用者自己用兩指縮小。
+ * Try to reset the page zoom and report whether it really got back to 1×. There is no standard way for a page to change
+ * the user's zoom: the viewport is pinned to 1× for a moment (Chrome follows it; Safari re-reads it only when the tag is
+ * re-inserted and often ignores it anyway), until the page is back at 1× or 1.5 s pass, then the original content comes
+ * back so zooming keeps working. On false, the page should ask the person to pinch out themselves.
+ */
+export async function resetPageZoom(doc: Document = document, win: Window = window): Promise<boolean> {
     const meta = doc.querySelector<HTMLMetaElement>('meta[name="viewport"]');
-    if (!meta) return;
+    const zoomedNow = () => isZoomed(win.visualViewport?.scale);
+    if (!meta) return !zoomedNow();
     const original = meta.content;
-    meta.content = withMaxScale(original);
-    setTimeout(() => { meta.content = original; }, 400);
+    meta.content = cappedViewport(original);
+    const parent = meta.parentNode;
+    if (parent) parent.insertBefore(meta, meta.nextSibling);
+    const start = Date.now();
+    while (zoomedNow() && Date.now() - start < 1500) await new Promise((r) => setTimeout(r, 100));
+    meta.content = original;
+    return !zoomedNow();
 }
