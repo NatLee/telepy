@@ -9,39 +9,24 @@
  * second row shows the same address marked "same as the web" (as the "SSH host" row does); an address set without the
  * proxy port open is called out.
  */
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/section";
-import { apiFetch, readJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { ProxyInfo } from "@/lib/proxy";
 import { proxyRows, proxyUrlProblem, proxyVerdict, tidyUrl, type ProxyRowState } from "@/lib/proxyUrl";
 
+/** `/api/proxy/tunnels` 的 endpoints：undefined = 讀取中，null = 讀不到。/ The endpoints of `/api/proxy/tunnels`: undefined = loading, null = unavailable. */
+export type ProxyEndpoints = ProxyInfo["endpoints"];
+
 const TONE: Record<ProxyRowState, "success" | "warning" | undefined> = { always: "success", listening: "success", notListening: "warning", sameAsWeb: undefined };
 
-export function ProxyUrlControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
+export function ProxyUrlControl({ shown, locked, onSave, endpoints }: { shown: unknown; locked: boolean; onSave: (value: string) => void; endpoints: ProxyEndpoints | null | undefined }) {
     const { t } = useI18n();
     const saved = String(shown ?? "");
     const [draft, setDraft] = useState(saved);
-    // undefined = 讀取中；null = 讀不到。/ undefined = loading; null = unavailable.
-    const [endpoints, setEndpoints] = useState<ProxyInfo["endpoints"] | null | undefined>(undefined);
-    useEffect(() => {
-        let cancelled = false;
-        void (async () => {
-            try {
-                const res = await apiFetch("/api/proxy/tunnels");
-                const body = res.ok ? ((await readJson(res)) as ProxyInfo) : null;
-                if (!cancelled) setEndpoints(body?.endpoints ?? null);
-            } catch {
-                if (!cancelled) setEndpoints(null);
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [saved]);
 
     const value = locked ? saved : draft;
     const problem = locked ? null : proxyUrlProblem(draft);
@@ -89,7 +74,7 @@ export function ProxyUrlControl({ shown, locked, onSave }: { shown: unknown; loc
                     <ul className="divide-y divide-border/70">
                         {proxyRows(saved, endpoints.websocket, listening).map((row) => (
                             <li key={row.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm">
-                                <span className="w-12 shrink-0 text-xs text-muted-foreground">{t(`proxyUrl.row.${row.id}`)}</span>
+                                <span className="min-w-12 shrink-0 whitespace-nowrap text-xs text-muted-foreground">{t(`proxyUrl.row.${row.id}`)}</span>
                                 <span className={`min-w-0 font-mono [overflow-wrap:anywhere] ${row.state === "sameAsWeb" ? "text-muted-foreground" : "text-foreground"}`}>{row.value}</span>
                                 <Chip tone={TONE[row.state]} className="whitespace-normal">{t(`proxyUrl.state.${row.state}`)}</Chip>
                                 <span className="ml-auto text-xs text-muted-foreground">{t(`proxyUrl.who.${row.id}`)}</span>
