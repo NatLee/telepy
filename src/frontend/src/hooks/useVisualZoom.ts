@@ -12,7 +12,7 @@ export function useVisualZoom(enabled: boolean): VisualViewportBox | null {
     useEffect(() => {
         const vv = typeof window !== "undefined" ? window.visualViewport : null;
         if (!enabled || !vv) return;
-        const update = () => setBox({ scale: vv.scale, offsetLeft: vv.offsetLeft, offsetTop: vv.offsetTop, width: vv.width });
+        const update = () => setBox({ scale: vv.scale, offsetLeft: vv.offsetLeft, offsetTop: vv.offsetTop, width: vv.width, height: vv.height });
         const first = requestAnimationFrame(update);
         vv.addEventListener("resize", update);
         vv.addEventListener("scroll", update);
