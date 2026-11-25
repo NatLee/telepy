@@ -1911,6 +1911,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "browser.step.proxy": "經由裝置開代理",
     "browser.step.browser": "啟動 Chromium",
     "browser.step.stream": "在這裡顯示畫面",
+    "browser.zoom.notice": "頁面已放大，觸控會移動頁面，不會操作遠端瀏覽器。",
+    "browser.zoom.reset": "還原縮放",
     "browser.path.aria": "瀏覽器怎麼連",
     "browser.path.targetIdle": "新分頁，或下面選的 port",
     "browser.path.opens": "開好後打開",

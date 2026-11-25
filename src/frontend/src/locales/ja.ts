@@ -1911,6 +1911,8 @@ export const ja: Record<TranslationKey, string> = {
     "browser.step.proxy": "デバイス経由のプロキシを開く",
     "browser.step.browser": "Chromium を起動",
     "browser.step.stream": "ここに画面を表示",
+    "browser.zoom.notice": "ページが拡大されているため、タッチはリモートブラウザーではなくページを動かします。",
+    "browser.zoom.reset": "拡大を戻す",
     "browser.path.aria": "ブラウザーの接続経路",
     "browser.path.targetIdle": "新しいタブか、下のポート",
     "browser.path.opens": "起動後に開く",

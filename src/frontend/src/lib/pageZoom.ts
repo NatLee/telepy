@@ -1,0 +1,50 @@
+/**
+ * 手機上的頁面縮放（兩指放大）。遠端畫面（VNC）會把畫面上的每個觸控都拿去操作遠端，所以頁面一旦被放大到畫面塞滿螢幕，
+ * 就再也縮不回來。這裡判斷「算不算放大了」、算出一條不管放大多少都維持原本大小的提示列放哪，以及把縮放還原。
+ * Page zoom on phones (pinch). The remote screen (VNC) takes every touch on it for the remote side, so once the page is
+ * zoomed until that screen fills the display there is no way back. This decides whether the page counts as zoomed, where
+ * a bar that keeps its normal size at any zoom goes, and how to reset the zoom.
+ */
+
+/** 比 1 大一點點才算（瀏覽器的捨入誤差不算）。/ A little over 1 counts (not the browser's rounding). */
+export const ZOOMED_FROM = 1.02;
+
+export function isZoomed(scale: number | null | undefined): boolean {
+    return typeof scale === "number" && scale >= ZOOMED_FROM;
+}
+
+export interface VisualViewportBox {
+    scale: number;
+    offsetLeft: number;
+    offsetTop: number;
+    width: number;
+}
+
+/**
+ * 貼在看得到的範圍頂端、看起來是原本大小的一條：fixed 的座標是 layout viewport 的，所以放在 visual viewport 的左上角，
+ * 寬度放大 scale 倍再整條縮小 1/scale。
+ * A bar on top of the visible area that looks its normal size: fixed coordinates are the layout viewport's, so it goes to
+ * the visual viewport's top-left corner, `scale` times as wide, then shrunk by 1/scale as a whole.
+ */
+export function zoomBarStyle(v: VisualViewportBox): { left: number; top: number; width: number; transform: string; transformOrigin: string } {
+    const s = v.scale > 0 ? v.scale : 1;
+    return { left: v.offsetLeft, top: v.offsetTop, width: v.width * s, transform: `scale(${1 / s})`, transformOrigin: "0 0" };
+}
+
+/**
+ * 把頁面縮放還原：暫時把 viewport 的 maximum-scale 設成 1（手機瀏覽器會因此縮回 1 倍），再放回原本的設定，之後一樣能縮放。
+ * Reset the page zoom: set the viewport's maximum-scale to 1 for a moment (mobile browsers zoom back to 1 for it), then
+ * restore the original content, so zooming keeps working afterwards.
+ */
+export function withMaxScale(content: string): string {
+    const kept = content.split(",").map((p) => p.trim()).filter((p) => p && !/^maximum-scale\s*=/.test(p));
+    return [...kept, "maximum-scale=1"].join(", ");
+}
+
+export function resetPageZoom(doc: Document = document): void {
+    const meta = doc.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    if (!meta) return;
+    const original = meta.content;
+    meta.content = withMaxScale(original);
+    setTimeout(() => { meta.content = original; }, 400);
+}
