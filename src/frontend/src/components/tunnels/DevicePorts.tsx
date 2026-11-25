@@ -71,10 +71,12 @@ export interface DevicePortsProps {
     onOpen: (url: string) => void;
     /** 瀏覽器已經開著：點了是開新分頁。/ The browser is running: a click opens a new tab. */
     running?: boolean;
+    /** 外框已經有標題（手機的底部面板）：不畫自己的標題列，重新整理放到說明那一行。/ The container already has a title (the phone sheet): no header row of its own, refresh moves to the intro line. */
+    headless?: boolean;
     className?: string;
 }
 
-export function DevicePorts({ serverId, username, data, loading, error, onRefresh, onOpen, running = false, className }: DevicePortsProps) {
+export function DevicePorts({ serverId, username, data, loading, error, onRefresh, onOpen, running = false, headless = false, className }: DevicePortsProps) {
     const { t } = useI18n();
     const { has } = useFeatures();
     const [query, setQuery] = useState("");
@@ -110,10 +112,12 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
 
     return (
         <section ref={sectionRef} className={cn("@container rounded-lg border border-border bg-background/60", className)} aria-label={t(running ? "browser.ports.title" : "browser.ports.titleStart")}>
-            <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+            {!headless && (
+                <header className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <h4 className="min-w-0 flex-1 text-sm font-medium text-foreground">{t(running ? "browser.ports.title" : "browser.ports.titleStart")}</h4>
                 <RefreshButton onRefresh={onRefresh} busy={loading} failed={!!error} variant="ghost" size="icon" className="h-7 w-7" iconSize={14} aria-label={t("browser.ports.refresh")} title={t("browser.ports.refresh")} />
-            </header>
+                </header>
+            )}
 
             {/* 為什麼是 localhost：瀏覽器 ─SSH─ 裝置。開始畫面上面的步驟已經畫了這條路，只在執行中的 popover 畫。
                 Why localhost: this browser ─SSH─ the device. The start screen's steps already show that path, so only the running popover draws it. */}
@@ -132,7 +136,10 @@ export function DevicePorts({ serverId, username, data, loading, error, onRefres
                     {t("browser.ports.pathDevice")}
                 </span>
             </div>}
-            <p className="px-3 pt-2 text-xs text-muted-foreground">{t(running ? "browser.ports.introTab" : "browser.ports.intro")}</p>
+            <div className="flex items-start gap-2 px-3 pt-2">
+                <p className="min-w-0 flex-1 text-xs text-muted-foreground">{t(running ? "browser.ports.introTab" : "browser.ports.intro")}</p>
+                {headless && <RefreshButton onRefresh={onRefresh} busy={loading} failed={!!error} variant="ghost" size="icon" className="h-7 w-7" iconSize={14} aria-label={t("browser.ports.refresh")} title={t("browser.ports.refresh")} />}
+            </div>
 
             <div className="p-3">
                 {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
