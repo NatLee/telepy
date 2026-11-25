@@ -142,7 +142,7 @@ Once the tunnel shows **Online**, the terminal, files, desktop and browser butto
 
 ### Going to production
 
-- Put an HTTPS proxy in front of Telepy and set the public address, either in `.env` or later under **Site settings → Server**.
+- Put an HTTPS proxy in front of Telepy and set the web address, either in `.env` or later under **Site settings → Server**.
 - Make the SSH gateway port reachable from your devices.
 - If your web name sits behind a proxy that only carries web traffic (a CDN, an HTTP load balancer, Cloudflare's orange cloud), SSH can't get through it, however politely it asks. Give SSH a name of its own under **Site settings → Server → SSH host**, or let devices use the web port.
 - **Server health** tells you whether visitors' real addresses survive the trip through your proxies.

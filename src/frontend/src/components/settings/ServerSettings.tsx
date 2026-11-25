@@ -5,7 +5,7 @@
  * 規則：.env 有設就以它為準（這裡鎖住、顯示它的值），沒設用這頁存的值，再沒有就是內建預設。分頁上方的 info 按鈕
  * 與每個鎖住的標籤打開 SettingSourceDialog，把這三層畫出來。
  * Site settings → "Server": visitor addresses (client_ip_*) and the server settings that used to live in .env only
- * (server_*), in four groups. The rule: .env wins when set (the row is locked and shows its value), else the value
+ * (server_*), in groups (the first, "Addresses", is the ServerAddresses diagram). The rule: .env wins when set (the row is locked and shows its value), else the value
  * saved here, else the built-in default. The tab's info button and every locked chip open SettingSourceDialog.
  */
 import React, { useState } from "react";
@@ -23,9 +23,7 @@ import type { TranslationKey } from "@/locales/en";
 import { ClientIpHeaderControl, ProxySourcesControl } from "./AddressOptions";
 import { SettingRow } from "./SettingRow";
 import { SettingSourceDialog } from "./SettingSourceDialog";
-import { SshHostControl } from "./SshHost";
 import { ServerAddresses } from "./ServerAddresses";
-import { ProxyUrlControl } from "./ProxyUrl";
 
 const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKey; hint: TranslationKey; anchor: string }> = {
     addresses: { icon: Signpost, title: "settingsEnv.group.addresses", hint: "settingsEnv.group.addressesHint", anchor: "addresses" },
@@ -36,7 +34,7 @@ const GROUP_META: Record<ServerGroupId, { icon: LucideIcon; title: TranslationKe
 };
 
 /** 自訂編輯器的 key（整列寬）。/ Keys with a custom, full-width editor. */
-const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from", "server_ssh_host", "server_public_url", "server_proxy_url"];
+const WIDE_KEYS = ["client_ip_hops", "client_ip_cloudflare", "client_ip_header", "server_gateway_proxy_protocol_from"];
 
 /** 代理層數：自動，或固定 0–10 層。/ Trusted proxies: automatic, or a fixed 0–10. */
 function HopsControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
@@ -151,8 +149,6 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
         client_ip_cloudflare: CloudflareControl,
         client_ip_header: ClientIpHeaderControl,
         server_gateway_proxy_protocol_from: ProxySourcesControl,
-        server_ssh_host: SshHostControl,
-        server_proxy_url: ProxyUrlControl,
     };
     const custom = (key: string) => {
         const Editor = EDITORS[key];
@@ -210,7 +206,8 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
                     return (
                         <section key={g.id} id={gm.anchor} className="scroll-mt-20 space-y-3">
                             <SectionHeading icon={<Icon />} wrapTitle title={t(gm.title)} description={t(gm.hint)} as="h2" />
-                            {g.id === "addresses" && <ServerAddresses values={settingsObj} env={env} />}
+                            {/* 位址那一組整組就是一張圖，設定收在每一條裡。/ The addresses group is one diagram; each lane holds its setting. */}
+                            {g.id === "addresses" ? <ServerAddresses settings={settings} onExplain={(k) => setExplain(k)} /> : (
                             <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
                                 <ul className="divide-y divide-border/70">
                                     {g.keys.map((key) => (
@@ -229,6 +226,7 @@ export function ServerSettingsTab({ settings }: { settings: ReturnType<typeof us
                                     ))}
                                 </ul>
                             </div>
+                            )}
                         </section>
                     );
                 })

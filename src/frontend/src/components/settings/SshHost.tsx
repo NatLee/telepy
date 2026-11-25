@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * 網站設定 → 伺服器 →「SSH 主機」：輸入框 + 即時檢查（網頁與 SSH 的名稱各解析到哪裡、有沒有走 Cloudflare 的代理）+
+ * 網站設定 → 伺服器 → 位址 →「SSH 主機」那一條打開後的內容：輸入框 + 即時檢查（網頁與 SSH 的名稱各解析到哪裡、有沒有走 Cloudflare 的代理）+
  * 結論，以及「為什麼要兩個名稱？」的說明圖：網頁與 SSH 兩條路並排，可以切換「網頁名稱走不走代理」「SSH 用自己的名稱
  * 還是網頁的」，看哪一段會斷。
  * Site settings → Server → "SSH host": the input, a live check (where the web and SSH names point, whether either is
  * on Cloudflare's proxy) with its verdict, and the "Why two names?" explainer: the web lane and the SSH lane side by
  * side, with switches for "is the web name proxied" and "does SSH use its own name", showing which part breaks.
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowRight, Cloud, Cpu, Globe, Info, Route } from "lucide-react";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ function NameRow({ label, host, lookup, proxied, from }: { label: string; host: 
     const more = lookup.addresses.length - 2;
     return (
         <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm">
-            <span className="w-10 shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className="min-w-10 shrink-0 whitespace-nowrap text-xs text-muted-foreground">{label}</span>
             <span className="min-w-0 font-mono text-foreground [overflow-wrap:anywhere]">{host}</span>
             {lookup.addresses.length > 0 && (
                 <span className="inline-flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
@@ -59,7 +59,7 @@ function NameRow({ label, host, lookup, proxied, from }: { label: string; host: 
 }
 
 /** 問一次檢查；查不到 = null。/ Ask for the check once; null when unavailable. */
-async function fetchCheck(): Promise<SshHostCheck | null> {
+export async function fetchSshHostCheck(): Promise<SshHostCheck | null> {
     try {
         const r = await apiFetch("/api/site/ssh-host");
         return r.ok ? parseSshHostCheck(await r.json()) : null;
@@ -68,29 +68,16 @@ async function fetchCheck(): Promise<SshHostCheck | null> {
     }
 }
 
-/** 「SSH 主機」的編輯器。/ The editor for "SSH host". */
-export function SshHostControl({ shown, locked, onSave }: { shown: unknown; locked: boolean; onSave: (value: string) => void }) {
+/**
+ * 「SSH 主機」的編輯器。檢查結果由上一層給（位址圖也用同一份）：undefined = 檢查中，null = 查不到。
+ * The editor for "SSH host". The check comes from the parent (the address diagram uses the same one): undefined =
+ * checking, null = unavailable.
+ */
+export function SshHostControl({ shown, locked, onSave, check, onRecheck }: { shown: unknown; locked: boolean; onSave: (value: string) => void; check: SshHostCheck | null | undefined; onRecheck: () => Promise<boolean> }) {
     const { t } = useI18n();
     const saved = String(shown ?? "");
     const [draft, setDraft] = useState(saved);
-    // undefined = 檢查中；null = 查不到（舊後端或錯誤）。/ undefined = checking; null = unavailable.
-    const [check, setCheck] = useState<SshHostCheck | null | undefined>(undefined);
     const [why, setWhy] = useState(false);
-
-    const load = useCallback(async () => {
-        const c = await fetchCheck();
-        setCheck(c);
-        return c !== null;
-    }, []);
-    useEffect(() => {
-        let cancelled = false;
-        void fetchCheck().then((c) => {
-            if (!cancelled) setCheck(c);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, []);
 
     const value = locked ? saved : draft;
     const problem = locked ? null : hostProblem(draft);
@@ -153,8 +140,6 @@ export function SshHostControl({ shown, locked, onSave }: { shown: unknown; lock
                 )}
             </div>
 
-            {check && check.verdict !== "local" && <p className="text-xs leading-relaxed text-muted-foreground">{t("sshHost.detectNote")}</p>}
-
             {/* SSH 的名稱也開得到網頁：代理裡多了一個繞過正式網址的入口。/ The SSH name serves the web too: a second way in. */}
             {check && !check.same && <WebOnSshHost host={check.ssh.host} />}
 
@@ -168,7 +153,7 @@ export function SshHostControl({ shown, locked, onSave }: { shown: unknown; lock
                 <Button type="button" size="sm" variant="outline" onClick={() => setWhy(true)}>
                     <Info size={15} /> {t("sshHost.why")}
                 </Button>
-                <RefreshButton size="sm" onRefresh={load} label={t("sshHost.recheck")} />
+                <RefreshButton size="sm" onRefresh={onRecheck} label={t("sshHost.recheck")} />
                 <span className="text-xs text-muted-foreground">{t("sshHost.installedNote")}</span>
             </div>
 
