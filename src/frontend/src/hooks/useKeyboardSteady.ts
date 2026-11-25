@@ -21,7 +21,14 @@ function editableFocused(): boolean {
     return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
 }
 
-export function useKeyboardSteady(enabled: boolean, frameRef: RefObject<HTMLElement | null>, screenRef: RefObject<HTMLElement | null>, rfbRef: RefObject<ResizableRfb | null>) {
+export function useKeyboardSteady(
+    enabled: boolean,
+    frameRef: RefObject<HTMLElement | null>,
+    screenRef: RefObject<HTMLElement | null>,
+    rfbRef: RefObject<ResizableRfb | null>,
+    /** 指標模式：用游標的位置代替手指點的位置。/ Pointer mode: the cursor's spot instead of where the finger landed. */
+    pointYRef?: RefObject<number | null>,
+) {
     useEffect(() => {
         const vv = typeof window !== "undefined" ? window.visualViewport : null;
         const frame = frameRef.current;
@@ -55,7 +62,7 @@ export function useKeyboardSteady(enabled: boolean, frameRef: RefObject<HTMLElem
                 }
                 const box = frame.getBoundingClientRect();
                 const visibleHeight = Math.max(40, Math.min(box.bottom, vv.offsetTop + vv.height) - box.top);
-                const shift = keyboardShift({ tapY, frozenHeight: frozen, visibleHeight });
+                const shift = keyboardShift({ tapY: pointYRef?.current ?? tapY, frozenHeight: frozen, visibleHeight });
                 screen.style.transform = shift ? `translateY(${-shift}px)` : "";
                 if (rfb) rfb.scaleViewport = true; // 依固定的大小重算縮放 / rescale against the frozen size
             } else {
@@ -95,5 +102,5 @@ export function useKeyboardSteady(enabled: boolean, frameRef: RefObject<HTMLElem
             screen.style.bottom = "";
             screen.style.transition = "";
         };
-    }, [enabled, frameRef, screenRef, rfbRef]);
+    }, [enabled, frameRef, screenRef, rfbRef, pointYRef]);
 }
