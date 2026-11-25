@@ -16,7 +16,7 @@ Chromium runs on Telepy's side, in a browser container. The device only lends it
 
 1. In the tunnel list, click **Browser** on a device. The terminal page opens on its browser view.
 2. Pick the login account at the top of the page. The browser goes online as that account's SSH login.
-3. Click **Start Browser** (or **Click to Initialize** in the middle of the panel).
+3. Start it one of two ways: **Start Browser** under **Start right away** opens a new tab, or pick a port under **Start from a page on this device** (below) and the browser starts on that page.
 
 Starting takes three steps, and the panel shows each one as it happens:
 
@@ -30,12 +30,12 @@ If a step fails, the list stops on it with the reason, and **Try again** starts 
 
 ### What the device itself serves
 
-You don't have to remember which port that dashboard was on, or open a shell to run `ss`. Under the start button the panel has **On this device**: the ports the device listens on right now.
+You don't have to remember which port that dashboard was on, or open a shell to run `ss`. Below **Start right away**, after an "or", the panel has **Start from a page on this device**: the ports the device listens on right now.
 
 - Telepy asks the device once, as the account you picked, with whatever it has (`ss`, `netstat`, `lsof`, PowerShell on Windows). Nothing is probed and nothing is stored.
-- Web pages come first, one tile per port. A tile says how sure Telepy is: **Web page** (a network scan saw one there), **Usually a web page** (a port that normally serves one) or **May be a web page** (anything else that isn't obviously a database or SSH).
-- Click a tile and the browser starts on `http://localhost:<port>/`. Localhost, because the browser connects from the device. That also reaches services that listen on the device's loopback only.
-- Ports that aren't web pages (SSH, PostgreSQL, Redis…) fold into one line below. The browser can't open those.
+- A column on the left sorts them by how sure Telepy is, each with a count: **Web pages** (a network scan saw one there), **Usually web pages** (ports that normally serve one), **Maybe web pages** (anything else that isn't obviously a database or SSH) and **Not web pages** (SSH, PostgreSQL, Redis…, which the browser can't open). On a narrow screen the column becomes a drop-down.
+- The list beside it has one line per port and pages at 10 (or 25, 50, 100). Once there are more than ten ports, a search box finds a port by number or name across every kind.
+- Click a line and the browser starts on `http://localhost:<port>/`. Localhost, because the browser connects from the device. That also reaches services that listen on the device's loopback only.
 - While the browser runs, the same list is behind **Ports** in the panel's header. A click there opens a new tab.
 
 Names such as "Grafana" come from the last network scan of the device (the **Network** page). A device that was never scanned still lists its ports, just without names.
