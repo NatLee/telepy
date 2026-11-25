@@ -36,3 +36,13 @@ test("each step's line", () => {
     const after = browserSteps([ev("proxy", "done"), ev("browser", "failed")], "failed");
     assert.deepEqual(after.map((v) => browserLine(v).key), ["browser.step.proxyDone", "browser.step.browserFailed", "browser.step.streamPlan"]);
 });
+
+test("the path diagram names the page this start opens", async () => {
+    const { startTarget } = await import("./browserStart.ts");
+    const names = (p: number) => (p === 3000 ? "Grafana" : null);
+    assert.deepEqual(startTarget(null, names), { kind: "newTab" });
+    assert.deepEqual(startTarget("http://localhost:3000/", names), { kind: "port", port: 3000, name: "Grafana" });
+    assert.deepEqual(startTarget("https://localhost:8443/", names), { kind: "port", port: 8443, name: null });
+    assert.deepEqual(startTarget("http://localhost:3000/admin", names), { kind: "url", text: "localhost:3000/admin" });
+    assert.deepEqual(startTarget("http://192.168.1.5:8080/", names), { kind: "url", text: "192.168.1.5:8080" });
+});
