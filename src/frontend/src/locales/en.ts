@@ -1923,6 +1923,7 @@ export const en = {
     "browser.step.stream": "Show the picture here",
     "browser.zoom.notice": "The page is zoomed in, so touches move the page instead of the remote browser.",
     "browser.zoom.reset": "Reset zoom",
+    "browser.zoom.pinchOut": "This browser won't let the page undo the zoom. Pinch out with two fingers; while zoomed, touches move the page, not the remote browser.",
     "browser.path.aria": "How the browser connects",
     "browser.path.targetIdle": "A new tab, or a port below",
     "browser.path.opens": "Opens",

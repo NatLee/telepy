@@ -1913,6 +1913,7 @@ export const ja: Record<TranslationKey, string> = {
     "browser.step.stream": "ここに画面を表示",
     "browser.zoom.notice": "ページが拡大されているため、タッチはリモートブラウザーではなくページを動かします。",
     "browser.zoom.reset": "拡大を戻す",
+    "browser.zoom.pinchOut": "このブラウザーではページから拡大を戻せません。2 本指で縮小してください。拡大中のタッチはリモートブラウザーではなくページを動かします。",
     "browser.path.aria": "ブラウザーの接続経路",
     "browser.path.targetIdle": "新しいタブか、下のポート",
     "browser.path.opens": "起動後に開く",

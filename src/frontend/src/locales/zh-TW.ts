@@ -1913,6 +1913,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "browser.step.stream": "在這裡顯示畫面",
     "browser.zoom.notice": "頁面已放大，觸控會移動頁面，不會操作遠端瀏覽器。",
     "browser.zoom.reset": "還原縮放",
+    "browser.zoom.pinchOut": "這個瀏覽器不讓網頁替你還原縮放，請用兩指縮小；放大期間觸控只會移動頁面，不會操作遠端瀏覽器。",
     "browser.path.aria": "瀏覽器怎麼連",
     "browser.path.targetIdle": "新分頁，或下面選的 port",
     "browser.path.opens": "開好後打開",

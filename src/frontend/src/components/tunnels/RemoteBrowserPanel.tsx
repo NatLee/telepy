@@ -460,6 +460,12 @@ export function RemoteBrowserPanel({
     // zoom out and pan), and a normal-sized bar on top offers "Reset zoom".
     const zoom = useVisualZoom(busy);
     const zoomed = busy && isZoomed(zoom?.scale);
+    // 「還原縮放」做不到時（瀏覽器不讓網頁改縮放）改成請使用者自己兩指縮小；縮回 1 倍後重來。
+    // When "Reset zoom" can't (the browser won't let a page change the zoom) the bar asks for a pinch instead; cleared at 1×.
+    const [zoomResetting, setZoomResetting] = useState(false);
+    const [zoomResetFailedRaw, setZoomResetFailed] = useState(false);
+    const zoomResetFailed = zoomed && zoomResetFailedRaw;
+    if (!zoomed && zoomResetFailedRaw) setZoomResetFailed(false);
 
     // 裝置自己在聽的 port：停著時列在開始畫面，開著時在標題列的「Port」。dock 裡（bare）不列，網路頁自己有。
     // The device's own ports: on the start screen while stopped, behind the header's "Ports" while running. Not in the
@@ -651,8 +657,15 @@ export function RemoteBrowserPanel({
             {zoomed && zoom && typeof document !== "undefined" && createPortal(
                 <div role="status" style={zoomBarStyle(zoom)} className="fixed z-[100] flex items-center gap-2 border-b border-warning/40 bg-card px-3 py-2 text-sm text-foreground shadow-dialog">
                     <ZoomIn size={16} className="shrink-0 text-warning" aria-hidden />
-                    <span className="min-w-0 flex-1">{t("browser.zoom.notice")}</span>
-                    <Button size="sm" className="h-8 shrink-0" onClick={() => resetPageZoom()}>{t("browser.zoom.reset")}</Button>
+                    <span className="min-w-0 flex-1">{t(zoomResetFailed ? "browser.zoom.pinchOut" : "browser.zoom.notice")}</span>
+                    {!zoomResetFailed && (
+                        <Button size="sm" className="h-8 shrink-0" disabled={zoomResetting} onClick={async () => {
+                            setZoomResetting(true);
+                            const back = await resetPageZoom();
+                            setZoomResetting(false);
+                            if (!back) setZoomResetFailed(true);
+                        }}>{t("browser.zoom.reset")}</Button>
+                    )}
                 </div>,
                 document.body,
             )}
