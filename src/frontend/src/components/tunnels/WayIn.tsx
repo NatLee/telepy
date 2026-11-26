@@ -24,10 +24,12 @@ import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { TransportVisibility, useHttps } from "@/components/tunnels/TransportVisibility";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { WAY_IN_KEY, type WayInSetup } from "@/lib/deviceInstall";
-import { NOTHING_BLOCKED, WAY_CHOICES, WAY_ROWS, WAY_WHAT, isReinstall, outcome, outcomeKey, type Blocked, type CellTone, type LaneState } from "@/lib/wayIn";
+import { NOTHING_BLOCKED, WAY_CHOICES, WAY_ROWS, WAY_WHAT, isReinstall, outcome, outcomeKey, wayPicture, type Blocked, type CellTone, type LaneState } from "@/lib/wayIn";
+import { wayInOf } from "@/lib/devicePlatforms";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
+import type { Tunnel } from "@/types/tunnel";
 
 const LANE_TONE: Record<LaneState, string> = {
     used: "text-success",
@@ -212,9 +214,10 @@ export function WayInLanes({ way, blocked = NOTHING_BLOCKED, sshPort, className 
 }
 
 /**
- * 換的對話框的三選一：每張卡是一種方式（名稱、列表上的標籤、一句話），自動標「建議」，現在這種標「現在」。
- * The switch dialog's three cards: name, the list badge's words, one line; automatic is "Recommended", the current
- * one "Now".
+ * 換的對話框的三選一：每張卡是一種方式（名稱、列表上的標籤、一句話），自動標「建議」，裝置設定的那種標「目前設定」
+ * （不叫「現在」：設定是自動時，現在實際可能走網頁 port）。
+ * The switch dialog's three cards: name, the list badge's words, one line; automatic is "Recommended", the one the
+ * device is set up with "Set up" (not "Now": automatic can be running over the web port right now).
  */
 export function WayChoiceCards({ value, current, onChange, disabled }: { value: WayInSetup | null; current: WayInSetup | null | undefined; onChange: (w: WayInSetup) => void; disabled?: boolean }) {
     const { t } = useI18n();
@@ -245,7 +248,7 @@ export function WayChoiceCards({ value, current, onChange, disabled }: { value: 
                             </span>
                             <span className="flex flex-wrap gap-1">
                                 {w === "auto" && <Chip tone="success">{t("wayIn.recommended")}</Chip>}
-                                {current === w && <Chip>{t("deviceInstall.switch.now")}</Chip>}
+                                {current === w && <Chip>{t("wayIn.setupChip")}</Chip>}
                             </span>
                         </span>
                         <span className="font-mono text-xs text-muted-foreground">{t(viaLabelKey(w, https))}</span>
@@ -265,7 +268,7 @@ function WayCompare({ viewed, current }: { viewed: WayInSetup; current: WayInSet
     const head = (w: WayInSetup) => (
         <span className="flex flex-wrap items-center gap-1">
             {t(WAY_IN_KEY[w])}
-            {current === w && <Chip>{t("deviceInstall.switch.now")}</Chip>}
+            {current === w && <Chip>{t("wayIn.setupChip")}</Chip>}
         </span>
     );
     return (
@@ -324,6 +327,13 @@ interface InfoProps {
     deviceName?: string;
     /** 從列表的標籤開的：說一聲在哪裡換（只有擁有者 / Admin 能換）。/ Opened from the list badge: say where switching lives. */
     whereHint?: boolean;
+    /**
+     * 這台實際怎麼連（列表的 `way_in`）：有的話上面寫「設定的方式 / 現在」兩行，打開時的「如果被擋」照實際狀況（自動卻走
+     * 網頁 port = SSH port 被擋），圖一打開就跟列表的標籤對得上。
+     * The device's actual connection: when given, two lines "Set up as / Right now" on top, and the what-if switches start
+     * from reality (automatic on the web port = the SSH port blocked), so the diagram matches the list badge.
+     */
+    tunnel?: Pick<Tunnel, "way_in" | "endpoint"> | null;
 }
 
 /**
@@ -332,10 +342,14 @@ interface InfoProps {
  * "How the three ways differ": pick a way and flip the what-if blocks to watch the diagram; the comparison table and
  * what the network sees below. Opened from the Device tab, the footer switches to the way being viewed.
  */
-export function WayInInfoDialog({ isOpen, onClose, current, sshPort, onPick, deviceName, whereHint }: InfoProps) {
+export function WayInInfoDialog({ isOpen, onClose, current, sshPort, onPick, deviceName, whereHint, tunnel }: InfoProps) {
     const { t } = useI18n();
-    const [viewed, setViewed] = useState<WayInSetup>(current ?? "auto");
-    const [blocked, setBlocked] = useState<Blocked>(NOTHING_BLOCKED);
+    const https = useHttps();
+    const seen = tunnel ? wayInOf(tunnel, https) : null;
+    const picture = seen ? wayPicture(current, seen) : null;
+    const viaWords = seen ? t(seen.via === "ssh" ? "platforms.via.ssh" : seen.via === "wss" ? "platforms.via.wss" : "platforms.via.ws") : "";
+    const [viewed, setViewed] = useState<WayInSetup>(picture?.way ?? current ?? "auto");
+    const [blocked, setBlocked] = useState<Blocked>(picture?.blocked ?? NOTHING_BLOCKED);
     const reinstall = isReinstall(viewed, current);
     const label = (w: WayInSetup) => (current === w ? t("wayIn.optionNow", { way: t(WAY_IN_KEY[w]) }) : t(WAY_IN_KEY[w]));
     return (
@@ -359,6 +373,20 @@ export function WayInInfoDialog({ isOpen, onClose, current, sshPort, onPick, dev
             }
         >
             <div className="space-y-5 text-sm">
+                {picture && (
+                    <dl className="space-y-1 rounded-lg border border-border bg-surface px-3 py-2">
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                            <dt className="text-muted-foreground">{t("wayIn.tab.setup")}</dt>
+                            <dd className="text-foreground">{current ? t(WAY_IN_KEY[current]) : t("deviceInstall.switch.wayUnknown")}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                            <dt className="text-muted-foreground">{t("wayIn.tab.now")}</dt>
+                            <dd className={cn("min-w-0", picture.status === "wayIn.now.liveFallback" ? "text-warning" : picture.status === "wayIn.now.offline" ? "text-muted-foreground" : "text-foreground")}>
+                                {t(picture.status, { via: viaWords })}
+                            </dd>
+                        </div>
+                    </dl>
+                )}
                 <div className="space-y-3">
                     {/* 手機上三段擠成好幾行（日文最明顯），改成一行的選單。/ On phones a one-line select instead of three squeezed segments. */}
                     <Segmented

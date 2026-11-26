@@ -177,7 +177,7 @@ export function TransportBadge({ tunnel, variant = "chip", className, onOpen, ca
                 </span>
             </PopoverContent>
         </Popover>
-        {compare && <WayInInfoDialog isOpen onClose={() => setCompare(false)} current={tunnel.way_in?.setup ?? null} whereHint={!onOpen} />}
+        {compare && <WayInInfoDialog isOpen onClose={() => setCompare(false)} current={tunnel.way_in?.setup ?? null} tunnel={tunnel} whereHint={!onOpen} />}
         </>
     );
 }

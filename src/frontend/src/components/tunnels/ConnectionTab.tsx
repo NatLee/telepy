@@ -160,6 +160,7 @@ export function ConnectionTab({ tunnel, active, manager, onChanged }: Props) {
                     isOpen
                     onClose={() => setCompareOpen(false)}
                     current={current}
+                    tunnel={tunnel}
                     sshPort={v?.server_port}
                     deviceName={tunnel.host_friendly_name}
                     onPick={
