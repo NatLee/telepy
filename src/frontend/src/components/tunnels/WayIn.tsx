@@ -350,6 +350,8 @@ export function WayInInfoDialog({ isOpen, onClose, current, sshPort, onPick, dev
     const viaWords = seen ? t(seen.via === "ssh" ? "platforms.via.ssh" : seen.via === "wss" ? "platforms.via.wss" : "platforms.via.ws") : "";
     const [viewed, setViewed] = useState<WayInSetup>(picture?.way ?? current ?? "auto");
     const [blocked, setBlocked] = useState<Blocked>(picture?.blocked ?? NOTHING_BLOCKED);
+    // 開關是照現況預先打開、而且還沒被動過：說一聲為什麼是開的。/ Still on as preset from reality: say why it is on.
+    const preset = !!picture && picture.way === viewed && (picture.blocked.ssh || picture.blocked.web) && blocked.ssh === picture.blocked.ssh && blocked.web === picture.blocked.web;
     const reinstall = isReinstall(viewed, current);
     const label = (w: WayInSetup) => (current === w ? t("wayIn.optionNow", { way: t(WAY_IN_KEY[w]) }) : t(WAY_IN_KEY[w]));
     return (
@@ -404,14 +406,20 @@ export function WayInInfoDialog({ isOpen, onClose, current, sshPort, onPick, dev
                             </option>
                         ))}
                     </NativeSelect>
-                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                        <span className="text-xs text-muted-foreground">{t("wayIn.whatIf")}</span>
-                        <Switch size="sm" checked={blocked.ssh} onCheckedChange={(v) => setBlocked((b) => ({ ...b, ssh: v }))}>
-                            {t("wayIn.blockSsh")}
-                        </Switch>
-                        <Switch size="sm" checked={blocked.web} onCheckedChange={(v) => setBlocked((b) => ({ ...b, web: v }))}>
-                            {t("wayIn.blockWeb")}
-                        </Switch>
+                    {/* 開關只是模擬：明說只改圖、不動裝置，不然會被當成「把裝置的 port 擋掉」或「現在被擋」。
+                        The switches are a simulation: say they only change the picture, or they read as blocking the
+                        device's port or as a live status. */}
+                    <div className="space-y-1.5 rounded-lg border border-dashed border-border px-3 py-2">
+                        <p className="text-xs text-muted-foreground">{t("wayIn.whatIf")}</p>
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                            <Switch size="sm" checked={blocked.ssh} onCheckedChange={(v) => setBlocked((b) => ({ ...b, ssh: v }))}>
+                                {t("wayIn.blockSsh")}
+                            </Switch>
+                            <Switch size="sm" checked={blocked.web} onCheckedChange={(v) => setBlocked((b) => ({ ...b, web: v }))}>
+                                {t("wayIn.blockWeb")}
+                            </Switch>
+                        </div>
+                        {preset && <p className="text-xs text-muted-foreground">{t("wayIn.whatIfPreset")}</p>}
                     </div>
                     <WayInLanes way={viewed} blocked={blocked} sshPort={sshPort} />
                 </div>
